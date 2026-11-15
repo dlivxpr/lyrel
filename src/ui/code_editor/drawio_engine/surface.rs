@@ -36,7 +36,9 @@ pub(crate) enum SurfaceEvent {
     /// The newest document the live engine produced — an edit, an engine
     /// replay of undo/redo, or a save flush. The owning document decides
     /// whether it is the canonical revision.
-    Commit { bytes: Arc<[u8]> },
+    Commit {
+        bytes: Arc<[u8]>,
+    },
     /// The engine asked for a workbench save (its own Ctrl+S).
     Save,
     /// The engine asked for the document's own undo/redo.
@@ -45,7 +47,9 @@ pub(crate) enum SurfaceEvent {
     /// The engine asked for the system clipboard's text.
     Paste,
     /// Serialized cells the engine copied or cut.
-    Clipboard { text: String },
+    Clipboard {
+        text: String,
+    },
     Blocked {
         reason: String,
     },
@@ -961,9 +965,7 @@ mod windows_host {
             BridgeEvent::Undo => emit(shared, SurfaceEvent::Undo),
             BridgeEvent::Redo => emit(shared, SurfaceEvent::Redo),
             BridgeEvent::Paste => emit(shared, SurfaceEvent::Paste),
-            BridgeEvent::Clipboard { text, .. } => {
-                emit(shared, SurfaceEvent::Clipboard { text })
-            }
+            BridgeEvent::Clipboard { text, .. } => emit(shared, SurfaceEvent::Clipboard { text }),
             BridgeEvent::Failed { message } => emit(shared, SurfaceEvent::Failed { message }),
         }
     }
@@ -1010,12 +1012,7 @@ mod windows_host {
                 Ok(state) => state,
                 Err(_) => return,
             };
-            assets::respond(
-                &method,
-                &uri,
-                state.session.as_mut(),
-                post_body.as_deref(),
-            )
+            assets::respond(&method, &uri, state.session.as_mut(), post_body.as_deref())
         };
         if let Some(bytes) = commit {
             emit(shared, SurfaceEvent::Commit { bytes });
@@ -1027,9 +1024,7 @@ mod windows_host {
 
     /// Reads a POST request stream with a hard ceiling: anything larger than
     /// the document budget plus slack is cut off and refused by `respond`.
-    unsafe fn read_request_body(
-        stream: &windows::Win32::System::Com::IStream,
-    ) -> Option<Vec<u8>> {
+    unsafe fn read_request_body(stream: &windows::Win32::System::Com::IStream) -> Option<Vec<u8>> {
         const LIMIT: usize = assets::MAX_DOCUMENT_BYTES + 1;
         let mut body = Vec::with_capacity(64 * 1024);
         let mut chunk = [0u8; 16 * 1024];

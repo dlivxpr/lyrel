@@ -171,11 +171,8 @@ pub(crate) enum DiskConflict {
 /// How long a deferred diagram save waits for the engine to confirm its
 /// current model. A test deadline stays short so a stalled flush is proven
 /// without sleeping the production three seconds.
-const DRAWIO_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) {
-    60
-} else {
-    3_000
-});
+const DRAWIO_FLUSH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(if cfg!(test) { 60 } else { 3_000 });
 
 /// A save that must not capture bytes older than the engine's live model:
 /// it waits for one committed revision newer than `from_edit`, with a
@@ -2735,7 +2732,12 @@ impl LyrelApp {
     /// failed write raises, the document stays dirty, and any close that was
     /// waiting on this save is cancelled instead of dropping the work.
     fn drawio_flush_failed(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(label) = self.editor.buffers.get(id).map(|file| file.label().to_string()) else {
+        let Some(label) = self
+            .editor
+            .buffers
+            .get(id)
+            .map(|file| file.label().to_string())
+        else {
             return;
         };
         let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);

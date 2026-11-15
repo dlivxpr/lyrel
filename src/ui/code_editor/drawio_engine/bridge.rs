@@ -38,7 +38,10 @@ pub(crate) enum BridgeEvent {
     Paste,
     /// Serialized cells the engine copied (or cut); `cut` only records intent —
     /// the deletion already landed in the document bytes this engine commits.
-    Clipboard { text: String, cut: bool },
+    Clipboard {
+        text: String,
+        cut: bool,
+    },
     Failed {
         message: String,
     },
@@ -321,9 +324,7 @@ impl LiveSession {
                     .get("text")
                     .and_then(serde_json::Value::as_str)
                     .ok_or(Reject("clipboard-text"))?;
-                if text.is_empty()
-                    || text.len() > super::assets::MAX_DOCUMENT_BYTES
-                {
+                if text.is_empty() || text.len() > super::assets::MAX_DOCUMENT_BYTES {
                     return Err(Reject("clipboard-text"));
                 }
                 BridgeEvent::Clipboard {

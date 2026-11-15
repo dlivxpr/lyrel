@@ -226,10 +226,10 @@ impl EditorBuffers {
             // Engine commits already landed on the document; its content
             // digest carries undo-to-saved semantics, so editing back to the
             // last-written bytes reads clean again.
-            file.dirty =
-                file.input.drawio_document(cx).is_some_and(|document| {
-                    document.fingerprint() != file.saved
-                });
+            file.dirty = file
+                .input
+                .drawio_document(cx)
+                .is_some_and(|document| document.fingerprint() != file.saved);
             file.reload_seq = file.reload_seq.wrapping_add(1);
             return;
         }

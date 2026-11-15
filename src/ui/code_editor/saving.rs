@@ -332,8 +332,7 @@ impl EditorPanelState {
                         if editor.buffers.get(id).is_some_and(|file| {
                             file.dirty
                                 || revision.is_some_and(|saved_revision| {
-                                    file.input.source_edit_revision(cx)
-                                        != Some(saved_revision)
+                                    file.input.source_edit_revision(cx) != Some(saved_revision)
                                 })
                         }) {
                             // New edits/representation changes retire this close.

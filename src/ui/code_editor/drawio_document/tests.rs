@@ -476,9 +476,7 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
 /// undo history — the workbench's own undo, not an engine-local stack, is
 /// what walks the document back through every presentation's edits.
 #[gpui_kit::test]
-fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(
-    tcx: &mut TestAppContext,
-) {
+fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(2);
@@ -612,7 +610,9 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_file(id, false, window, cx);
     });
-    until(&mut cx, |_cx| std::fs::read(&path).unwrap().as_slice() == committed.as_ref());
+    until(&mut cx, |_cx| {
+        std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
+    });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, _| {
         let file = app.editor.buffers.get(id).expect("still installed");
@@ -751,11 +751,15 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
         app.editor_save_file(id, false, window, cx);
     });
     until(&mut cx, |_cx| {
-        std::fs::read(remote_dir.join("remote.drawio")).unwrap().as_slice()
+        std::fs::read(remote_dir.join("remote.drawio"))
+            .unwrap()
+            .as_slice()
             == committed.as_ref()
     });
     assert_eq!(
-        std::fs::read(remote_dir.join("remote.drawio")).unwrap().as_slice(),
+        std::fs::read(remote_dir.join("remote.drawio"))
+            .unwrap()
+            .as_slice(),
         committed.as_ref(),
         "the mapped host wrote the committed serialization back"
     );
@@ -792,7 +796,9 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
     // The frame sweep owns the request: run it explicitly, then wait for the
     // Host write itself rather than for a dirty bit that may already be gone.
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    until(&mut cx, |_cx| std::fs::read(&path).unwrap().as_slice() == committed.as_ref());
+    until(&mut cx, |_cx| {
+        std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
+    });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, _| {
         assert!(
@@ -807,15 +813,12 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
     );
 }
 
-
 /// A commit that rewrites one page must not cost the file its other pages,
 /// its compressed representation, its unknown attributes or its embedded
 /// resources: the bytes the workbench serves back decode to both pages, and
 /// the untouched page is still there verbatim.
 #[gpui_kit::test]
-fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
-    tcx: &mut TestAppContext,
-) {
+fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let untouched = format!(
@@ -985,9 +988,7 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
 /// the document stays dirty, and a close waiting on that save is cancelled
 /// rather than dropping the engine's work.
 #[gpui_kit::test]
-fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(
-    tcx: &mut TestAppContext,
-) {
+fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
@@ -1018,7 +1019,10 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(
     let tab = app.read_with(&cx, |app, _| app.tabs[app.tabs.active_index()].id());
     cx.dispatch_action(CloseActiveTab);
     settle(&mut cx);
-    assert!(cx.has_pending_prompt(), "a dirty diagram asks before closing");
+    assert!(
+        cx.has_pending_prompt(),
+        "a dirty diagram asks before closing"
+    );
     cx.simulate_prompt_answer(t(L10nKey::Save));
     settle(&mut cx);
     // The save armed a flush on the live engine; without this the assertions
@@ -1058,7 +1062,10 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(
         );
         let file = app.editor.buffers.get(id).expect("still installed");
         assert!(file.dirty, "the engine's model is still unsaved");
-        assert!(file.drawio_flush.is_none(), "the failed flush is cleared for a retry");
+        assert!(
+            file.drawio_flush.is_none(),
+            "the failed flush is cleared for a retry"
+        );
     });
 }
 
@@ -1174,12 +1181,15 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| app.active_buffer().is_some())
     });
-    let id = app.read_with(&cx, |app, _| app.active_buffer().expect("remote diagram").id());
+    let id = app.read_with(&cx, |app, _| {
+        app.active_buffer().expect("remote diagram").id()
+    });
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
-            app.editor.buffers.get(id).is_some_and(|file| {
-                file.host.id() == host.id() && !file.host.id().is_local()
-            })
+            app.editor
+                .buffers
+                .get(id)
+                .is_some_and(|file| file.host.id() == host.id() && !file.host.id().is_local())
         })
     });
     let diagram = view(&app, &cx);
@@ -1203,7 +1213,11 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     let reopened = host
         .read_file(&remote, committed.len() as u64 + 1)
         .expect("reopen the remote diagram");
-    assert_eq!(reopened, committed.to_vec(), "the owning Host wrote the commit");
+    assert_eq!(
+        reopened,
+        committed.to_vec(),
+        "the owning Host wrote the commit"
+    );
     let source = crate::ui::code_editor::drawio_engine::parse(&reopened)
         .expect("the saved remote file still parses");
     assert_eq!(source.pages.len(), 2);

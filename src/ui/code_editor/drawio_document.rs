@@ -189,11 +189,7 @@ impl DrawioDocument {
         let restored = std::mem::replace(&mut self.content, previous.clone());
         self.future.push(restored);
         self.edit = self.edit.wrapping_add(1);
-        self.fingerprint = self
-            .bytes()
-            .as_deref()
-            .map(fingerprint)
-            .unwrap_or_default();
+        self.fingerprint = self.bytes().as_deref().map(fingerprint).unwrap_or_default();
         cx.notify();
         true
     }
@@ -210,11 +206,7 @@ impl DrawioDocument {
         self.past.push_back(current);
         self.trim_past();
         self.edit = self.edit.wrapping_add(1);
-        self.fingerprint = self
-            .bytes()
-            .as_deref()
-            .map(fingerprint)
-            .unwrap_or_default();
+        self.fingerprint = self.bytes().as_deref().map(fingerprint).unwrap_or_default();
         cx.notify();
         true
     }

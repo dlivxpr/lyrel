@@ -154,8 +154,7 @@ impl EditorInput {
         &self,
         cx: &'a gpui_kit::App,
     ) -> Option<&'a super::drawio_document::DrawioDocument> {
-        self.drawio()
-            .map(|view| view.read(cx).document().read(cx))
+        self.drawio().map(|view| view.read(cx).document().read(cx))
     }
     /// Markdown, SVG, the JSON family and CSV keep the same line-preserving
     /// source authority; every save, reload and dirty comparison reads this
@@ -999,9 +998,7 @@ impl Presentations {
 
     /// Split draw.io presentations created per group, in creation order;
     /// the owning primary view is not repeated here.
-    pub(super) fn drawios(
-        &self,
-    ) -> Vec<(TabId, split::GroupId, Entity<DrawioView>)> {
+    pub(super) fn drawios(&self) -> Vec<(TabId, split::GroupId, Entity<DrawioView>)> {
         self.drawios
             .borrow()
             .iter()
