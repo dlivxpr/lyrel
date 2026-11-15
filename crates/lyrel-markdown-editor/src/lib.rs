@@ -1357,6 +1357,36 @@ impl EditorState {
         cx.notify();
     }
 
+    /// Undo the shared document's last history entry without requiring this
+    /// presentation to hold the keyboard. A format view (for example the CSV
+    /// table) edits the same [`Document`] through this presentation, so its
+    /// undo must be the document's ordinary history rather than a second one.
+    /// Returns whether an entry existed.
+    pub fn undo_document(&mut self, cx: &mut Context<Self>) -> bool {
+        self.finish_composition(cx);
+        let document = self.document.clone();
+        let origin = cx.entity_id();
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.undo(origin, cx))
+        else {
+            return false;
+        };
+        self.restore_snapshot(snapshot, caret, cx);
+        true
+    }
+
+    /// Redo the shared document's last undone entry; see [`Self::undo_document`].
+    pub fn redo_document(&mut self, cx: &mut Context<Self>) -> bool {
+        self.finish_composition(cx);
+        let document = self.document.clone();
+        let origin = cx.entity_id();
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.redo(origin, cx))
+        else {
+            return false;
+        };
+        self.restore_snapshot(snapshot, caret, cx);
+        true
+    }
+
     /// Replace the set of diagnostics (underlined spans). The host computes these
     /// (e.g. spell-check) and refreshes them as the text changes.
     pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>, cx: &mut Context<Self>) {
@@ -3253,25 +3283,11 @@ impl EditorState {
     // --- Undo / redo ---------------------------------------------------------
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
-        let document = self.document.clone();
-        let origin = cx.entity_id();
-        if let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.undo(origin, cx))
-        {
-            self.restore_snapshot(snapshot, caret, cx);
-        }
+        self.undo_document(cx);
     }
 
     fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
-        let document = self.document.clone();
-        let origin = cx.entity_id();
-        if let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.redo(origin, cx))
-        {
-            self.restore_snapshot(snapshot, caret, cx);
-        }
+        self.redo_document(cx);
     }
 
     fn restore_snapshot(
