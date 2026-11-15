@@ -1362,38 +1362,568 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
 }
 
 #[gpui_kit::test]
-fn jsonl_does_not_show_json_tree_mutation_controls(tcx: &mut TestAppContext) {
+fn jsonl_records_edit_values_keys_arrays_and_add_remove_lines(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
-    let dir = canonical_tempdir();
-    let path = fixture(
-        dir.path(),
+    let remote = canonical_tempdir();
+    let local = canonical_tempdir();
+    let original: &[u8] = b"\xef\xbb\xbf{\"id\": 1, \"name\": \"one\", \"big\": 184467440737095516170, \"dup\": 1, \"dup\": 2}\r\n\n{\"id\": 2, \"items\": [1e2, -0, \"\\u4e2d\"]}\n{\"id\": 3,}\r\n42\r\n";
+    let remote_file = fixture(remote.path(), "records.jsonl", original);
+    let local_file = fixture(
+        local.path(),
         "records.jsonl",
-        b"{\"id\": 1, \"name\": \"one\"}\n{\"id\": 2, \"name\": \"two\"}\n",
+        b"LOCAL DECOY MUST STAY UNCHANGED",
     );
-    let host: SharedHost = FileHost::new(HostId(2904));
+    let host = FileHost::mapped(HostId(2910), remote.path());
+    let path = PathBuf::from("/records.jsonl");
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1600.), px(1000.)));
-    let (_, view) = open_ready(&app, &mut cx, host, &path);
-    click_row(&view, &mut cx, "line 1");
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &path);
+
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure
+    );
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(4)
+    );
+    assert_eq!(view.read_with(&cx, |view, cx| view.invalid_records(cx)), 1);
+    assert_eq!(
+        row_value(&view, &mut cx, "JSONL").as_deref(),
+        Some("4 records")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 1[\"dup\"] #2").as_deref(),
+        Some("2")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 3[\"items\"]").as_deref(),
+        Some("[ 3 items ]"),
+        "the invalid line is a separate record, not an array element"
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 5").as_deref(),
+        Some("42"),
+        "a scalar record is one real record line"
+    );
     cx.update(|window, _| {
         for id in [
             "json-edit-value",
             "json-rename-key",
             "json-add-member",
             "json-remove-member",
+            "json-add-record",
+            "json-remove-record",
         ] {
             assert!(
-                window.try_find((id, view.entity_id())).is_none(),
-                "JSONL must not advertise a JSON-document tree mutation control"
+                window.find((id, view.entity_id())).visible(),
+                "JSONL record editing must expose {id}"
             );
         }
-        assert!(window.find(("json-reveal", view.entity_id())).visible());
-        assert!(
-            window
-                .find(("json-full-value-button", view.entity_id()))
-                .visible()
-        );
     });
+
+    // A duplicate-key occurrence is renamed and edited without touching its
+    // sibling, the exact large literal or the escape spelling on other lines.
+    click_row(&view, &mut cx, "line 1[\"dup\"] #2");
+    click_button(&view, &mut cx, "json-edit-value");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((None, "2".to_owned()))
+    );
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"中文\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        row_value(&view, &mut cx, "line 1[\"dup\"]").as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 1[\"dup\"] #2").as_deref(),
+        Some("\"中文\"")
+    );
+    assert!(
+        source_text(&app, &cx).contains("\"big\": 184467440737095516170"),
+        "the unrelated exact number is untouched"
+    );
+
+    click_row(&view, &mut cx, "line 3[\"id\"]");
+    click_button(&view, &mut cx, "json-rename-key");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((None, "id".to_owned()))
+    );
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "编号");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        row_value(&view, &mut cx, "line 3[\"编号\"]").as_deref(),
+        Some("2")
+    );
+    assert!(
+        source_text(&app, &cx).contains("\"items\": [1e2, -0, \"\\u4e2d\"]"),
+        "renaming one key leaves array spelling and escapes in its record"
+    );
+
+    // An array inside a record gains a Unicode item; the record stays one line.
+    click_row(&view, &mut cx, "line 3[\"items\"]");
+    click_button(&view, &mut cx, "json-add-member");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"追加\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(source_text(&app, &cx).contains("\"items\": [1e2, -0, \"\\u4e2d\", \"追加\"]"));
+
+    // Add a whole record after line 1. The blank line and every later
+    // physical line remain; only the new record line is inserted.
+    click_row(&view, &mut cx, "line 1");
+    click_button(&view, &mut cx, "json-add-record");
+    assert!(panel_open(&view, &mut cx));
+    replace_panel_text(
+        &view,
+        &mut cx,
+        "structure-edit-value",
+        "{\"id\": 9, \"name\": \"你好🙂\"}",
+    );
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(5)
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 2").as_deref(),
+        Some("{ 2 keys }")
+    );
+    assert_eq!(view.read_with(&cx, |view, cx| view.invalid_records(cx)), 1);
+
+    // The invalid line is still a selectable record and can be removed as a
+    // physical line without parsing or rewriting its neighbors.
+    click_row(&view, &mut cx, "line 5");
+    click_button(&view, &mut cx, "json-remove-record");
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(view.read_with(&cx, |view, cx| view.invalid_records(cx)), 0);
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(4)
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "line 5").as_deref(),
+        Some("42"),
+        "the record after the deleted line keeps its own bytes and moves up one line"
+    );
+
+    // A scalar record itself can be replaced as one line.
+    click_row(&view, &mut cx, "line 5");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "43");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(row_value(&view, &mut cx, "line 5").as_deref(), Some("43"));
+
+    // The record command is ordinary shared history: the source presentation
+    // undoes and redoes it without a second editable copy.
+    toggle_mode(&view, &mut cx);
+    press(&app, &mut cx, &secondary("z"));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    toggle_mode(&view, &mut cx);
+    assert_eq!(row_value(&view, &mut cx, "line 5").as_deref(), Some("42"));
+    toggle_mode(&view, &mut cx);
+    press(&app, &mut cx, &secondary("shift-z"));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    toggle_mode(&view, &mut cx);
+    assert_eq!(row_value(&view, &mut cx, "line 5").as_deref(), Some("43"));
+
+    save(&app, &mut cx);
+    let expected = replace_bytes(original, b"\"dup\": 2", "\"dup\": \"中文\"".as_bytes());
+    let expected = replace_bytes(&expected, b"\"id\": 2", "\"编号\": 2".as_bytes());
+    let expected = replace_bytes(
+        &expected,
+        b"\"\\u4e2d\"]",
+        b"\"\\u4e2d\", \"\xe8\xbf\xbd\xe5\x8a\xa0\"]",
+    );
+    let marker = "\"dup\": \"中文\"}\r\n";
+    let replacement = "\"dup\": \"中文\"}\r\n{\"id\": 9, \"name\": \"你好🙂\"}\r\n";
+    let expected = replace_bytes(&expected, marker.as_bytes(), replacement.as_bytes());
+    let expected = replace_bytes(&expected, b"{\"id\": 3,}\r\n", b"");
+    let expected = replace_bytes(&expected, b"\n42\r\n", b"\n43\r\n");
+    assert_eq!(
+        std::fs::read(&remote_file).unwrap(),
+        expected,
+        "every untouched record keeps its own bytes and mixed terminator"
+    );
+    assert_eq!(
+        std::fs::read(&local_file).unwrap(),
+        b"LOCAL DECOY MUST STAY UNCHANGED",
+        "the same path on this machine was never read or written"
+    );
+
+    // Independent reopen through the owning Host sees the complete stream.
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &path);
+    assert_eq!(
+        reopened.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(4)
+    );
+    assert_eq!(
+        reopened.read_with(&cx, |view, cx| view.invalid_records(cx)),
+        0
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 1[\"dup\"] #2").as_deref(),
+        Some("\"中文\"")
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 2[\"name\"]").as_deref(),
+        Some("\"你好🙂\"")
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 4[\"items\"]").as_deref(),
+        Some("[ 4 items ]")
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 5").as_deref(),
+        Some("43")
+    );
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        expected
+    );
+}
+
+#[gpui_kit::test]
+fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let original_bytes = b"{\"id\":1,\"name\":\"one\"}\n{\"id\":2,\"name\":\"two\"}\n";
+    let original = fixture(dir.path(), "lifecycle.ndjson", original_bytes);
+    let target = dir.path().join("persisted.ndjson");
+    let host = FileHost::new(HostId::LOCAL);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+
+    // A record insertion, then Save As to another owning-Host path.
+    click_row(&view, &mut cx, "line 2");
+    click_button(&view, &mut cx, "json-add-record");
+    replace_panel_text(
+        &view,
+        &mut cx,
+        "structure-edit-value",
+        "{\"id\":3,\"name\":\"三\"}",
+    );
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(3)
+    );
+    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    settle(&mut cx);
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
+        })
+    });
+    let saved = source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap());
+    assert_eq!(std::fs::read(&target).unwrap(), saved);
+    assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+
+    // A failed owning-Host write leaves the record edit dirty and the target
+    // bytes unchanged; an ordinary retry lands the same bytes.
+    click_row(&view, &mut cx, "line 1[\"name\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"失败\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    host.fail_next_write();
+    cx.dispatch_action(crate::core::actions::EditorSave);
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&target).unwrap(), saved);
+    save(&app, &mut cx);
+    let failed = replace_bytes(&saved, b"\"name\":\"one\"", "\"name\":\"失败\"".as_bytes());
+    assert_eq!(std::fs::read(&target).unwrap(), failed);
+
+    // A dirty external write is a conflict, not a silent replacement. Keep
+    // mine and save the pending record edit to the owning Host.
+    click_row(&view, &mut cx, "line 2[\"name\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"保留\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    std::fs::write(&target, b"{\"external\":true}\n").unwrap();
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.conflict.is_some())
+        })
+    });
+    assert!(source_text(&app, &cx).contains("\"保留\""));
+    cx.update(|window, cx| window.click("editor-conflict-keep", cx));
+    settle(&mut cx);
+    save(&app, &mut cx);
+    let kept = replace_bytes(&failed, b"\"name\":\"two\"", "\"name\":\"保留\"".as_bytes());
+    assert_eq!(std::fs::read(&target).unwrap(), kept);
+
+    // Cancelling an unsaved close keeps the document and the pending record.
+    click_row(&view, &mut cx, "line 3[\"name\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"关闭\"");
+    // After the conflict/save state the synthetic Apply click has not emitted
+    // in this harness; use the panel's production Enter command instead, as
+    // the corresponding #290 lifecycle consumer does.
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    let panel = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    let error = panel_error(&view, &mut cx);
+    assert!(
+        panel.is_none(),
+        "the record edit must apply before close; panel={panel:?} error={error:?}"
+    );
+    assert!(
+        source_text(&app, &cx).contains("\"关闭\""),
+        "the record edit must reach the shared source"
+    );
+    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    settle(&mut cx);
+    assert!(
+        cx.has_pending_prompt(),
+        "an unsaved record edit must prompt before close"
+    );
+    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    settle(&mut cx);
+    assert!(
+        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        "cancelled close keeps the record document"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), kept);
+    save(&app, &mut cx);
+    let closed = replace_bytes(
+        &kept,
+        "\"name\":\"三\"".as_bytes(),
+        "\"name\":\"关闭\"".as_bytes(),
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), closed);
+
+    // An independent reopen verifies the full record stream.
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &target);
+    assert_eq!(
+        reopened.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(3)
+    );
+    assert_eq!(
+        reopened.read_with(&cx, |view, cx| view.invalid_records(cx)),
+        0
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 1[\"name\"]").as_deref(),
+        Some("\"失败\"")
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 2[\"name\"]").as_deref(),
+        Some("\"保留\"")
+    );
+    assert_eq!(
+        row_value(&reopened, &mut cx, "line 3[\"name\"]").as_deref(),
+        Some("\"关闭\"")
+    );
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        closed
+    );
+}
+
+#[gpui_kit::test]
+fn jsonl_record_budget_is_explicit_and_source_stays_editable(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let host: SharedHost = FileHost::new(HostId(2912));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let at_budget_bytes = "0\n".repeat(projection::STRUCTURE_RECORDS).into_bytes();
+    let at_budget = fixture(dir.path(), "at-budget.jsonl", &at_budget_bytes);
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &at_budget);
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.record_count(cx)),
+        Some(projection::STRUCTURE_RECORDS)
+    );
+    assert!(view.read_with(&cx, |view, cx| view.structure_ready(cx)));
+    press(&app, &mut cx, "end");
+    let last_record = format!("line {}", projection::STRUCTURE_RECORDS);
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.selected_path(cx))
+            .as_deref(),
+        Some(last_record.as_str())
+    );
+    save(&app, &mut cx);
+    assert_eq!(std::fs::read(&at_budget).unwrap(), at_budget_bytes);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+
+    // One more record exceeds the record budget before the node budget; the
+    // source remains whole, editable and byte-exact.
+    let over_bytes = "0\n".repeat(projection::STRUCTURE_RECORDS + 1).into_bytes();
+    let over = fixture(dir.path(), "over-budget.jsonl", &over_bytes);
+    let _ = open(&app, &mut cx, host, &over);
+    let over_view = json_view(&app, &cx);
+    until(&mut cx, |cx| {
+        over_view.read_with(cx, |view, cx| view.fatal_error(cx).is_some())
+    });
+    assert!(over_view.read_with(&cx, |view, cx| {
+        view.fatal_error(cx).is_some_and(|(_, detail)| {
+            detail.contains(projection::STRUCTURE_RECORDS.to_string().as_str())
+        })
+    }));
+    toggle_mode(&over_view, &mut cx);
+    assert_eq!(source_text(&app, &cx).as_bytes(), over_bytes);
+    save(&app, &mut cx);
+    assert_eq!(std::fs::read(&over).unwrap(), over_bytes);
+}
+
+#[gpui_kit::test]
+fn jsonl_late_parse_and_stale_record_actions_never_write(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let original = b"{\"id\":1,\"name\":\"first\"}\n{\"id\":2,\"name\":\"two\"}\n";
+    let path = fixture(dir.path(), "late.jsonl", original);
+    let host: SharedHost = FileHost::new(HostId(2913));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (release, entered) = test_support::pause_next_parse();
+    let _ = open(&app, &mut cx, host, &path);
+    let view = json_view(&app, &cx);
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::SeqCst)
+    });
+    toggle_mode(&view, &mut cx);
+    let text = source_text(&app, &cx);
+    let at = text.find("\"first\"").expect("fixture value");
+    type_source(&app, &mut cx, at..at + "\"first\"".len(), "\"mid\"");
+    let text = source_text(&app, &cx);
+    let at = text.find("\"mid\"").expect("edited value");
+    type_source(&app, &mut cx, at..at + "\"mid\"".len(), "\"latest\"");
+    let revision = source_document(&app, &cx).read_with(&cx, |document, _| document.revision());
+    assert!(
+        view.read_with(&cx, |view, cx| view
+            .document()
+            .read(cx)
+            .installed_revision())
+            .is_none(),
+        "no stale projection may be installed while the newer edit is pending"
+    );
+    release.send(()).unwrap();
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view
+            .document()
+            .read(cx)
+            .installed_revision()),
+        Some(revision)
+    );
+    toggle_mode(&view, &mut cx);
+    assert_eq!(
+        row_value(&view, &mut cx, "line 1[\"name\"]").as_deref(),
+        Some("\"latest\"")
+    );
+
+    // Open a record command in one presentation, then change the shared
+    // source from the other. The stale command must not write.
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the JSONL document splits");
+    });
+    settle(&mut cx);
+    let (tab, left, right) = app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("editor group");
+        let tab = app.tabs.get(app.tabs.active_index()).unwrap().id();
+        let right = code.focused_group();
+        let left = match code.group == right {
+            true => code.split.as_ref().expect("two groups").id,
+            false => code.group,
+        };
+        (tab, left, right)
+    });
+    let (front, other) = app.read_with(&cx, |app, _| {
+        let file = app.active_buffer().expect("JSONL buffer");
+        (
+            file.presentations.json_existing(tab, right).expect("front"),
+            file.presentations.json_existing(tab, left).expect("other"),
+        )
+    });
+    assert_eq!(
+        other.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure
+    );
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Source
+    );
+    click_row(&other, &mut cx, "line 2");
+    click_button(&other, &mut cx, "json-add-record");
+    assert!(panel_open(&other, &mut cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    let text = source_text(&app, &cx);
+    let at = text.find("\"latest\"").expect("edited value");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "\"latest\"".len(),
+        "\"source-wins\"",
+    );
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(
+        panel_error(&other, &mut cx).as_deref(),
+        Some(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::EditorJsonEditStale
+        ))
+    );
+    apply_panel(&other, &mut cx);
+    let text = source_text(&app, &cx);
+    assert!(text.contains("\"source-wins\""));
+    assert!(
+        text.lines().count() == 2,
+        "the stale add-record command must not insert a third line"
+    );
+    assert!(
+        panel_open(&other, &mut cx),
+        "a stale record command stays open for a decision"
+    );
+    cancel_panel(&other, &mut cx);
+    assert!(!panel_open(&other, &mut cx));
+    save(&app, &mut cx);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        replace_bytes(original, b"\"first\"", b"\"source-wins\"")
+    );
 }
 
 #[gpui_kit::test]
@@ -1433,6 +1963,67 @@ fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
         .expect("independent remote read");
     eprintln!(
         "json290 real native SSH saved {} bytes at {}",
+        bytes.len(),
+        path.display()
+    );
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        expected
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "requires the explicit private Linux SSH fixture, a matching same-commit local router and the running private remote daemon; run alone with --ignored"]
+fn jsonl_record_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
+    use lyrel_core::host::Host as _;
+
+    crate::ui::i18n::set_locale("en");
+    let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
+        "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
+    );
+    let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(Path::new(&binary));
+    let host = fixture.connect_control();
+    let script = b"{\"id\": 1, \"name\": \"one\"}\n{\"id\": 2, \"big\": 184467440737095516170}\n";
+    let _ = fixture.install_script(&host, "records.jsonl", script, Vec::new());
+    let path = fixture.remote_path("records.jsonl");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host, &path);
+
+    click_row(&view, &mut cx, "line 2[\"big\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "1e400");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    click_row(&view, &mut cx, "line 1");
+    click_button(&view, &mut cx, "json-add-record");
+    replace_panel_text(
+        &view,
+        &mut cx,
+        "structure-edit-value",
+        "{\"id\": 3, \"name\": \"远端\"}",
+    );
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    save(&app, &mut cx);
+
+    let expected = replace_bytes(script, b"184467440737095516170", b"1e400");
+    let expected = replace_bytes(
+        &expected,
+        b"{\"id\": 1, \"name\": \"one\"}\n",
+        "{\"id\": 1, \"name\": \"one\"}\n{\"id\": 3, \"name\": \"远端\"}\n".as_bytes(),
+    );
+    let verifier = fixture.connect_control_as(
+        "fixture:native-ssh-291-verify",
+        "native-ssh-jsonl-291",
+        "isolated-fixture",
+    );
+    let bytes = verifier
+        .read_file(&path, expected.len() as u64 + 1)
+        .expect("independent remote read");
+    eprintln!(
+        "jsonl291 real native SSH saved {} bytes at {}",
         bytes.len(),
         path.display()
     );

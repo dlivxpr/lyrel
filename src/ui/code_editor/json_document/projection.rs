@@ -31,8 +31,9 @@ pub(crate) const STRUCTURE_INPUT_BYTES: usize = 1024 * 1024;
 /// 一份投影最多保留的节点数；超限时整份结构视图报预算错误，而不是静默
 /// 截断树。源码访问不受影响。
 pub(crate) const STRUCTURE_NODES: usize = 20_000;
-/// JSONL／NDJSON 最多解析的记录数；空行不计。
-pub(crate) const STRUCTURE_RECORDS: usize = 20_000;
+/// JSONL／NDJSON 最多解析的记录数；空行不计。记录根占用一个节点，所以
+/// 该上限比节点预算少一，超限时报告记录预算而不是被节点预算抢先。
+pub(crate) const STRUCTURE_RECORDS: usize = STRUCTURE_NODES - 1;
 /// 所有节点的完整路径字符串合计；长祖先键不能按子节点数量无界放大内存。
 pub(crate) const STRUCTURE_PATH_BYTES: usize = 8 * 1024 * 1024;
 
@@ -162,6 +163,31 @@ impl JsonProjection {
 
     pub(crate) fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// JSONL／NDJSON 中包含 `index` 的物理记录节点。JSON／JSONC 的根是值
+    /// 本身，不存在逐行记录，因此这里返回 `None`。
+    pub(crate) fn record_ancestor(&self, index: usize) -> Option<usize> {
+        if self.format != JsonFormat::JsonLines {
+            return None;
+        }
+        let root = self.root?;
+        if index == root || index >= self.nodes.len() {
+            return None;
+        }
+        let mut current = index;
+        loop {
+            let node = &self.nodes[current];
+            match node.parent {
+                Some(parent) if parent == root => return Some(current),
+                Some(parent) => current = parent,
+                None => return None,
+            }
+        }
+    }
+
+    pub(crate) fn is_record_root(&self, index: usize) -> bool {
+        self.record_ancestor(index) == Some(index)
     }
 }
 

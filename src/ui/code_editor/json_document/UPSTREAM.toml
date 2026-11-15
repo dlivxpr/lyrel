@@ -89,3 +89,14 @@ retained = "#289 的 JSONC 词法边界、逐 occurrence 源码范围、可见�
 adapted = "`json_document/mutation.rs` 在调用时重新取得当前 LF 源码的 jsonc-parser token 结构，按 `(path, range, key_range)` 重新解析选中 occurrence，规划最小替换清单；新值片段必须恰好是一个 JSON 值，新键由标准 JSON 转义生成并复核，写入前再解析整个结果。清单交给共享 `EditorState::replace_ranges`，一次命令一条 history。`structure_edit.rs` 是单/双字段共享编辑面板，后续 YAML/TOML/XML 可复用。"
 replaced = "没有可移植的上游 mutation；不采用 `serde_json::Value` 序列化、Glim `format_document` 整篇空白重排或 jsonc-parser CST 的整篇 `to_string()` 作为写回路径。注释、键序、未选中转义与数字拼写只受最小 splice 影响。"
 not_imported = "JSON5、JSONL 记录插入/删除（#291）、通用 Value 文档、整篇格式化与第二份可写内容"
+
+# #291：同一模块补 JSONL／NDJSON 的逐行记录编辑。上游没有一行一记录的
+# 可写模型；Glim 的 NDJSON-to-Value::Array 投影只服务阅读，不能作为写入
+# 权威，因此这里记录本票补的局部层及明确拒绝的上游做法。
+[[extension]]
+ticket = "#291"
+status = "added source-preserving JSONL／NDJSON line-record editing over #289/#290"
+retained = "#289 的逐非空行记录 identity、1-based 行号、无效行可见错误与源码范围；#290 的共享 structure_view／structure_edit 面板、`(path, range, key_range)` occurrence 身份、共享 Document 的 replace_ranges／history／保存／另存为／冲突／关闭生命周期"
+adapted = "`mutation.rs` 为 JSONL 单独规划：嵌套值／键／数组成员按目标记录自己的 jsonc-parser token 结构计算最小替换，插入记录只写一条带缩进的新行，删除记录只移除该物理行；新值必须是单行、恰好一个严格 JSON 值。修改后只重新解析目标行，邻近无效记录不参与校验。`JsonView` 复用同一面板与工具栏，新增记录根改值、添加记录、删除记录；所有命令都要求已安装投影的 revision 仍等于共享源码权威。"
+replaced = "不把 JSONL 投影成 JSON 数组，不把 Value 序列化回写，不对整篇 JSONL 做解析/格式化，不以无效邻居阻塞合法记录编辑。记录插入换行使用 Document 的现存主行尾 representation；未触及行的逐行 endings 仍由 Document 保存。"
+not_imported = "Glim NDJSON 数组预览作为编辑存储、JSON5、整篇格式化、第二份可写内容与跨行记录值"
