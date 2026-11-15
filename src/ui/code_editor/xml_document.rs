@@ -1431,6 +1431,7 @@ impl XmlView {
                         .flex_none()
                         .text_xs()
                         .text_color(warning)
+                        .aria_value(error.clone())
                         .child(error),
                 )
             })

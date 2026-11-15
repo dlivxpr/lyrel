@@ -210,6 +210,26 @@ fn type_source(
     settle(cx);
 }
 
+fn type_source_on(
+    app: &Entity<LyrelApp>,
+    view: &Entity<XmlView>,
+    cx: &mut VisualTestContext,
+    range: std::ops::Range<usize>,
+    text: &str,
+) {
+    app.update_in(cx, |app, window, cx| {
+        view.update(cx, |view, cx| {
+            let source = view.source().clone();
+            source.update(cx, |source, cx| source.select_range(range, cx));
+            let focus = source.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    cx.update(|window, cx| window.input(text, cx));
+    settle(cx);
+}
+
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(cx, |cx| {
@@ -893,7 +913,11 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     });
     let text = source_text(&app, &cx);
     let at = text.find("text</b>").expect("fixture text");
-    type_source(&app, &mut cx, at..at + "text".len(), "TEXT");
+    type_source_on(&app, &front, &mut cx, at..at + "text".len(), "TEXT");
+    assert!(
+        source_text(&app, &cx).contains("<b>TEXT</b>"),
+        "the source edit must land before testing the stale panel"
+    );
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     focus_panel_value(&other, &mut cx);
     apply_panel(&other, &mut cx);
@@ -924,7 +948,11 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     });
     let text = source_text(&app, &cx);
     let at = text.find("TEXT</b>").expect("fixture text");
-    type_source(&app, &mut cx, at..at + "TEXT".len(), "source-wins");
+    type_source_on(&app, &front, &mut cx, at..at + "TEXT".len(), "source-wins");
+    assert!(
+        source_text(&app, &cx).contains("<b>source-wins</b>"),
+        "the source edit must land before testing the stale panel"
+    );
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     focus_panel_value(&other, &mut cx);
     apply_panel(&other, &mut cx);
