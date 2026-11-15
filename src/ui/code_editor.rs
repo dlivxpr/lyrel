@@ -34,6 +34,7 @@ mod image_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
+mod pdf_document;
 mod svg_document;
 mod text;
 use buffers::Loaded;
@@ -54,6 +55,8 @@ mod test_host;
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
+pub(crate) use pdf_document::{PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
@@ -783,6 +786,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.image().is_some())
     }
 
+    pub(crate) fn pdf_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.pdf().is_some())
+    }
+
     pub(crate) fn svg_document_active(&self) -> bool {
         self.active_buffer()
             .is_some_and(|file| file.input.svg().is_some())
@@ -809,6 +817,11 @@ impl LyrelApp {
                     file.presentations
                         .image_existing(tab, group)
                         .map(EditorInput::Image)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .pdf_existing(tab, group)
+                        .map(EditorInput::Pdf)
                 })
                 .unwrap_or_else(|| file.input.clone()),
         )
@@ -1982,6 +1995,9 @@ impl LyrelApp {
             let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
             return image_document::menu_entries(menu, multipage);
         }
+        if input.pdf().is_some() {
+            return pdf_document::menu_entries(menu);
+        }
         let selected = input
             .text()
             .is_some_and(|text| !text.read(cx).selected_range().is_empty());
@@ -2687,6 +2703,8 @@ impl LyrelApp {
                     "svg-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
+                } else if self.pdf_document_active() {
+                    "pdf-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2830,6 +2848,28 @@ impl LyrelApp {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.pdf().is_some() => {
+                let primary = f.input.pdf().expect("pdf document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.pdf_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("pdf-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
                     .child(view)
                     .into_any_element()
             }
@@ -3179,6 +3219,15 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
+        let pdf = self
+            .active_editor_input()
+            .and_then(|input| input.pdf().cloned());
+        let pdf_status: Option<SharedString> =
+            pdf.as_ref().map(|view| view.read(cx).status_text(cx));
+        let pdf_zoom: Option<SharedString> = pdf
+            .as_ref()
+            .filter(|view| view.read(cx).has_pages())
+            .map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
         let cursor: Option<SharedString> = self
@@ -3408,6 +3457,35 @@ impl LyrelApp {
                 this.child(
                     div()
                         .id("status-image-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
+            // A PDF states its page identity, zoom and read-only nature; it has
+            // no caret, wrap, line ending or editable text format.
+            .when_some(pdf_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-pdf-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when(pdf_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-pdf-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(pdf_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-pdf-zoom")
                         .test_support()
                         .flex_none()
                         .child(zoom),

@@ -1,8 +1,12 @@
+use super::pdf_document::{PdfDocument, PdfLoaded, PdfView};
 use super::*;
 use lyrel_core::core::session::WorkspaceId;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+/// PDFs share the owning Host's bounded versioned read and the same 32 MiB
+/// input ceiling; parsing never raises the text or control-frame limits.
+const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use markdown::images;
 use markdown::images::ImageFormat;
@@ -375,6 +379,14 @@ impl EditorBuffers {
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Pdf {
+                path,
+                mtime,
+                content,
+            } => (
+                self.create_pdf(host, path, mtime, content, window, cx),
+                true,
+            ),
             Loaded::Text {
                 path,
                 text,
@@ -435,6 +447,54 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A read-only PDF document. Parsing and page rasterization happen off the
+    /// UI thread; this only installs the document identity and its first view.
+    fn create_pdf<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        path: PathBuf,
+        mtime: Option<MTime>,
+        content: PdfLoaded,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|_| PdfDocument::new(content));
+        let view = cx.new(|cx| PdfView::new(document, window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Pdf(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -825,6 +885,7 @@ impl EditorBuffers {
         let source = file.input.source_document(cx);
         let source_reload = source.is_some();
         let image = file.input.image().cloned();
+        let pdf = file.input.pdf().cloned();
         let input_lease = source.as_ref().map(|document| document.read(cx).revision());
         let pending_lease = source
             .as_ref()
@@ -844,7 +905,12 @@ impl EditorBuffers {
             let document = view.read(cx).document().clone();
             document.update(cx, |document, cx| document.begin_reload(cx));
         }
+        if let Some(view) = &pdf {
+            let document = view.read(cx).document().clone();
+            document.update(cx, |document, cx| document.begin_reload(cx));
+        }
         let image_reload = image.is_some();
+        let pdf_reload = pdf.is_some();
         HostOps::run_in(
             host,
             window,
@@ -861,6 +927,11 @@ impl EditorBuffers {
                         })?;
                     let meta = h.stat(&target)?;
                     return read_image(h, target, format, meta).map(Reloaded::Image);
+                }
+                if pdf_reload {
+                    let meta = h.stat(&target)?;
+                    return read_pdf(h, target, meta)
+                        .map(|(content, mtime)| Reloaded::Pdf(content, mtime));
                 }
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
                 let decoded = if source_reload {
@@ -897,6 +968,21 @@ impl EditorBuffers {
                 };
                 let (decoded, mtime) = match reloaded {
                     Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // PDFs are read-only too: a clean document takes the new
+                    // bytes, including a new password or format failure.
+                    Reloaded::Pdf(content, mtime) => {
+                        file.disk_mtime = mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .pdf()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| document.replace(content, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
                     // A picture cannot be edited, so nothing here can conflict:
                     // the freshest bytes are the document.
                     Reloaded::Image(image) => {
@@ -1018,6 +1104,13 @@ pub(super) enum Loaded {
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
+    /// A PDF: parse/password failures are the document's own visible state, so
+    /// the file still gets a tab with an explanation and a retry path.
+    Pdf {
+        path: PathBuf,
+        mtime: Option<MTime>,
+        content: PdfLoaded,
+    },
 }
 
 pub(super) struct LoadedImage {
@@ -1034,6 +1127,7 @@ impl Loaded {
         match self {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
+            Self::Pdf { path, .. } => path,
         }
     }
 }
@@ -1042,6 +1136,7 @@ impl Loaded {
 enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
+    Pdf(PdfLoaded, Option<MTime>),
 }
 
 /// Reads, sizes, decodes and configures a file, on the host's own thread.
@@ -1051,12 +1146,16 @@ fn load_file(
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
     let claimed = ImageFormat::from_extension(&path);
+    let claimed_pdf = is_pdf_path(&path);
     let meta = h.stat(&path).map_err(|e| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantOpen,
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    if claimed_pdf {
+        return load_pdf(h, path, meta);
+    }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
     }
@@ -1080,6 +1179,13 @@ fn load_file(
     // has had its chance: a file the editor can show as text keeps that.
     if let Some(format) = ImageFormat::probe(&bytes) {
         return load_image(h, path, format, meta);
+    }
+    if is_pdf_bytes(&bytes) {
+        return Ok(Loaded::Pdf {
+            path,
+            mtime: meta.mtime,
+            content: pdf_content(bytes),
+        });
     }
     let Some(decoded) = decode_file(&path, &bytes).map_err(|error| {
         EditorOpenError::Message(t_fmt(
@@ -1124,6 +1230,75 @@ fn load_image(
                 ],
             ))
         })
+}
+
+fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn is_pdf_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
+}
+
+/// Read a PDF under the same bounded, versioned Host session as a picture.
+/// Parse/decrypt failures are part of the document, so only the read itself
+/// can fail the open.
+fn load_pdf(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> Result<Loaded, EditorOpenError> {
+    let requested = path.clone();
+    let shown = path.clone();
+    read_pdf(h, path, meta)
+        .map(|(content, mtime)| Loaded::Pdf {
+            path: requested,
+            mtime,
+            content,
+        })
+        .map_err(|error| {
+            EditorOpenError::Message(t_fmt(
+                L10nKey::EditorCantRead,
+                &[
+                    ("path", &shown.display().to_string()),
+                    ("e", &error.to_string()),
+                ],
+            ))
+        })
+}
+
+fn read_pdf(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> std::io::Result<(PdfLoaded, Option<MTime>)> {
+    let mut mtime = meta.mtime;
+    if meta.len > PDF_MAX_BYTES {
+        return Ok((
+            PdfLoaded::Failed(t(L10nKey::EditorPdfTooLarge).to_string().into()),
+            mtime,
+        ));
+    }
+    let (bound, bytes) = images::read_bytes(
+        h,
+        &path,
+        PDF_MAX_BYTES,
+        &lyrel_core::host::transfer::CancelToken::default(),
+        |_| {},
+    )?;
+    mtime = bound.mtime;
+    Ok((pdf_content(bytes), mtime))
+}
+
+fn pdf_content(bytes: Vec<u8>) -> PdfLoaded {
+    let bytes = Arc::new(bytes);
+    match lyrel_pdf::PdfDocument::load(bytes.clone(), "") {
+        Ok(document) => PdfLoaded::Ready(Arc::new(document)),
+        Err(lyrel_pdf::LoadError::Locked) => PdfLoaded::Locked(bytes),
+        Err(lyrel_pdf::LoadError::Other(message)) => PdfLoaded::Failed(message.into()),
+    }
 }
 
 /// 图片的读取只有一种失败：Host 读不出来。字节读到了但不能解码，是文档

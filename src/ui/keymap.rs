@@ -198,6 +198,27 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The read-only PDF's framing and page stepping. `PdfDocument` is declared
+    // only by the PDF presentation, so these never take keys from text or a
+    // shell. PageUp/PageDown/Left/Right are handled inside the viewer so the
+    // page window follows the action.
+    {
+        use crate::ui::code_editor::{
+            PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
+        };
+        let pdf = Some(crate::ui::code_editor::PDF_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("0", PdfFitWidth, pdf, cx),
+            load_binding("9", PdfFitPage, pdf, cx),
+            load_binding("1", PdfActualSize, pdf, cx),
+            load_binding("secondary-=", PdfZoomIn, pdf, cx),
+            load_binding("secondary-+", PdfZoomIn, pdf, cx),
+            load_binding("+", PdfZoomIn, pdf, cx),
+            load_binding("secondary--", PdfZoomOut, pdf, cx),
+            load_binding("secondary-_", PdfZoomOut, pdf, cx),
+            load_binding("-", PdfZoomOut, pdf, cx),
+        ]);
+    }
     // The SVG preview is the same kind of framed canvas; its context exists
     // only while that side is shown, so source editing keeps its keys.
     {

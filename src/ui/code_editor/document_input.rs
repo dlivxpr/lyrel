@@ -1,5 +1,6 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
 use super::image_document::ImageView;
+use super::pdf_document::PdfView;
 use super::text::TextSnapshot;
 use super::*;
 use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
@@ -11,6 +12,8 @@ pub(crate) enum EditorInput {
     Markdown(Entity<MarkdownEditor>),
     /// 只读静态图片：没有文本，只有取景。
     Image(Entity<ImageView>),
+    /// 只读 PDF：没有文本编辑，只有页、缩放与密码。
+    Pdf(Entity<PdfView>),
     /// SVG 文档：共享逐行保真 Document 的源码与安全原生预览。
     Svg(Entity<SvgView>),
 }
@@ -31,6 +34,7 @@ pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
+    Pdf(gpui_kit::WeakEntity<PdfView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
 }
 impl WeakEditorInput {
@@ -39,6 +43,7 @@ impl WeakEditorInput {
             Self::Code(input) => input.upgrade().map(EditorInput::Code),
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
+            Self::Pdf(input) => input.upgrade().map(EditorInput::Pdf),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
         }
     }
@@ -49,6 +54,7 @@ impl EditorInput {
             Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
+            Self::Pdf(input) => WeakEditorInput::Pdf(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
         }
     }
@@ -67,6 +73,12 @@ impl EditorInput {
     pub(crate) fn image(&self) -> Option<&Entity<ImageView>> {
         match self {
             Self::Image(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn pdf(&self) -> Option<&Entity<PdfView>> {
+        match self {
+            Self::Pdf(input) => Some(input),
             _ => None,
         }
     }
@@ -94,7 +106,7 @@ impl EditorInput {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Pdf(_) => None,
         }
     }
     /// 有文本可编辑、可查找、可保存的输入。图片不是。
@@ -130,6 +142,10 @@ impl EditorInput {
                 input.update(cx, |state, cx| state.set_scroll_offset(offset, cx))
             }
             Self::Image(input) => input.update(cx, |view, cx| {
+                view.scroll().set_offset(offset);
+                cx.notify();
+            }),
+            Self::Pdf(input) => input.update(cx, |view, cx| {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
@@ -279,6 +295,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
+            EditorInput::Pdf(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
         }
     }
@@ -287,6 +304,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
+            EditorInput::Pdf(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
         }
     }
@@ -377,6 +395,7 @@ pub(super) struct Presentations {
         )>,
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
+    pdfs: RefCell<Vec<(TabId, split::GroupId, Entity<PdfView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
 }
 impl Presentations {
@@ -474,6 +493,31 @@ impl Presentations {
             .map(|(_, _, view, _)| view.clone())
     }
 
+    /// 一份 PDF 在一个分组里的呈现。与图片一样：第一组用文档自带的呈现，
+    /// 其余分组各有自己的页与缩放，共享同一份解析结果。
+    pub(super) fn pdf_view<E: 'static>(
+        &self,
+        primary: &Entity<PdfView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<PdfView> {
+        let mut views = self.pdfs.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| PdfView::new(document, window, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
     /// An SVG document's presentation in one group. The first group uses the
     /// document's own view; a split group gets its own mode, source caret and
     /// preview framing over the same Document and preview entity.
@@ -509,6 +553,18 @@ impl Presentations {
         let observe = cx.observe(&view, |_, _, cx| cx.notify());
         views.push((tab, group, view.clone(), observe));
         view
+    }
+
+    pub(super) fn pdf_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<PdfView>> {
+        self.pdfs
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
     }
 
     pub(super) fn svg_existing(
@@ -567,6 +623,9 @@ impl Presentations {
         // 图片呈现没有进行中的输入法组合，也没有缓存的地图与公式：退场只需
         // 让最后一个句柄落下，解码结果由文档本身继续持有。
         self.images
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
+        self.pdfs
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
         // SVG 的源码呈现持有可提交的 preedit；离开分组时先结束自己的 lease，
