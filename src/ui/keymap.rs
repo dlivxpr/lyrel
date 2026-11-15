@@ -217,6 +217,25 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("escape", SqliteCloseValue, Some("DataTable"), cx),
         ]);
     }
+    // CSV/TSV table editing. `CsvDocument` is declared only by the table
+    // presentation, so these chords never take a key from a text field, a
+    // shell, the terminal or the source side of the same document.
+    {
+        use crate::ui::code_editor::{
+            CSV_KEY_CONTEXT, CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
+            CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow,
+        };
+        let csv = Some(CSV_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("f2", CsvEditCell, csv, cx),
+            load_binding("secondary-shift-up", CsvInsertRowAbove, csv, cx),
+            load_binding("secondary-shift-down", CsvInsertRowBelow, csv, cx),
+            load_binding("secondary-shift-backspace", CsvDeleteRow, csv, cx),
+            load_binding("secondary-shift-left", CsvInsertColumnLeft, csv, cx),
+            load_binding("secondary-shift-right", CsvInsertColumnRight, csv, cx),
+            load_binding("secondary-shift-delete", CsvDeleteColumn, csv, cx),
+        ]);
+    }
     // The JSON structure tree's history keys. A tree presentation edits the
     // shared source Document through its ordinary `replace_ranges`, so undo
     // and redo there are the same document history the source view uses, not

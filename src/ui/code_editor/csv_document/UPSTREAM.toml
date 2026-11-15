@@ -1,4 +1,11 @@
 # 记录导入前核对的原始源码摘要；本地适配后的文件不应与上游相等。
+#
+# #288 局部 mutation 层（`edit.rs`）是 Lyrel 补缺，不是上游源码：Glim 的 CSV
+# reader 只有只读表格，没有保真写回。它按本清单记录的记录／字段源区间计算
+# 单元格、表格粘贴与行列增删的局部替换，交给共享 Document 作为一次 history
+# 记录；不序列化整表、不使用排序／筛选后的显示位置、不改动未触及字段的
+# 拼写／引号／分隔符／BOM／编码／逐行行尾。字节级回归见 `edit_tests.rs`，
+# 生产工作台消费者见 `tests.rs`。
 repository = "https://github.com/glimapp/glim"
 revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
 license = "MIT"

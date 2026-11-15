@@ -25,6 +25,7 @@
 ### 新增
 
 - #287：CSV／TSV 接入共享保真源码和虚拟化只读表格，保留 quoted／多行／不等长逻辑记录、完整字段查看与复制、键盘源码定位，以及每个呈现独立的视图筛选／排序。后台解析和查询按文档修订拒绝迟到结果；源码编辑、编码／BOM、逐行换行、历史与保存沿用现有 Host 文档。表格内修改仍归 #288；原生、真实远端与双平台验收另行记录。
+- #288：CSV／TSV 表格加入真实单元格输入、矩形复制与表格粘贴、行列插入／删除。每个逻辑操作是对共享 `Document` 的一次 revision 校验局部源替换，参与源码与表格共同的 Undo／Redo、dirty、保存、另存为、在途／失败写入、外部冲突与未保存关闭；完成较早的保存不会把更新的编辑标记为已保存。未触及字段的拼写、引号、分隔符、BOM／编码与逐行行尾保持原样，不等长记录不被补齐；排序／筛选仍只改视图，粘贴与行列操作按逻辑记录身份工作，过期解析不写回。生产工作台与 GUI-free 字节回归见 `src/ui/code_editor/csv_document`；原生、真实 SSH、macOS 与系统 IME 仍未验收。
 - #291：JSONL／NDJSON 记录视图加入逐行保真编辑：记录内标量值、重复键 occurrence、object／array 成员可局部修改；整条记录可作为一个单行 JSON 值替换，也可在选中记录后插入新记录或删除该物理行。命令复用 `(path, range, key_range)` 身份和共享 `Document` history，提交前要求已安装投影仍匹配源码 revision；嵌套命令只解析目标记录自己的 token，修改后只复核目标行，邻近无效记录不阻止合法记录编辑。新值必须单行且恰好一个严格 JSON 值；未触及行的 BOM／编码、逐行行尾、空行、exact number 与 escape 原拼写保留，不把文件转成 JSON 数组、不整篇序列化或格式化。记录预算与节点预算对齐为 19,999 条，超限仍保留完整源码编辑与保存。生产工作台回归覆盖映射 Host 同名诱饵、混合有效／无效记录、Unicode、插删后导航、过期命令与迟到解析、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭、独立重开及真实远端路由保存回读；真实原生窗口、系统 IME、macOS 与性能仍按最终验收记录。
 - #290：JSON／JSONC 结构树加入局部编辑：改标量值、只重命名选中的重复键 occurrence、向 object／array 末尾插入成员、删除成员。命令以 `(path, range, key_range)` 绑定当前投影并要求 revision 仍匹配源码权威，可见行号不是写入身份；新值片段与生成的键先由 `jsonc-parser` 校验，写入前再解析整篇结果。替换清单经共享 `Document` 的 `replace_ranges` 成为一条普通 history，保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；注释、键序、未选中转义和 `1e2`／`-0`／超浮点精度大整数保持原拼写。新增共享 `structure_edit` 单／双字段面板供后续结构格式复用；结构树持有键盘时 `Ctrl`／`Cmd`+`Z` 与 `Ctrl`／`Cmd`+`Shift`+`Z`（Windows／Linux 另含 `Ctrl`+`Y`）经同一源码 presentation 的 `EditorState::undo_document`／`redo_document` 撤销／重做，仍停在树上、不切换源码模式，也不另建 history。JSONL／NDJSON 的记录编辑见 #291。真实原生窗口、真实 SSH 产品路径、macOS、IME 与性能仍按最终验收记录。
 - #270：完整单色 Glyph Protocol 正常启用，GUI 对实际支持 `glyph-support` 的 pane endpoint 声明完整绘制能力；daemon 仅为当前 rendering controller 的 `s` 广告 `fmt=glyf`，state-only、observer、脱离及替代 controller 不继承能力声明。保留有界 `q/r/c`、注册／布局／保留态和单一实时回复所有者，不启用颜色格式、全局字体注入、磁盘 glyph cache 或默认关闭实验开关。正式 `omp/18.20.0` 已在隔离真实 PTY／生产消费者中完成 bundle 注册与绘制；该后台证据不替代 Windows 原生像素、WSL／真实 SSH 或最终组合验收。Windows fixture 显式完成 ConPTY 首次 DA1 初始化，真实客户端 harness 分开 shell source 引用与 argv，并禁止向 omp 注入 fixture 命令。
@@ -47,6 +48,8 @@
 - #298：draw.io 图在同一固定离线引擎上获得真实可视化编辑。引擎侧的模型修改、删除、剪贴板与页面切换经会话内的 commit POST（按会话 id 与单调序列校验、体积预算拒绝、sync 允许同序列重放）回到 owning 文档，解析失败的提交被拒绝并保留上一份正常字节；同字节 sync 只推进已确认修订。工作台 undo/redo 是文档级共享历史——任一 presentation 的编辑可在另一 presentation 撤销，不存在引擎本地第二历史；保存先经 sync flush 等待引擎提交当前模型再走同一 Host 写路径，外部重写下 dirty 图如实冲突。引擎自身 Ctrl+S、剪贴板复制／剪切／删除与粘贴经同一桥接；页面、缩放、多页切换与原 session/token/资源白名单不变。本机原生 WebView 验收、真实 SSH 远端编辑与双平台边界按实际执行另行记录，不预先声明。
 
 ### 修复
+
+- #288：CSV／TSV 表格呈现挂接已有文档右键菜单，修复行列操作只有键盘路径、鼠标无法打开菜单的问题；生产工作台回归实际通过菜单插入行并核对局部源码及单步撤销。
 
 - #279：根分发许可证补齐固定 draw.io 引擎、图形资源和 Windows WebView2 SDK 的完整原始许可与声明；沿现有 ZIP／Inno／app／DMG 链分发。Windows MSVC 实际静态链接 SDK loader，移除误加到 CLI／server／所有测试的动态 DLL 暂存依赖；draw.io 预览仍需系统 WebView2 Runtime，缺失时不自动下载安装。
 - #283：SVG 图像自身按固有 CSS 像素与缩放比例设置宽高，不再继承居中视口的填充尺寸；修复 64×64 SVG 在 1:1／100% 时仍被放大铺满的问题。真实工作台回归检查图像 bounds 的 1:1／125%／fit，不只检查比例字段。
