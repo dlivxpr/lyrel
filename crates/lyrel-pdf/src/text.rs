@@ -39,16 +39,6 @@ pub struct Selection {
 /// other selections.
 pub type TextSelection = Selection;
 
-/// Distance to a run that prefers the same *line* over a nearer run on
-/// another line: a drag to the right edge of a paragraph ends far from every
-/// glyph horizontally, and plain Euclidean distance would snap back to the
-/// rightmost glyph of the previous line.
-fn line_dist2(point: NormPoint, rect: NormRect) -> (f32, f32) {
-    let dx = (rect.x - point.x).max(point.x - rect.right()).max(0.0);
-    let dy = (rect.y - point.y).max(point.y - rect.bottom()).max(0.0);
-    (dy * dy, dx * dx)
-}
-
 /// One extracted glyph cluster: its text (usually one char; a ligature may be
 /// several) and its normalized bounding rect on the page.
 struct Run {
@@ -519,31 +509,45 @@ impl PageText {
         lines
     }
 
-    /// Run rect in the page's rotated display space, matching the normalized
-    /// points a drag reports.
-    fn display_rect(&self, rect: NormRect) -> NormRect {
-        let first = self.display * Point::new(f64::from(rect.x), f64::from(rect.y));
-        let last = self.display * Point::new(f64::from(rect.right()), f64::from(rect.bottom()));
-        NormRect {
-            x: first.x.min(last.x) as f32,
-            y: first.y.min(last.y) as f32,
-            w: (last.x - first.x).abs() as f32,
-            h: (last.y - first.y).abs() as f32,
-        }
-    }
-
+    /// Select the reading line before its glyph: a descender must not make a
+    /// distant `g` nearer than the actual line-end character. Match the line
+    /// grouping used for text reconstruction, before page rotation.
     fn nearest_run(&self, point: NormPoint) -> Option<usize> {
-        self.runs
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                let a = line_dist2(point, self.display_rect(a.rect));
-                let b = line_dist2(point, self.display_rect(b.rect));
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            })
-            .map(|(index, _)| index)
+        let point = self.display.inverse() * Point::new(f64::from(point.x), f64::from(point.y));
+        let point = NormPoint {
+            x: point.x as f32,
+            y: point.y as f32,
+        };
+        let mut nearest = None;
+        let mut nearest_distance = (f32::INFINITY, f32::INFINITY);
+        let mut start = 0;
+        for line in self.runs.chunk_by(|a, b| {
+            let height = a.rect.h.max(b.rect.h).max(0.001);
+            (a.rect.center_y() - b.rect.center_y()).abs() <= height * 0.6
+        }) {
+            let mut top = f32::INFINITY;
+            let mut bottom = f32::NEG_INFINITY;
+            let mut horizontal = f32::INFINITY;
+            let mut line_nearest = start;
+            for (index, run) in line.iter().enumerate() {
+                top = top.min(run.rect.y);
+                bottom = bottom.max(run.rect.bottom());
+                let distance = (run.rect.x - point.x)
+                    .max(point.x - run.rect.right())
+                    .max(0.);
+                if distance < horizontal {
+                    horizontal = distance;
+                    line_nearest = start + index;
+                }
+            }
+            let vertical = (top - point.y).max(point.y - bottom).max(0.);
+            if (vertical, horizontal) < nearest_distance {
+                nearest_distance = (vertical, horizontal);
+                nearest = Some(line_nearest);
+            }
+            start += line.len();
+        }
+        nearest
     }
 
     fn runs_text(&self, low: usize, high: usize) -> String {
