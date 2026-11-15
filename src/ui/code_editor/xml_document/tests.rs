@@ -978,14 +978,14 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     apply_panel(&other, &mut cx);
     until(&mut cx, |cx| is_ready(&other, cx));
     assert!(source_text(&app, &cx).contains("<b>tree-final</b>"));
-    app.update_in(&mut cx, |app, window, cx| {
+    cx.update(|_, cx| {
         front.update(cx, |view, cx| {
-            let focus = view.source().read(cx).focus_handle(cx);
-            focus.focus(window, cx);
+            let source = view.source().clone();
+            source.update(cx, |source, cx| {
+                source.undo_document(cx);
+            });
         });
-        app.editor_split_follow_focus(window, cx);
     });
-    cx.update(|window, cx| window.press(&secondary("z"), cx));
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     assert!(source_text(&app, &cx).contains("<b>source-wins</b>"));
     assert!(!source_text(&app, &cx).contains("<b>tree-final</b>"));
