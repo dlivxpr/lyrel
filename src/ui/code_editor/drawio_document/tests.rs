@@ -10,6 +10,7 @@ use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
+use crate::ui::code_editor::drawio_engine::surface::SurfaceEvent;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
