@@ -233,7 +233,7 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 - 取消绑定到请求而非视图：`Requests` 的请求级 interrupt hook 调用 `sqlite3_interrupt`，progress handler 同时检查令牌与查询秒预算；旧 cancel 不能停止同一视图上后续页。连接断开时服务端清空该连接的全部视图。
 - wire 为 control v18 的 `ControlRequest::Sqlite`／`ReplyOk::Sqlite`，能力名 `sqlite-browse-v1`。缺少能力的 peer 在发送前返回 `Unsupported`，不返回假空 schema。GUI 不在本地读取同名路径：`RemoteHost` 把请求发给实际 daemon，映射 Host 在测试宿主中同样转到其根目录。
 - 值保留 NULL、精确 INTEGER、REAL 位模式（含非有限值）、原始 TEXT 与 BLOB 字节；页面携带页号、列窗与 `more`，不拼接另一视图的数据。`SqliteQuery` 没有任意 SQL 字段，所有标识符先对照视图 schema 再引用，search 始终是绑定参数。
-- GUI 文档在 `loading`、空 schema、错误、刷新与取消时都有可见状态；架构列表显示表／视图与存储的 SQL 定义，分页与列窗来自同一视图。筛选、排序与完整值检查器属于 #296，本切片不绘制无效控件。
+- GUI 文档在 `loading`、空 schema、错误、刷新与取消时都有可见状态；架构列表显示表／视图与存储的 SQL 定义，分页与列窗来自同一视图。#296 补齐可见筛选、表头三态排序与完整值检查器：筛选与排序作为 `SqliteQuery` 字段随同一受限 SQL 走，检查器经 `sqlite_value` 按字节偏移分块读取，并把 cell 身份绑定到 view／epoch／query_rev——筛选、排序或换视图之后打开的值不会冒充新查询的单元格。
 
 新增 wire 消息前读取 `daemon/control.rs` 与 `daemon/protocol.rs`，按现有规则升级 control 版本；可安全忽略的字段才通过 feature 协商。新客户端遇到缺少能力的远端必须明确提示，不显示假空结果。GUI、解码引擎和 WebView 依赖不得进入 `lyrel-core`／server／CLI；本切片的 `rusqlite`（`bundled` + `hooks`）作为 headless 依赖单独记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。真实 SSH、原生窗口、系统 IME 与 macOS 结果仍按各自验收边界单独记录。
 

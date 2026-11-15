@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#295 的 [SQLite 数据库文档](#sqlite-documents)。PDF 大纲／选字复制／搜索归 #285，SQLite 筛选／排序／完整值检查归 #296；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
+> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索归 #285；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
 
 本节使用以下术语：
 
@@ -252,7 +252,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 1. 共享文件打开入口与 Host 有界读取基础，接入常见位图和 SVG。
 2. 接入 PDF 与 EPUB，验证长文档阅读、搜索、文本选择和内存回收。
 3. 接入 CSV 及 JSON／YAML／TOML／XML 的保真格式编辑，验证源码、视图和共享历史。
-4. SQLite 的只读表／视图、schema 与基础分页已由 #295 落地；筛选、排序与完整值检查留给 #296。draw.io 的离线引擎、保存与冲突处理仍待实现。
+4. SQLite 的只读表／视图、schema、分页、筛选、排序与完整值检查已由 #295／#296 落地。draw.io 的离线引擎、保存与冲突处理仍待实现。
 
 每种格式分别记录 Windows／macOS、本地／真实远端的结果。只读预览检查原件未修改；格式编辑检查真实输入、Undo／Redo、保存、关闭与独立重开。结构化文本还要逐字节核对未修改部分，覆盖注释、重复键、大整数、引用、混合内容、编码和换行。
 
@@ -335,15 +335,15 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 证据范围：Windows 生产工作台的完整章节末尾搜索、偏好／书签／阅读位置保存重开和损坏／不支持状态三项通过，原件未写；同次编译零 warning。另由 GUI-free 消费者通过新增的 Unicode 搜索范围与有界上下文回归。上述不代替最终组合候选的原生窗口、真实 SSH、macOS、显示缩放、系统 IME 或性能验收。
 
 <a id="sqlite-documents"></a>
-#### SQLite 数据库文档（#295 已实现）
+#### SQLite 数据库文档（#295、#296 已实现）
 
-#295 交付表、视图、schema 与存储 SQL 定义、基础分页记录和按列窗浏览；筛选、排序、完整单元格检查与更细的完整值交互属于 #296，本切片不显示这些无效控件，也不提供任意 SQL 控制台。扩展名 `.sqlite`、`.sqlite3`、`.db`、`.db3` 进入数据库文档；其他名字不因内容猜测被抢走。
+#295 交付表、视图、schema 与存储 SQL 定义、基础分页记录和按列窗浏览；#296 补齐可见筛选、表头三态排序与完整单元格检查/复制，不提供任意 SQL 控制台。扩展名 `.sqlite`、`.sqlite3`、`.db`、`.db3` 进入数据库文档；其他名字不因内容猜测被抢走。
 
 - 身份与打开：打开请求发给实际所属 Host。本机 `LocalHost` 在进程内打开，远端 `RemoteHost` 经 control v18 的 `sqlite-browse-v1` 请求；映射 Host 把路径解析到自己的根目录，测试中使用同路径本机替身证明数据仍来自该 Host。数据库字节不下载到桌面，分页与值请求都限制在 Host 侧。
 - 读取视图：每次打开建立一条只读连接与 `BEGIN DEFERRED` 读取事务，schema、列与页共享同一数据库版本。视图有 30 秒闲置上限、180 秒绝对上限与单 Host 64 个视图上限；过期后显示刷新提示，刷新打开新身份。只读打开不得写数据／schema、改变 journal 模式、checkpoint 源库或加载扩展；可能改变 `-shm` 的正常 SQLite 协调与禁止的数据写入分开表述，需要恢复才能打开的 WAL 被明确拒绝。
 - 值与取消：NULL、精确 INTEGER、非有限 REAL、原始 TEXT 与 BLOB 都以类型化值穿过 wire；页面携带页号、列窗与 `more`。取消绑定到具体请求，旧取消不会停止同一视图上的新页；查询有秒预算、行数／行宽与返回大小上限。
-- 呈现：`src/ui/code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。
-- 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。生产工作台回归覆盖类型化值、原件不变与分屏独立焦点；Linux 私有回环 SSH 已执行共享读取契约。该客户端与远端共享测试文件系统，不代替 Windows 远端、独立物理主机、native 窗口、系统 IME、macOS 或性能验收。
+- 呈现：`src/ui/code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、筛选输入、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。筛选经 Glim 250 ms 防抖把单个绑定参数送入受限 predicate（对所有列做 `instr` 子串匹配），排序经表头循环 降序→升序→还原、名指向 schema 列并随列窗映射，切表清空排序、刷新保留筛选与排序；状态行如实显示当前筛选与排序。完整值检查器（双击或选中单元格 Enter）经同一 query 快照与 `sqlite_value` 按精确字节偏移分块读取，BLOB 显示偏移十六进制转储、复制为连续 hex，非 UTF-8 文本复制标注 hex，NULL 不置剪贴板，超过 8 MiB 的值保持可翻页但拒绝部分复制并说明限额；`secondary-f` 聚焦筛选、`escape` 关闭检查器。检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。
+- 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。生产工作台回归覆盖类型化值、筛选/排序可见行为、完整值分块与剪贴板、WAL writer 快照、原件不变与分屏独立焦点；Linux 私有回环 SSH 复用同一 fixture 执行共享读取契约，#296 新增的筛选／排序／分块值契约已进入同一套例、其实际 SSH 执行按交付记录单独说明，不把本地结果记为远端通过。该客户端与远端共享测试文件系统，不代替 Windows 远端、独立物理主机、native 窗口、系统 IME、macOS 或性能验收。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

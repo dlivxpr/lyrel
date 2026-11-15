@@ -57,7 +57,10 @@ use svg_document::{SvgDocument, SvgMode, SvgView};
 mod test_host;
 
 pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
-pub(crate) use sqlite_document::Refresh as SqliteRefresh;
+pub(crate) use sqlite_document::{
+    CloseValue as SqliteCloseValue, FocusFilter as SqliteFocusFilter,
+    InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
+};
 
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
 pub(crate) use book_view::KEY_CONTEXT as BOOK_KEY_CONTEXT;
