@@ -185,7 +185,7 @@ Unix 的 daemon handoff 是独立的升级路径：通过 exec 继承本地 PTY 
 
 ## 编辑器与 agent 的边界
 
-当前的文档编辑与终端输入是不同能力，两者均未引入 WebView 或代理第三方应用界面。下方[文件能力扩展设计](#file-capability-design)仅为待实现的 draw.io 本机引擎定义局部例外，不改变当前行为，也不授权普通文本、Markdown 或终端执行任意网页脚本。
+当前的文档编辑与终端输入是不同能力，两者均未引入 WebView 或代理第三方应用界面。draw.io 本机引擎的局部例外已由 #297／#298 实现为固定的离线 viewer／editor，不改变普通文本、Markdown 或终端行为，也不授权它们执行任意网页脚本。
 
 文件缓冲区按 Host 与文档身份加载、监视和保存。编辑器用工作区、`HostId`、目标文档／分组与请求序号核对结果，恢复另有 `context_epoch`；这与文件树按 Host adapter 实例隔离不是同一机制。
 
@@ -193,14 +193,14 @@ Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即�
 
 每个 presentation 都安装 writing、table/code、owning-Host 图片/链接、结构公式及 Mermaid provider。普通链接采用 release 单击，caret 附近按上游语义显露标记；不保留旧 Ctrl+Click-only、始终隐藏标记或旧 WYSIWYG fallback。MDX 是 source-only，旧 rich component/inspector/workspace embed 已退役；frontmatter 和未知语法保留源码，不执行项目组件。公式与图形在 native Rust 中呈现，不使用浏览器或 Node.js 编辑器。
 
-当前已接入的源码例外涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。#279 新批准、尚待实施的格式源码复用范围见下方[上游源码复用与适配](#file-source-reuse)。LSP 仍属于桌面，headless 不引入 GUI。
+当前已接入的源码例外涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。#279 的格式源码复用已按下方[上游源码复用与适配](#file-source-reuse)与各模块 `UPSTREAM.toml` 实施，逐格式来源、适配与拒绝理由以这些记录为准。LSP 仍属于桌面，headless 不引入 GUI。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 
 <a id="file-capability-design"></a>
-## 文件能力扩展设计（部分已实现）
+## 文件能力扩展设计（已实现能力与验收边界）
 
-本节记录文件能力的架构约束。#280 的静态图片、#281 的版本化分段读取、#282 的 GIF／TIFF、#283 的 SVG 源码／安全预览、#284 的 PDF 页／缩放／密码／既有外观、#285 的 PDF 大纲／选字／搜索、#286 的 EPUB 阅读与 #295 的只读 SQLite 浏览已有实现；其余未列明的编辑能力仍待完成。产品范围、逐格式支持深度及实际验收边界以[文件能力扩展设计](/window/side-panel#file-format-plan)及各专节为准；源码接入不表示双平台验收通过，Office、Notebook、kernel 与 Plotly 均不在本轮范围。
+本节记录文件能力的架构约束。#280 的静态图片、#281 的版本化分段读取、#282 的 GIF／TIFF、#283 的 SVG 源码／安全预览、#284／#285 的 PDF 页／缩放／大纲／选字／搜索、#286 的 EPUB 阅读、#287／#288 的 CSV／TSV、#289–#294 的 JSON／YAML／TOML／XML、#295／#296 的只读 SQLite 浏览与 #297／#298 的离线 draw.io 预览／编辑均已接入各自的文档与工作台流程。产品范围、逐格式支持深度及实际验收边界以[文件能力扩展设计](/window/side-panel#file-format-plan)及各专节为准；源码接入不表示双平台实窗、系统 IME、真实 SSH 或性能验收通过，Office、Notebook、kernel 与 Plotly 仍不在本轮范围。
 
 ### 文件打开与状态归属
 
@@ -270,11 +270,11 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 | #292–#294，YAML／TOML／XML | 复用 #289 移植的树交互与 Lyrel history；Glim `glim-services/src/graph.rs` 的 YAML／XML 分支仅作输入／展示差异参考 | #292 已实现：registry `yaml-edit =0.3.6`（`default-features=false`）在后台提供无损 CST，投影多文档／锚点／别名／tag／标量原拼写与 byte range；mutation 用同一 parser 校验片段（含共享面板多行 block scalar 与 flow 复杂键）并规划最小 splice，写入前复核整篇与 revision；`yaml_document/UPSTREAM.toml` 记录被拒绝的 Glim YAML→JSON 投影与依赖来源。#293 已实现：registry `toml_edit 0.25.19` 只读 `Document::parse` 原区间、局部 splice、交错表／AoT 保留，不使用 `DocumentMut` 整篇回写。两者共用 `structure_rows`／`StructureEditPanel`／Document history（含树焦点 undo_document／redo_document）、保存与冲突所有者。#294 已实现：registry `xmlparser =0.13.6` 保留元素／属性／文本／CDATA／注释／PI／声明 byte range，`roxmltree 0.21.2` 以 `allow_dtd:false`、`entity_resolver: None` 做良构与命名空间解析；`xml_document/projection.rs` 按源码顺序建树，`mutation.rs` 用 `(path, kind, range, key_range, value_range)` 重解析目标并只规划局部 splice，写入前复核整篇良构性、命名空间与预算，经共享 `Document::replace_ranges` 成为一条 history，树焦点撤销／重做共用同一 history。DTD／外部实体不解析、不访问文件或网络 | Glim YAML／XML 是有损只读投影；不移植 YAML→JSON 或扁平 XML 数据模型。不移植 YAML→JSON 或扁平 XML 数据模型，也不声称现有代码已支持 XML CDATA 等保真要求 |
 | #295–#296，SQLite | [Glim `glim-services/src/sqlite/browser.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/sqlite/browser.rs)、`glim-core/src/table.rs`、`glim-app/src/views/reader/sqlite.rs` 与 `sqlite/view.rs` | 移植受限 SQL 构造、列／分页／筛选／排序／完整值读取及交互；连接与查询移到 owning Host，保留值类型，补 read-view 生命周期 | 明确排除 `sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制；不沿用每次查询独立连接而未声明的跨页语义或把显示文本当无损值 |
 | #297–#298，draw.io | 固定版本官方离线引擎；Glim `glim-services/src/drawio.rs::decode_page` 仅在需要时作为压缩格式辅助代码／夹具来源 | #297 落地只读预览；#298 在其上接真实编辑：引擎 commit 经会话内 `POST .../commit|sync/<seq>` 回到 owning 文档，工作台 undo/redo 是文档共享历史而非引擎本地栈，保存先经 sync flush 确认最新提交再走同一 Host 写路径；dirty、外部冲突与未保存关闭复用既有 buffer 生命周期。原始摘要与逐项 notice 见 `assets/drawio/{UPSTREAM.toml,PROVENANCE.json,THIRD-PARTY-NOTICES.md}` | `extensions.min.js`（LGPL libavoid、EPL ELK）因固定发行无公开对应源码而不分发，MathJax、模板、字体、PlantUML 同样排除；macOS 宿主已按同一 bridge 接入 wry 的真实 WKWebView（`lyrel://app` 自定义 scheme、CSP、navigation/new-window/download/permission/drag 拒绝），但未在本机或 CI macOS 运行；原生实窗／IME／双平台仍不得写成通过。Glim 基本形状 renderer 与 Zorite 白板仍不是替代品 |
-| #299，集成接受 | 前述实际导入模块的 `UPSTREAM.toml`、所需 notices，以及 Lyrel 原生产消费者 | 汇总每张票保留／适配／补齐／拒绝的具体记录，检查是否偷换成整项自建 | 这是实现后的集成接受票；本轮不执行，不把固定源码阅读当兼容、实窗或远端验收 |
+| #299，集成接受 | 各模块实际 `UPSTREAM.toml`、根 `LICENSE` notices、`assets/drawio` 来源／分发闭包与 Lyrel 原生产消费者 | 已核对 13 份来源记录（#280–#298 的 12 个新模块记录及既有 `lyrel-markdown-editor`）：59 条 source 记录（51 imported、5 adapted、3 evaluated／rejected）、5 条 dependency、5 条 extension；缓存中的原始上游字节与记录的 SHA-256 逐项一致，本地目标路径均存在，拒绝项带具体理由。根 `LICENSE` 按 `Cargo.lock` 修正了过期的 roxmltree 0.21.1 项；Glim／Zorite／draw.io notices 与导入夹具按现有清单进入分发。新增生产工作台混合格式与同名双 Host 消费者，真实 SSH 混合读／编辑／保存／独立重开作为显式 `--ignored` 用例 | 不把静态来源核对当运行验收。Windows／macOS 实窗、系统 IME、整包安装／更新、最终平台 CI 与隔离性能仍是独立边界；`ignored` 的真实 SSH 用例需显式 fixture，未运行时保持未验证 |
 
 Glim 的测试代码可从上述模块内联测试与 `glim-services/tests/reader_boundaries.rs`、`reader_session_regressions.rs` 提取适用场景；`assets/reader-contracts/table.csv`、`table.json`、`sqlite.sql`、`book.epub.json` 仅在逐项核对来源许可后使用。Zorite PDF 的合成测试位于四个 `src/*.rs` 内，不能据此宣称存在完整实文档夹具。保留场景而替换 `/usr/bin/sqlite3`、`/usr/bin/zip` 等平台生成方式；不导入无关格式测试或第三方整包资产。
 
-当前静态审阅还发现 PDF 文本定位的 UTF-8 字节边界风险、未处理的裁剪／命名目标，以及表单 appearance 注释与依赖源码不一致。实现时逐项确认并修复相关路径，保留可用算法；不机械复制已知缺陷，也不据未执行的静态推断声称测试已失败或通过。
+PDF 文本定位的 UTF-8 字节推进、裁剪／命名目标与表单 appearance 偏差已按实现记录修复：`crates/lyrel-pdf` 保留可用算法，同时修正 byte-index 边界、保留裁剪栈、解析 named destination，并把无 `/AP` 表单改为解密后的只读值叠加，而不是写回合成外观。draw.io 与各格式消费者仍按各自测试与验收记录核对，不机械复制上游缺陷，也不据未执行的静态推断声称已通过。
 
 ### draw.io 的局部引擎例外
 

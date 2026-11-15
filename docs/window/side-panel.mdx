@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)、[YAML 源码链接结构与局部编辑](#yaml-documents)、[TOML 源码链接结构与局部编辑](#toml-documents)、[XML 有序结构与局部编辑](#xml-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑，#292 交付 YAML 键／值／sequence 编辑与锚点／别名／tag／多文档保真。其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
+本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)、[YAML 源码链接结构与局部编辑](#yaml-documents)、[TOML 源码链接结构与局部编辑](#toml-documents)、[XML 有序结构与局部编辑](#xml-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑，#292 交付 YAML 键／值／sequence 编辑与锚点／别名／tag／多文档保真，#293／#294 补齐 TOML／XML 的局部结构编辑，#287／#288 交付 CSV／TSV 表格与保真编辑，#297／#298 交付 draw.io 离线预览与编辑。各专节分别说明实现深度和未验收边界；双平台实窗、系统 IME、整包安装／更新与真实 SSH 不以 headless 测试替代。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -192,11 +192,11 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 如果窗口太窄，无法同时为终端和文档提供可读宽度，则仅对当前文件临时使用填满窗口布局——加宽窗口后，分栏会恢复，而你的设置不会改变。
 
 <a id="file-format-plan"></a>
-### 文件能力扩展设计（已确认，待实现）
+### 文件能力扩展设计（已实现能力与验收边界）
 
-本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
+本节记录已纳入的生产能力、明确限制和尚未执行的验收边界。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#292 的 [YAML 源码链接结构与局部编辑](#yaml-documents)、#293 的 [TOML 源码链接结构与局部编辑](#toml-documents)、#294 的 [XML 有序结构与局部编辑](#xml-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索已由 #285 补齐；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
+> 已接入：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#287／#288 的 CSV／TSV 表格与保真编辑、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#292 的 [YAML 源码链接结构与局部编辑](#yaml-documents)、#293 的 [TOML 源码链接结构与局部编辑](#toml-documents)、#294 的 [XML 有序结构与局部编辑](#xml-documents)、#295／#296 的 [SQLite 数据库文档](#sqlite-documents)，以及 #297／#298 的 draw.io 离线预览与编辑。#299 汇总并交叉验证这些能力；源码接入、headless 工作台测试与真实 SSH 证据不自动等于双平台实窗、系统 IME 或整包安装／更新通过。
 
 本节使用以下术语：
 
@@ -207,7 +207,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 #### 纳入的文件类型
 
-下表定义本轮的目标范围，所有行均为待实现、待验证的能力。
+下表定义已纳入的生产能力及明确限制；逐格式的验证深度与未执行平台边界见各专节，不能把表中存在一行当作双平台实窗已验收。
 
 | 类型 | 预览与阅读 | 编辑范围与明确限制 |
 | --- | --- | --- |
@@ -268,7 +268,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 
 上游的本机路径、macOS 框架、不同 GPUI 类型和有损保存需要适配，不能覆盖 Lyrel 的 Host、Kit/Fast、安全与保真契约。Zorite 的 GPL 应用胶水和 Notebook／白板不在源码许可例外中；draw.io 仍复用固定离线引擎，不把 Glim 的有限形状解析当作完整兼容。具体差异必须在原件完整性、输入、保存和独立重开中验证，不能靠缩减本节范围解决。
 
-当前证据是固定版本的源码与许可核对，不是上游程序实测或 Lyrel 集成通过记录。没有在本次文档更新中导入格式实现、安装依赖或执行新格式；平台、资源预算与真实远端的结果仍须按前述验收记录。
+#299 已实际核对 13 份 `UPSTREAM.toml` 的 59 条 source 记录：51 条 imported、5 条 adapted、3 条 evaluated／rejected，5 条 dependency 与 5 条 extension；缓存上游字节与记录 SHA-256、本地目标路径、拒绝理由和导入夹具均逐项核对，根 `LICENSE` 同时按 `Cargo.lock` 修正了过期的 roxmltree 0.21.1 清单项。draw.io viewer 由 `include_bytes!` 进入二进制，打包脚本复制根 `LICENSE`，其附录包含引擎与 shape／stencil notices；实际安装包和自动更新尚未执行。生产工作台新增混合格式消费者，真实 SSH 用例以显式 `--ignored` fixture 覆盖混合读、编辑、保存与独立重开。Windows／macOS 实窗、系统 IME、整包安装／更新、最终平台 CI 与隔离性能仍按各自证据单独记录，不用 headless 测试或源码核对替代。
 
 <a id="static-image-documents"></a>
 #### 图片文档：静态图、GIF 与多页 TIFF（#280、#282 已实现）
