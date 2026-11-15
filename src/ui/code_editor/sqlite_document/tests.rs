@@ -870,8 +870,8 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     });
     cx.update(|window, _| {
         assert!(
-            !window.find("sqlite-detail").visible(),
-            "the panel is gone, not merely hidden"
+            window.try_find("sqlite-detail").is_none(),
+            "the panel left the tree, not merely hidden"
         );
     });
 
