@@ -280,7 +280,10 @@ fn document_target(path: &str) -> Option<(SessionId, &str)> {
     let rest = path.strip_prefix("/drawio/session/")?;
     let (id, rest) = rest.split_at_checked(32)?;
     let rest = rest.strip_prefix('/')?;
-    if !id.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+    if !id
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
         return None;
     }
     let id = SessionId::parse(id)?;
@@ -294,7 +297,13 @@ pub(crate) fn asset_paths() -> impl Iterator<Item = &'static str> {
 }
 
 #[cfg(test)]
-pub(crate) fn asset_manifest() -> Vec<(&'static str, &'static [u8], &'static str, &'static str, bool)> {
+pub(crate) fn asset_manifest() -> Vec<(
+    &'static str,
+    &'static [u8],
+    &'static str,
+    &'static str,
+    bool,
+)> {
     ASSETS
         .iter()
         .map(|asset| {

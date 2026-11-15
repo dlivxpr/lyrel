@@ -68,17 +68,15 @@ pub(crate) use book_view::{
     BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
     BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
 };
+/// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
+pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
+pub(crate) use drawio_document::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
 pub(crate) use pdf_document::{PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
-/// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
-pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
-pub(crate) use drawio_document::{
-    DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut,
-};
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -3427,8 +3425,9 @@ impl LyrelApp {
             .and_then(|input| input.drawio().cloned());
         let drawio_status: Option<SharedString> =
             drawio.as_ref().map(|view| view.read(cx).status_text(cx));
-        let drawio_page: Option<SharedString> =
-            drawio.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let drawio_page: Option<SharedString> = drawio
+            .as_ref()
+            .and_then(|view| view.read(cx).page_label(cx));
         let drawio_zoom: Option<SharedString> =
             drawio.as_ref().map(|view| view.read(cx).zoom_label());
         let book_status: Option<SharedString> = self

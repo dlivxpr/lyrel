@@ -1193,9 +1193,7 @@ impl EditorBuffers {
                         if let Some(view) = file.input.drawio().cloned() {
                             let LoadedDrawio { bytes, source, .. } = drawio;
                             let document = view.read(cx).document().clone();
-                            document.update(cx, |document, cx| {
-                                document.replace(bytes, source, cx)
-                            });
+                            document.update(cx, |document, cx| document.replace(bytes, source, cx));
                         }
                         cx.notify();
                         return;

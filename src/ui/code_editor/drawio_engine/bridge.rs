@@ -10,9 +10,9 @@ use std::io;
 use std::sync::Arc;
 
 use super::assets::SHELL_URL;
-use super::session::{DocumentSession, PreviewTheme, SessionToken};
 #[cfg(test)]
 use super::session::SessionId;
+use super::session::{DocumentSession, PreviewTheme, SessionToken};
 
 pub(crate) const PROTOCOL_VERSION: u64 = 1;
 pub(crate) const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -85,19 +85,11 @@ impl LiveSession {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(
-        body: Arc<[u8]>,
-        session: SessionId,
-        token: SessionToken,
-    ) -> Self {
+    pub(crate) fn for_test(body: Arc<[u8]>, session: SessionId, token: SessionToken) -> Self {
         Self::with_parts(DocumentSession { id: session, body }, token, SHELL_URL)
     }
 
-    fn with_parts(
-        document: DocumentSession,
-        token: SessionToken,
-        shell_url: &'static str,
-    ) -> Self {
+    fn with_parts(document: DocumentSession, token: SessionToken, shell_url: &'static str) -> Self {
         Self {
             document,
             token,
@@ -384,13 +376,13 @@ mod tests {
     fn foreign_source_token_session_replay_and_shape_are_rejected() {
         let mut session = session();
         assert_eq!(
-            session.accept("https://evil.invalid/drawio/shell.html", &wire(&session, 1, "ready", serde_json::json!({}))),
+            session.accept(
+                "https://evil.invalid/drawio/shell.html",
+                &wire(&session, 1, "ready", serde_json::json!({}))
+            ),
             Err(Reject("source"))
         );
-        assert_eq!(
-            session.accept(SHELL_URL, b"not json"),
-            Err(Reject("json"))
-        );
+        assert_eq!(session.accept(SHELL_URL, b"not json"), Err(Reject("json")));
         let mut message: serde_json::Value =
             serde_json::from_slice(&wire(&session, 1, "ready", serde_json::json!({}))).unwrap();
         message["token"] = serde_json::json!("00000000000000000000000000000000");
@@ -407,10 +399,7 @@ mod tests {
         );
         let first = wire(&session, 1, "ready", serde_json::json!({}));
         assert_eq!(session.accept(SHELL_URL, &first), Ok(BridgeEvent::Ready));
-        assert_eq!(
-            session.accept(SHELL_URL, &first),
-            Err(Reject("seq"))
-        );
+        assert_eq!(session.accept(SHELL_URL, &first), Err(Reject("seq")));
         assert_eq!(
             session.accept(
                 SHELL_URL,
@@ -430,13 +419,23 @@ mod tests {
             SessionId::parse("fedcba9876543210fedcba9876543210").unwrap(),
             SessionToken::random().unwrap(),
         );
-        let old = wire(&first, 2, "state", serde_json::json!({"page":0,"pages":1,"zoom":1}));
+        let old = wire(
+            &first,
+            2,
+            "state",
+            serde_json::json!({"page":0,"pages":1,"zoom":1}),
+        );
         assert_eq!(second.accept(SHELL_URL, &old), Err(Reject("session")));
         ready(&mut second);
         assert_eq!(
             second.accept(
                 SHELL_URL,
-                &wire(&second, 2, "state", serde_json::json!({"page": 0, "pages": 1, "zoom": 1})),
+                &wire(
+                    &second,
+                    2,
+                    "state",
+                    serde_json::json!({"page": 0, "pages": 1, "zoom": 1})
+                ),
             ),
             Ok(BridgeEvent::State {
                 page: 0,
@@ -452,19 +451,32 @@ mod tests {
         assert_eq!(
             session.accept(
                 SHELL_URL,
-                &wire(&session, 1, "state", serde_json::json!({"page":0,"pages":1,"zoom":1})),
+                &wire(
+                    &session,
+                    1,
+                    "state",
+                    serde_json::json!({"page":0,"pages":1,"zoom":1})
+                ),
             ),
             Err(Reject("state-before-ready"))
         );
         ready(&mut session);
         assert_eq!(
-            session.accept(SHELL_URL, &wire(&session, 2, "ready", serde_json::json!({}))),
+            session.accept(
+                SHELL_URL,
+                &wire(&session, 2, "ready", serde_json::json!({}))
+            ),
             Err(Reject("duplicate-ready"))
         );
         assert_eq!(
             session.accept(
                 SHELL_URL,
-                &wire(&session, 2, "failed", serde_json::json!({"message":"bad\n\u{7f}diagram"})),
+                &wire(
+                    &session,
+                    2,
+                    "failed",
+                    serde_json::json!({"message":"bad\n\u{7f}diagram"})
+                ),
             ),
             Ok(BridgeEvent::Failed {
                 message: "baddiagram".to_string()
@@ -473,7 +485,12 @@ mod tests {
         assert_eq!(
             session.accept(
                 SHELL_URL,
-                &wire(&session, 3, "state", serde_json::json!({"page":0,"pages":1,"zoom":1})),
+                &wire(
+                    &session,
+                    3,
+                    "state",
+                    serde_json::json!({"page":0,"pages":1,"zoom":1})
+                ),
             ),
             Err(Reject("state-after-failure"))
         );
@@ -492,7 +509,12 @@ mod tests {
         assert_eq!(
             session.accept(
                 SHELL_URL,
-                &wire(&session, 2, "state", serde_json::json!({"page":0,"pages":2,"zoom":1})),
+                &wire(
+                    &session,
+                    2,
+                    "state",
+                    serde_json::json!({"page":0,"pages":2,"zoom":1})
+                ),
             ),
             Ok(BridgeEvent::State {
                 page: 0,
@@ -504,7 +526,12 @@ mod tests {
         assert!(command.contains("\"cmd\":\"page\""));
         assert!(command.contains("\"page\":1"));
         assert_eq!(session.last_outbound(), 1);
-        assert!(session.command(Command::Fit).unwrap().contains("\"cmd\":\"fit\""));
+        assert!(
+            session
+                .command(Command::Fit)
+                .unwrap()
+                .contains("\"cmd\":\"fit\"")
+        );
         assert_eq!(session.last_outbound(), 2);
     }
 }

@@ -74,10 +74,7 @@ impl DrawioDocument {
     ) -> Self {
         Self {
             content: match parsed {
-                Ok(source) => DrawioContent::Ready {
-                    bytes,
-                    source,
-                },
+                Ok(source) => DrawioContent::Ready { bytes, source },
                 Err(error) => DrawioContent::Failed(SharedString::from(error.to_string())),
             },
             reloading: false,
@@ -134,11 +131,7 @@ impl DrawioDocument {
     }
 
     pub(crate) fn page_name(&self, page: usize) -> Option<&str> {
-        self.source()?
-            .pages
-            .get(page)?
-            .name
-            .as_deref()
+        self.source()?.pages.get(page)?.name.as_deref()
     }
 
     pub(crate) fn failure(&self) -> Option<&SharedString> {
@@ -324,9 +317,9 @@ impl DrawioView {
             parts.push(label.to_string());
         }
         match &self.engine {
-            EngineStatus::Idle | EngineStatus::Starting => parts.push(
-                t(L10nKey::EditorDrawioLoading).to_string(),
-            ),
+            EngineStatus::Idle | EngineStatus::Starting => {
+                parts.push(t(L10nKey::EditorDrawioLoading).to_string())
+            }
             EngineStatus::Ready => parts.push(self.zoom_label().to_string()),
             EngineStatus::Failed(message) | EngineStatus::Unsupported(message) => {
                 parts.push(message.to_string());
@@ -350,7 +343,11 @@ impl DrawioView {
         }
         self.revision = revision;
         let count = self.page_count(cx);
-        self.page = if count == 0 { 0 } else { self.page.min(count - 1) };
+        self.page = if count == 0 {
+            0
+        } else {
+            self.page.min(count - 1)
+        };
         // A new document is a new session. The old WebView token and URL must
         // not survive a reload.
         self.surface = None;
@@ -627,11 +624,7 @@ impl DrawioView {
     ) -> AnyElement {
         let (muted, foreground, warning) = {
             let theme = cx.theme();
-            (
-                theme.muted_foreground,
-                theme.foreground,
-                theme.warning,
-            )
+            (theme.muted_foreground, theme.foreground, theme.warning)
         };
         v_flex()
             .id("drawio-failed")
@@ -643,7 +636,11 @@ impl DrawioView {
             .justify_center()
             .gap_2()
             .px_4()
-            .child(Icon::new(IconName::TriangleAlert).large().text_color(warning))
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .large()
+                    .text_color(warning),
+            )
             .child(div().text_sm().text_color(foreground).child(title))
             .when_some(detail, |panel, detail| {
                 panel.child(
@@ -695,7 +692,11 @@ impl Render for DrawioView {
             )
         };
         let focused = self.focus.contains_focused(window, cx);
-        let ring = if focused { primary } else { gpui_kit::transparent_black() };
+        let ring = if focused {
+            primary
+        } else {
+            gpui_kit::transparent_black()
+        };
         let multipage = self.multipage(cx);
         let page_label = self.page_label(cx);
         let ready = matches!(self.engine, EngineStatus::Ready);
@@ -792,9 +793,7 @@ impl Render for DrawioView {
                             move |bounds, window, cx| {
                                 if let Some(bounds) = bounds.first() {
                                     let bounds = *bounds;
-                                    view.update(cx, |view, cx| {
-                                        view.prepared(bounds, window, cx)
-                                    });
+                                    view.update(cx, |view, cx| view.prepared(bounds, window, cx));
                                 }
                             }
                         })
@@ -869,38 +868,34 @@ impl Render for DrawioView {
             .on_action(cx.listener(|this, _: &DrawioZoomOut, _, cx| this.zoom_out(cx)))
             .on_action(cx.listener(|this, _: &DrawioFit, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &DrawioActualSize, _, cx| this.actual_size(cx)))
-            .on_key_down(
-                cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
-                    let key = event.keystroke.key.as_str();
-                    if event.keystroke.modifiers.secondary(cx)
-                        && matches!(key, "pageup" | "pagedown")
-                    {
-                        return;
-                    }
-                    if this.multipage(cx) {
-                        match key {
-                            "pageup" => {
-                                this.previous_page(cx);
-                                cx.stop_propagation();
-                            }
-                            "pagedown" => {
-                                this.next_page(cx);
-                                cx.stop_propagation();
-                            }
-                            "home" => {
-                                this.set_page(0, cx);
-                                cx.stop_propagation();
-                            }
-                            "end" => {
-                                let last = this.page_count(cx).saturating_sub(1);
-                                this.set_page(last, cx);
-                                cx.stop_propagation();
-                            }
-                            _ => {}
+            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                let key = event.keystroke.key.as_str();
+                if event.keystroke.modifiers.secondary(cx) && matches!(key, "pageup" | "pagedown") {
+                    return;
+                }
+                if this.multipage(cx) {
+                    match key {
+                        "pageup" => {
+                            this.previous_page(cx);
+                            cx.stop_propagation();
                         }
+                        "pagedown" => {
+                            this.next_page(cx);
+                            cx.stop_propagation();
+                        }
+                        "home" => {
+                            this.set_page(0, cx);
+                            cx.stop_propagation();
+                        }
+                        "end" => {
+                            let last = this.page_count(cx).saturating_sub(1);
+                            this.set_page(last, cx);
+                            cx.stop_propagation();
+                        }
+                        _ => {}
                     }
-                }),
-            )
+                }
+            }))
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -928,10 +923,16 @@ pub(super) fn menu_entries(
         .menu(t(L10nKey::EditorImageZoomIn), Box::new(DrawioZoomIn))
         .menu(t(L10nKey::EditorImageZoomOut), Box::new(DrawioZoomOut))
         .menu(t(L10nKey::EditorImageFit), Box::new(DrawioFit))
-        .menu(t(L10nKey::EditorImageActualSize), Box::new(DrawioActualSize));
+        .menu(
+            t(L10nKey::EditorImageActualSize),
+            Box::new(DrawioActualSize),
+        );
     if multipage {
         menu.separator()
-            .menu(t(L10nKey::EditorDrawioPagePrevious), Box::new(DrawioPreviousPage))
+            .menu(
+                t(L10nKey::EditorDrawioPagePrevious),
+                Box::new(DrawioPreviousPage),
+            )
             .menu(t(L10nKey::EditorDrawioPageNext), Box::new(DrawioNextPage))
     } else {
         menu

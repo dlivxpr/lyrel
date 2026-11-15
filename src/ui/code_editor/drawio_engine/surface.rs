@@ -210,15 +210,15 @@ mod windows_host {
     use std::sync::Arc;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use webview2_com::*;
-    use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::UI::Shell::SHCreateMemStream;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
-        SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+        CreateWindowExW, DestroyWindow, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER,
+        SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
         WS_VISIBLE,
     };
+    use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
     struct Shared {
         host: HWND,
@@ -319,8 +319,8 @@ mod windows_host {
             }
             let environment_options = ICoreWebView2EnvironmentOptions::from(options);
             let handler_shared = shared.clone();
-            let handler =
-                CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, env| {
+            let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+                move |result, env| {
                     if let Err(error) = result {
                         fail(&handler_shared, error.to_string());
                         return Ok(());
@@ -338,7 +338,8 @@ mod windows_host {
                     }
                     Self::create_controller(&handler_shared, env);
                     Ok(())
-                }));
+                },
+            ));
             let data_dir = HSTRING::from(data_dir.to_string_lossy().as_ref());
             let created = unsafe {
                 CreateCoreWebView2EnvironmentWithOptions(
@@ -478,7 +479,9 @@ mod windows_host {
             if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
                 unsafe { controller4.SetAllowExternalDrop(false)? };
             } else {
-                return Err(windows::core::Error::from(windows::Win32::Foundation::E_NOINTERFACE));
+                return Err(windows::core::Error::from(
+                    windows::Win32::Foundation::E_NOINTERFACE,
+                ));
             }
             let webview4: ICoreWebView2_4 = webview.cast()?;
             let webview22: ICoreWebView2_22 = webview.cast()?;
@@ -682,7 +685,8 @@ mod windows_host {
                         let Some(script) = script else {
                             return Ok(());
                         };
-                        let handler = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
+                        let handler =
+                            ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
                         let _ = webview.ExecuteScript(&HSTRING::from(script), &handler);
                         Ok(())
                     })),
@@ -755,7 +759,9 @@ mod windows_host {
             let message = {
                 let mut state = self.shared.borrow_mut();
                 if state.closed {
-                    return Err(SurfaceError::Platform("the diagram surface is closed".into()));
+                    return Err(SurfaceError::Platform(
+                        "the diagram surface is closed".into(),
+                    ));
                 }
                 state
                     .session
@@ -820,8 +826,7 @@ mod windows_host {
 
     fn private_data_dir() -> Result<PathBuf, SurfaceError> {
         let mut suffix = [0u8; 16];
-        getrandom::fill(&mut suffix)
-            .map_err(|error| SurfaceError::Platform(error.to_string()))?;
+        getrandom::fill(&mut suffix).map_err(|error| SurfaceError::Platform(error.to_string()))?;
         let mut name = String::from("lyrel-drawio-");
         for byte in suffix {
             name.push(char::from(b"0123456789abcdef"[(byte >> 4) as usize]));
@@ -937,7 +942,12 @@ mod windows_host {
             unsafe { SHCreateMemStream(Some(body)) }
         };
         unsafe {
-            env.CreateWebResourceResponse(stream.as_ref(), response.status as i32, &reason, &headers)
+            env.CreateWebResourceResponse(
+                stream.as_ref(),
+                response.status as i32,
+                &reason,
+                &headers,
+            )
         }
     }
 }
@@ -1118,7 +1128,9 @@ mod macos_host {
             let message = {
                 let mut state = self.shared.borrow_mut();
                 if state.closed {
-                    return Err(SurfaceError::Platform("the diagram surface is closed".into()));
+                    return Err(SurfaceError::Platform(
+                        "the diagram surface is closed".into(),
+                    ));
                 }
                 state.session.command(command)
             };

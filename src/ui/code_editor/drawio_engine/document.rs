@@ -272,16 +272,20 @@ mod tests {
         let dtd = b"<!DOCTYPE mxfile [<!ENTITY x \"y\">]><mxfile/>";
         assert!(matches!(parse(dtd), Err(DrawioError::Xml(_))));
         assert_eq!(parse(b"<mxfile></mxfile>"), Err(DrawioError::NoPages));
-        let utf16 = "\u{feff}<mxfile/>".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
-        assert!(matches!(parse(&utf16), Err(DrawioError::NotUtf8) | Err(DrawioError::Xml(_))));
+        let utf16 = "\u{feff}<mxfile/>"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            parse(&utf16),
+            Err(DrawioError::NotUtf8) | Err(DrawioError::Xml(_))
+        ));
     }
 
     #[test]
     fn probes_only_accept_the_two_roots() {
         assert!(looks_like_drawio(UNCOMPRESSED.as_bytes()));
-        assert!(looks_like_drawio(
-            b"<mxGraphModel><root/></mxGraphModel>"
-        ));
+        assert!(looks_like_drawio(b"<mxGraphModel><root/></mxGraphModel>"));
         assert!(!looks_like_drawio(b"<svg><mxfile></svg>"));
         assert!(!looks_like_drawio(b"<html><body/></html>"));
         assert!(!looks_like_drawio(b"plain"));

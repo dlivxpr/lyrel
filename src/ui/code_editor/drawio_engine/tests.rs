@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use super::assets::{self, EngineBody, ENGINE_URL, SHELL_URL};
+use super::assets::{self, ENGINE_URL, EngineBody, SHELL_URL};
 use super::bridge::{BridgeEvent, Command, LiveSession, MAX_MESSAGE_BYTES};
 use super::document::{self, DiagramContent, RootKind};
 use super::session::{DocumentSession, PreviewTheme, SessionId, SessionToken};
@@ -22,11 +22,7 @@ fn asset_bytes(path: &str) -> &'static [u8] {
 }
 
 fn request(path: &str) -> assets::EngineResponse {
-    assets::respond(
-        "GET",
-        &format!("{}{path}", assets::ORIGIN),
-        None,
-    )
+    assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None)
 }
 
 #[test]
@@ -48,7 +44,10 @@ fn every_distributed_asset_matches_its_pinned_hash_and_has_a_license() {
         }
     }
     let viewer = asset_bytes("/drawio/viewer-static.min.js");
-    assert!(viewer.len() > 8_000_000, "the real viewer bundle is present");
+    assert!(
+        viewer.len() > 8_000_000,
+        "the real viewer bundle is present"
+    );
     assert!(
         viewer.windows(16).any(|w| w == b"DOMPurify 3.4.17"),
         "the vendored sanitizer version is the fixed one"
@@ -100,7 +99,10 @@ fn distribution_notices_and_engine_provenance_are_present() {
     }
     let provenance = std::fs::read_to_string(root.join("PROVENANCE.json")).unwrap();
     let provenance: serde_json::Value = serde_json::from_str(&provenance).unwrap();
-    assert_eq!(provenance["engine"]["commit"], "c72c9a98b7a6ce392556ed04c05e0ff19f43f5c3");
+    assert_eq!(
+        provenance["engine"]["commit"],
+        "c72c9a98b7a6ce392556ed04c05e0ff19f43f5c3"
+    );
     assert_eq!(
         provenance["artifact"]["war_sha256"],
         "a57b06b3b6a876a351dacfe65d027d9509319cd030e9bacf6ae04a034d66a38f"
@@ -136,7 +138,10 @@ fn the_shell_and_engine_carry_strict_csp_and_sandboxing() {
         "img-src 'self' data: blob:",
         "frame-ancestors 'self'",
     ] {
-        assert!(engine_csp.contains(directive), "engine CSP lacks {directive}");
+        assert!(
+            engine_csp.contains(directive),
+            "engine CSP lacks {directive}"
+        );
     }
     assert!(!engine_csp.contains("unsafe-eval"));
 
@@ -169,8 +174,16 @@ fn the_shell_and_engine_carry_strict_csp_and_sandboxing() {
 #[test]
 fn requests_are_exact_get_manifest_only() {
     let shell = request(assets::SHELL_PATH);
-    assert_eq!((shell.status, shell.content_type), (200, "text/html; charset=utf-8"));
-    assert!(shell.headers.iter().any(|(name, _)| *name == "Content-Security-Policy"));
+    assert_eq!(
+        (shell.status, shell.content_type),
+        (200, "text/html; charset=utf-8")
+    );
+    assert!(
+        shell
+            .headers
+            .iter()
+            .any(|(name, _)| *name == "Content-Security-Policy")
+    );
     assert_eq!(request("/drawio/viewer-static.min.js").status, 200);
     for refused in [
         "/drawio/missing.js",
@@ -185,7 +198,11 @@ fn requests_are_exact_get_manifest_only() {
     ] {
         assert_eq!(request(refused).status, 403, "{refused} was not refused");
     }
-    let post = assets::respond("POST", &format!("{}{}", assets::ORIGIN, assets::SHELL_PATH), None);
+    let post = assets::respond(
+        "POST",
+        &format!("{}{}", assets::ORIGIN, assets::SHELL_PATH),
+        None,
+    );
     assert_eq!(post.status, 405);
     let foreign = assets::respond("GET", "https://example.invalid/drawio/shell.html", None);
     assert_eq!(foreign.status, 403);
@@ -213,7 +230,8 @@ fn only_the_live_session_document_is_addressable() {
     assert_eq!(refused.status, 403);
     let missing = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None);
     assert_eq!(missing.status, 403);
-    let oversized = DocumentSession::new(Arc::from(vec![b' '; assets::MAX_DOCUMENT_BYTES + 1])).unwrap();
+    let oversized =
+        DocumentSession::new(Arc::from(vec![b' '; assets::MAX_DOCUMENT_BYTES + 1])).unwrap();
     let too_large = assets::respond(
         "GET",
         &format!("{}{}", assets::ORIGIN, oversized.path()),
@@ -226,7 +244,11 @@ fn only_the_live_session_document_is_addressable() {
 fn the_native_shell_handshake_retires_tokens_and_sequences() {
     let document: Arc<[u8]> = Arc::from(b"<mxfile/>".as_slice());
     let mut session = LiveSession::start(document).unwrap();
-    assert!(session.bind_script(PreviewTheme::Dark).contains("\"theme\":\"dark\""));
+    assert!(
+        session
+            .bind_script(PreviewTheme::Dark)
+            .contains("\"theme\":\"dark\"")
+    );
 
     let message = |session: &LiveSession, seq: u64, kind: &str, payload: serde_json::Value| {
         serde_json::json!({
@@ -250,7 +272,10 @@ fn the_native_shell_handshake_retires_tokens_and_sequences() {
         Err(super::bridge::Reject("size"))
     );
     assert_eq!(
-        session.accept(SHELL_URL, &message(&session, 1, "ready", serde_json::json!({}))),
+        session.accept(
+            SHELL_URL,
+            &message(&session, 1, "ready", serde_json::json!({}))
+        ),
         Ok(BridgeEvent::Ready)
     );
     assert_eq!(
@@ -283,7 +308,12 @@ fn the_native_shell_handshake_retires_tokens_and_sequences() {
     assert_eq!(
         replacement.accept(
             SHELL_URL,
-            &message(&session, 3, "state", serde_json::json!({"page":0,"pages":1,"zoom":1})),
+            &message(
+                &session,
+                3,
+                "state",
+                serde_json::json!({"page":0,"pages":1,"zoom":1})
+            ),
         ),
         Err(super::bridge::Reject("session"))
     );
@@ -321,7 +351,10 @@ fn representative_compressed_and_uncompressed_documents_parse() {
 fn engine_urls_are_reserved_and_never_resolve() {
     assert_eq!(assets::ORIGIN, "https://drawio.lyrel.invalid");
     assert_eq!(SHELL_URL, "https://drawio.lyrel.invalid/drawio/shell.html");
-    assert_eq!(ENGINE_URL, "https://drawio.lyrel.invalid/drawio/engine.html");
+    assert_eq!(
+        ENGINE_URL,
+        "https://drawio.lyrel.invalid/drawio/engine.html"
+    );
     let paths: Vec<_> = assets::asset_paths().collect();
     assert!(paths.contains(&assets::SHELL_PATH));
     assert!(paths.contains(&assets::ENGINE_PATH));

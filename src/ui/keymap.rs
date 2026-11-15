@@ -280,9 +280,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // handled by its own key context because the engine owns the canvas and
     // has no text caret to move.
     {
-        use crate::ui::code_editor::{
-            DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut,
-        };
+        use crate::ui::code_editor::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
         let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
         bindings.extend([
             load_binding("0", DrawioFit, drawio, cx),

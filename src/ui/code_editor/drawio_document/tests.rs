@@ -114,9 +114,7 @@ fn dispatch<A: gpui_kit::Action>(app: &Entity<LyrelApp>, cx: &mut VisualTestCont
 }
 
 #[gpui_kit::test]
-fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(
-    tcx: &mut TestAppContext,
-) {
+fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let plain = fixture(dir.path(), "plain.drawio", &uncompressed(2));
@@ -183,7 +181,10 @@ fn page_controls_and_split_groups_keep_their_own_page(tcx: &mut TestAppContext) 
     let page_facts = view(&app, &cx).read_with(&cx, |view, cx| {
         view.page_label(cx).expect("multi-page label").to_string()
     });
-    assert!(page_facts.contains("2"), "the visible page moved: {page_facts}");
+    assert!(
+        page_facts.contains("2"),
+        "the visible page moved: {page_facts}"
+    );
 
     app.update_in(&mut cx, |app, window, cx| {
         assert!(app.editor_split(window, cx), "the diagram splits");
@@ -292,9 +293,7 @@ fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(
-    tcx: &mut TestAppContext,
-) {
+fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "watched.drawio", &compressed(2));
@@ -313,7 +312,11 @@ fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(
         assert!(file.conflict.is_none(), "a clean preview reloads itself");
         assert!(!file.dirty);
         let view = file.input.drawio().unwrap();
-        assert_eq!(view.read(cx).page(), 1, "the page is clamped to the new list");
+        assert_eq!(
+            view.read(cx).page(),
+            1,
+            "the page is clamped to the new list"
+        );
         assert!(
             view.read(cx).document().read(cx).bytes().is_some(),
             "the new bytes are the document"
