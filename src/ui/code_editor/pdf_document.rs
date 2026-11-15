@@ -459,11 +459,6 @@ impl PdfView {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn find_input(&self) -> Entity<InputState> {
-        self.find_input.clone()
-    }
-
     /// Whether the document has pages to frame; false while locked or failed.
     pub(crate) fn has_pages(&self) -> bool {
         !self.dims.is_empty()
