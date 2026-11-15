@@ -8,9 +8,9 @@
 //! host. The native hosts are non-test platform components: lib tests compile a
 //! surface type with no host and report truthfully that no WebView was started.
 
-use gpui_kit::{Bounds, Pixels};
 #[cfg(not(test))]
 use gpui_kit::Window;
+use gpui_kit::{Bounds, Pixels};
 #[cfg(not(test))]
 use smol::channel::Sender;
 #[cfg(not(test))]

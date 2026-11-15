@@ -26,9 +26,9 @@ use super::drawio_engine::bridge::Command;
 use super::drawio_engine::document::{DrawioError, DrawioSource};
 #[cfg(not(test))]
 use super::drawio_engine::session::PreviewTheme;
-use super::drawio_engine::surface::{SurfaceEvent, SurfaceHost};
 #[cfg(not(test))]
 use super::drawio_engine::surface::{ParentWindow, SurfaceError};
+use super::drawio_engine::surface::{SurfaceEvent, SurfaceHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 gpui_kit::actions!(
@@ -414,8 +414,7 @@ impl DrawioView {
             let parent = match ParentWindow::from_window(window) {
                 Ok(parent) => parent,
                 Err(error) => {
-                    self.engine =
-                        EngineStatus::Unsupported(SharedString::from(error.to_string()));
+                    self.engine = EngineStatus::Unsupported(SharedString::from(error.to_string()));
                     return;
                 }
             };

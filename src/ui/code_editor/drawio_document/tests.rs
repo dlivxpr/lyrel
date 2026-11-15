@@ -427,7 +427,10 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
     view(&app, &cx).read_with(&cx, |view, cx| {
         assert!(view.blocked.is_some(), "a blocked request stays visible");
         let status = view.status_text(cx);
-        assert!(status.contains("150%"), "the engine zoom is shown: {status}");
+        assert!(
+            status.contains("150%"),
+            "the engine zoom is shown: {status}"
+        );
     });
 
     let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {

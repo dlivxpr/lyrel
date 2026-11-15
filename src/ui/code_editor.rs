@@ -56,8 +56,8 @@ mod split;
 mod sqlite_document;
 mod sqlite_grid;
 mod strip;
-use json_document::{JsonDocument, JsonMode, JsonView};
 use csv_document::{CsvDocument, CsvMode, CsvView};
+use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
