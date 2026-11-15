@@ -103,6 +103,11 @@ impl CsvRecordId {
     pub(crate) fn index(self) -> usize {
         self.0
     }
+
+    /// 按文件顺序构造记录身份；只供已解析表的局部编辑遍历使用。
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
 }
 
 /// 单元格身份是逻辑记录与逻辑列，而不是排序／筛选后的显示位置。
@@ -153,6 +158,11 @@ impl CsvRecord {
     pub(crate) fn field_span(&self, column: usize) -> Option<Range<usize>> {
         self.fields.get(column).cloned()
     }
+
+    /// 这条记录实际写出的字段数；不等长记录可以少于逻辑列数。
+    pub(crate) fn field_count(&self) -> usize {
+        self.fields.len()
+    }
 }
 
 /// 一份已解析的完整逻辑表，绑定到产生它的 Document revision。
@@ -161,6 +171,7 @@ pub(crate) struct CsvTable {
     records: Vec<CsvRecord>,
     columns: usize,
     revision: u64,
+    delimiter: u8,
 }
 
 /// 一次只读查询的可见顺序。记录编号仍是 [`CsvRecordId`]。
@@ -302,11 +313,21 @@ impl CsvTable {
             records,
             columns,
             revision,
+            delimiter,
         })
     }
 
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub(crate) fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
+
+    /// 解析时的规范源文（LF、无 BOM）。局部编辑用它检查记录边界上的换行。
+    pub(crate) fn source(&self) -> &str {
+        &self.text
     }
 
     pub(crate) fn record_count(&self) -> usize {

@@ -205,6 +205,25 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
         bindings.push(load_binding("secondary-r", SqliteRefresh, sqlite, cx));
     }
+    // CSV/TSV table editing. `CsvDocument` is declared only by the table
+    // presentation, so these chords never take a key from a text field, a
+    // shell, the terminal or the source side of the same document.
+    {
+        use crate::ui::code_editor::{
+            CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
+            CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow, CSV_KEY_CONTEXT,
+        };
+        let csv = Some(CSV_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("f2", CsvEditCell, csv, cx),
+            load_binding("secondary-shift-up", CsvInsertRowAbove, csv, cx),
+            load_binding("secondary-shift-down", CsvInsertRowBelow, csv, cx),
+            load_binding("secondary-shift-backspace", CsvDeleteRow, csv, cx),
+            load_binding("secondary-shift-left", CsvInsertColumnLeft, csv, cx),
+            load_binding("secondary-shift-right", CsvInsertColumnRight, csv, cx),
+            load_binding("secondary-shift-delete", CsvDeleteColumn, csv, cx),
+        ]);
+    }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a
     // shell or the terminal.

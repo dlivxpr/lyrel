@@ -66,6 +66,14 @@ mod test_host;
 pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
 pub(crate) use sqlite_document::Refresh as SqliteRefresh;
 
+/// CSV／TSV 表格的键盘上下文与编辑动作；只在表格呈现持有键盘时生效。
+pub(crate) use csv_document::KEY_CONTEXT as CSV_KEY_CONTEXT;
+pub(crate) use csv_document::{
+    DeleteColumn as CsvDeleteColumn, DeleteRow as CsvDeleteRow, EditCell as CsvEditCell,
+    InsertColumnLeft as CsvInsertColumnLeft, InsertColumnRight as CsvInsertColumnRight,
+    InsertRowAbove as CsvInsertRowAbove, InsertRowBelow as CsvInsertRowBelow,
+};
+
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
 pub(crate) use book_view::KEY_CONTEXT as BOOK_KEY_CONTEXT;
 pub(crate) use book_view::{

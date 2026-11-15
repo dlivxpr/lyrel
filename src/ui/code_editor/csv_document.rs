@@ -29,10 +29,25 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod edit;
 mod table;
 
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+use edit::CsvEdit;
 use table::{CsvCellId, CsvSort, CsvTable, CsvTableError, DEFAULT_LIMITS, DETAIL_CHARS};
+
+gpui_kit::actions!(
+    csv_document,
+    [
+        EditCell,
+        InsertRowAbove,
+        InsertRowBelow,
+        DeleteRow,
+        InsertColumnLeft,
+        InsertColumnRight,
+        DeleteColumn,
+    ]
+);
 
 /// 只在表格持有键盘时成立，源码编辑和终端的键不会被表格导航截走。
 pub(crate) const KEY_CONTEXT: &str = "CsvDocument";
@@ -51,6 +66,8 @@ const PAGE_ROWS: isize = 10;
 const TAG_CELL: u8 = 0;
 const TAG_EXCERPT: u8 = 1;
 const TAG_COLUMN: u8 = 2;
+/// 单元格输入控件的稳定标识；测试通过它找到真实 Input，而不是隐藏文本。
+const TAG_EDITOR: u8 = 4;
 
 /// 一个分组画的是表格还是源码。分屏时两个分组默认各占一面。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,7 +261,16 @@ pub(crate) struct CsvView {
     sort: Option<CsvSort>,
     /// 可见记录编号，按当前筛选／排序；文件顺序本身不在其中。
     order: Vec<usize>,
+    /// 当前光标单元格；它是逻辑记录与逻辑列，不是显示位置。
     selection: Option<CsvCellId>,
+    /// 矩形选择的固定角；单击与方向键把它重置到光标。
+    anchor: Option<CsvCellId>,
+    /// 正在编辑的单元格与真实文本输入。输入组件是 gpui-kit 的 `InputState`，
+    /// 与筛选框使用同一套编辑／IME 路径，不是隐藏的假控件。
+    editing: Option<CsvCellId>,
+    /// 开始编辑时的表格 revision；源文在此期间变化则丢弃这次输入。
+    editing_revision: Option<u64>,
+    editor: Option<Entity<InputState>>,
     column_start: usize,
     query_generation: u64,
     query_running: bool,
@@ -256,6 +282,7 @@ pub(crate) struct CsvView {
     _document: Subscription,
     _source: Subscription,
     _filter: Subscription,
+    _editor: Option<Subscription>,
 }
 
 impl CsvView {
@@ -301,6 +328,10 @@ impl CsvView {
             sort: None,
             order: Vec::new(),
             selection: None,
+            anchor: None,
+            editing: None,
+            editing_revision: None,
+            editor: None,
             column_start: 0,
             query_generation: 0,
             query_running: false,
@@ -312,6 +343,7 @@ impl CsvView {
             _document: watch_document,
             _source: watch_source,
             _filter: watch_filter,
+            _editor: None,
         };
         this.sync_table(cx);
         this
@@ -491,6 +523,7 @@ impl CsvView {
     }
 
     pub(crate) fn show_source(&mut self, cx: &mut Context<Self>) {
+        self.commit_edit(None, None, cx);
         if self.mode != CsvMode::Source {
             self.mode = CsvMode::Source;
             cx.notify();
@@ -501,6 +534,7 @@ impl CsvView {
     /// composition through the document's ordinary history first.
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.commit_edit(None, None, cx);
         self.mode = self.mode.opposite();
         let focus = self.focus_handle(cx);
         focus.focus(window, cx);
@@ -519,6 +553,7 @@ impl CsvView {
         cx: &mut Context<Self>,
     ) {
         self.selection = selection;
+        self.anchor = selection;
         let source = self.source.clone();
         source.update(cx, |source, cx| {
             source.select_range(source_selection, cx);
@@ -542,9 +577,300 @@ impl CsvView {
         true
     }
 
+    /// 选中矩形作为制表符分隔文本复制；单格仍是完整原值。
+    pub(crate) fn copy_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(table) = self.table(cx) else {
+            return false;
+        };
+        let Some(cursor) = self.selection else {
+            return false;
+        };
+        let Some(anchor) = self.selection_origin() else {
+            return false;
+        };
+        let Some(text) = table.selection_text(anchor, cursor) else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        true
+    }
+
+    /// 单元格是否在当前矩形选择内（固定角与光标之间）。
+    fn range_contains(&self, cell: CsvCellId) -> bool {
+        let Some(cursor) = self.selection else {
+            return false;
+        };
+        let anchor = self.anchor.unwrap_or(cursor);
+        let record = cell.record().index();
+        let column = cell.column();
+        let (first_record, last_record) = (
+            anchor.record().index().min(cursor.record().index()),
+            anchor.record().index().max(cursor.record().index()),
+        );
+        let (first_column, last_column) = (
+            anchor.column().min(cursor.column()),
+            anchor.column().max(cursor.column()),
+        );
+        (first_record..=last_record).contains(&record)
+            && (first_column..=last_column).contains(&column)
+    }
+
+    /// 当前选择矩形的固定角；没有矩形时就是光标。
+    fn selection_origin(&self) -> Option<CsvCellId> {
+        self.selection.map(|cursor| self.anchor.unwrap_or(cursor))
+    }
+
+    /// 只有仍描述当前源文 revision 的表格才能写回；过期解析结果一律拒绝。
+    fn editable_table(&self, cx: &App) -> Option<Arc<CsvTable>> {
+        let table = self.table(cx)?;
+        let revision = self.document.read(cx).document().read(cx).revision();
+        (table.revision() == revision).then_some(table)
+    }
+
+    /// 用一个真实的 `InputState` 编辑单元格；它与筛选框共用文本、光标与 IME
+    /// 路径。开始编辑时选中原值，第一次输入替换它。
+    fn begin_edit(&mut self, cell: CsvCellId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing == Some(cell) {
+            return;
+        }
+        let Some(table) = self.editable_table(cx) else {
+            return;
+        };
+        if table.record(cell.record()).is_none() || cell.column() >= table.column_count() {
+            return;
+        }
+        let value = table.cell_value(cell).unwrap_or_default();
+        let revision = table.revision();
+        let editor = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(value.clone(), window, cx);
+            state.set_selected_range(0..value.len(), cx);
+            state
+        });
+        let watch = cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { shift, .. } => {
+                    this.commit_edit(Some(window), Some(if *shift { -1 } else { 1 }), cx)
+                }
+                InputEvent::Blur => this.commit_edit(None, None, cx),
+                _ => {}
+            },
+        );
+        let focus = editor.read(cx).focus_handle().clone();
+        focus.focus(window, cx);
+        self.editing = Some(cell);
+        self.editing_revision = Some(revision);
+        self.editor = Some(editor);
+        self._editor = Some(watch);
+        self.select_cell(cell.record().index(), cell.column(), cx);
+        cx.notify();
+    }
+
+    fn begin_edit_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(cell) = self.selection {
+            self.begin_edit(cell, window, cx);
+        }
+    }
+
+    /// 提交单元格输入。`advance` 是回车后的记录步进；失焦提交保持原位。
+    fn commit_edit(
+        &mut self,
+        window: Option<&mut Window>,
+        advance: Option<isize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.editor.take() else {
+            return;
+        };
+        self._editor = None;
+        let Some(cell) = self.editing.take() else {
+            return;
+        };
+        let value = editor.read(cx).value().to_string();
+        let record = cell.record().index();
+        let column = cell.column();
+        let count = self.table(cx).map(|table| table.record_count());
+        // 输入开始后源文被外部重载或另一呈现修改时，这份文本属于旧 revision，
+        // 不能写回新表格。
+        let stale = self.editing_revision != Some(self.document.read(cx).document().read(cx).revision());
+        self.editing_revision = None;
+        if !stale && self.apply_edit(CsvEdit::Cell { cell, value }, cx) {
+            if let (Some(step), Some(count)) = (advance, count) {
+                let next = (record as isize + step).clamp(0, count as isize - 1) as usize;
+                self.select_identity(next, column, cx);
+            }
+        }
+        if let Some(window) = window {
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.take().is_none() {
+            return;
+        }
+        self._editor = None;
+        self.editing = None;
+        self.editing_revision = None;
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// 把一次逻辑编辑作为同一 Document history 中的一条记录写回。整批替换
+    /// 一次交给源码呈现，绝不序列化整张表；表格随后按新 revision 重新解析。
+    fn apply_edit(&mut self, edit: CsvEdit, cx: &mut Context<Self>) -> bool {
+        let Some(table) = self.editable_table(cx) else {
+            return false;
+        };
+        let revision = table.revision();
+        let Ok(mutation) = table.edit(revision, edit) else {
+            return false;
+        };
+        if mutation.changed() {
+            let source = self.source.clone();
+            source.update(cx, |source, cx| source.replace_ranges(mutation.replacements, cx));
+        }
+        cx.notify();
+        true
+    }
+
+    fn select_identity(&mut self, record: usize, column: usize, cx: &mut Context<Self>) {
+        self.selection = Some(CsvCellId::new(record, column));
+        self.anchor = self.selection;
+        self.column_start = (column / COLUMN_WINDOW) * COLUMN_WINDOW;
+        if let Some(position) = self
+            .order
+            .iter()
+            .position(|candidate| *candidate == record)
+        {
+            self.scroll
+                .scroll_to_item(position, ScrollStrategy::Nearest);
+        }
+        cx.notify();
+    }
+
+    fn insert_row(&mut self, below: bool, cx: &mut Context<Self>) {
+        let Some(cell) = self.selection else {
+            return;
+        };
+        let Some(table) = self.editable_table(cx) else {
+            return;
+        };
+        let count = table.record_count();
+        let column = cell.column().min(table.column_count().saturating_sub(1));
+        if !self.apply_edit(
+            CsvEdit::InsertRow {
+                at: cell.record(),
+                below,
+            },
+            cx,
+        ) {
+            return;
+        }
+        let record = match below {
+            true => (cell.record().index() + 1).min(count),
+            false => cell.record().index(),
+        };
+        self.select_identity(record, column, cx);
+    }
+
+    fn delete_row(&mut self, cx: &mut Context<Self>) {
+        let Some(cell) = self.selection else {
+            return;
+        };
+        let Some(table) = self.editable_table(cx) else {
+            return;
+        };
+        let count = table.record_count();
+        let column = cell.column().min(table.column_count().saturating_sub(1));
+        if !self.apply_edit(CsvEdit::DeleteRow { at: cell.record() }, cx) {
+            return;
+        }
+        let remaining = count.saturating_sub(1);
+        match remaining {
+            0 => {
+                self.selection = None;
+                self.anchor = None;
+                cx.notify();
+            }
+            _ => self.select_identity(cell.record().index().min(remaining - 1), column, cx),
+        }
+    }
+
+    fn insert_column(&mut self, right: bool, cx: &mut Context<Self>) {
+        let Some(cell) = self.selection else {
+            return;
+        };
+        if !self.apply_edit(
+            CsvEdit::InsertColumn {
+                at: cell.column(),
+                right,
+            },
+            cx,
+        ) {
+            return;
+        }
+        let column = match right {
+            true => cell.column() + 1,
+            false => cell.column(),
+        };
+        self.select_identity(cell.record().index(), column, cx);
+    }
+
+    fn delete_column(&mut self, cx: &mut Context<Self>) {
+        let Some(cell) = self.selection else {
+            return;
+        };
+        let Some(table) = self.editable_table(cx) else {
+            return;
+        };
+        let columns = table.column_count();
+        if !self.apply_edit(CsvEdit::DeleteColumn { at: cell.column() }, cx) {
+            return;
+        }
+        let column = cell.column().min(columns.saturating_sub(2));
+        self.select_identity(cell.record().index(), column, cx);
+    }
+
+    /// 粘贴从当前单元格开始的表格块。记录身份是逻辑记录，筛选／排序只影响
+    /// 可见顺序；超出末尾的行追加到文件末尾。
+    fn paste(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(item) = cx.read_from_clipboard() else {
+            return false;
+        };
+        let Some(text) = item.text() else {
+            return false;
+        };
+        let rows = edit::parse_clipboard(&text);
+        let Some(cell) = self.selection else {
+            return false;
+        };
+        if !self.apply_edit(CsvEdit::Paste { origin: cell, rows }, cx) {
+            return false;
+        }
+        self.select_identity(cell.record().index(), cell.column(), cx);
+        true
+    }
+
+    fn undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        source.update(cx, |source, cx| {
+            if redo {
+                source.redo_document(cx);
+            } else {
+                source.undo_document(cx);
+            }
+        });
+        cx.notify();
+    }
+
     /// 把表格选择定位到源码里的同一逻辑字段；不等长记录缺少该字段时定位到
     /// 整条记录。切换后由共享 Document 的正常选择／滚动呈现它。
     pub(crate) fn reveal_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_edit(None, None, cx);
         let Some(table) = self.table(cx) else {
             return;
         };
@@ -581,8 +907,8 @@ impl CsvView {
         self.query_pending = false;
         self.queried_revision = None;
         let Some(table) = self.table(cx) else {
+            // 重新解析期间保留选择身份；新表到达后按记录编号重新协调。
             self.order.clear();
-            self.selection = None;
             cx.notify();
             return;
         };
@@ -672,22 +998,26 @@ impl CsvView {
     fn reconcile_selection(&mut self, table: &CsvTable) {
         if table.record_count() == 0 || table.column_count() == 0 || self.order.is_empty() {
             self.selection = None;
+            self.anchor = None;
             return;
         }
-        let column = self
-            .selection
-            .map(CsvCellId::column)
-            .unwrap_or(0)
-            .min(table.column_count() - 1);
-        let record = self.selection.and_then(|cell| {
+        let order = &self.order;
+        let clamp = |cell: CsvCellId| {
+            let column = cell.column().min(table.column_count() - 1);
             let record = cell.record().index();
-            self.order
-                .iter()
-                .position(|candidate| *candidate == record)
-                .map(|_| record)
-        });
-        let record = record.or_else(|| self.order.first().copied()).unwrap_or(0);
-        self.selection = Some(CsvCellId::new(record, column));
+            let record = match order.iter().position(|candidate| *candidate == record) {
+                Some(_) => record,
+                None => order[0],
+            };
+            CsvCellId::new(record, column)
+        };
+        let cursor = self
+            .selection
+            .map(clamp)
+            .unwrap_or_else(|| CsvCellId::new(order[0], 0));
+        let anchor = self.anchor.map(clamp).unwrap_or(cursor);
+        self.selection = Some(cursor);
+        self.anchor = Some(anchor);
         self.ensure_column_window(table);
     }
 
@@ -706,12 +1036,29 @@ impl CsvView {
 
     fn select_cell(&mut self, record: usize, column: usize, cx: &mut Context<Self>) {
         self.selection = Some(CsvCellId::new(record, column));
+        self.anchor = self.selection;
         if let Some(table) = self.table(cx) {
             self.ensure_column_window(&table);
         }
         if let Some(position) = self.order.iter().position(|candidate| *candidate == record) {
             self.scroll
                 .scroll_to_item(position, ScrollStrategy::Nearest);
+        }
+        cx.notify();
+    }
+
+    /// 指针点击：Shift 保留固定角扩展矩形，普通点击重新开始。
+    fn click_cell(&mut self, record: usize, column: usize, extend: bool, cx: &mut Context<Self>) {
+        if !extend {
+            self.select_cell(record, column, cx);
+            return;
+        }
+        if self.anchor.is_none() {
+            self.anchor = self.selection;
+        }
+        self.selection = Some(CsvCellId::new(record, column));
+        if let Some(table) = self.table(cx) {
+            self.ensure_column_window(&table);
         }
         cx.notify();
     }
@@ -726,6 +1073,37 @@ impl CsvView {
         let current = self
             .selection
             .unwrap_or_else(|| CsvCellId::new(self.order[0], 0));
+        let position = self
+            .order
+            .iter()
+            .position(|candidate| *candidate == current.record().index())
+            .unwrap_or(0) as isize;
+        let position = (position + rows).clamp(0, self.order.len() as isize - 1) as usize;
+        let record = self.order[position];
+        let column = (current.column() as isize + columns)
+            .clamp(0, table.column_count() as isize - 1) as usize;
+        self.selection = Some(CsvCellId::new(record, column));
+        self.anchor = self.selection;
+        self.ensure_column_window(&table);
+        self.scroll
+            .scroll_to_item(position, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    /// Shift+方向键扩展矩形；固定角保持不动。
+    fn extend_selection(&mut self, rows: isize, columns: isize, cx: &mut Context<Self>) {
+        let Some(table) = self.table(cx) else {
+            return;
+        };
+        if table.record_count() == 0 || table.column_count() == 0 || self.order.is_empty() {
+            return;
+        }
+        let current = self
+            .selection
+            .unwrap_or_else(|| CsvCellId::new(self.order[0], 0));
+        if self.anchor.is_none() {
+            self.anchor = Some(current);
+        }
         let position = self
             .order
             .iter()
@@ -759,6 +1137,7 @@ impl CsvView {
             .unwrap_or(0)
             .min(table.column_count() - 1);
         self.selection = Some(CsvCellId::new(record, column));
+        self.anchor = self.selection;
         self.ensure_column_window(&table);
         let position = match last {
             true => self.order.len() - 1,
@@ -790,6 +1169,7 @@ impl CsvView {
             false => 0,
         };
         self.selection = Some(CsvCellId::new(record, column));
+        self.anchor = self.selection;
         self.ensure_column_window(&table);
         cx.notify();
     }
@@ -849,13 +1229,33 @@ impl CsvView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.editing.is_some() {
+            // 输入中的回车由 InputState 事件提交；这里只接管仍会冒泡的取消键。
+            if event.keystroke.key == "escape" {
+                self.cancel_edit(window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
         let secondary = event.keystroke.modifiers.secondary(cx);
         let shift = event.keystroke.modifiers.shift;
         match event.keystroke.key.as_str() {
-            "down" => self.move_selection(1, 0, cx),
-            "up" => self.move_selection(-1, 0, cx),
-            "right" => self.move_selection(0, 1, cx),
-            "left" => self.move_selection(0, -1, cx),
+            "down" => match shift {
+                true => self.extend_selection(1, 0, cx),
+                false => self.move_selection(1, 0, cx),
+            },
+            "up" => match shift {
+                true => self.extend_selection(-1, 0, cx),
+                false => self.move_selection(-1, 0, cx),
+            },
+            "right" => match shift {
+                true => self.extend_selection(0, 1, cx),
+                false => self.move_selection(0, 1, cx),
+            },
+            "left" => match shift {
+                true => self.extend_selection(0, -1, cx),
+                false => self.move_selection(0, -1, cx),
+            },
             "pagedown" => self.move_selection(PAGE_ROWS, 0, cx),
             "pageup" => self.move_selection(-PAGE_ROWS, 0, cx),
             "tab" => self.move_selection(0, if shift { -1 } else { 1 }, cx),
@@ -870,10 +1270,17 @@ impl CsvView {
             "enter" => self.reveal_source(window, cx),
             "escape" if !self.filter.is_empty() => self.clear_filter(window, cx),
             "c" if secondary => {
-                if !self.copy_selected(cx) {
+                if !self.copy_selection(cx) {
                     return;
                 }
             }
+            "v" if secondary => {
+                if !self.paste(cx) {
+                    return;
+                }
+            }
+            "z" if secondary => self.undo(shift, cx),
+            "y" if secondary => self.undo(true, cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -1233,6 +1640,10 @@ impl CsvView {
             true => t(L10nKey::EditorCsvEmptyField).to_string(),
             false => text.clone(),
         };
+        let multi = self
+            .anchor
+            .zip(self.selection)
+            .is_some_and(|(anchor, cursor)| anchor != cursor);
         v_flex()
             .id(("csv-details", view))
             .flex_none()
@@ -1259,10 +1670,13 @@ impl CsvView {
                             .ghost()
                             .xsmall()
                             .flex_none()
-                            .label(t(L10nKey::EditorCsvCopyValue))
-                            .disabled(!copyable)
+                            .label(match multi {
+                                true => t(L10nKey::EditorCsvCopyCells),
+                                false => t(L10nKey::EditorCsvCopyValue),
+                            })
+                            .disabled(!copyable && !multi)
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy_selected(cx);
+                                this.copy_selection(cx);
                                 this.focus.focus(window, cx);
                             })),
                     ),
@@ -1446,6 +1860,7 @@ fn render_record(
     let border = theme.border;
     let muted = theme.muted_foreground;
     let selected_background = theme.secondary;
+    let range_background = theme.accent;
     let selected_border = theme.primary;
     let transparent = gpui_kit::transparent_black();
     h_flex()
@@ -1477,8 +1892,11 @@ fn render_record(
         .children(columns.map(|column| {
             let cell = CsvCellId::new(record, column);
             let selected = view.selection == Some(cell);
+            let in_range = view.range_contains(cell);
             let excerpt: SharedString = table.cell_excerpt(cell).unwrap_or_default().into();
             let cell_view = entity.clone();
+            let editing = view.editing == Some(cell);
+            let editor = view.editor.clone();
             div()
                 .id(cell_element_id(view_id, record, column, TAG_CELL))
                 .test_support()
@@ -1497,23 +1915,32 @@ fn render_record(
                     true => selected_border,
                     false => transparent,
                 })
+                .when(in_range && !selected, |cell| cell.bg(range_background))
                 .when(selected, |cell| cell.bg(selected_background))
-                .child(
-                    div()
+                .child(match (editing, editor) {
+                    (true, Some(editor)) => div()
+                        .id(cell_element_id(view_id, record, column, TAG_EDITOR))
+                        .test_support()
+                        .w_full()
+                        .min_w_0()
+                        .child(Input::new(&editor).xsmall())
+                        .into_any_element(),
+                    _ => div()
                         .id(cell_element_id(view_id, record, column, TAG_EXCERPT))
                         .test_support()
                         .w_full()
                         .min_w_0()
                         .truncate()
                         .text_xs()
-                        .child(excerpt),
-                )
+                        .child(excerpt)
+                        .into_any_element(),
+                })
                 .on_click(move |event, window, cx| {
                     let _ = cell_view.update(cx, |this, cx| {
                         this.focus.focus(window, cx);
-                        this.select_cell(record, column, cx);
+                        this.click_cell(record, column, event.modifiers().shift, cx);
                         if event.click_count() == 2 {
-                            this.reveal_source(window, cx);
+                            this.begin_edit(cell, window, cx);
                         }
                     });
                 })
@@ -1625,6 +2052,35 @@ impl Render for CsvView {
                         this.key_down(event, window, cx);
                     }),
                 )
+                .on_action(cx.listener(|this, _: &EditCell, window, cx| {
+                    this.begin_edit_selected(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &InsertRowAbove, _, cx| {
+                    this.insert_row(false, cx)
+                }))
+                .on_action(cx.listener(|this, _: &InsertRowBelow, _, cx| {
+                    this.insert_row(true, cx)
+                }))
+                .on_action(cx.listener(|this, _: &DeleteRow, _, cx| this.delete_row(cx)))
+                .on_action(cx.listener(|this, _: &InsertColumnLeft, _, cx| {
+                    this.insert_column(false, cx)
+                }))
+                .on_action(cx.listener(|this, _: &InsertColumnRight, _, cx| {
+                    this.insert_column(true, cx)
+                }))
+                .on_action(cx.listener(|this, _: &DeleteColumn, _, cx| this.delete_column(cx)))
+                .on_action(cx.listener(
+                    |this, _: &gpui_kit::component::input::Escape, window, cx| {
+                        if this.editing.is_some() {
+                            this.cancel_edit(window, cx);
+                        } else if !this.filter.is_empty() {
+                            this.clear_filter(window, cx);
+                        } else {
+                            return;
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
                 .into_any_element(),
             CsvMode::Source => item.into_any_element(),
         }
@@ -1652,6 +2108,16 @@ pub(super) fn menu_entries(
                 });
             })
     };
+    let copy_cells = {
+        let weak = weak.clone();
+        PopupMenuItem::new(t(L10nKey::EditorCsvCopyCells))
+            .disabled(!has_selection)
+            .on_click(move |_, _, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    view.copy_selection(cx);
+                });
+            })
+    };
     let reveal = {
         let weak = weak.clone();
         PopupMenuItem::new(t(L10nKey::EditorCsvRevealSource))
@@ -1671,9 +2137,43 @@ pub(super) fn menu_entries(
             Box::new(crate::core::actions::ToggleDocumentPreview),
         )
         .item(copy)
+        .item(copy_cells)
         .item(reveal);
     match mode {
-        CsvMode::Table => menu,
+        CsvMode::Table => menu
+            .menu_with_disabled(t(L10nKey::EditorCsvEditCell), Box::new(EditCell), !has_selection)
+            .separator()
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvInsertRowAbove),
+                Box::new(InsertRowAbove),
+                !has_selection,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvInsertRowBelow),
+                Box::new(InsertRowBelow),
+                !has_selection,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvDeleteRow),
+                Box::new(DeleteRow),
+                !has_selection,
+            )
+            .separator()
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvInsertColumnLeft),
+                Box::new(InsertColumnLeft),
+                !has_selection,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvInsertColumnRight),
+                Box::new(InsertColumnRight),
+                !has_selection,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvDeleteColumn),
+                Box::new(DeleteColumn),
+                !has_selection,
+            ),
         CsvMode::Source => {
             let has_selection = !view.read(cx).selected_range(cx).is_empty();
             menu.separator()
