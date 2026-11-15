@@ -73,6 +73,14 @@ pub(crate) use sqlite_document::{
     InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
 };
 
+/// CSV／TSV 表格的键盘上下文与编辑动作；只在表格呈现持有键盘时生效。
+pub(crate) use csv_document::KEY_CONTEXT as CSV_KEY_CONTEXT;
+pub(crate) use csv_document::{
+    DeleteColumn as CsvDeleteColumn, DeleteRow as CsvDeleteRow, EditCell as CsvEditCell,
+    InsertColumnLeft as CsvInsertColumnLeft, InsertColumnRight as CsvInsertColumnRight,
+    InsertRowAbove as CsvInsertRowAbove, InsertRowBelow as CsvInsertRowBelow,
+};
+
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
 pub(crate) use book_view::KEY_CONTEXT as BOOK_KEY_CONTEXT;
 pub(crate) use book_view::{
@@ -2262,6 +2270,11 @@ impl LyrelApp {
             let multipage = drawio.read(cx).page_count(cx) > 1;
             return drawio_document::menu_entries(menu, multipage);
         }
+        if let Some(csv) = input.csv() {
+            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
+            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
         let selected = input
             .text()
             .is_some_and(|text| !text.read(cx).selected_range().is_empty());
@@ -2308,11 +2321,6 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = yaml_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(csv) = input.csv() {
-            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
-            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -3254,6 +3262,8 @@ impl LyrelApp {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.csv_view(primary, tab, group, window, cx);
+                let id = f.id();
+                let app = cx.entity().downgrade();
                 v_flex()
                     .id(("csv-presentation", view.entity_id()))
                     .min_w_0()
@@ -3263,6 +3273,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
+                    .context_menu(move |menu, _window, cx| {
+                        Self::editor_body_menu(menu, &app, id, cx)
+                    })
                     .into_any_element()
             }
             Some(f) if f.input.pdf().is_some() => {
