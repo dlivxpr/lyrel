@@ -29,6 +29,7 @@ use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 
 mod buffers;
 pub(crate) mod commands;
+mod csv_document;
 mod document_input;
 mod image_document;
 pub(crate) mod markdown;
@@ -45,6 +46,7 @@ mod problems;
 pub(crate) mod saving;
 mod split;
 mod strip;
+use csv_document::{CsvDocument, CsvMode, CsvView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
@@ -180,6 +182,8 @@ impl OpenFile {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.svg() {
             view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.csv() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
         }
@@ -208,6 +212,14 @@ impl OpenFile {
         // the buffer is released and reopened by extension.
         if self.input.svg().is_some() {
             return "svg";
+        }
+        // CSV and TSV keep the route chosen at open; a rename is not a
+        // delimiter probe.
+        if self.input.csv().is_some() {
+            return match csv_delimiter(&self.path) {
+                b'\t' => "tsv",
+                _ => "csv",
+            };
         }
         if self.untitled.is_some() {
             return "text";
@@ -421,6 +433,26 @@ pub(crate) fn is_svg_path(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
+/// CSV/TSV records have one source authority and a derived table. The
+/// extension chooses the delimiter and the route; content never turns an
+/// ordinary text file into a table.
+pub(crate) fn is_csv_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "csv" | "tsv"))
+}
+
+pub(crate) fn csv_delimiter(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsv"))
+    {
+        true => b'\t',
+        false => b',',
+    }
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -446,6 +478,8 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "json" | "jsonc" => "json",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
+        "csv" => "csv",
+        "tsv" => "tsv",
         "html" | "htm" => "html",
         "svg" => "svg",
         "css" => "css",
@@ -489,6 +523,8 @@ fn language_label(id: &str) -> Option<&'static str> {
         "json" => "JSON",
         "toml" => "TOML",
         "yaml" => "YAML",
+        "csv" => "CSV",
+        "tsv" => "TSV",
         "html" => "HTML",
         "svg" => "SVG",
         "css" => "CSS",
@@ -788,6 +824,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.svg().is_some())
     }
 
+    pub(crate) fn csv_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.csv().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -804,6 +845,11 @@ impl LyrelApp {
                     file.presentations
                         .svg_existing(tab, group)
                         .map(EditorInput::Svg)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .csv_existing(tab, group)
+                        .map(EditorInput::Csv)
                 })
                 .or_else(|| {
                     file.presentations
@@ -1444,6 +1490,9 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.svg() {
             let view = file.presentations.svg_view(primary, tab, group, cx);
             EditorInput::Svg(view).focus(window, cx);
+        } else if let Some(primary) = file.input.csv() {
+            let view = file.presentations.csv_view(primary, tab, group, window, cx);
+            EditorInput::Csv(view).focus(window, cx);
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
@@ -1511,6 +1560,12 @@ impl LyrelApp {
         } else if let Some(view) = self
             .active_editor_input()
             .and_then(|input| input.svg().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.csv().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
@@ -1844,6 +1899,8 @@ impl LyrelApp {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
                 } else if let Some(view) = file.presentations.svg_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.csv_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -2012,6 +2069,11 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = svg_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(csv) = input.csv() {
+            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
+            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2685,6 +2747,8 @@ impl LyrelApp {
                     "markdown-status-bar"
                 } else if self.svg_document_active() {
                     "svg-status-bar"
+                } else if self.csv_document_active() {
+                    "csv-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
                 } else {
@@ -2824,6 +2888,31 @@ impl LyrelApp {
                 let view = f.presentations.svg_view(primary, tab, group, cx);
                 v_flex()
                     .id(("svg-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.csv().is_some() => {
+                let primary = f.input.csv().expect("CSV document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.csv_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("csv-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3181,9 +3270,18 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
-        let cursor: Option<SharedString> = self
+        let csv_view = self
             .active_editor_input()
-            .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            .and_then(|input| input.csv().cloned());
+        let csv_table_mode = csv_view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).mode() == CsvMode::Table);
+        let cursor: Option<SharedString> = (!csv_table_mode)
+            .then(|| {
+                self.active_editor_input()
+                    .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            })
+            .flatten()
             .map(|pos| {
                 t_fmt(
                     L10nKey::EditorLnCol,
@@ -3213,6 +3311,19 @@ impl LyrelApp {
                     view.preview_failure(cx),
                 )
             });
+        let csv_state = csv_view.as_ref().map(|view| {
+            let view = view.read(cx);
+            (
+                view.mode(),
+                view.facts(cx),
+                view.selection(),
+                view.visible_count(),
+                view.is_parsing(cx),
+                view.parse_error(cx),
+                view.filter().to_owned(),
+                view.sort(),
+            )
+        });
         let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -3275,6 +3386,107 @@ impl LyrelApp {
                         })),
                 )
             })
+            .when_some(
+                csv_state,
+                |this, (mode, facts, selection, visible, parsing, error, filter, sort)| {
+                    let (label, tip) = match mode {
+                        CsvMode::Table => {
+                            (t(L10nKey::EditorCsvTable), t(L10nKey::EditorCsvShowSource))
+                        }
+                        CsvMode::Source => (
+                            t(L10nKey::EditorMarkdownSource),
+                            t(L10nKey::EditorCsvShowTable),
+                        ),
+                    };
+                    let mut this =
+                        this.child(item("status-csv-mode", label.into()).tooltip(tip).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            }),
+                        ));
+                    if mode == CsvMode::Table {
+                        if let Some((records, columns)) = facts {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-facts")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t_fmt(
+                                        L10nKey::EditorCsvFacts,
+                                        &[
+                                            ("records", &records.to_string()),
+                                            ("columns", &columns.to_string()),
+                                        ],
+                                    )),
+                            );
+                            if let Some(cell) = selection {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-cell")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvCell,
+                                            &[
+                                                (
+                                                    "record",
+                                                    &(cell.record().index() + 1).to_string(),
+                                                ),
+                                                ("column", &(cell.column() + 1).to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if !filter.is_empty() {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-filter")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvFilterStatus,
+                                            &[
+                                                ("filter", &filter),
+                                                ("visible", &visible.to_string()),
+                                                ("records", &records.to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if let Some(sort) = sort {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-sort")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(csv_document::sort_label(sort)),
+                                );
+                            }
+                        }
+                        if parsing {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-parsing")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t(L10nKey::EditorCsvParsing)),
+                            );
+                        }
+                        if error.is_some() {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-error")
+                                    .test_support()
+                                    .flex_none()
+                                    .text_color(cx.theme().warning)
+                                    .child(t(L10nKey::EditorCsvTableUnavailable)),
+                            );
+                        }
+                    }
+                    this
+                },
+            )
             .when_some(svg_state, |this, (mode, size, zoom, rendering, failure)| {
                 let (label, tip) = match mode {
                     SvgMode::Source => (

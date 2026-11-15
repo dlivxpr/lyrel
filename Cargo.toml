@@ -107,6 +107,10 @@ percent-encoding = "2"
 # The code editor's language-server client (`ui::lsp`). The same version
 # gpui-component's LSP hooks take their types from.
 lsp-types = { version = "0.97.0", features = ["proposed"] }
+# CSV/TSV record reading: the same reader Glim pins for its table, with
+# quoted delimiters, embedded newlines and flexible records. Source spans and
+# the parsed table are Lyrel's; this crate does not write files.
+csv = "1.4.0"
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
 encoding_rs = "0.8.35"
 

@@ -13,6 +13,8 @@ pub(crate) enum EditorInput {
     Image(Entity<ImageView>),
     /// SVG 文档：共享逐行保真 Document 的源码与安全原生预览。
     Svg(Entity<SvgView>),
+    /// CSV／TSV 文档：共享逐行保真 Document 的源码与虚拟化表格。
+    Csv(Entity<CsvView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -25,6 +27,7 @@ pub(crate) enum TextInput<'a> {
     Code(&'a Entity<EditorState>),
     Markdown(&'a Entity<MarkdownEditor>),
     Svg(&'a Entity<SvgView>),
+    Csv(&'a Entity<CsvView>),
 }
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
@@ -32,6 +35,7 @@ pub(crate) enum WeakEditorInput {
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
+    Csv(gpui_kit::WeakEntity<CsvView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -40,6 +44,7 @@ impl WeakEditorInput {
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
+            Self::Csv(input) => input.upgrade().map(EditorInput::Csv),
         }
     }
 }
@@ -50,6 +55,7 @@ impl EditorInput {
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
+            Self::Csv(input) => WeakEditorInput::Csv(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -76,13 +82,20 @@ impl EditorInput {
             _ => None,
         }
     }
-    /// Markdown and SVG keep the same line-preserving source authority; every
-    /// save, reload and dirty comparison reads this document rather than a
-    /// presentation's cached text.
+    pub(crate) fn csv(&self) -> Option<&Entity<CsvView>> {
+        match self {
+            Self::Csv(input) => Some(input),
+            _ => None,
+        }
+    }
+    /// Markdown, SVG and CSV keep the same line-preserving source authority;
+    /// every save, reload and dirty comparison reads this document rather than
+    /// a presentation's cached text.
     pub(crate) fn source_document(&self, cx: &gpui_kit::App) -> Option<Entity<Document>> {
         match self {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Csv(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Code(_) | Self::Image(_) => None,
         }
     }
@@ -94,6 +107,7 @@ impl EditorInput {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
+            Self::Csv(input) => Some(TextInput::Csv(input)),
             Self::Image(_) => None,
         }
     }
@@ -105,6 +119,8 @@ impl EditorInput {
         if let Some(input) = self.markdown() {
             input.update(cx, |state, cx| state.finish_composition(cx));
         } else if let Some(view) = self.svg() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.csv() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         }
     }
@@ -134,6 +150,7 @@ impl EditorInput {
                 cx.notify();
             }),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -153,18 +170,20 @@ impl TextInput<'_> {
             }
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
         }
     }
     /// Whether this presentation keeps the shared line-preserving source and
-    /// its history (Markdown and SVG), rather than the ordinary code codec.
+    /// its history (Markdown, SVG and CSV), rather than the ordinary code codec.
     pub(crate) fn is_source(&self) -> bool {
-        matches!(self, Self::Markdown(_) | Self::Svg(_))
+        matches!(self, Self::Markdown(_) | Self::Svg(_) | Self::Csv(_))
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
         }
     }
     pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
@@ -172,6 +191,7 @@ impl TextInput<'_> {
             Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
         }
     }
     pub(crate) fn set_cursor_position(
@@ -189,6 +209,10 @@ impl TextInput<'_> {
                 input.update(cx, |state, cx| state.select_range(at..at, cx));
             }
             Self::Svg(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Csv(view) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
@@ -216,6 +240,9 @@ impl TextInput<'_> {
             Self::Svg(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
+            Self::Csv(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
         }
     }
     pub(crate) fn replace_ranges(
@@ -229,6 +256,9 @@ impl TextInput<'_> {
                 input.update(cx, |state, cx| state.replace_ranges(replacements, cx))
             }
             Self::Svg(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
         }
@@ -249,6 +279,9 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
         }
     }
     pub(crate) fn set_history_selection(
@@ -263,6 +296,9 @@ impl TextInput<'_> {
                 state.set_history_selection(before, after, cx)
             }),
             Self::Svg(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
         }
@@ -280,6 +316,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Csv(view) => view.read(self.cx).focus_handle(cx),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -288,6 +325,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Csv(view) => view.read(self.cx).scroll_offset(self.cx),
         }
     }
 }
@@ -320,6 +358,15 @@ impl TextRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
+            TextInput::Csv(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
         }
     }
     pub(crate) fn cursor(&self) -> usize {
@@ -327,6 +374,7 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).cursor(),
             TextInput::Markdown(input) => input.read(self.cx).cursor(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).cursor(),
         }
     }
     pub(crate) fn cursor_position(&self) -> Position {
@@ -337,6 +385,7 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).selected_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).selected_range(),
         }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
@@ -344,6 +393,7 @@ impl TextRead<'_> {
             TextInput::Code(_) => self.selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).occurrence_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
         }
     }
     pub(crate) fn range_to_bounds(
@@ -354,6 +404,11 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Svg(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Csv(view) => view
                 .read(self.cx)
                 .source()
                 .read(self.cx)
@@ -378,6 +433,7 @@ pub(super) struct Presentations {
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
+    csvs: RefCell<Vec<(TabId, split::GroupId, Entity<CsvView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -522,6 +578,65 @@ impl Presentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
     }
+
+    /// A CSV/TSV document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own mode, table
+    /// selection, filter/sort and scrolls over the same Document and table.
+    pub(super) fn csv_view<E: 'static>(
+        &self,
+        primary: &Entity<CsvView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<CsvView> {
+        let mut views = self.csvs.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).selection();
+            let source_selection = primary.read(cx).selected_range(cx);
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let table_scroll = primary.read(cx).table_scroll_offset();
+            let table_horizontal = primary.read(cx).horizontal_offset();
+            cx.new(|cx| {
+                let mut view = CsvView::new(document, mode, wrap, indent, window, cx);
+                view.seed_presentation(
+                    selection,
+                    source_selection,
+                    source_scroll,
+                    table_scroll,
+                    table_horizontal,
+                    cx,
+                );
+                view
+            })
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn csv_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<CsvView>> {
+        self.csvs
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
@@ -578,6 +693,13 @@ impl Presentations {
             }
             keep
         });
+        self.csvs.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(
@@ -606,6 +728,9 @@ impl Presentations {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.svgs.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.csvs.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }
