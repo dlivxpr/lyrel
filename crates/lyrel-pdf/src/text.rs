@@ -39,10 +39,14 @@ pub struct Selection {
 /// other selections.
 pub type TextSelection = Selection;
 
-fn dist2(point: NormPoint, rect: NormRect) -> f32 {
+/// Distance to a run that prefers the same *line* over a nearer run on
+/// another line: a drag to the right edge of a paragraph ends far from every
+/// glyph horizontally, and plain Euclidean distance would snap back to the
+/// rightmost glyph of the previous line.
+fn line_dist2(point: NormPoint, rect: NormRect) -> (f32, f32) {
     let dx = (rect.x - point.x).max(point.x - rect.right()).max(0.0);
     let dy = (rect.y - point.y).max(point.y - rect.bottom()).max(0.0);
-    dx * dx + dy * dy
+    (dy * dy, dx * dx)
 }
 
 /// One extracted glyph cluster: its text (usually one char; a ligature may be
@@ -515,19 +519,33 @@ impl PageText {
         lines
     }
 
+    /// Run rect in the page's rotated display space, matching the normalized
+    /// points a drag reports.
+    fn display_rect(&self, rect: NormRect) -> NormRect {
+        let first = self
+            .display
+            * Point::new(f64::from(rect.x), f64::from(rect.y));
+        let last = self
+            .display
+            * Point::new(f64::from(rect.right()), f64::from(rect.bottom()));
+        NormRect {
+            x: first.x.min(last.x) as f32,
+            y: first.y.min(last.y) as f32,
+            w: (last.x - first.x).abs() as f32,
+            h: (last.y - first.y).abs() as f32,
+        }
+    }
+
     fn nearest_run(&self, point: NormPoint) -> Option<usize> {
-        let point = self.display.inverse() * Point::new(f64::from(point.x), f64::from(point.y));
-        let point = NormPoint {
-            x: point.x as f32,
-            y: point.y as f32,
-        };
         self.runs
             .iter()
             .enumerate()
             .min_by(|(_, a), (_, b)| {
-                dist2(point, a.rect)
-                    .partial_cmp(&dist2(point, b.rect))
+                let a = line_dist2(point, self.display_rect(a.rect));
+                let b = line_dist2(point, self.display_rect(b.rect));
+                a.0.partial_cmp(&b.0)
                     .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             })
             .map(|(index, _)| index)
     }

@@ -512,6 +512,15 @@ mod tests {
         assert_eq!(text.find_matches("中文").len(), 3);
         assert_eq!(text.locate("中文", 1).len(), 1);
         assert!(text.locate("中文", 3).is_empty());
+        // 从页顶拖到第二行下方：复制必须跨行，相邻 CJK run 之间不插空格。
+        assert_eq!(
+            text.selected_text(
+                NormPoint { x: 0.05, y: 0.06 },
+                NormPoint { x: 0.55, y: 0.30 }
+            )
+            .as_deref(),
+            Some("中文 中文\n中文")
+        );
     }
 
     #[test]
@@ -662,5 +671,20 @@ mod tests {
             .render_page(2, 1.0, &never_cancelled)
             .expect("rotated render");
         assert_eq!((page.width, page.height), (792, 612));
+    }
+
+    #[test]
+    fn ligature_glyph_expands_to_its_full_unicode_string() {
+        let document =
+            PdfDocument::load(Arc::new(fixtures::ligature_text_document()), "").expect("ligature");
+        let text = document.text(0).expect("text page");
+        // One Type3 glyph maps to the three-letter "ffi" ligature, so the
+        // extracted line reads as the word, not the raw code points.
+        assert_eq!(text.text(), "office");
+        assert_eq!(text.find_matches("ffi").len(), 1);
+        assert_eq!(text.find_matches("office").len(), 1);
+        let rects = text.locate("ffi", 0);
+        assert_eq!(rects.len(), 1);
+        assert!(rects[0].w > 0.0 && rects[0].h > 0.0);
     }
 }

@@ -204,7 +204,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // page window follows the action.
     {
         use crate::ui::code_editor::{
-            PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
+            PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
         };
         let pdf = Some(crate::ui::code_editor::PDF_KEY_CONTEXT);
         bindings.extend([
@@ -217,6 +217,11 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("secondary--", PdfZoomOut, pdf, cx),
             load_binding("secondary-_", PdfZoomOut, pdf, cx),
             load_binding("-", PdfZoomOut, pdf, cx),
+            // 查找与复制跟随全局习惯；enter/shift-enter 不绑 FindNext/
+            // FindPrevious——TOC 打开时 Enter 属于大纲键盘导航，查找条内
+            // 的 Enter 则由输入框的 PressEnter 事件驱动。
+            load_binding("secondary-f", gpui_kit::component::input::Search, pdf, cx),
+            load_binding("secondary-c", PdfCopy, pdf, cx),
         ]);
     }
     // The SVG preview is the same kind of framed canvas; its context exists
