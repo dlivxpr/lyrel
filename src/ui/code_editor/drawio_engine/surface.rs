@@ -56,6 +56,9 @@ pub(crate) enum SurfaceEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+// The platform arms are built only by the native hosts; automated builds
+// keep the wording but never construct them.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) enum SurfaceError {
     /// Produced only by the Windows host's own geometry contract.
     #[cfg(all(not(test), windows))]
@@ -144,16 +147,48 @@ impl ParentWindow {
 /// Creates and owns one native child surface. Windows uses WebView2 directly;
 /// macOS uses a WKWebView through wry's registry host. Both expose the same
 /// session, bridge, asset and lifecycle contract.
+/// The test-only stand-in for a live engine surface: it records the
+/// commands production code sends and answers whether the engine would take
+/// them, so the save flush, clipboard and page paths run through
+/// `SurfaceHost::command` instead of a no-op.
+#[cfg(test)]
+pub(crate) struct TestSurface {
+    pub(crate) commands: std::cell::RefCell<Vec<Command>>,
+}
+
+#[cfg(test)]
+impl TestSurface {
+    pub(crate) fn new() -> Self {
+        Self {
+            commands: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
 pub(crate) struct SurfaceHost {
     #[cfg(all(windows, not(test)))]
     inner: windows_host::Host,
     #[cfg(all(target_os = "macos", not(test)))]
     inner: macos_host::Host,
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(test)]
+    inner: TestSurface,
+    #[cfg(not(any(windows, target_os = "macos", test)))]
     _unsupported: std::marker::PhantomData<()>,
 }
 
 impl SurfaceHost {
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        Self {
+            inner: TestSurface::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_commands(&self) -> Vec<Command> {
+        self.inner.commands.borrow().clone()
+    }
+
     #[cfg(not(test))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
@@ -221,18 +256,16 @@ impl SurfaceHost {
     /// means the surface is up but the engine is not ready to receive it, so
     /// callers waiting on an answer must not wait on this surface.
     pub(crate) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
+        #[cfg(test)]
+        {
+            self.inner.commands.borrow_mut().push(command);
+            return Ok(true);
+        }
         #[cfg(all(windows, not(test)))]
         return self.inner.command(command);
         #[cfg(all(target_os = "macos", not(test)))]
         return self.inner.command(command);
-        #[cfg(all(test, any(windows, target_os = "macos")))]
-        {
-            let _ = command;
-            Err(SurfaceError::Platform(
-                "the native diagram surface is not started by automated tests".into(),
-            ))
-        }
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", test)))]
         {
             let _ = command;
             Err(SurfaceError::Unsupported(

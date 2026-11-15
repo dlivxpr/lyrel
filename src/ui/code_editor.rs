@@ -157,6 +157,15 @@ pub(crate) enum DiskConflict {
     Deleted,
 }
 
+/// How long a deferred diagram save waits for the engine to confirm its
+/// current model. A test deadline stays short so a stalled flush is proven
+/// without sleeping the production three seconds.
+const DRAWIO_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) {
+    60
+} else {
+    3_000
+});
+
 /// A save that must not capture bytes older than the engine's live model:
 /// it waits for one committed revision newer than `from_edit`, with a
 /// deadline so a dead surface cannot wedge the whole save path.
@@ -205,6 +214,9 @@ pub(crate) struct OpenFile {
     /// A save deferred until the engine confirms its latest serialization
     /// committed through the document. Absent for every other input.
     drawio_flush: Option<DrawioFlush>,
+    /// Set when the deferred save's flush was confirmed and the write is
+    /// being re-entered: the engine must not be asked to sync a second time.
+    drawio_flush_done: bool,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) wrap: bool,
     /// Git change markers — see `gutter`.
@@ -2645,17 +2657,34 @@ impl LyrelApp {
         }
         self.editor_adopt_orphans(window, cx);
         self.editor_restore_active(window, cx);
-        for (id, force, target) in self
-            .editor
-            .buffers
-            .take_drawio_flush_resolutions(cx)
-        {
-            // A confirmed (or timed-out) flush takes the same Host write path
-            // as a synchronous save: conflicts, prompts and identity checks
-            // still apply to the bytes that are actually current now.
-            let root = self.editor_save_root();
-            self.editor
-                .save_at(id, force, target, &root, window, cx, Self::editor_bridge());
+        for (id, readiness) in self.editor.buffers.take_drawio_flush_resolutions(cx) {
+            match readiness {
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Confirmed {
+                    force,
+                    target,
+                } => {
+                    // A confirmed flush takes the same Host write path as a
+                    // synchronous save: conflicts, prompts and identity
+                    // checks still apply to the bytes that are current now.
+                    let root = self.editor_save_root();
+                    self.editor.save_at(
+                        id,
+                        force,
+                        target,
+                        &root,
+                        window,
+                        cx,
+                        Self::editor_bridge(),
+                    );
+                }
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Expired => {
+                    // The engine never confirmed: writing the bytes we have
+                    // would silently drop the model on its canvas. Fail the
+                    // save the way any other failed write does — the dirty
+                    // document stays, and a pending close is cancelled.
+                    self.drawio_flush_failed(id, window, cx);
+                }
+            }
         }
         for (id, views) in self.editor.buffers.drawio_pending(cx) {
             for view in views {
@@ -2688,6 +2717,28 @@ impl LyrelApp {
             );
         }
         self.editor_record_sessions(cx);
+    }
+
+    /// A deferred diagram save whose engine never confirmed its model is a
+    /// failed save, not a licence to write older bytes: the same toast a
+    /// failed write raises, the document stays dirty, and any close that was
+    /// waiting on this save is cancelled instead of dropping the work.
+    fn drawio_flush_failed(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(label) = self.editor.buffers.get(id).map(|file| file.label().to_string()) else {
+            return;
+        };
+        let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);
+        crate::ui::host_ops::HostOps::notify_err(
+            window,
+            cx,
+            &context,
+            &std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the diagram engine did not confirm its current model",
+            ),
+        );
+        self.editor.saves_failed(id);
+        cx.notify();
     }
 
     fn editor_adopt_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {

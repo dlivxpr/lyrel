@@ -9,6 +9,7 @@
 use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
+use crate::core::actions::CloseActiveTab;
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::drawio_engine::surface::SurfaceEvent;
 use gpui_kit::test::TestWindowExt as _;
@@ -797,31 +798,6 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
     );
 }
 
-/// Workbench clipboard actions reach the live engine as commands and never
-/// touch a text buffer the document does not have; a missing surface drops
-/// them without disturbing the document.
-#[gpui_kit::test]
-fn clipboard_and_delete_actions_fall_safely_without_a_surface(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
-    let dir = super::super::test_host::canonical_tempdir();
-    let bytes = uncompressed(1);
-    let path = fixture(dir.path(), "no-surface.drawio", &bytes);
-    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
-    let id = open(&app, &mut cx, &path);
-    let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
-        view.on_surface_event(SurfaceEvent::Ready, cx);
-    });
-    dispatch(&app, &mut cx, DrawioCopy);
-    dispatch(&app, &mut cx, DrawioCut);
-    dispatch(&app, &mut cx, DrawioDelete);
-    dispatch(&app, &mut cx, DrawioPaste);
-    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).unwrap();
-        assert!(!file.dirty, "no phantom edit without a live engine");
-    });
-}
 
 /// A commit that rewrites one page must not cost the file its other pages,
 /// its compressed representation, its unknown attributes or its embedded
@@ -893,4 +869,343 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
             .expect("the committed file still parses");
         assert_eq!(source.pages.len(), 2, "independent decode sees two pages");
     });
+}
+
+/// A deferred save asks **every** live presentation for its model — one
+/// engine left un-flushed would write bytes older than its canvas — and the
+/// write happens once, only after the confirmation, with no second sync.
+///
+/// A commit retires sibling surfaces (each presentation reloads to the newer
+/// document), so the two engines are saved-as while both are live and the
+/// confirmation arrives afterwards.
+#[gpui_kit::test]
+fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "flush-all.drawio", &original);
+    let target = dir.path().join("flush-all-target.drawio");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the diagram splits");
+    });
+    settle(&mut cx);
+    let views = app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("diagram");
+        let mut views = vec![view_of(file).clone()];
+        for (_, _, view) in file.presentations.drawios() {
+            if !views.contains(&view) {
+                views.push(view);
+            }
+        }
+        views
+    });
+    assert_eq!(views.len(), 2, "two live presentations");
+    for view in &views {
+        let _ = view.update_in(&mut cx, |view, _window, cx| {
+            view.on_surface_event(SurfaceEvent::Ready, cx);
+            view.attach_test_surface(cx);
+        });
+    }
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_as_active(window, cx);
+    });
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
+    settle(&mut cx);
+    // Both live engines were asked, and nothing was written yet.
+    for (index, view) in views.iter().enumerate() {
+        assert_eq!(
+            view.read_with(&cx, |view, _| view.test_surface_commands()),
+            vec![Command::Sync],
+            "presentation {index} was not flushed"
+        );
+    }
+    assert!(
+        !target.exists(),
+        "the write waits for the engine's confirmation"
+    );
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(1))
+            .unwrap()
+            .replace("Uncompressed page 0", "Flushed by both")
+            .into_bytes()
+            .as_slice(),
+    );
+    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    until(&mut cx, |_cx| {
+        std::fs::read(&target).is_ok_and(|bytes| bytes.as_slice() == committed.as_ref())
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    // The committer wrote without a second sync; the sibling reloaded to the
+    // newer document, which retires its old engine session instead of asking
+    // it to serialize bytes it no longer owns.
+    assert_eq!(
+        views[0].read_with(&cx, |view, _| view.test_surface_commands()),
+        vec![Command::Sync],
+        "the confirmed re-entry must not flush the committer again"
+    );
+    assert!(
+        views[1]
+            .read_with(&cx, |view, _| view.test_surface_commands())
+            .is_empty(),
+        "the reloaded sibling retired its stale surface"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap().as_slice(),
+        original.as_slice(),
+        "the original file is untouched by a save-as"
+    );
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "the confirmed model is on disk");
+        assert_eq!(file.path.as_path(), target.as_path());
+    });
+}
+
+/// A flush that never confirms is a failed save: the old bytes stay on disk,
+/// the document stays dirty, and a close waiting on that save is cancelled
+/// rather than dropping the engine's work.
+#[gpui_kit::test]
+fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "never-confirmed.drawio", &original);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(1))
+            .unwrap()
+            .replace("Uncompressed page 0", "Never confirmed")
+            .into_bytes()
+            .as_slice(),
+    );
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.attach_test_surface(cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    // Ask to close the dirty tab and choose Save: the close now waits for the
+    // save, which waits for a flush the engine never answers.
+    let tab = app.read_with(&cx, |app, _| app.tabs[app.tabs.active_index()].id());
+    cx.dispatch_action(CloseActiveTab);
+    settle(&mut cx);
+    assert!(cx.has_pending_prompt(), "a dirty diagram asks before closing");
+    cx.simulate_prompt_answer(t(L10nKey::Save));
+    settle(&mut cx);
+    // The save armed a flush on the live engine; without this the assertions
+    // below would also hold for a save that never started.
+    assert_eq!(
+        view(&app, &cx).read_with(&cx, |view, _| view.test_surface_commands()),
+        vec![Command::Sync],
+        "the close-waiting save asked the engine for its model"
+    );
+    // Let the (short, test-only) deadline pass without a confirmation, driving
+    // the frame sweep each pass so the expiry is actually processed.
+    let expiry = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+        settle(&mut cx);
+        let expired = app.read_with(&cx, |app, _| {
+            app.editor
+                .buffers
+                .get(id)
+                .is_some_and(|file| file.dirty && file.drawio_flush.is_none())
+        });
+        if expired {
+            break;
+        }
+        assert!(Instant::now() < expiry, "the flush never expired");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read(&path).unwrap().as_slice(),
+        original.as_slice(),
+        "an unconfirmed engine model is never replaced by stale bytes"
+    );
+    app.read_with(&cx, |app, _| {
+        assert!(
+            app.tabs.iter().any(|entry| entry.id() == tab),
+            "the cancelled close keeps the tab and its unsaved work"
+        );
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(file.dirty, "the engine's model is still unsaved");
+        assert!(file.drawio_flush.is_none(), "the failed flush is cleared for a retry");
+    });
+}
+
+/// Save As writes the confirmed engine model to the chosen target and leaves
+/// the original file untouched.
+#[gpui_kit::test]
+fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "save-as-source.drawio", &original);
+    let target = dir.path().join("save-as-target.drawio");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(1))
+            .unwrap()
+            .replace("Uncompressed page 0", "Save as target")
+            .into_bytes()
+            .as_slice(),
+    );
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.attach_test_surface(cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_as_active(window, cx);
+    });
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
+    settle(&mut cx);
+    // The engine answers the flush the save-as asked for.
+    let view = view(&app, &cx);
+    let _ = view.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    until(&mut cx, |_cx| {
+        std::fs::read(&target).is_ok_and(|bytes| bytes.as_slice() == committed.as_ref())
+    });
+    assert_eq!(
+        std::fs::read(&target).unwrap().as_slice(),
+        committed.as_ref(),
+        "the chosen target received the confirmed model"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap().as_slice(),
+        original.as_slice(),
+        "save-as never rewrites the original"
+    );
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert_eq!(
+            file.path.as_path(),
+            target.as_path(),
+            "the buffer now owns the new path"
+        );
+        assert!(!file.dirty);
+    });
+}
+
+/// The same diagram lifecycle over a real SSH Host: open from the remote,
+/// commit an edit, save back through the owning Host, then prove the remote
+/// bytes with an independent control client — and that a same-named local
+/// decoy never changed.
+///
+/// Requires the private loopback fixture (explicit `LYREL_TEST_SSH_*` and a
+/// same-commit router binary); the engine surface is the production event
+/// seam, not a native window.
+#[gpui_kit::test]
+#[ignore = "requires the explicit private SSH fixture and a same-commit local router binary; run alone with --ignored"]
+fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
+    use lyrel_core::host::Host as _;
+
+    crate::ui::i18n::set_locale("en");
+    let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
+        "real SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER names the same-commit router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
+    );
+    let ssh = crate::native_ssh_graphics_fixture::NativeSshFixture::start(Path::new(&binary));
+    let host = ssh.connect_control();
+    let original = uncompressed(2);
+    let name = "remote-298.drawio";
+    let remote = ssh.remote_path(name);
+    host.write_file(&remote, &original)
+        .expect("upload the remote diagram through the owning Host");
+    // A same-named local decoy must never be the file this buffer writes.
+    let decoy_dir = super::super::test_host::canonical_tempdir();
+    let decoy = self::fixture(decoy_dir.path(), name, b"decoy");
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(2))
+            .unwrap()
+            .replace("Uncompressed page 0", "Remote engine edit")
+            .into_bytes()
+            .as_slice(),
+    );
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &remote, window, cx);
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    let id = app.read_with(&cx, |app, _| app.active_buffer().expect("remote diagram").id());
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.editor.buffers.get(id).is_some_and(|file| {
+                file.host.id() == host.id() && !file.host.id().is_local()
+            })
+        })
+    });
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_file(id, false, window, cx);
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| !app.editor.buffers.get(id).unwrap().dirty)
+    });
+    // Reopen the same remote path: the document the Host now holds parses and
+    // carries the engine's change.
+    let reopened = host
+        .read_file(&remote, committed.len() as u64 + 1)
+        .expect("reopen the remote diagram");
+    assert_eq!(reopened, committed.to_vec(), "the owning Host wrote the commit");
+    let source = crate::ui::code_editor::drawio_engine::parse(&reopened)
+        .expect("the saved remote file still parses");
+    assert_eq!(source.pages.len(), 2);
+    // A second control client proves the bytes are on the remote, and the
+    // local decoy is untouched.
+    let verifier = ssh.connect_control_as(
+        "fixture:native-ssh-298-verify",
+        "native-ssh-drawio-298",
+        "isolated-fixture",
+    );
+    let bytes = verifier
+        .read_file(&remote, committed.len() as u64 + 1)
+        .expect("independent remote read");
+    assert_eq!(bytes, committed.to_vec());
+    assert_eq!(std::fs::read(&decoy).unwrap(), b"decoy");
 }

@@ -195,7 +195,8 @@ impl EditorPanelState {
         // A diagram save must write the engine's live model, not the last
         // committed bytes: defer the write through every live surface's sync
         // flush until a newer committed revision (or the deadline) confirms.
-        if file.input.drawio().is_some() && file.drawio_flush.is_none() {
+        let flushed = std::mem::take(&mut file.drawio_flush_done);
+        if file.input.drawio().is_some() && file.drawio_flush.is_none() && !flushed {
             let Some((from_edit, has_bytes)) = file
                 .input
                 .drawio_document(cx)
@@ -216,14 +217,18 @@ impl EditorPanelState {
                     views.push(view.clone());
                 }
             }
-            let live = views.iter().any(|view| {
-                view.update(cx, |view, _| view.flush())
-            });
+            // Every live presentation must flush: a short-circuit would leave
+            // an engine whose model is newer than the committed bytes.
+            let mut live = false;
+            for view in &views {
+                if view.update(cx, |view, _| view.flush()) {
+                    live = true;
+                }
+            }
             if live {
                 file.drawio_flush = Some(DrawioFlush {
                     from_edit,
-                    deadline: std::time::Instant::now()
-                        + std::time::Duration::from_secs(3),
+                    deadline: std::time::Instant::now() + super::DRAWIO_FLUSH_TIMEOUT,
                     force,
                     target: save_as,
                 });

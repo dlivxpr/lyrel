@@ -27,6 +27,16 @@ const EDITORCONFIG_DEPTH: usize = 16;
 
 /// Document identity and I/O lifetime. Tabs only retain presentation relations;
 /// replacing an editing presentation does not replace the document.
+/// What one deferred draw.io save turned into: a confirmed engine revision
+/// ready to write, or a flush that never arrived.
+pub(super) enum DrawioFlushReadiness {
+    Confirmed {
+        force: bool,
+        target: Option<PathBuf>,
+    },
+    Expired,
+}
+
 pub(super) struct EditorBuffers {
     files: Vec<OpenFile>,
     next_untitled: u32,
@@ -266,14 +276,14 @@ impl EditorBuffers {
         pending
     }
 
-    /// Resolves deferred draw.io saves: a flush waits for the engine's sync
-    /// commit to advance the document's committed revision past the marker,
-    /// or for the deadline so a dead surface cannot wedge the save path.
-    /// Returns the (id, save-as target) pairs ready to write now.
+    /// Resolves deferred draw.io saves. A flush writes only once the engine
+    /// has committed a revision newer than the marker: the deadline is not
+    /// permission to write older bytes, so an unconfirmed flush reports
+    /// `Expired` and the caller fails the save visibly instead.
     pub(super) fn take_drawio_flush_resolutions(
         &mut self,
         cx: &gpui_kit::App,
-    ) -> Vec<(BufferId, bool, Option<PathBuf>)> {
+    ) -> Vec<(BufferId, DrawioFlushReadiness)> {
         let now = std::time::Instant::now();
         let mut ready = Vec::new();
         for file in &mut self.files {
@@ -288,7 +298,20 @@ impl EditorBuffers {
                 continue;
             }
             file.drawio_flush = None;
-            ready.push((file.id(), flush.force, flush.target));
+            if confirmed {
+                // This save already waited for the engine: the re-entered
+                // write must not flush again, or it would never reach disk.
+                file.drawio_flush_done = true;
+                ready.push((
+                    file.id(),
+                    DrawioFlushReadiness::Confirmed {
+                        force: flush.force,
+                        target: flush.target,
+                    },
+                ));
+            } else {
+                ready.push((file.id(), DrawioFlushReadiness::Expired));
+            }
         }
         ready
     }
@@ -560,6 +583,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -614,6 +638,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -667,6 +692,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -716,6 +742,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -765,6 +792,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -966,6 +994,7 @@ impl EditorBuffers {
             reload_seq: 0,
             reload_request: 0,
             drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),

@@ -558,6 +558,24 @@ impl DrawioView {
         matches!(surface.command(Command::Sync), Ok(true))
     }
 
+    /// Test-only live surface: the production `flush`, clipboard and page
+    /// paths then run through `SurfaceHost::command`, and the test answers
+    /// with the same `SurfaceEvent` the native hosts deliver.
+    #[cfg(test)]
+    pub(crate) fn attach_test_surface(&mut self, cx: &mut Context<Self>) {
+        self.surface = Some(SurfaceHost::test());
+        self.engine = EngineStatus::Ready;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_surface_commands(&self) -> Vec<Command> {
+        self.surface
+            .as_ref()
+            .map(SurfaceHost::test_commands)
+            .unwrap_or_default()
+    }
+
     /// Drained by the editor's frame sweep: the engine asked for the Host's
     /// save path (its own Ctrl+S), which only the owning workbench can run.
     pub(crate) fn take_save_request(&mut self) -> bool {
