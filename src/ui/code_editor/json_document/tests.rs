@@ -1044,7 +1044,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.jsonc", EDITABLE);
     let target = dir.path().join("persisted.jsonc");
-    let host = FileHost::new(HostId(2902));
+    let host = FileHost::new(HostId::LOCAL);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
@@ -1271,11 +1271,11 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
         app.editor_split_follow_focus(window, cx);
     });
     let text = source_text(&app, &cx);
-    let at = text.find("\"unterminated\"").expect("broken value");
+    let at = text.find("\"unterminated").expect("broken value");
     type_source(
         &app,
         &mut cx,
-        at..at + "\"unterminated\"".len(),
+        at..at + "\"unterminated".len(),
         "\"repaired\"",
     );
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
