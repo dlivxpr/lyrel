@@ -492,9 +492,10 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
         "the count answers the filtered rows"
     );
 
-    // 大小写不敏感、覆盖每一列：按数字筛出同一行。
+    // 大小写不敏感、覆盖每一列：全选替换为数字，筛出同一行。
     cx.update(|window, cx| {
         window.click("sqlite-filter", cx);
+        window.press("secondary-a", cx);
         window.input("900719925474099", cx);
     });
     until_named(&mut cx, "filter-digits", |cx| {
@@ -504,9 +505,10 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
     assert_eq!(dump(&view, &cx).1[0][1], "9007199254740993");
 
     // 清空筛选恢复整页；筛选期间产生的迟到页不会覆盖新结果。
-    view.update_in(&mut cx, |view, window, cx| {
-        view.search_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.press("secondary-a", cx);
+        window.press("backspace", cx);
     });
     until_named(&mut cx, "filter-cleared", |cx| {
         view.read_with(cx, |view, _| view.state.search.is_empty()) && dump(&view, cx).1.len() == 5
@@ -594,7 +596,7 @@ fn big_value_database(dir: &Path) -> PathBuf {
         .expect("fixture schema");
     connection
         .execute(
-            "INSERT INTO items VALUES (1, replace(hex(zeroblob(1050000)), '00', 'x'), x'00ff10')",
+            "INSERT INTO items VALUES (1, replace(hex(zeroblob(1050000)), '0', 'x'), x'00ff10')",
             [],
         )
         .expect("big row");
