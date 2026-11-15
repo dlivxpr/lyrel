@@ -290,6 +290,13 @@ fn replace_panel_text(
     settle(cx);
 }
 
+fn focus_panel_value(view: &Entity<XmlView>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.focus_edit_value(window, cx));
+    });
+    settle(cx);
+}
+
 fn apply_panel(view: &Entity<XmlView>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.click(("structure-edit-apply", view.entity_id()), cx));
     settle(cx);
@@ -628,9 +635,9 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
     let before = source_text(&app, &cx);
     click_row(&view, &mut cx, "/r/@xmlns:p");
     click_button(&view, &mut cx, "xml-remove");
-    assert!(mutation_error(&view, &mut cx).is_some());
     assert_eq!(source_text(&app, &cx), before);
     assert!(source_text(&app, &cx).contains("xmlns:p=\"urn:part\""));
+    assert!(mutation_error(&view, &mut cx).is_some());
 
     // An ordinary attribute and a non-root element can be removed locally.
     ensure_expanded(&view, &mut cx, "/r/p:b[1]");
@@ -888,6 +895,7 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     let at = text.find("text</b>").expect("fixture text");
     type_source(&app, &mut cx, at..at + "text".len(), "TEXT");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    focus_panel_value(&other, &mut cx);
     apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
@@ -918,6 +926,7 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     let at = text.find("TEXT</b>").expect("fixture text");
     type_source(&app, &mut cx, at..at + "TEXT".len(), "source-wins");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    focus_panel_value(&other, &mut cx);
     apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
@@ -939,6 +948,7 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     click_row(&other, &mut cx, "/r/b[1]/text()[1]");
     click_button(&other, &mut cx, "xml-edit-value");
     type_edit_value(&other, &mut cx, "tree-final");
+    focus_panel_value(&other, &mut cx);
     apply_panel(&other, &mut cx);
     until(&mut cx, |cx| is_ready(&other, cx));
     assert!(source_text(&app, &cx).contains("<b>tree-final</b>"));

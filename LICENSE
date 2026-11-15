@@ -295,6 +295,7 @@ core-foundation-sys 0.8.7
 core-graphics 0.24.0
 core-graphics-types 0.2.0
 core-text 21.0.0
+countme 3.0.1
 cpubits 0.1.1
 cpufeatures 0.3.0
 crc32c 0.6.8
@@ -590,6 +591,7 @@ ring 0.17.14 (also applies: Apache-2.0 AND ISC)
 rio-unicode 0.5.30
 rle-decode-fast 1.0.3
 ropey 2.0.0-beta.1
+rowan 0.16.1
 roxmltree 0.20.0
 roxmltree 0.21.1
 roxmltree 0.21.2 (also applies: MIT)
@@ -668,6 +670,7 @@ system-configuration-sys 0.6.0
 tauri-winrt-notification 0.8.1
 tempfile 3.27.0
 tendril 0.4.3
+text-size 1.1.1
 thiserror 1.0.69
 thiserror 2.0.20
 thiserror-impl 1.0.69
@@ -681,7 +684,7 @@ toml 0.8.23
 toml_datetime 0.6.11
 toml_datetime 1.1.2+spec-1.1.0
 toml_edit 0.22.27
-toml_edit 0.25.17+spec-1.1.0
+toml_edit 0.25.19+spec-1.1.0
 toml_parser 1.1.5+spec-1.1.0
 toml_write 0.1.2
 toml_writer 1.1.3+spec-1.1.0
@@ -757,6 +760,7 @@ wnaf 0.14.0
 write16 1.0.0
 xml5ever 0.18.1
 xmlparser 0.13.6 (also applies: MIT)
+yaml-edit 0.3.6
 yaml_serde 0.10.7
 zed-font-kit 0.14.1-zed
 zerocopy 0.8.56
@@ -5824,7 +5828,7 @@ Applicable components and notice files:
 - clap_builder 4.6.7 / LICENSE-APACHE (copyright notice)
 - clap_derive 4.6.7 / LICENSE-APACHE (copyright notice)
 - toml_datetime 1.1.2+spec-1.1.0 / LICENSE-APACHE (copyright notice)
-- toml_edit 0.25.17+spec-1.1.0 / LICENSE-APACHE (copyright notice)
+- toml_edit 0.25.19+spec-1.1.0 / LICENSE-APACHE (copyright notice)
 - toml_parser 1.1.5+spec-1.1.0 / LICENSE-APACHE (copyright notice)
 - toml_writer 1.1.3+spec-1.1.0 / LICENSE-APACHE (copyright notice)
 

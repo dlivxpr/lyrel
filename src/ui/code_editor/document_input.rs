@@ -5,7 +5,9 @@ use super::image_document::ImageView;
 use super::pdf_document::PdfView;
 use super::sqlite_document::SqliteView;
 use super::text::TextSnapshot;
+use super::toml_document::TomlView;
 use super::xml_document::XmlView;
+use super::yaml_document::YamlView;
 use super::*;
 use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
 use std::cell::RefCell;
@@ -26,6 +28,10 @@ pub(crate) enum EditorInput {
     Svg(Entity<SvgView>),
     /// JSON 家族：共享逐行保真 Document 的源码与无损结构/记录视图。
     Json(Entity<JsonView>),
+    /// YAML：共享逐行保真 Document 的源码与保留锚点／别名／tag 的结构树。
+    Yaml(Entity<YamlView>),
+    /// TOML：共享逐行保真 Document 的源码与无损结构/局部编辑视图。
+    Toml(Entity<TomlView>),
     /// CSV／TSV 文档：共享逐行保真 Document 的源码与虚拟化表格。
     Csv(Entity<CsvView>),
     /// XML 文档：共享逐行保真 Document 的源码与有序、命名空间感知的结构树。
@@ -45,6 +51,8 @@ pub(crate) enum TextInput<'a> {
     Markdown(&'a Entity<MarkdownEditor>),
     Svg(&'a Entity<SvgView>),
     Json(&'a Entity<JsonView>),
+    Yaml(&'a Entity<YamlView>),
+    Toml(&'a Entity<TomlView>),
     Csv(&'a Entity<CsvView>),
     Xml(&'a Entity<XmlView>),
 }
@@ -58,6 +66,8 @@ pub(crate) enum WeakEditorInput {
     Pdf(gpui_kit::WeakEntity<PdfView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
     Json(gpui_kit::WeakEntity<JsonView>),
+    Yaml(gpui_kit::WeakEntity<YamlView>),
+    Toml(gpui_kit::WeakEntity<TomlView>),
     Csv(gpui_kit::WeakEntity<CsvView>),
     Xml(gpui_kit::WeakEntity<XmlView>),
     Drawio(gpui_kit::WeakEntity<DrawioView>),
@@ -73,6 +83,8 @@ impl WeakEditorInput {
             Self::Pdf(input) => input.upgrade().map(EditorInput::Pdf),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
             Self::Json(input) => input.upgrade().map(EditorInput::Json),
+            Self::Yaml(input) => input.upgrade().map(EditorInput::Yaml),
+            Self::Toml(input) => input.upgrade().map(EditorInput::Toml),
             Self::Csv(input) => input.upgrade().map(EditorInput::Csv),
             Self::Xml(input) => input.upgrade().map(EditorInput::Xml),
             Self::Drawio(input) => input.upgrade().map(EditorInput::Drawio),
@@ -90,6 +102,8 @@ impl EditorInput {
             Self::Pdf(input) => WeakEditorInput::Pdf(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
             Self::Json(input) => WeakEditorInput::Json(input.downgrade()),
+            Self::Yaml(input) => WeakEditorInput::Yaml(input.downgrade()),
+            Self::Toml(input) => WeakEditorInput::Toml(input.downgrade()),
             Self::Csv(input) => WeakEditorInput::Csv(input.downgrade()),
             Self::Xml(input) => WeakEditorInput::Xml(input.downgrade()),
             Self::Drawio(input) => WeakEditorInput::Drawio(input.downgrade()),
@@ -143,6 +157,18 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn yaml(&self) -> Option<&Entity<YamlView>> {
+        match self {
+            Self::Yaml(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn toml(&self) -> Option<&Entity<TomlView>> {
+        match self {
+            Self::Toml(input) => Some(input),
+            _ => None,
+        }
+    }
     pub(crate) fn csv(&self) -> Option<&Entity<CsvView>> {
         match self {
             Self::Csv(input) => Some(input),
@@ -177,6 +203,8 @@ impl EditorInput {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Json(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Yaml(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Toml(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Csv(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Xml(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Code(_)
@@ -196,6 +224,8 @@ impl EditorInput {
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
             Self::Json(input) => Some(TextInput::Json(input)),
+            Self::Yaml(input) => Some(TextInput::Yaml(input)),
+            Self::Toml(input) => Some(TextInput::Toml(input)),
             Self::Csv(input) => Some(TextInput::Csv(input)),
             Self::Xml(input) => Some(TextInput::Xml(input)),
             Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) | Self::Drawio(_) => {
@@ -229,6 +259,10 @@ impl EditorInput {
         } else if let Some(view) = self.svg() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         } else if let Some(view) = self.json() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.yaml() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.toml() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         } else if let Some(view) = self.csv() {
             view.update(cx, |view, cx| view.finish_composition(cx));
@@ -273,6 +307,8 @@ impl EditorInput {
             }),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Yaml(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Toml(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Xml(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             // The engine owns its pan/zoom view; the workbench has no second
@@ -298,17 +334,25 @@ impl TextInput<'_> {
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Yaml(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Toml(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
             Self::Xml(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
         }
     }
     /// Whether this presentation keeps the shared line-preserving source and
-    /// its history (Markdown, SVG, the JSON family and CSV), rather than the
-    /// ordinary code codec.
+    /// its history (Markdown, SVG, the JSON family, YAML, TOML and CSV), rather than
+    /// the ordinary code codec.
     pub(crate) fn is_source(&self) -> bool {
         matches!(
             self,
-            Self::Markdown(_) | Self::Svg(_) | Self::Json(_) | Self::Csv(_) | Self::Xml(_)
+            Self::Markdown(_)
+                | Self::Svg(_)
+                | Self::Json(_)
+                | Self::Yaml(_)
+                | Self::Toml(_)
+                | Self::Csv(_)
+                | Self::Xml(_)
         )
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
@@ -317,6 +361,8 @@ impl TextInput<'_> {
             Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Yaml(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Toml(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
             Self::Xml(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
         }
@@ -327,6 +373,8 @@ impl TextInput<'_> {
             Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Yaml(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Toml(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
             Self::Xml(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
         }
@@ -350,6 +398,14 @@ impl TextInput<'_> {
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
             Self::Json(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Yaml(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Toml(view) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
@@ -388,6 +444,12 @@ impl TextInput<'_> {
             Self::Json(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
+            Self::Yaml(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
+            Self::Toml(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
             Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
@@ -410,6 +472,12 @@ impl TextInput<'_> {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
             Self::Json(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Yaml(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Toml(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
             Self::Csv(view) => {
@@ -439,6 +507,12 @@ impl TextInput<'_> {
             Self::Json(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
+            Self::Yaml(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
+            Self::Toml(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
             Self::Csv(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
@@ -462,6 +536,12 @@ impl TextInput<'_> {
                 view.set_source_history_selection(before, after, cx)
             }),
             Self::Json(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
+            Self::Yaml(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
+            Self::Toml(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
             Self::Csv(view) => view.update(cx, |view, cx| {
@@ -489,6 +569,8 @@ impl InputRead<'_> {
             EditorInput::Pdf(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Json(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Yaml(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Toml(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Csv(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Xml(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Drawio(view) => view.read(self.cx).handle(),
@@ -504,6 +586,8 @@ impl InputRead<'_> {
             EditorInput::Pdf(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Json(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Yaml(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Toml(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Csv(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Xml(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Drawio(_) => gpui_kit::Point::default(),
@@ -548,6 +632,24 @@ impl TextRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
+            TextInput::Yaml(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+            TextInput::Toml(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
             TextInput::Csv(view) => TextSnapshot::Shared(
                 view.read(self.cx)
                     .document()
@@ -574,6 +676,8 @@ impl TextRead<'_> {
             TextInput::Markdown(input) => input.read(self.cx).cursor(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).cursor(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Yaml(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Toml(view) => view.read(self.cx).source().read(self.cx).cursor(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).cursor(),
             TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).cursor(),
         }
@@ -587,6 +691,8 @@ impl TextRead<'_> {
             TextInput::Markdown(input) => input.read(self.cx).selected_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).selected_range(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Yaml(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Toml(view) => view.read(self.cx).source().read(self.cx).selected_range(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).selected_range(),
             TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).selected_range(),
         }
@@ -597,6 +703,8 @@ impl TextRead<'_> {
             TextInput::Markdown(input) => input.read(self.cx).occurrence_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Yaml(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Toml(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
             TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
         }
@@ -614,6 +722,16 @@ impl TextRead<'_> {
                 .read(self.cx)
                 .range_to_bounds(range),
             TextInput::Json(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Yaml(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Toml(view) => view
                 .read(self.cx)
                 .source()
                 .read(self.cx)
@@ -652,6 +770,8 @@ pub(super) struct Presentations {
     pdfs: RefCell<Vec<(TabId, split::GroupId, Entity<PdfView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
     jsons: RefCell<Vec<(TabId, split::GroupId, Entity<JsonView>, Subscription)>>,
+    yamls: RefCell<Vec<(TabId, split::GroupId, Entity<YamlView>, Subscription)>>,
+    tomls: RefCell<Vec<(TabId, split::GroupId, Entity<TomlView>, Subscription)>>,
     csvs: RefCell<Vec<(TabId, split::GroupId, Entity<CsvView>, Subscription)>>,
     xmls: RefCell<Vec<(TabId, split::GroupId, Entity<XmlView>, Subscription)>>,
     drawios: RefCell<Vec<(TabId, split::GroupId, Entity<DrawioView>, Subscription)>>,
@@ -956,6 +1076,96 @@ impl Presentations {
         view
     }
 
+    /// A YAML document's presentation in one group. The first group uses the
+    /// document's own view; a split group gets its own mode, folds, selection,
+    /// source caret and scroll over the same Document and projection.
+    pub(super) fn yaml_view<E: 'static>(
+        &self,
+        primary: &Entity<YamlView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<YamlView> {
+        let mut views = self.yamls.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).source().read(cx).selected_range();
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let structure_scroll = primary.read(cx).structure_scroll_offset();
+            let (expanded, selected) = primary.read(cx).expansion_state();
+            let view = cx.new(|cx| YamlView::new(document, mode, wrap, indent, cx));
+            view.update(cx, |view, cx| {
+                view.seed_presentation(
+                    selection,
+                    source_scroll,
+                    structure_scroll,
+                    expanded,
+                    selected,
+                    cx,
+                )
+            });
+            view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    /// A TOML document's presentation in one group. The first group uses the
+    /// document's own view; a split group gets its own mode, structure folds,
+    /// selection, source caret and scroll over the same Document.
+    pub(super) fn toml_view<E: 'static>(
+        &self,
+        primary: &Entity<TomlView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<TomlView> {
+        let mut views = self.tomls.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).source().read(cx).selected_range();
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let structure_scroll = primary.read(cx).structure_scroll_offset();
+            let (expanded, selected) = primary.read(cx).expansion_state();
+            let view = cx.new(|cx| TomlView::new(document, mode, wrap, indent, cx));
+            view.update(cx, |view, cx| {
+                view.seed_presentation(
+                    selection,
+                    source_scroll,
+                    structure_scroll,
+                    expanded,
+                    selected,
+                    cx,
+                )
+            });
+            view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
     /// A CSV/TSV document's presentation in one group. The first group uses
     /// the document's own view; a split group gets its own mode, table
     /// selection, filter/sort and scrolls over the same Document and table.
@@ -1086,6 +1296,30 @@ impl Presentations {
             .map(|(_, _, view, _)| view.clone())
     }
 
+    pub(super) fn yaml_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<YamlView>> {
+        self.yamls
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    pub(super) fn toml_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<TomlView>> {
+        self.tomls
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     pub(super) fn csv_existing(
         &self,
         tab: TabId,
@@ -1208,6 +1442,20 @@ impl Presentations {
             }
             keep
         });
+        self.yamls.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
+        self.tomls.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
         self.csvs.borrow_mut().retain(|(tab, group, view, _)| {
             let keep = live(*tab, *group);
             if !keep {
@@ -1258,6 +1506,12 @@ impl Presentations {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.jsons.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.yamls.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.tomls.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.csvs.borrow().iter() {

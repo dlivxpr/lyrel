@@ -94,6 +94,10 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
         // JSON's identity is likewise the shared source Document and history.
         EditorInput::Json(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // YAML's identity is likewise the shared source Document and history.
+        EditorInput::Yaml(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // TOML uses the same one-document identity and ordinary history.
+        EditorInput::Toml(view) => view.read(cx).document().read(cx).document().entity_id(),
         // CSV/TSV has the same one-document identity as its source view.
         EditorInput::Csv(view) => view.read(cx).document().read(cx).document().entity_id(),
         // XML likewise saves the shared source Document, never a tree copy.
@@ -499,6 +503,10 @@ impl EditorPanelState {
                 "md"
             } else if file.input.svg().is_some() {
                 "svg"
+            } else if file.input.yaml().is_some() {
+                "yaml"
+            } else if file.input.toml().is_some() {
+                "toml"
             } else {
                 "txt"
             };

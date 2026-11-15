@@ -256,6 +256,16 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("ctrl-y", Redo, xml, cx),
         ]);
     }
+    // YAML's tree uses the same shared Document history as its source view.
+    {
+        use gpui_kit::component::input::{Redo, Undo};
+        let yaml = Some(crate::ui::code_editor::YAML_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, yaml, cx),
+            load_binding("secondary-shift-z", Redo, yaml, cx),
+            load_binding("ctrl-y", Redo, yaml, cx),
+        ]);
+    }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a
     // shell or the terminal.

@@ -47,7 +47,9 @@ mod structure_rows;
 mod structure_view;
 mod svg_document;
 mod text;
+mod toml_document;
 mod xml_document;
+mod yaml_document;
 use buffers::Loaded;
 use document_input::{EditorInput, Presentations};
 mod gutter;
@@ -63,7 +65,9 @@ use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
-use xml_document::{XmlDocument, XmlMode, XmlView};
+use toml_document::TomlMode;
+use xml_document::XmlMode;
+use yaml_document::YamlMode;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
@@ -106,6 +110,8 @@ pub(crate) use pdf_document::{
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 /// XML 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
 pub(crate) use xml_document::KEY_CONTEXT as XML_KEY_CONTEXT;
+/// YAML 结构树的键盘上下文。
+pub(crate) use yaml_document::KEY_CONTEXT as YAML_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -264,6 +270,10 @@ impl OpenFile {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.json() {
             view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.yaml() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.toml() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.svg() {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.csv() {
@@ -301,6 +311,13 @@ impl OpenFile {
         }
         if self.input.json().is_some() {
             return "json";
+        }
+        // YAML/TOML survive a rename or Save As as the document they already are.
+        if self.input.yaml().is_some() {
+            return "yaml";
+        }
+        if self.input.toml().is_some() {
+            return "toml";
         }
         if self.input.xml().is_some() {
             return "xml";
@@ -548,6 +565,25 @@ pub(crate) fn is_json_path(path: &Path) -> bool {
                 .iter()
                 .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })
+}
+
+/// YAML source has its own document route: one plain-source Document plus a
+/// lossless structure tree that keeps anchors, aliases, tags and documents.
+pub(crate) fn is_yaml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+        })
+}
+
+/// TOML documents have one plain-source Document and a lossless structure
+/// view. The extension decides the route, so a temporarily invalid file still
+/// opens where it can be repaired.
+pub(crate) fn is_toml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"))
 }
 
 /// XML source has its own document route: one plain-source Document plus an
@@ -981,6 +1017,14 @@ impl LyrelApp {
         self.active_buffer()
             .is_some_and(|file| file.input.json().is_some())
     }
+    pub(crate) fn yaml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.yaml().is_some())
+    }
+    pub(crate) fn toml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.toml().is_some())
+    }
     pub(crate) fn csv_document_active(&self) -> bool {
         self.active_buffer()
             .is_some_and(|file| file.input.csv().is_some())
@@ -1015,6 +1059,16 @@ impl LyrelApp {
                     file.presentations
                         .json_existing(tab, group)
                         .map(EditorInput::Json)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .yaml_existing(tab, group)
+                        .map(EditorInput::Yaml)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .toml_existing(tab, group)
+                        .map(EditorInput::Toml)
                 })
                 .or_else(|| {
                     file.presentations
@@ -1688,6 +1742,12 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.json() {
             let view = file.presentations.json_view(primary, tab, group, cx);
             EditorInput::Json(view).focus(window, cx);
+        } else if let Some(primary) = file.input.yaml() {
+            let view = file.presentations.yaml_view(primary, tab, group, cx);
+            EditorInput::Yaml(view).focus(window, cx);
+        } else if let Some(primary) = file.input.toml() {
+            let view = file.presentations.toml_view(primary, tab, group, cx);
+            EditorInput::Toml(view).focus(window, cx);
         } else if let Some(primary) = file.input.csv() {
             let view = file.presentations.csv_view(primary, tab, group, window, cx);
             EditorInput::Csv(view).focus(window, cx);
@@ -1783,6 +1843,18 @@ impl LyrelApp {
         } else if let Some(view) = self
             .active_editor_input()
             .and_then(|input| input.json().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.yaml().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.toml().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
@@ -2353,6 +2425,22 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = json_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(yaml) = input.yaml() {
+            let menu = menu.action_context(yaml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = yaml_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(toml) = input.toml() {
+            let menu = menu.action_context(toml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = toml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         if let Some(xml) = input.xml() {
@@ -3103,6 +3191,10 @@ impl LyrelApp {
                     "svg-status-bar"
                 } else if self.json_document_active() {
                     "json-status-bar"
+                } else if self.yaml_document_active() {
+                    "yaml-status-bar"
+                } else if self.toml_document_active() {
+                    "toml-status-bar"
                 } else if self.csv_document_active() {
                     "csv-status-bar"
                 } else if self.xml_document_active() {
@@ -3321,6 +3413,56 @@ impl LyrelApp {
                 let view = f.presentations.json_view(primary, tab, group, cx);
                 v_flex()
                     .id(("json-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.yaml().is_some() => {
+                let primary = f.input.yaml().expect("YAML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.yaml_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("yaml-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.toml().is_some() => {
+                let primary = f.input.toml().expect("TOML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.toml_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("toml-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3887,6 +4029,33 @@ impl LyrelApp {
                     view.attribute_count(cx),
                 )
             });
+        let yaml_state = self
+            .active_editor_input()
+            .and_then(|input| input.yaml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                    view.document_count(cx),
+                )
+            });
+        let toml_state = self
+            .active_editor_input()
+            .and_then(|input| input.toml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                )
+            });
         let csv_state = csv_view.as_ref().map(|view| {
             let view = view.read(cx);
             (
@@ -4284,6 +4453,158 @@ impl LyrelApp {
                                     L10nKey::EditorJsonInvalidRecords,
                                     &[("count", &invalid.to_string())],
                                 )),
+                        );
+                    }
+                    this
+                },
+            )
+            .when_some(
+                toml_state,
+                |this, (mode, parsing, fatal, location, nodes)| {
+                    let (label, tip) = match mode {
+                        TomlMode::Source => (
+                            t(L10nKey::EditorTomlSource),
+                            t(L10nKey::EditorTomlShowStructure),
+                        ),
+                        TomlMode::Structure => (
+                            t(L10nKey::EditorTomlStructure),
+                            t(L10nKey::EditorTomlShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-toml-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-toml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorTomlNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-toml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-toml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorTomlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-toml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    }
+                    this
+                },
+            )
+            .when_some(
+                yaml_state,
+                |this, (mode, parsing, fatal, location, nodes, documents)| {
+                    let (label, tip) = match mode {
+                        YamlMode::Source => (
+                            t(L10nKey::EditorYamlSource),
+                            t(L10nKey::EditorYamlShowStructure),
+                        ),
+                        YamlMode::Structure => (
+                            t(L10nKey::EditorYamlStructure),
+                            t(L10nKey::EditorYamlShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-yaml-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = documents {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-documents")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorYamlDocuments,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorYamlNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorYamlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
                         );
                     }
                     this

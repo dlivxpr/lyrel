@@ -65,6 +65,13 @@ roxmltree = "0.21"
 # is given a DTD or an external resolver, so external entities are never read.
 # MIT/Apache-2.0; see src/ui/code_editor/xml_document/UPSTREAM.toml.
 xmlparser = "=0.13.6"
+# Lossless YAML CST with source byte ranges, anchors, aliases and tags. The
+# default `binary` feature only adds base64 tag helpers, which this editor
+# does not use; keep the dependency to what the parser itself needs.
+yaml-edit = { version = "=0.3.6", default-features = false }
+# `yaml-edit` exposes its rowan syntax node types for source ranges; pin the
+# same registry version so the GUI can name that node type without re-parsing.
+rowan = "0.16"
 # Session and shell tokens are 128-bit OS entropy, never a timestamp or a
 # hash of the document. `getrandom` is already in the tree.
 getrandom = "0.3.4"
@@ -108,6 +115,10 @@ serde_json.workspace = true
 # MIT; the Value-backed Glim model is replaced, not wrapped (see
 # src/ui/code_editor/json_document/UPSTREAM.toml). JSON5 stays out.
 jsonc-parser = "=0.34.0"
+# Format-preserving TOML syntax with source spans for the #293 structure tree
+# and local edits. The immutable `Document::parse` tree keeps spans; the
+# `DocumentMut` conversion would despan it. MIT OR Apache-2.0.
+toml_edit = "0.25.19"
 tempfile = "3"
 # Browser session import stays desktop-local; database recovery runs in memory.
 rusqlite = { version = "0.41.0", features = ["bundled"] }
