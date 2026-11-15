@@ -236,6 +236,20 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("secondary-shift-delete", CsvDeleteColumn, csv, cx),
         ]);
     }
+    // The JSON structure tree's history keys. A tree presentation edits the
+    // shared source Document through its ordinary `replace_ranges`, so undo
+    // and redo there are the same document history the source view uses, not
+    // a second one. Bound on the tree's own context so a source view, a text
+    // field, a shell or the terminal keeps its own chords.
+    {
+        use gpui_kit::component::input::{Redo, Undo};
+        let json = Some(crate::ui::code_editor::JSON_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, json, cx),
+            load_binding("secondary-shift-z", Redo, json, cx),
+            load_binding("ctrl-y", Redo, json, cx),
+        ]);
+    }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a
     // shell or the terminal.
