@@ -485,6 +485,7 @@ impl Builder {
         if let Some(id) = attribute(node, "id") {
             self.push_html(" id=\"");
             push_attribute(id, &mut self.parts);
+            self.push_html("\"");
             self.anchors.push((id.to_owned(), self.text.len()));
         }
         if tag == "a" {

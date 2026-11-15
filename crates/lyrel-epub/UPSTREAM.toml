@@ -26,6 +26,8 @@ import_owner = "#286"
 # 补齐: 固定版式检测（全局 + spine itemref + EPUB2/Apple 启发式）、
 # rights.xml/license.lcpl/ZIP 加密/字体目标校验、整书搜索的文本与命中上限、
 # 可见的省略计数、单块/章节/条目/总未压缩预算、可取消 token。
+# 修复: 净化的 id 属性完整闭合引号，避免富文本消费者吞掉锚点所在块的正文；
+# 锚点与原章节的身份仍保留，不修改归档输入。
 # 替换: Glim 的 archive(path)/File 打开改为调用方 Reader；整书 SHA-256 改由
 # Host 传输阶段计算并只作版本守卫；1×1 透明缺图改为 UI 可见占位与计数。
 
