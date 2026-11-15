@@ -19,6 +19,7 @@
 
 ### 新增
 
+- #287：CSV／TSV 接入共享保真源码和虚拟化只读表格，保留 quoted／多行／不等长逻辑记录、完整字段查看与复制、键盘源码定位，以及每个呈现独立的视图筛选／排序。后台解析和查询按文档修订拒绝迟到结果；源码编辑、编码／BOM、逐行换行、历史与保存沿用现有 Host 文档。表格内修改仍归 #288；原生、真实远端与双平台验收另行记录。
 - #270：完整单色 Glyph Protocol 正常启用，GUI 对实际支持 `glyph-support` 的 pane endpoint 声明完整绘制能力；daemon 仅为当前 rendering controller 的 `s` 广告 `fmt=glyf`，state-only、observer、脱离及替代 controller 不继承能力声明。保留有界 `q/r/c`、注册／布局／保留态和单一实时回复所有者，不启用颜色格式、全局字体注入、磁盘 glyph cache 或默认关闭实验开关。正式 `omp/18.20.0` 已在隔离真实 PTY／生产消费者中完成 bundle 注册与绘制；该后台证据不替代 Windows 原生像素、WSL／真实 SSH 或最终组合验收。Windows fixture 显式完成 ConPTY 首次 DA1 初始化，真实客户端 harness 分开 shell source 引用与 argv，并禁止向 omp 注入 fixture 命令。
 - #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
 - #267：GUI Glyph 消费路径实现 pinned v1.12 §8.5 布局：pad → size → align，声明 extent（`aw`／`lh`／`ymin`）或未声明时的解码点 bbox 与 `contain` em 上限、五种 size、水平／垂直 align（含 baseline 与 descender）、分数 padding 与退化归零、未扣 padding 的 render span 裁剪；`width=2` 仅扩像素 span，末列、非空或已有邻格自行绘制时回退一列，保持 logical width、光标推进、换行、选择与复制。前景、单元格几何、主字体 baseline、span、注册 revision 与 display scale 每帧参与派生，字体／显示缩放不要求应用重注册。保留普通字体、Powerline／boxdraw、Kitty 与 native 路径；本切片仍不回复 `s`。真实 PTY→daemon→production consumer 与确定性边界结果见本票交付证据；Windows 原生像素／显示缩放、WSL、真实 SSH 与 macOS 未在本票宣称通过。
@@ -30,9 +31,23 @@
 - #272：标签页进度汇总其全部终端叶子，包括未聚焦、隐藏和停放的窗格；错误优先，仅单个有效任务提供百分比时显示数值，多任务只显示诚实状态而不做平均。保留智能体等待／完成／未读语义，不增加重复 busy 或完成通知；关闭、移动、停放／恢复、焦点、重连及休眠／唤醒重建按当前成员更新，瞬时进度不写入 durable 布局或 agent payload。新增真实多 PTY→daemon→生产 tab 消费者、确定性成员边界测试和原生多窗格场景；Windows 实窗、WSL 与真实 SSH 仍按父验收边界分别记录，不宣称 macOS 通过。
 - #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
 - #261：终端新增 pane 会话内 `OSC 4/10/11/12` 索引色与默认前景／背景／光标 set/query/reset 覆盖层，绘制、查询与 prompt 背景共用当前主题 + 覆盖后的有效调色板；命令退出保留、主题切换只更新未覆盖默认、复位露出当前主题，其他 pane／界面／配置不受影响。daemon 在回放环之外保留固定 259 槽的有界解码状态，经有序流投影给已协商消费者；ring 裁剪、窗口重附着与同会话 handoff 可恢复，daemon 死亡后的新 shell 从空状态开始。新增 `pane-colors` feature 与客户端 opt-in，新 daemon 绝不向旧客户端发送新帧；缺少该能力的后端在图形窗格附着前收到明确的更新错误，不静默丢弃颜色、不停止旧 daemon、不自动重启。同步输出与阅读态沿用现有 retained-frame 规则；新增真实 PTY／daemon／生产终端消费者、handoff 与恢复路径回归及原生颜色场景入口。Windows 原生、WSL 与真实 SSH 组合验收由集成阶段补齐，不以 headless 结果替代。
+- #286：工作台新增只读 EPUB 阅读文档，沿用所属 Host 的一致读取与文档身份，移植 Glim 的容器／spine／目录、章节净化和阅读状态；补齐后台全书搜索、书签／位置持久化、独立字号／行距／宽度／明暗主题及固定版式／DRM 明确拒绝。插图后台解码并复用既有纹理租约，不执行书内脚本或获取远程资源。工作台已覆盖完整 3000 段末尾搜索、阅读偏好和重开、损坏／不支持状态与原件不变；原生窗口、真实 SSH、macOS、IME 与性能仍按最终候选分别验收。
+
+- #295：只读 SQLite 浏览接入所属 Host 与工作台。`lyrel-core` 移植 Glim `browser.rs` 的标识符引用、单绑定 predicate、稳定顺序、列窗、count、page 与值分块，每个数据库打开一条 `BEGIN DEFERRED` 读取视图；view 有 30 秒 idle／180 秒绝对寿命与进程级 reaper，取消绑定到请求并调用 `sqlite3_interrupt`，连接断开时服务端释放该连接的全部视图。control v18 新增 `sqlite-browse-v1` 与 `Sqlite` 请求，缺少能力的 peer 在发送前拒绝。值保留 NULL、精确 INTEGER、REAL 位模式、原始 TEXT／BLOB，不下载整库、不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；`Snapshot` 文件复制被明确排除。工作台新增只读数据库文档、schema／SQL 定义、分页与列窗、加载／空／失败／刷新／取消状态和每分屏独立焦点／表格状态；筛选、排序与完整值检查留给 #296。真实 SSH、原生窗口、系统 IME、macOS 与性能按父验收边界另记，不以 workbench／conformance 结果代替。
+
+- #296：SQLite 只读浏览补齐筛选、排序与完整值检查。筛选输入按 Glim 250 ms 防抖把单个绑定参数送入既有受限 predicate（`instr(lower(CAST(col AS TEXT)), lower(?1))`，覆盖所有列，不引入自由 SQL）；表头可排序列循环 降序→升序→还原，排序名指向 schema 列索引并随列窗映射，切表清空排序、刷新保留筛选与排序且由 view/epoch/query_rev 三重身份拒绝迟到结果。完整值检查器经同一 `SqliteQuery` 快照与 `sqlite_value` 按精确字节偏移分块读取（每块 ≤1 MiB），INTEGER/REAL 整块精确返回；BLOB 以偏移十六进制转储显示、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 转储并标注原因（不用替换字符冒充原值），NULL 提示无内容不置剪贴板，>8 MiB 值保持可翻页但拒绝部分复制并说明限额；检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。键盘 `secondary-f` 聚焦筛选、`enter` 检查选中单元格、`escape` 关闭检查器，均只在数据库文档持有焦点时生效。新增 Host conformance `sqlite_filters_sorts_and_reads_values_in_bounded_chunks` 由本地与真实 SSH 循环共用；工作台回归覆盖真实输入/表头点击、分块翻页与剪贴板、WAL writer 下打开视图保持快照且 main 文件字节不变、原件不被修改。原生窗口、系统 IME、macOS 与性能不记为已通过。
 
 ### 修复
 
+- #283：SVG 图像自身按固有 CSS 像素与缩放比例设置宽高，不再继承居中视口的填充尺寸；修复 64×64 SVG 在 1:1／100% 时仍被放大铺满的问题。真实工作台回归检查图像 bounds 的 1:1／125%／fit，不只检查比例字段。
+- #286：同章搜索定位与普通章节导航共用阅读位置持久化，避免全书末尾匹配已显示却在主题切换／关闭重开后回到章节起点。虚拟章节按布局后的实际可见区准备富文本状态，异步内容就绪后重测对应行；滚轮、滚动条和程序化定位共用同一可见区更新路径，避免在 ListState 的滚轮回调内重借列表。
+- #286：章节净化输出正确闭合 `id` 属性引号，避免带锚点的标题／段落被富文本消费者当作未结束标签而显示为空；不修改书籍原件或放宽资源隔离。
+- #289：JSON 家族结构与源码使用同一保真文档；首次打开使用严格逐行解码，未编辑保存不再归一化混合行尾。重复键 occurrence、精确数字和 JSONL 行身份不经 Value 重写，分屏工具栏可换行、折叠与选择独立。分屏 group 元素身份在焦点切换中保持，工具栏与树行首击不丢失；叶节点方向键返回父节点。不可变投影共享，完整路径文本超过 8 MiB 时明确拒绝结构检查，完整源码仍可编辑与保存。
+
+- #279：图片的实际绘制宽高按原始尺寸与取景比例计算，不再跟随用于居中的最小视口拉伸；修复小图片显示为 100%／实际大小却被放大的问题。新增生产工作台的实际图像 bounds 回归，覆盖 1:1、125% 与 fit，不只检查比例标签。
+- #295：列元数据改为受限只读 `table_xinfo`；空 TEXT／BLOB 的预览和完整值分块保留原类型，可能触发恢复的 schema 读取保留 WAL 拒绝原因。Linux 真实回环 SSH 共享读取契约已通过；不将该场景扩展为 Windows 远端、独立物理主机或原生 UI 验收。
+
+- #295：SQLite 分屏首次建立时立即装入文档当前分页，不把尚未填充的 grid 误标为已同步；点击／键盘焦点同步到工作台当前分组，关闭等命令只操作实际聚焦的一侧。工作台回归按真实分组身份验证两侧数据、焦点切换与关闭后另一呈现仍保留，不把原输入句柄误认成新建分组。
 - #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。
 - #270：将 Glyph glossary 投影与字体 coverage 应答凭证分开：CLI／observer 继续接收已协商的 `GlyphState`，但仅实际声明 `SubscribeGlyphRender` 的当前 controller 接收 `GlyphQuery`；没有字体应答端时保持协议规定的静默，不让查询积压到忽略该帧的 CLI。移除无调用的 attach／observe 兼容包装，公开 `RetainedGlyph` 记录标为非穷尽，不改 wire kind、协议版本或 GUI 字体权威。
 - #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。

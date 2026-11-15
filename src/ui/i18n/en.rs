@@ -1851,6 +1851,56 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageReadOnly => "Read-only",
         L10nKey::EditorImageUndecodable => "This file could not be decoded as an image",
         L10nKey::EditorImagePixelSize => "{width} × {height}",
+        L10nKey::EditorSqliteOpenFailed => "Couldn’t open this SQLite database",
+        L10nKey::EditorSqliteRefreshed => "Read view {view}",
+        L10nKey::EditorSqliteCancelled => "Cancelled",
+        L10nKey::EditorSqliteExpired => "This read view expired",
+        L10nKey::EditorSqliteExpiredHint => "Refresh to read a new view of this database.",
+        L10nKey::EditorSqliteLoading => "Loading…",
+        L10nKey::EditorSqliteReadView => "Read view {view}",
+        L10nKey::EditorSqliteViewLimits => "expires after {idle}s idle or {age}s",
+        L10nKey::EditorSqlitePage => "Page {page}",
+        L10nKey::EditorSqliteRows => "Rows {from}–{to}",
+        L10nKey::EditorSqliteRowCount => "{n} rows",
+        L10nKey::EditorSqliteCountUnavailable => "Row count unavailable",
+        L10nKey::EditorSqliteJournal => "journal {mode}",
+        L10nKey::EditorSqliteReadOnly => "Read-only",
+        L10nKey::EditorSqliteFailed => "SQLite database unavailable",
+        L10nKey::EditorSqlitePreviousColumns => "Previous columns",
+        L10nKey::EditorSqliteNextColumns => "Next columns",
+        L10nKey::EditorSqliteFirstPage => "First page",
+        L10nKey::EditorSqlitePreviousPage => "Previous page",
+        L10nKey::EditorSqliteNextPage => "Next page",
+        L10nKey::EditorSqliteLastPage => "Last page",
+        L10nKey::EditorSqliteRefresh => "Refresh",
+        L10nKey::EditorSqliteCancel => "Cancel",
+        L10nKey::EditorSqliteSchema => "Schema",
+        L10nKey::EditorSqliteDefinition => "Definition",
+        L10nKey::EditorSqliteKindTable => "Table",
+        L10nKey::EditorSqliteKindView => "View",
+        L10nKey::EditorSqliteNoRows => "No rows in this page",
+        L10nKey::EditorSqliteNoColumns => "This object has no columns to show",
+        L10nKey::EditorSqliteNoObjects => "This database has no tables or views",
+        L10nKey::EditorSqliteNull => "NULL",
+        L10nKey::EditorSqliteFilterPlaceholder => "Filter rows…",
+        L10nKey::EditorSqliteFilterStatus => "filter “{filter}”",
+        L10nKey::EditorSqliteSortStatus => "sorted by {column} {direction}",
+        L10nKey::EditorSqliteSortAscending => "ascending",
+        L10nKey::EditorSqliteSortDescending => "descending",
+        L10nKey::EditorSqliteValueTitle => "Inspect {name}",
+        L10nKey::EditorSqliteValueExtent => "bytes {from}–{to} of {total}",
+        L10nKey::EditorSqlitePreviousChunk => "Previous chunk",
+        L10nKey::EditorSqliteNextChunk => "Next chunk",
+        L10nKey::EditorSqliteCopyValue => "Copy value",
+        L10nKey::EditorSqliteCopied => "Complete value copied",
+        L10nKey::EditorSqliteCopiedHex => "Copied as hex (not valid UTF-8 text)",
+        L10nKey::EditorSqliteTextNotUtf8 => {
+            "This TEXT is not valid UTF-8; the raw bytes are shown as hex"
+        }
+        L10nKey::EditorSqliteNullNotice => "NULL values copy nothing",
+        L10nKey::EditorSqliteCopyTooLarge => "{bytes} exceeds the {limit} copy limit",
+        L10nKey::EditorSqliteCloseValue => "Close value inspector",
+        L10nKey::EditorSqliteInspectHint => "Enter: inspect value",
         L10nKey::EditorPdfPageOf => "Page {page} / {total}",
         L10nKey::EditorPdfPreviousPage => "Previous page",
         L10nKey::EditorPdfNextPage => "Next page",
@@ -1879,6 +1929,79 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSvgLimit => {
             "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
         }
+        L10nKey::EditorJsonStructure => "Structure",
+        L10nKey::EditorJsonSource => "Source",
+        L10nKey::EditorJsonShowStructure => "Show structure",
+        L10nKey::EditorJsonShowSource => "Show source",
+        L10nKey::EditorJsonToggleStructure => "Toggle JSON structure / source",
+        L10nKey::EditorJsonParsing => "Parsing JSON",
+        L10nKey::EditorJsonInvalid => "JSON source could not be parsed",
+        L10nKey::EditorJsonInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorJsonInvalidRecords => "{count} invalid JSONL records",
+        L10nKey::EditorJsonStructureUnavailable => "JSON structure unavailable",
+        L10nKey::EditorJsonSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorJsonInputLimit => {
+            "JSON structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorJsonNodeLimit => {
+            "JSON structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorJsonRecordLimit => {
+            "JSONL has more than {count} records; the source stays editable."
+        }
+        L10nKey::EditorJsonPathLimit => {
+            "JSON structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorJsonRecords => "{count} records",
+        L10nKey::EditorJsonNodes => "{count} nodes",
+        L10nKey::EditorJsonReveal => "Reveal in source",
+        L10nKey::EditorJsonFullValue => "Full value",
+        L10nKey::EditorJsonCopyValue => "Copy value",
+        L10nKey::EditorCsvTable => "Table",
+        L10nKey::EditorCsvShowTable => "Show table",
+        L10nKey::EditorCsvShowSource => "Show source",
+        L10nKey::EditorCsvParsing => "Parsing table",
+        L10nKey::EditorCsvQuerying => "Updating view",
+        L10nKey::EditorCsvTableUnavailable => "Table unavailable",
+        L10nKey::EditorCsvSourceIncomplete => "Source is incomplete",
+        L10nKey::EditorCsvTableLimit => "Table limit reached",
+        L10nKey::EditorCsvFixSource => "Fix the source to see the table.",
+        L10nKey::EditorCsvLimitHint => "Source still shows and edits the complete file.",
+        L10nKey::EditorCsvUnterminatedQuote => "unterminated quoted field at line {line}",
+        L10nKey::EditorCsvUnsupportedSyntax => {
+            "quoted syntax at line {line} cannot be represented exactly"
+        }
+        L10nKey::EditorCsvReaderFailed => "could not read records: {error}",
+        L10nKey::EditorCsvLimitSource => "source is larger than {mib} MiB",
+        L10nKey::EditorCsvLimitRecords => "more than {limit} records",
+        L10nKey::EditorCsvLimitColumns => "more than {limit} columns in one record",
+        L10nKey::EditorCsvLimitCells => "more than {limit} cells",
+        L10nKey::EditorCsvFacts => "{records} records × {columns} columns",
+        L10nKey::EditorCsvFilter => "Filter records",
+        L10nKey::EditorCsvFilterStatus => "Filter: {filter} · {visible} of {records}",
+        L10nKey::EditorCsvFilterClear => "Clear filter",
+        L10nKey::EditorCsvRow => "Row {row}",
+        L10nKey::EditorCsvRowShort => "Row",
+        L10nKey::EditorCsvColumn => "Column {column}",
+        L10nKey::EditorCsvCell => "R{record} C{column}",
+        L10nKey::EditorCsvSortAscending => "ascending",
+        L10nKey::EditorCsvSortDescending => "descending",
+        L10nKey::EditorCsvSortStatus => "Column {column} {direction}",
+        L10nKey::EditorCsvFullValue => "Full value",
+        L10nKey::EditorCsvEmptyField => "Empty field",
+        L10nKey::EditorCsvMissingField => "This record has no field {column}",
+        L10nKey::EditorCsvCopyValue => "Copy value",
+        L10nKey::EditorCsvRevealSource => "Show in source",
+        L10nKey::EditorCsvDetailTruncated => {
+            "Showing the first {chars} characters. Copy copies the full value."
+        }
+        L10nKey::EditorCsvNoRecords => "No records",
+        L10nKey::EditorCsvNoMatch => "No records match the filter",
+        L10nKey::EditorCsvSelectCell => "Select a cell to inspect its full value",
+        L10nKey::EditorCsvColumnPrevious => "Previous columns",
+        L10nKey::EditorCsvColumnNext => "Next columns",
         L10nKey::EditorImagePageOf => "Page {page} of {pages}",
         L10nKey::EditorImagePageLoading => "Loading page",
         L10nKey::EditorImagePagePrevious => "Previous page",
@@ -1900,6 +2023,69 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageAnimationEmpty => "This animation has no frames to show",
         L10nKey::EditorImageAnimationTruncated => {
             "This animation ends before its frame data is complete"
+        }
+        L10nKey::EditorDrawioFailed => "Couldn’t render the draw.io diagram",
+        L10nKey::EditorDrawioLoading => "Rendering diagram",
+        L10nKey::EditorDrawioPageOf => "Page {page} of {pages}",
+        L10nKey::EditorDrawioPagePrevious => "Previous page",
+        L10nKey::EditorDrawioPageNext => "Next page",
+        L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
+        L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
+        L10nKey::EditorDrawioRetry => "Try again",
+        L10nKey::EditorBookContents => "Contents",
+        L10nKey::EditorBookBookmarks => "Bookmarks",
+        L10nKey::EditorBookSearch => "Search book",
+        L10nKey::EditorBookSearchPlaceholder => "Search this book",
+        L10nKey::EditorBookSearchEmpty => "No matches",
+        L10nKey::EditorBookSearching => "Searching…",
+        L10nKey::EditorBookSearchPrevious => "Previous match",
+        L10nKey::EditorBookSearchNext => "Next match",
+        L10nKey::EditorBookSearchClose => "Close search",
+        L10nKey::EditorBookMatches => "{current}/{total} matches",
+        L10nKey::EditorBookMatchesTruncated => "Partial results; refine the search",
+        L10nKey::EditorBookAddBookmark => "Add bookmark",
+        L10nKey::EditorBookRemoveBookmark => "Remove bookmark",
+        L10nKey::EditorBookNoBookmarks => "No bookmarks yet",
+        L10nKey::EditorBookFontSmaller => "Smaller text",
+        L10nKey::EditorBookFontLarger => "Larger text",
+        L10nKey::EditorBookSpacing => "Spacing {value}",
+        L10nKey::EditorBookWidth => "Width {value}",
+        L10nKey::EditorBookThemeApplication => "Theme: Workbench",
+        L10nKey::EditorBookThemeLight => "Theme: Light",
+        L10nKey::EditorBookThemeDark => "Theme: Dark",
+        L10nKey::EditorBookChapterOf => "Chapter {chapter} of {chapters}",
+        L10nKey::EditorBookReadOnly => "Read-only",
+        L10nKey::EditorBookIndexing => "Indexing {done}/{total}",
+        L10nKey::EditorBookIndexTooLarge => {
+            "This book is too large to index for search ({bytes} byte limit)"
+        }
+        L10nKey::EditorBookLoadingChapter => "Loading chapter…",
+        L10nKey::EditorBookOmissions => {
+            "Omitted: {scripts} scripts, {styles} styles, {remote} remote images, {links} links, {images} unavailable images"
+        }
+        L10nKey::EditorBookRetry => "Retry",
+        L10nKey::EditorBookNextPage => "Next page",
+        L10nKey::EditorBookPreviousPage => "Previous page",
+        L10nKey::EditorBookNextChapter => "Next chapter",
+        L10nKey::EditorBookPreviousChapter => "Previous chapter",
+        L10nKey::EditorBookNotEpub => "This file is not a readable EPUB",
+        L10nKey::EditorBookUnsupportedProtected => "Protected EPUB: {detail}",
+        L10nKey::EditorBookUnsupportedFixed => {
+            "Fixed-layout (pre-paginated) EPUBs are not supported"
+        }
+        L10nKey::EditorBookUnsupportedFixedItems => {
+            "This EPUB marks {items} spine item(s) as fixed-layout; fixed-layout books are not supported"
+        }
+        L10nKey::EditorBookLimit => "This book exceeds the {resource} limit ({limit})",
+        L10nKey::EditorBookCorrupt => "This EPUB is damaged: {detail}",
+        L10nKey::EditorBookEncoding => "This EPUB uses an unsupported text encoding: {detail}",
+        L10nKey::EditorBookMissing => "This EPUB is missing {entry}",
+        L10nKey::EditorBookPathEscapes => {
+            "This EPUB references a resource outside its container: {href}"
+        }
+        L10nKey::EditorBookCancelled => "Reading this EPUB was cancelled",
+        L10nKey::EditorBookSaveFailed => {
+            "Couldn’t save reading state. Reading continues, but the position may not be restored."
         }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",

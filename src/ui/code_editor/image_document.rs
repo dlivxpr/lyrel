@@ -1000,7 +1000,14 @@ impl Render for ImageView {
                                 .h(natural.height * scale)
                                 .items_center()
                                 .justify_center()
-                                .child(gpui_kit::img(image).size_full()),
+                                .child(
+                                    gpui_kit::img(image)
+                                        .id(("image-document-pixels", cx.entity_id()))
+                                        .test_support()
+                                        .flex_none()
+                                        .w(natural.width * scale)
+                                        .h(natural.height * scale),
+                                ),
                         ),
                 )
                 .into_any_element()

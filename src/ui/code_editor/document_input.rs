@@ -1,6 +1,9 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
+use super::book_view::BookView;
+use super::drawio_document::DrawioView;
 use super::image_document::ImageView;
 use super::pdf_document::PdfView;
+use super::sqlite_document::SqliteView;
 use super::text::TextSnapshot;
 use super::*;
 use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
@@ -12,10 +15,20 @@ pub(crate) enum EditorInput {
     Markdown(Entity<MarkdownEditor>),
     /// 只读静态图片：没有文本，只有取景。
     Image(Entity<ImageView>),
+    /// 只读 SQLite 数据库：没有文本，只有表结构与分页数据。
+    Sqlite(Entity<SqliteView>),
+    /// 只读 EPUB：章节、目录、搜索与阅读位置由书文档拥有。
+    Book(Entity<BookView>),
     /// 只读 PDF：没有文本编辑，只有页、缩放与密码。
     Pdf(Entity<PdfView>),
     /// SVG 文档：共享逐行保真 Document 的源码与安全原生预览。
     Svg(Entity<SvgView>),
+    /// JSON 家族：共享逐行保真 Document 的源码与无损结构/记录视图。
+    Json(Entity<JsonView>),
+    /// CSV／TSV 文档：共享逐行保真 Document 的源码与虚拟化表格。
+    Csv(Entity<CsvView>),
+    /// draw.io 图：字节与页表属于文档，渲染只属于固定离线引擎。
+    Drawio(Entity<DrawioView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -28,14 +41,21 @@ pub(crate) enum TextInput<'a> {
     Code(&'a Entity<EditorState>),
     Markdown(&'a Entity<MarkdownEditor>),
     Svg(&'a Entity<SvgView>),
+    Json(&'a Entity<JsonView>),
+    Csv(&'a Entity<CsvView>),
 }
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
+    Sqlite(gpui_kit::WeakEntity<SqliteView>),
+    Book(gpui_kit::WeakEntity<BookView>),
     Pdf(gpui_kit::WeakEntity<PdfView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
+    Json(gpui_kit::WeakEntity<JsonView>),
+    Csv(gpui_kit::WeakEntity<CsvView>),
+    Drawio(gpui_kit::WeakEntity<DrawioView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -43,8 +63,13 @@ impl WeakEditorInput {
             Self::Code(input) => input.upgrade().map(EditorInput::Code),
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
+            Self::Sqlite(input) => input.upgrade().map(EditorInput::Sqlite),
+            Self::Book(input) => input.upgrade().map(EditorInput::Book),
             Self::Pdf(input) => input.upgrade().map(EditorInput::Pdf),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
+            Self::Json(input) => input.upgrade().map(EditorInput::Json),
+            Self::Csv(input) => input.upgrade().map(EditorInput::Csv),
+            Self::Drawio(input) => input.upgrade().map(EditorInput::Drawio),
         }
     }
 }
@@ -54,8 +79,13 @@ impl EditorInput {
             Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
+            Self::Sqlite(input) => WeakEditorInput::Sqlite(input.downgrade()),
+            Self::Book(input) => WeakEditorInput::Book(input.downgrade()),
             Self::Pdf(input) => WeakEditorInput::Pdf(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
+            Self::Json(input) => WeakEditorInput::Json(input.downgrade()),
+            Self::Csv(input) => WeakEditorInput::Csv(input.downgrade()),
+            Self::Drawio(input) => WeakEditorInput::Drawio(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -76,6 +106,18 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn sqlite(&self) -> Option<&Entity<SqliteView>> {
+        match self {
+            Self::Sqlite(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn book(&self) -> Option<&Entity<BookView>> {
+        match self {
+            Self::Book(input) => Some(input),
+            _ => None,
+        }
+    }
     pub(crate) fn pdf(&self) -> Option<&Entity<PdfView>> {
         match self {
             Self::Pdf(input) => Some(input),
@@ -88,14 +130,39 @@ impl EditorInput {
             _ => None,
         }
     }
-    /// Markdown and SVG keep the same line-preserving source authority; every
-    /// save, reload and dirty comparison reads this document rather than a
-    /// presentation's cached text.
+    pub(crate) fn json(&self) -> Option<&Entity<JsonView>> {
+        match self {
+            Self::Json(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn csv(&self) -> Option<&Entity<CsvView>> {
+        match self {
+            Self::Csv(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn drawio(&self) -> Option<&Entity<DrawioView>> {
+        match self {
+            Self::Drawio(input) => Some(input),
+            _ => None,
+        }
+    }
+    /// Markdown, SVG, the JSON family and CSV keep the same line-preserving
+    /// source authority; every save, reload and dirty comparison reads this
+    /// document rather than a presentation's cached text.
     pub(crate) fn source_document(&self, cx: &gpui_kit::App) -> Option<Entity<Document>> {
         match self {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
-            Self::Code(_) | Self::Image(_) | Self::Pdf(_) => None,
+            Self::Json(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Csv(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Code(_)
+            | Self::Image(_)
+            | Self::Pdf(_)
+            | Self::Book(_)
+            | Self::Sqlite(_)
+            | Self::Drawio(_) => None,
         }
     }
     /// 这份输入的文本能力；只读图片返回 `None`。
@@ -106,10 +173,14 @@ impl EditorInput {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
-            Self::Image(_) | Self::Pdf(_) => None,
+            Self::Json(input) => Some(TextInput::Json(input)),
+            Self::Csv(input) => Some(TextInput::Csv(input)),
+            Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) | Self::Drawio(_) => {
+                None
+            }
         }
     }
-    /// 有文本可编辑、可查找、可保存的输入。图片不是。
+    /// 有文本可编辑、可查找、可保存的输入。图片和 draw.io 图不是。
     pub(crate) fn is_text(&self) -> bool {
         self.text().is_some()
     }
@@ -117,6 +188,10 @@ impl EditorInput {
         if let Some(input) = self.markdown() {
             input.update(cx, |state, cx| state.finish_composition(cx));
         } else if let Some(view) = self.svg() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.json() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.csv() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         }
     }
@@ -145,11 +220,22 @@ impl EditorInput {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
+            // 表格的滚动属于呈现自己的 `TableState`；打开文档时的光标放置
+            // 不适用于数据库，因此这里不假装有第二个滚动所有者。
+            Self::Sqlite(_) => {}
+            // A book's position is block/chapter state stored in its document,
+            // not a free pixel offset that a tab restore could impose.
+            Self::Book(_) => {}
             Self::Pdf(input) => input.update(cx, |view, cx| {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Json(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            // The engine owns its pan/zoom view; the workbench has no second
+            // scroll axis to synchronise.
+            Self::Drawio(_) => {}
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -169,18 +255,26 @@ impl TextInput<'_> {
             }
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Json(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
         }
     }
     /// Whether this presentation keeps the shared line-preserving source and
-    /// its history (Markdown and SVG), rather than the ordinary code codec.
+    /// its history (Markdown, SVG, the JSON family and CSV), rather than the
+    /// ordinary code codec.
     pub(crate) fn is_source(&self) -> bool {
-        matches!(self, Self::Markdown(_) | Self::Svg(_))
+        matches!(
+            self,
+            Self::Markdown(_) | Self::Svg(_) | Self::Json(_) | Self::Csv(_)
+        )
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Json(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
         }
     }
     pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
@@ -188,6 +282,8 @@ impl TextInput<'_> {
             Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Svg(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Json(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Csv(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
         }
     }
     pub(crate) fn set_cursor_position(
@@ -205,6 +301,14 @@ impl TextInput<'_> {
                 input.update(cx, |state, cx| state.select_range(at..at, cx));
             }
             Self::Svg(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Json(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Csv(view) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
@@ -232,6 +336,12 @@ impl TextInput<'_> {
             Self::Svg(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
+            Self::Json(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
+            Self::Csv(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
         }
     }
     pub(crate) fn replace_ranges(
@@ -245,6 +355,12 @@ impl TextInput<'_> {
                 input.update(cx, |state, cx| state.replace_ranges(replacements, cx))
             }
             Self::Svg(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Json(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
         }
@@ -265,6 +381,12 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
+            Self::Json(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
         }
     }
     pub(crate) fn set_history_selection(
@@ -281,6 +403,12 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
+            Self::Json(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
         }
     }
 }
@@ -295,8 +423,13 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
+            EditorInput::Sqlite(input) => input.read(self.cx).focus_handle(cx),
+            EditorInput::Book(input) => input.read(self.cx).handle(),
             EditorInput::Pdf(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Json(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Csv(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Drawio(view) => view.read(self.cx).handle(),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -304,8 +437,13 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
+            EditorInput::Sqlite(_) => gpui_kit::Point::default(),
+            EditorInput::Book(_) => gpui_kit::Point::default(),
             EditorInput::Pdf(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Json(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Csv(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Drawio(_) => gpui_kit::Point::default(),
         }
     }
 }
@@ -338,6 +476,24 @@ impl TextRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
+            TextInput::Json(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+            TextInput::Csv(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
         }
     }
     pub(crate) fn cursor(&self) -> usize {
@@ -345,6 +501,8 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).cursor(),
             TextInput::Markdown(input) => input.read(self.cx).cursor(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Json(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).cursor(),
         }
     }
     pub(crate) fn cursor_position(&self) -> Position {
@@ -355,6 +513,8 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).selected_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Json(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).selected_range(),
         }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
@@ -362,6 +522,8 @@ impl TextRead<'_> {
             TextInput::Code(_) => self.selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).occurrence_range(),
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Json(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
         }
     }
     pub(crate) fn range_to_bounds(
@@ -372,6 +534,16 @@ impl TextRead<'_> {
             TextInput::Code(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Svg(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Json(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Csv(view) => view
                 .read(self.cx)
                 .source()
                 .read(self.cx)
@@ -395,8 +567,13 @@ pub(super) struct Presentations {
         )>,
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
+    sqlite: RefCell<Vec<(TabId, split::GroupId, Entity<SqliteView>, Subscription)>>,
+    books: RefCell<Vec<(TabId, split::GroupId, Entity<BookView>, Subscription)>>,
     pdfs: RefCell<Vec<(TabId, split::GroupId, Entity<PdfView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
+    jsons: RefCell<Vec<(TabId, split::GroupId, Entity<JsonView>, Subscription)>>,
+    csvs: RefCell<Vec<(TabId, split::GroupId, Entity<CsvView>, Subscription)>>,
+    drawios: RefCell<Vec<(TabId, split::GroupId, Entity<DrawioView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -493,6 +670,80 @@ impl Presentations {
             .map(|(_, _, view, _)| view.clone())
     }
 
+    /// 每个数据库分组保留独立焦点与表格状态，共享同一份读取结果。
+    pub(super) fn sqlite_view<E: 'static>(
+        &self,
+        primary: &Entity<SqliteView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<SqliteView> {
+        let mut views = self.sqlite.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| SqliteView::new(document, window, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn sqlite_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<SqliteView>> {
+        self.sqlite
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    /// A book's first group draws the document's primary presentation; later
+    /// groups get their own chapter, scroll, search and focus over the same
+    /// parsed book and reading record.
+    pub(super) fn book_view<E: 'static>(
+        &self,
+        primary: &Entity<BookView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<BookView> {
+        let mut views = self.books.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| BookView::new(document, window, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn book_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<BookView>> {
+        self.books
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     /// 一份 PDF 在一个分组里的呈现。与图片一样：第一组用文档自带的呈现，
     /// 其余分组各有自己的页与缩放，共享同一份解析结果。
     pub(super) fn pdf_view<E: 'static>(
@@ -578,6 +829,161 @@ impl Presentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
     }
+
+    /// A JSON document's presentation in one group. The first group uses the
+    /// document's own view; a split group gets its own mode, structure folds,
+    /// selection, source caret and scroll over the same Document.
+    pub(super) fn json_view<E: 'static>(
+        &self,
+        primary: &Entity<JsonView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<JsonView> {
+        let mut views = self.jsons.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).source().read(cx).selected_range();
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let structure_scroll = primary.read(cx).structure_scroll_offset();
+            let (expanded, selected) = primary.read(cx).expansion_state();
+            let view = cx.new(|cx| JsonView::new(document, mode, wrap, indent, cx));
+            view.update(cx, |view, cx| {
+                view.seed_presentation(
+                    selection,
+                    source_scroll,
+                    structure_scroll,
+                    expanded,
+                    selected,
+                    cx,
+                )
+            });
+            view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    /// A CSV/TSV document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own mode, table
+    /// selection, filter/sort and scrolls over the same Document and table.
+    pub(super) fn csv_view<E: 'static>(
+        &self,
+        primary: &Entity<CsvView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<CsvView> {
+        let mut views = self.csvs.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).selection();
+            let source_selection = primary.read(cx).selected_range(cx);
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let table_scroll = primary.read(cx).table_scroll_offset();
+            let table_horizontal = primary.read(cx).horizontal_offset();
+            cx.new(|cx| {
+                let mut view = CsvView::new(document, mode, wrap, indent, window, cx);
+                view.seed_presentation(
+                    selection,
+                    source_selection,
+                    source_scroll,
+                    table_scroll,
+                    table_horizontal,
+                    cx,
+                );
+                view
+            })
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    /// A draw.io document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own page/zoom and its
+    /// own engine session over the same bytes and page list.
+    pub(super) fn drawio_view<E: 'static>(
+        &self,
+        primary: &Entity<DrawioView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<DrawioView> {
+        let mut views = self.drawios.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let page = primary.read(cx).page();
+            cx.new(|cx| DrawioView::new_at(document, page, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn json_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<JsonView>> {
+        self.jsons
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    pub(super) fn csv_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<CsvView>> {
+        self.csvs
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    pub(super) fn drawio_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<DrawioView>> {
+        self.drawios
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
@@ -625,6 +1031,14 @@ impl Presentations {
         self.images
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
+        // 数据库呈现同样没有输入组合；读取视图与页数据由文档持有，退场只让
+        // 这个分组的焦点、滚动与表格选择落下。
+        self.sqlite
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
+        self.books
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
         self.pdfs
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
@@ -637,6 +1051,27 @@ impl Presentations {
             }
             keep
         });
+        // JSON presentation 的源码面同样可能持有 preedit；结构状态只属于
+        // 这个呈现，退场不需要触碰共享 Document。
+        self.jsons.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
+        self.csvs.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
+        // Dropping the last presentation drops its native surface and session;
+        // there is no engine-owned editing state to flush.
+        self.drawios
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(
@@ -665,6 +1100,12 @@ impl Presentations {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.svgs.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.jsons.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.csvs.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }

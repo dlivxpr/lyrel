@@ -172,6 +172,18 @@ fn run_request(
             conn.read_sessions.close(session);
             (ReplyOk::Unit, Vec::new())
         }
+        ControlRequest::Sqlite { request } => {
+            // The operation's own token is the interrupt target: a CANCEL for
+            // this req_id stops the statement this request started, and no
+            // other request on the same read view.
+            let cancel = crate::host::sqlite::SqliteCancel::new();
+            conn.requests.set_interrupt(req_id, {
+                let cancel = cancel.clone();
+                Arc::new(move || cancel.cancel())
+            });
+            let reply = run_sqlite(conn, *request, &cancel)?;
+            (ReplyOk::Sqlite(Box::new(reply)), Vec::new())
+        }
         ControlRequest::Search {
             roots,
             query,
@@ -615,6 +627,95 @@ fn run_request(
             Vec::new(),
         ),
     })
+}
+
+/// One SQLite operation against the Host this connection serves.
+///
+/// Read views are tracked per connection: a view opened here is addressable
+/// only from here, and all of them close when the link ends. The request
+/// never carries SQL; the Host validates every identifier against the view's
+/// own schema.
+fn run_sqlite(
+    conn: &Arc<Conn>,
+    request: crate::host::sqlite::SqliteRequest,
+    cancel: &crate::host::sqlite::SqliteCancel,
+) -> io::Result<crate::host::sqlite::SqliteReply> {
+    use crate::host::sqlite::{SqliteReply, SqliteRequest as R, SqliteValue};
+    let h: &dyn Host = &*conn.host;
+    match request {
+        R::Open { path } => {
+            {
+                let views = conn.sqlite_views.lock().unwrap_or_else(|e| e.into_inner());
+                if views.len() >= super::MAX_SQLITE_VIEWS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!(
+                            "this connection already holds {} SQLite read views; close one before opening another",
+                            super::MAX_SQLITE_VIEWS
+                        ),
+                    ));
+                }
+            }
+            let opened = h.sqlite_open(std::path::Path::new(&path), cancel)?;
+            conn.sqlite_views
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(opened.view);
+            Ok(SqliteReply::Opened(opened))
+        }
+        R::Close { view } => {
+            let tracked = conn
+                .sqlite_views
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&view);
+            if tracked {
+                h.sqlite_close(view);
+            }
+            Ok(SqliteReply::Closed)
+        }
+        R::Columns { view, table } => {
+            tracked_view(conn, view)?;
+            Ok(SqliteReply::Columns(
+                h.sqlite_columns(view, &table, cancel)?,
+            ))
+        }
+        R::Count { view, query } => {
+            tracked_view(conn, view)?;
+            Ok(SqliteReply::Count(h.sqlite_count(view, &query, cancel)?))
+        }
+        R::Page { view, query } => {
+            tracked_view(conn, view)?;
+            Ok(SqliteReply::Page(h.sqlite_page(view, &query, cancel)?))
+        }
+        R::Value {
+            view,
+            query,
+            row,
+            column,
+            offset,
+            max_bytes,
+        } => {
+            tracked_view(conn, view)?;
+            let value: SqliteValue =
+                h.sqlite_value(view, &query, row, column, offset, max_bytes, cancel)?;
+            Ok(SqliteReply::Value(value))
+        }
+    }
+}
+
+/// A view id is only meaningful for the connection that opened it.
+fn tracked_view(conn: &Conn, view: u64) -> io::Result<()> {
+    if conn
+        .sqlite_views
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&view)
+    {
+        Ok(())
+    } else {
+        Err(crate::host::sqlite::stale_view(view))
+    }
 }
 
 fn paths(v: &[String]) -> Vec<PathBuf> {

@@ -198,6 +198,55 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The database reader's commands. Refresh opens a new read view, the
+    // filter focuses its search field, and Enter inspects the cell under the
+    // grid's selection — all bound only while a database presentation holds
+    // the keyboard. Escape is bound again in the table's own context, later
+    // than the table's Cancel so it wins there: it closes the inspector
+    // first, then keeps the table's selection-clearing meaning.
+    {
+        use crate::ui::code_editor::{
+            SqliteCloseValue, SqliteFocusFilter, SqliteInspectValue, SqliteRefresh,
+        };
+        let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-r", SqliteRefresh, sqlite, cx),
+            load_binding("secondary-f", SqliteFocusFilter, sqlite, cx),
+            load_binding("enter", SqliteInspectValue, sqlite, cx),
+            load_binding("escape", SqliteCloseValue, sqlite, cx),
+            load_binding("escape", SqliteCloseValue, Some("DataTable"), cx),
+        ]);
+    }
+    // The read-only book's commands. `BookDocument` is declared only by the
+    // book presentation, so none of these take a key from a text field, a
+    // shell or the terminal.
+    {
+        use crate::ui::code_editor::{
+            BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
+            BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
+            BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
+        };
+        let book = Some(crate::ui::code_editor::BOOK_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("pageup", BookPreviousPage, book, cx),
+            load_binding("pagedown", BookNextPage, book, cx),
+            load_binding("space", BookNextPage, book, cx),
+            load_binding("shift-space", BookPreviousPage, book, cx),
+            load_binding("alt-left", BookPreviousChapter, book, cx),
+            load_binding("alt-right", BookNextChapter, book, cx),
+            load_binding("secondary-shift-c", BookToggleContents, book, cx),
+            load_binding("secondary-shift-b", BookToggleBookmarks, book, cx),
+            load_binding("secondary-f", BookSearch, book, cx),
+            load_binding("secondary-d", BookAddBookmark, book, cx),
+            load_binding("f3", BookNextResult, book, cx),
+            load_binding("shift-f3", BookPreviousResult, book, cx),
+            load_binding("secondary-=", BookFontLarger, book, cx),
+            load_binding("secondary-+", BookFontLarger, book, cx),
+            load_binding("secondary--", BookFontSmaller, book, cx),
+            load_binding("secondary-shift-s", BookCycleSpacing, book, cx),
+            load_binding("secondary-shift-w", BookCycleWidth, book, cx),
+        ]);
+    }
     // The read-only PDF's framing and page stepping. `PdfDocument` is declared
     // only by the PDF presentation, so these never take keys from text or a
     // shell. PageUp/PageDown/Left/Right are handled inside the viewer so the
@@ -243,6 +292,23 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         ]);
         bindings.push(load_binding(back, EditorNavigateBack, svg, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, svg, cx));
+    }
+    // The draw.io preview keeps the same framing chords. PageUp/PageDown are
+    // handled by its own key context because the engine owns the canvas and
+    // has no text caret to move.
+    {
+        use crate::ui::code_editor::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
+        let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("0", DrawioFit, drawio, cx),
+            load_binding("1", DrawioActualSize, drawio, cx),
+            load_binding("secondary-=", DrawioZoomIn, drawio, cx),
+            load_binding("secondary-+", DrawioZoomIn, drawio, cx),
+            load_binding("+", DrawioZoomIn, drawio, cx),
+            load_binding("secondary--", DrawioZoomOut, drawio, cx),
+            load_binding("secondary-_", DrawioZoomOut, drawio, cx),
+            load_binding("-", DrawioZoomOut, drawio, cx),
+        ]);
     }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all

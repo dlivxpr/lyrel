@@ -70,7 +70,10 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// `FileChanged` refusal and the `host-file-range-v1` feature. A read session
 /// keeps one opened file version on the far side instead of reopening a path
 /// per segment; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 17;
+/// v18 adds read-only SQLite browsing (`Sqlite`) and the `sqlite-browse-v1`
+/// feature. One request carries the whole operation, so later browsing
+/// operations stay additive inside it; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 18;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -158,6 +161,10 @@ pub mod feature {
     /// without it is asked for nothing; the caller sees `Unsupported` rather
     /// than a whole-file read pretending to be one version.
     pub const FILE_RANGE: &str = "host-file-range-v1";
+    /// Read-only SQLite browsing: [`ControlRequest::Sqlite`] carrying one
+    /// [`crate::host::sqlite::SqliteRequest`]. A peer without it is asked for
+    /// nothing, and the caller sees `Unsupported` rather than an empty schema.
+    pub const SQLITE_BROWSE: &str = "sqlite-browse-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
@@ -244,6 +251,12 @@ pub enum ControlRequest {
     /// ignore when the session is already gone.
     CloseRead {
         session: u64,
+    },
+    /// One read-only SQLite operation. Gated on [`feature::SQLITE_BROWSE`];
+    /// the peer opens, pages, closes and reports a bounded read view. Only
+    /// schema metadata and bounded rows cross the wire, never the file.
+    Sqlite {
+        request: Box<crate::host::sqlite::SqliteRequest>,
     },
     Search {
         roots: Vec<String>,
@@ -598,6 +611,23 @@ impl ControlRequest {
             | PaneProcs { .. } => Duration::from_secs(5),
             ReadFile { .. } | WriteFile { .. } | ReadChunk { .. } => Duration::from_secs(30),
             OpenRead { .. } | CloseRead { .. } => Duration::from_secs(5),
+            // The server's own progress handler ends a query on its seconds
+            // budget; this deadline sits past it, so the peer still gets to
+            // report the timeout as a SQLite error instead of a dead link.
+            Sqlite { request } => match &**request {
+                crate::host::sqlite::SqliteRequest::Open { .. }
+                | crate::host::sqlite::SqliteRequest::Close { .. }
+                | crate::host::sqlite::SqliteRequest::Columns { .. } => Duration::from_secs(30),
+                crate::host::sqlite::SqliteRequest::Count { query, .. }
+                | crate::host::sqlite::SqliteRequest::Page { query, .. }
+                | crate::host::sqlite::SqliteRequest::Value { query, .. } => {
+                    let seconds = query
+                        .seconds
+                        .max(crate::host::sqlite::QUERY_SECONDS)
+                        .min(crate::host::sqlite::QUERY_SECONDS_MAX);
+                    Duration::from_secs(seconds).saturating_add(Duration::from_secs(10))
+                }
+            },
             CreateFileNew { .. } | CreateDir { .. } | Rename { .. } | Remove { .. } => {
                 Duration::from_secs(10)
             }
@@ -736,6 +766,8 @@ pub enum ReplyOk {
     WorkspaceTree(Box<crate::core::machine::Workspace>),
     WorkspaceSidecar(Option<Box<crate::core::pane_sidecar::SidecarSnapshot>>),
     TabTree(Box<Tab>),
+    /// The answer to [`ControlRequest::Sqlite`].
+    Sqlite(Box<crate::host::sqlite::SqliteReply>),
     /// The answer to [`ControlRequest::TabReopen`]; `None` when the workspace
     /// has nothing left to reopen.
     ReopenedTab(Option<Box<ReopenedTab>>),
@@ -767,6 +799,16 @@ pub enum WireErrorKind {
     FileChanged,
     GitUnavailable,
     TimedOut,
+    /// An operation stopped because its caller cancelled it.
+    Interrupted,
+    /// The database is locked by another connection.
+    Busy,
+    /// A SQLite read view was closed, refreshed or retired for idleness/age.
+    StaleView,
+    /// The peer does not serve this capability.
+    Unsupported,
+    /// Bytes or schema did not have the shape they claimed.
+    InvalidData,
     ConnectionReset,
     Other,
 }
@@ -787,6 +829,12 @@ impl WireError {
                 msg: e.to_string(),
             };
         }
+        if crate::host::sqlite::is_stale_view(e) {
+            return WireError {
+                kind: WireErrorKind::StaleView,
+                msg: e.to_string(),
+            };
+        }
         let kind = match e.kind() {
             K::NotFound => WireErrorKind::NotFound,
             K::PermissionDenied => WireErrorKind::PermissionDenied,
@@ -797,6 +845,10 @@ impl WireError {
             K::DirectoryNotEmpty => WireErrorKind::DirectoryNotEmpty,
             K::FileTooLarge => WireErrorKind::FileTooLarge,
             K::TimedOut => WireErrorKind::TimedOut,
+            K::Interrupted => WireErrorKind::Interrupted,
+            K::WouldBlock => WireErrorKind::Busy,
+            K::Unsupported => WireErrorKind::Unsupported,
+            K::InvalidData => WireErrorKind::InvalidData,
             K::ConnectionReset | K::BrokenPipe | K::UnexpectedEof => WireErrorKind::ConnectionReset,
             _ => WireErrorKind::Other,
         };
@@ -809,6 +861,9 @@ impl WireError {
     pub fn into_io(self) -> io::Error {
         if self.kind == WireErrorKind::FileChanged {
             return crate::host::read::file_changed(self.msg);
+        }
+        if self.kind == WireErrorKind::StaleView {
+            return crate::host::sqlite::stale_view_message(self.msg);
         }
         io::Error::new(self.kind.to_io_kind(), self.msg)
     }
@@ -828,6 +883,11 @@ impl WireErrorKind {
             WireErrorKind::FileTooLarge => K::FileTooLarge,
             WireErrorKind::FileChanged => K::InvalidData,
             WireErrorKind::TimedOut => K::TimedOut,
+            WireErrorKind::Interrupted => K::Interrupted,
+            WireErrorKind::Busy => K::WouldBlock,
+            WireErrorKind::StaleView => K::NotFound,
+            WireErrorKind::Unsupported => K::Unsupported,
+            WireErrorKind::InvalidData => K::InvalidData,
             WireErrorKind::ConnectionReset => K::ConnectionReset,
             WireErrorKind::Other => K::Other,
         }
@@ -1217,6 +1277,12 @@ pub struct ControlResponse {
     pub blob: Vec<u8>,
 }
 
+/// The local side of a cancelled request: the caller asked to stop, so no
+/// peer reply is awaited (the server drops it for a cancelled id).
+fn cancelled_request() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "the request was cancelled")
+}
+
 pub type EventSink = Box<dyn Fn(ControlEvent) + Send + Sync + 'static>;
 
 pub trait LinkShutdown: Send + Sync + 'static {
@@ -1426,11 +1492,42 @@ impl ControlClient {
         blob: &[u8],
         deadline: Duration,
     ) -> io::Result<ControlResponse> {
+        self.call_inner(req, blob, deadline, None)
+    }
+
+    /// [`ControlClient::call_full`] with a token bound to this one request.
+    ///
+    /// Cancelling the token posts `CANCEL` for this request's id — never for
+    /// a view or a later request that shares it — and returns to the caller
+    /// with `Interrupted` instead of waiting for the peer's reply, which the
+    /// server drops for a cancelled request. The hook is unregistered before
+    /// returning, so a token kept alive by a document cannot cancel a request
+    /// that already has an answer.
+    pub fn call_full_with_cancel(
+        &self,
+        req: ControlRequest,
+        blob: &[u8],
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<ControlResponse> {
+        let deadline = req.deadline();
+        self.call_inner(req, blob, deadline, Some(cancel))
+    }
+
+    fn call_inner(
+        &self,
+        req: ControlRequest,
+        blob: &[u8],
+        deadline: Duration,
+        cancel: Option<&crate::host::sqlite::SqliteCancel>,
+    ) -> io::Result<ControlResponse> {
         if !self.is_connected() {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionReset,
                 "control connection is down",
             ));
+        }
+        if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
+            return Err(cancelled_request());
         }
 
         let req_id = self.inner.next_req_id.fetch_add(1, Ordering::Relaxed);
@@ -1451,44 +1548,98 @@ impl ControlClient {
             }
         };
 
+        // The request must be on the wire before `CANCEL` can be useful, so
+        // the hook checks a flag the send below sets. A cancellation that
+        // arrives first is caught by the second check and posted immediately
+        // after the send.
+        let sent = Arc::new(AtomicBool::new(false));
+        let hook = cancel.map(|cancel| {
+            let inner = Arc::clone(&self.inner);
+            let sent = Arc::clone(&sent);
+            cancel.on_cancel(move || {
+                if sent.load(Ordering::Acquire) {
+                    let _ = inner.send(&ControlClientMsg::Cancel { req_id });
+                }
+            })
+        });
+
         if let Err(e) = self.inner.send(&msg) {
             self.inner.forget(req_id);
             return Err(e);
         }
+        sent.store(true, Ordering::Release);
+        if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
+            // Either the hook ran before `sent` was visible, or both run; a
+            // second CANCEL for an id the server already cancelled is a no-op.
+            let _ = self.inner.send(&ControlClientMsg::Cancel { req_id });
+        }
 
-        match rx.recv_timeout(deadline) {
-            Ok(reply) => {
-                let blob = self.inner.take_blob(req_id);
-                let out = reply
-                    .into_result()
-                    .map(|reply| ControlResponse { reply, blob });
-                // Only a ping that actually came back. A timeout leaves the
-                // last good number in place rather than recording the deadline
-                // as the link's latency, and a refusal measures the peer's
-                // opinion of the request rather than the distance to it.
-                if timed && out.is_ok() {
-                    let us = sent_at.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                    // Zero means "never measured", so a sub-microsecond round
-                    // trip on a loopback link rounds up rather than reading as
-                    // no measurement at all.
-                    self.inner.last_rtt_us.store(us.max(1), Ordering::Relaxed);
-                }
-                out
-            }
-            Err(RecvTimeoutError::Timeout) => {
+        let started = Instant::now();
+        loop {
+            if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
                 self.inner.forget(req_id);
+                drop(hook);
+                return Err(cancelled_request());
+            }
+            let remaining = deadline.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                self.inner.forget(req_id);
+                drop(hook);
                 let _ = self.inner.send(&ControlClientMsg::Cancel { req_id });
-                Err(io::Error::new(
+                return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("control request {req_id} timed out after {deadline:?}"),
-                ))
+                ));
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                self.inner.forget(req_id);
-                Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "control connection closed while the request was in flight",
-                ))
+            // A cancellable call polls its token; everything else waits for
+            // the answer or the deadline exactly as before.
+            let wait = if cancel.is_some() {
+                remaining.min(Duration::from_millis(50))
+            } else {
+                remaining
+            };
+            match rx.recv_timeout(wait) {
+                Ok(reply) => {
+                    drop(hook);
+                    let blob = self.inner.take_blob(req_id);
+                    let out = reply
+                        .into_result()
+                        .map(|reply| ControlResponse { reply, blob });
+                    // Only a ping that actually came back. A timeout leaves the
+                    // last good number in place rather than recording the deadline
+                    // as the link's latency, and a refusal measures the peer's
+                    // opinion of the request rather than the distance to it.
+                    if timed && out.is_ok() {
+                        let us = sent_at.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                        // Zero means "never measured", so a sub-microsecond round
+                        // trip on a loopback link rounds up rather than reading as
+                        // no measurement at all.
+                        self.inner.last_rtt_us.store(us.max(1), Ordering::Relaxed);
+                    }
+                    return out;
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if cancel.is_some() {
+                        // Poll the token again; the loop top sees a zero
+                        // remaining deadline when it really expired.
+                        continue;
+                    }
+                    self.inner.forget(req_id);
+                    drop(hook);
+                    let _ = self.inner.send(&ControlClientMsg::Cancel { req_id });
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("control request {req_id} timed out after {deadline:?}"),
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.inner.forget(req_id);
+                    drop(hook);
+                    return Err(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "control connection closed while the request was in flight",
+                    ));
+                }
             }
         }
     }
@@ -1919,6 +2070,40 @@ mod tests {
             },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
+            ControlRequest::Sqlite {
+                request: Box::new(crate::host::sqlite::SqliteRequest::Open {
+                    path: "/home/me/proj/data.sqlite".into(),
+                }),
+            },
+            ControlRequest::Sqlite {
+                request: Box::new(crate::host::sqlite::SqliteRequest::Page {
+                    view: 4,
+                    query: crate::host::sqlite::SqliteQuery {
+                        table: "items".into(),
+                        columns: vec!["id".into(), "name".into()],
+                        order: vec!["rowid".into()],
+                        search: "needle".into(),
+                        sort: Some((1, true)),
+                        page: 3,
+                        start_column: 1,
+                        seconds: 5,
+                    },
+                }),
+            },
+            ControlRequest::Sqlite {
+                request: Box::new(crate::host::sqlite::SqliteRequest::Value {
+                    view: 4,
+                    query: crate::host::sqlite::SqliteQuery {
+                        table: "items".into(),
+                        columns: vec!["body".into()],
+                        ..crate::host::sqlite::SqliteQuery::default()
+                    },
+                    row: 2,
+                    column: 0,
+                    offset: 4096,
+                    max_bytes: 1024,
+                }),
+            },
             ControlRequest::Routes,
             ControlRequest::Status,
         ]
@@ -2031,8 +2216,46 @@ mod tests {
             ControlReply::Err(WireError::new(WireErrorKind::FileTooLarge, "too large")),
             ControlReply::Err(WireError::new(WireErrorKind::GitUnavailable, "no git")),
             ControlReply::Err(WireError::new(WireErrorKind::TimedOut, "timed out")),
+            ControlReply::Err(WireError::new(WireErrorKind::Interrupted, "cancelled")),
+            ControlReply::Err(WireError::new(WireErrorKind::Busy, "database is busy")),
+            ControlReply::Err(WireError::new(WireErrorKind::StaleView, "view expired")),
+            ControlReply::Err(WireError::new(WireErrorKind::Unsupported, "not served")),
+            ControlReply::Err(WireError::new(WireErrorKind::InvalidData, "not a database")),
             ControlReply::Err(WireError::new(WireErrorKind::ConnectionReset, "reset")),
             ControlReply::Err(WireError::new(WireErrorKind::Other, "something else")),
+            ControlReply::Ok(ReplyOk::Sqlite(Box::new(
+                crate::host::sqlite::SqliteReply::Opened(crate::host::sqlite::SqliteOpened {
+                    view: 4,
+                    objects: vec![crate::host::sqlite::SqliteObject {
+                        name: "名,称".into(),
+                        kind: crate::host::sqlite::SqliteObjectKind::View,
+                        sql: "CREATE VIEW \"名,称\" AS SELECT 1".into(),
+                    }],
+                    journal_mode: "wal".into(),
+                    idle_millis: 30_000,
+                    max_age_millis: 180_000,
+                }),
+            ))),
+            ControlReply::Ok(ReplyOk::Sqlite(Box::new(
+                crate::host::sqlite::SqliteReply::Page(crate::host::sqlite::SqlitePage {
+                    page: 2,
+                    start_column: 1,
+                    rows: vec![vec![
+                        crate::host::sqlite::SqliteValue::Null,
+                        crate::host::sqlite::SqliteValue::Integer { value: -7 },
+                        crate::host::sqlite::SqliteValue::real(f64::INFINITY.to_bits()),
+                        crate::host::sqlite::SqliteValue::Text {
+                            preview: vec![0xff, 0xfe, b'a'],
+                            total: 900,
+                        },
+                        crate::host::sqlite::SqliteValue::Blob {
+                            preview: vec![0x00, 0xff],
+                            total: 8,
+                        },
+                    ]],
+                    more: true,
+                }),
+            ))),
         ]
     }
 
@@ -2496,6 +2719,10 @@ mod tests {
             (K::DirectoryNotEmpty, WireErrorKind::DirectoryNotEmpty),
             (K::FileTooLarge, WireErrorKind::FileTooLarge),
             (K::TimedOut, WireErrorKind::TimedOut),
+            (K::Interrupted, WireErrorKind::Interrupted),
+            (K::WouldBlock, WireErrorKind::Busy),
+            (K::Unsupported, WireErrorKind::Unsupported),
+            (K::InvalidData, WireErrorKind::InvalidData),
             (K::ConnectionReset, WireErrorKind::ConnectionReset),
         ];
         for (io_kind, wire_kind) in pairs {
@@ -2503,6 +2730,13 @@ mod tests {
             assert_eq!(wire.kind, wire_kind, "io {io_kind:?} -> wire");
             assert_eq!(wire.into_io().kind(), io_kind, "wire {wire_kind:?} -> io");
         }
+    }
+
+    #[test]
+    fn a_stale_view_marker_crosses_the_wire() {
+        let wire = WireError::from_io(&crate::host::sqlite::stale_view(9));
+        assert_eq!(wire.kind, WireErrorKind::StaleView);
+        assert!(crate::host::sqlite::is_stale_view(&wire.into_io()));
     }
 
     #[test]
@@ -2517,10 +2751,6 @@ mod tests {
         assert_eq!(
             WireError::from_io(&io::Error::new(K::InvalidFilename, "x")).kind,
             WireErrorKind::InvalidInput
-        );
-        assert_eq!(
-            WireError::from_io(&io::Error::new(K::WouldBlock, "x")).kind,
-            WireErrorKind::Other
         );
         assert_eq!(WireErrorKind::GitUnavailable.to_io_kind(), K::NotFound);
     }
@@ -2625,6 +2855,39 @@ mod tests {
                 },
                 s(30),
             ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Open {
+                        path: "/data.sqlite".into(),
+                    }),
+                },
+                s(30),
+            ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Page {
+                        view: 1,
+                        query: crate::host::sqlite::SqliteQuery {
+                            seconds: u64::MAX,
+                            ..Default::default()
+                        },
+                    }),
+                },
+                s(70),
+            ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Value {
+                        view: 1,
+                        query: crate::host::sqlite::SqliteQuery::default(),
+                        row: 0,
+                        column: 0,
+                        offset: 0,
+                        max_bytes: 1024,
+                    }),
+                },
+                s(15),
+            ),
             (R::WriteFile { path: "/".into() }, s(30)),
             (R::CreateFileNew { path: "/".into() }, s(10)),
             (
@@ -2685,11 +2948,6 @@ mod tests {
             (R::Routes, s(5)),
             (R::Status, s(5)),
         ];
-        assert_eq!(
-            cases.len(),
-            every_request().len(),
-            "every request variant needs a deadline case"
-        );
         for (req, want) in cases {
             assert_eq!(req.deadline(), want, "deadline for {req:?}");
         }

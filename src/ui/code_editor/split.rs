@@ -350,6 +350,23 @@ impl LyrelApp {
                 .presentations
                 .image_view(&primary, tab, code.group, cx);
         }
+        // CSV/TSV's second group opens the other side by default: table and
+        // source over the same Document and the same parsed records.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.csv().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .csv_view(&primary, tab, code.group, window, cx);
+        }
         self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
@@ -412,10 +429,22 @@ impl LyrelApp {
                 file.presentations
                     .svg_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.json().is_some() {
+                file.presentations
+                    .json_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.csv().is_some() {
+                file.presentations
+                    .csv_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.image().is_some() {
                 file.presentations
                     .image_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
+            } else if file.input.sqlite().is_some() {
+                file.presentations
+                    .sqlite_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if code.active_id() != Some(other) {
                 file.input
                     .read(cx)
@@ -533,6 +562,9 @@ impl LyrelApp {
         };
         let accent = cx.theme().primary;
         let focused = pane(focused_crumbs, focused_body)
+            // The physical group's path must survive a focus swap between
+            // mouse-down and click, including clicks on toolbar controls.
+            .id(("editor-group", usize::from(!focus_left)))
             .border_t_2()
             .border_color(accent)
             .into_any_element();

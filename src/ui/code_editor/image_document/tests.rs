@@ -11,12 +11,14 @@ use super::*;
 // `image_document` has private `gif`/`tiff` submodules; these explicit
 // imports keep the fixture encoders pointing at the registry crates.
 use crate::ui::app::test_window::harness_with_tabs;
+#[rustfmt::skip]
 use ::gif;
-use ::tiff;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+#[rustfmt::skip]
+use ::tiff;
 
 fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
@@ -804,7 +806,7 @@ fn gif_fixture(
 }
 
 fn tiff_fixture(pages: &[(u32, u32, [u8; 3])]) -> Vec<u8> {
-    use tiff::encoder::colortype::RGB8;
+    use self::tiff::encoder::colortype::RGB8;
     let mut bytes = Vec::new();
     {
         let mut encoder =
@@ -859,7 +861,7 @@ fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
 
 #[gpui_kit::test]
 fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppContext) {
-    use gif::DisposalMethod::{Background, Keep, Previous};
+    use self::gif::DisposalMethod::{Background, Keep, Previous};
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = gif_fixture(
@@ -1440,4 +1442,45 @@ fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
         app.read_with(cx, |app, _| app.active_buffer().is_some())
     });
     assert_eq!(ready_size(&app, &cx), (1400, 1000));
+}
+
+#[gpui_kit::test]
+fn actual_size_and_zoom_measure_the_pixels_not_the_centering_viewport(tcx: &mut TestAppContext) {
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(
+        dir.path(),
+        "small.png",
+        &solid(image::ImageFormat::Png, 256, 160),
+    );
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    let id = image_view(&app, &cx).entity_id();
+    cx.update(|window, cx| window.press("1", cx));
+    settle(&mut cx);
+    cx.update(|window, _| {
+        let bounds = window.find(("image-document-pixels", id)).bounds();
+        let scale_factor = window.scale_factor();
+        assert_eq!(bounds.size.width * scale_factor, px(256.));
+        assert_eq!(bounds.size.height * scale_factor, px(160.));
+    });
+    cx.update(|window, cx| window.press(&secondary("="), cx));
+    settle(&mut cx);
+    cx.update(|window, _| {
+        let bounds = window.find(("image-document-pixels", id)).bounds();
+        let scale_factor = window.scale_factor();
+        assert_eq!(bounds.size.width * scale_factor, px(320.));
+        assert_eq!(bounds.size.height * scale_factor, px(200.));
+    });
+    cx.update(|window, cx| window.press("0", cx));
+    settle(&mut cx);
+    cx.update(|window, _| {
+        let bounds = window.find(("image-document-pixels", id)).bounds();
+        let scale_factor = window.scale_factor();
+        assert_eq!(
+            bounds.size.width * scale_factor,
+            px(256.),
+            "fit never enlarges a small picture"
+        );
+        assert_eq!(bounds.size.height * scale_factor, px(160.));
+    });
 }

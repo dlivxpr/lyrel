@@ -48,3 +48,63 @@ sha256 = "f339462fabb7d43181d088988476b96ac21649f08e3c63c7925e67a49437777f"
 reason = """仅参考、未导入：该实现使用 Unix (dev, ino) 与本地 tempfile，不是 Host-aware
 传输。Lyrel 在 LocalHost 内用平台对象身份 + change time 绑定打开版本，并在
 control 会话中复用同一 HostRead，而不是把本机 paged-file 当成远端实现。"""
+
+# #295 只读 SQLite 浏览保留的 Glim MIT 源码记录。GUI 交互按同一固定 revision
+# 的 reader/sqlite.rs 与 view.rs 适配到 Kit/Fast；没有逐字复制其中的 Glim
+# gpui_kit 接线，记录为 [[inspected]]，实际消费者与后端替换见本地文件。
+
+[[source]]
+upstream = "crates/glim-services/src/sqlite/browser.rs"
+local = "src/host/sqlite/browser.rs"
+sha256 = "2a68f09db01fe87519c352bdd2b6099519d2809cbed07f9abbda4984182f2a07"
+notes = """保留 quote、columns、单绑定参数 predicate 与括号树、tail、count、page 和
+value 分块。Lyrel 适配：每页投影改为 typeof + 原始类型值 + 完整字节长度，
+保留 NULL/INTEGER/REAL 位模式/原始 TEXT/BLOB；去掉 Snapshot/ResourcePool 参数；
+连接来自 owning Host 的一个 read view，而不是每次查询新连接。"""
+
+[[source]]
+upstream = "crates/glim-core/src/table.rs"
+local = "src/host/sqlite/mod.rs"
+sha256 = "d3e940b951efa519370c1b6d79ba02bbe81981746a4b53ef31b80b05cc656151"
+notes = """保留 SqlitePage 的 rows/more/start_column 语义（多取一行探测 more），把
+TextRows 显示行替换为带存储类型的 SqliteValue 单元格；wire 上不携带整库。"""
+
+[[source]]
+upstream = "assets/reader-contracts/sqlite.sql"
+local = "tests/fixtures/glim-reader-sqlite.sql"
+sha256 = "f07cab1372c4217c7404305bd2b0ca96fef9496aa57913ba77911c36b88fe6f8"
+notes = """夹具 DDL/DML 原样保留，用于 520 行分页、换行 TEXT 与中文引号标识符的
+回归；测试在 tempdir 内自行建库，不依赖 /usr/bin/sqlite3 或外部夹具。"""
+
+[[inspected]]
+upstream = "crates/glim-services/src/sqlite.rs"
+sha256 = "5c323df65054dfa8e7e02ed23e1295db2ecf1af9d534e3ca0366adf8785c890d"
+reason = """明确拒绝 Snapshot：该模块把 main/-wal/-journal 复制到 tempdir 并对副本做
+读写恢复。Lyrel 只读打开源库一次并为元数据与所有页保持同一 read view；不复制、
+不恢复、不改 journal mode、不 checkpoint。失败信息仅把“需要恢复”作为拒绝原因。"""
+
+[[inspected]]
+upstream = "crates/glim-services/tests/reader_session_regressions.rs"
+sha256 = "79a80432e35c9ae76a813096e4202aba750383818c71a5e3e368989c4fee049a"
+reason = """场景参照，未导入文件：727 行/300 列 WAL、跨页列窗与源 main/-wal 字节不变
+已改写为本票 conformance/引擎测试。测试进程内用 rusqlite 建库，并额外断言没有
+-journal、journal mode 不变；-shm 属 SQLite 读协调，不宣称字节不变。"""
+
+[[inspected]]
+upstream = "crates/glim-app/src/views/reader/sqlite.rs"
+sha256 = "1832087dc7b5bddb47302193062a2b34b79d5274ef54b034c1a72825ca4999a0"
+reason = """按固定 revision 适配交互语义，未逐字复制：schema 列表、表选择、250ms 搜索防抖、
+分页/列窗、四类后台任务与 Cancellation、refresh 后重发过期结果、失败保留旧页。
+Lyrel 改为一个 HostOps worker + `SqliteCancel` 请求身份，后端换成本地/远端 Host 的
+read view；呈现迁移到 Kit/Fast 的 `sqlite_document.rs`，不再使用 Glim 的 gpui_kit
+组件与每查询新连接。#296 在此基础上接入筛选输入、表头排序与完整值检查器，交互
+顺序沿用 Glim：防抖后重发查询、排序降序→升序→还原、检查器绑定 cell 身份并在
+查询/视图变化时关闭。"""
+
+[[inspected]]
+upstream = "crates/glim-app/src/views/reader/sqlite/view.rs"
+sha256 = "93aebc2d503bff29439b869133935252b00f7be89e8e2c0885ddcfbaa74aafe4"
+reason = """按固定 revision 适配表格语义：固定行号列、可见列窗、双击详情入口、
+三态排序（降序→升序→还原，名指向 schema 列）、页发布与列变化刷新、resume scroll。
+Lyrel 以 Kit `DataTable` / `TableDelegate` 重写呈现，行号来自页偏移，类型化值不做
+显示字符串回写。#296 交付筛选/排序/完整值交互，排序列名经列窗映射回 schema 索引。"""
