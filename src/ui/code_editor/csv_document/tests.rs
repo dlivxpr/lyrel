@@ -1001,11 +1001,45 @@ fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(tcx: &mut
 /// 真实 pinned SSH 上的生产工作台消费者：远端读取 → 单元格局部修改 → 保存 →
 /// 独立控制连接重读字节 → 关闭后用另一条连接重开。需要显式私有 fixture 与
 /// 同 dialect 的本地 router／远端 server；常规套件不连接任何主机。
+fn open_remote(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedHost, path: &Path) {
+    app.update_in(cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), path, window, cx)
+    });
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let opened = app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == path && file.input.csv().is_some())
+        });
+        if opened {
+            settle(cx);
+            return;
+        }
+        if Instant::now() >= deadline {
+            let stat = host.stat(path);
+            let read = host.read_file(path, 1024 * 1024).map(|bytes| bytes.len());
+            let active = app.read_with(cx, |app, _| {
+                app.active_buffer().map(|file| {
+                    (
+                        file.path.clone(),
+                        file.input.is_text(),
+                        file.input.csv().is_some(),
+                    )
+                })
+            });
+            panic!(
+                "remote CSV did not open in 120s: stat={stat:?} read_len={read:?} active={active:?}"
+            );
+        }
+        settle(cx);
+        cx.executor().advance_clock(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[gpui_kit::test]
 #[ignore = "requires the explicit private pinned SSH fixture and a same-commit local server; run alone with --ignored"]
-fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(
-    tcx: &mut TestAppContext,
-) {
+fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     use lyrel_core::host::Host as _;
     let binary = std::path::PathBuf::from(
@@ -1015,14 +1049,30 @@ fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(
     let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
     let host = fixture.connect_control();
     let path = fixture.remote_path("edit.csv");
-    let directory = path.parent().expect("remote fixture directory").to_path_buf();
+    let directory = path
+        .parent()
+        .expect("remote fixture directory")
+        .to_path_buf();
     if !host.exists(&directory) {
         host.create_dir(&directory, false)
             .expect("create the private remote fixture directory");
     }
-    let original = "\u{feff}name,value\r\na,\"b,c\"\r\nq,1\n".as_bytes().to_vec();
+    let original = "\u{feff}name,value\r\na,\"b,c\"\r\nq,1\n"
+        .as_bytes()
+        .to_vec();
     host.write_file(&path, &original)
         .expect("seed the remote CSV through the real SSH host");
+    assert_eq!(
+        host.read_file(&path, 1024 * 1024)
+            .expect("read the seeded remote CSV back"),
+        original
+    );
+    if let Ok(canonical) = host.canonicalize(&path) {
+        assert!(
+            host.stat(&canonical).is_ok(),
+            "remote stat of {canonical:?}"
+        );
+    }
 
     let decoy_dir = canonical_tempdir();
     let decoy = decoy_dir.path().join("edit.csv");
@@ -1034,8 +1084,8 @@ fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(
 
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1600.), px(1000.)));
-    open(&app, &mut cx, host.clone(), &path);
-    ready(&app, &mut cx, 2);
+    open_remote(&app, &mut cx, host.clone(), &path);
+    ready(&app, &mut cx, 3);
     let csv = view(&app, &cx);
     let id = csv.entity_id();
     edit_cell(&mut cx, id, 1, 0, "更新");
@@ -1064,8 +1114,8 @@ fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| app.editor.buffers.is_empty())
     });
-    open(&app, &mut cx, reader.clone(), &path);
-    ready(&app, &mut cx, 2);
+    open_remote(&app, &mut cx, reader.clone(), &path);
+    ready(&app, &mut cx, 3);
     assert_eq!(value(&app, &cx, 1, 0).as_deref(), Some("更新"));
     assert_eq!(
         reader.read_file(&path, 1024 * 1024).unwrap(),
