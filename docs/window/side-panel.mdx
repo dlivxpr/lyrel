@@ -334,6 +334,18 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；#291 在同一投影上补 JSONL／NDJSON 的逐行记录层，明确不使用 Glim 的 NDJSON-to-`Value::Array` 投影作为存储或写回权威。`src/ui/code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，`src/ui/code_editor/structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果；#290 另覆盖选中重复 occurrence 的改值／改名、空 object／array 插入、删除成员、JSONC 注释与尾随逗号保真、保存／另存为／失败写入／外部冲突／取消关闭、分屏中的迟到命令拒绝、关闭后回调不写原件，树焦点下的普通撤销／重做（键盘留在树上、另一呈现源码与独立保存字节一致），以及真实远端路由下的保存回读。#291 覆盖 JSONL／NDJSON 的嵌套值／键／数组编辑、记录整行改值、插入与删除记录、无效邻居不阻塞、空白行与混合行尾／BOM 未触及字节保留、记录预算边界、迟到解析与过期记录命令拒绝、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭与独立重开，并新增映射 Host 同名诱饵和真实远端路由保存回读消费者。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
+<a id="toml-documents"></a>
+#### TOML 源码链接结构与局部编辑（#293）
+
+`.toml` 打开为同一份可编辑源码及其无损结构树，不把 TOML 当作普通代码文本或经 JSON 结构转换。
+
+- 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，BOM／编码、逐行混合行尾、revision、history、保存、另存为、外部冲突与关闭沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不复制第二份可变文档；ordinary／inline table、array of tables、dotted／quoted key 与 string／integer／float／boolean／datetime／array 保留原字面拼写，不把普通表与内联表互转。
+- 解析：使用正式 registry 的 `toml_edit = 0.25.19`（MIT OR Apache-2.0）。原范围来自只读 `Document::parse`；`DocumentMut::from_str`→`into_mut()` 会无条件 `despan()`，不能当原源码区间权威。解析失败时显示行列与错误，源码仍可编辑修复。
+- 语句归属与局部编辑：选中键值可改原值片段；选中键、显式表或整个表数组可重命名；可向表／根／AoT entry／inline table 添加键，向表添加子表／表数组，向表数组添加 entry；可删除键值、表子树、entry 或整个表数组。`Table::span()` 只覆盖该表 header，`ArrayOfTables::span()` 可能跨过交错无关表，因此删除只收集目标自己的 header 行、直接 key/value 行与显式后代行并合并区间；`[a]`、交错 `[b]`、稍后 `[a.child]` 以及两个 `[[jobs]]` 之间的无关表不会被容器 span 误删。新键与新值先由同一解析器校验，写入前再解析整个结果并核对目标结构；revision／目标 occurrence 过期时拒绝写入。
+- 呈现：默认结构树支持真实指针选择／展开、方向键／Home／End／PageUp／PageDown、Space 折叠、Enter 在源码中定位键值或 header；工具栏与状态行提供 Structure／Source、节点计数、行列、Reveal in source、Full value 与树内编辑。分屏每个分组独立折叠／选择／滚动／焦点，共享同一 Document 与 history。输入最多 1 MiB、结构最多 20,000 节点、路径合计最多 8 MiB；超限时结构明确报错，源码仍可编辑保存。
+- 复用记录：见 `src/ui/code_editor/toml_document/UPSTREAM.toml`。固定 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 没有 TOML 结构编辑器或 mutation；本切片复用 #289 的 `structure_view` 与 #290 的 `structure_edit` 共享机制，TOML 语义／原区间／语句归属／局部规划由 Lyrel 在 `toml_edit` 上补齐，没有把不存在的上游能力伪装成移植。
+- 证据边界：隔离工作台回归覆盖映射 Host／同名本机诱饵、BOM／混合行尾、交错表与 AoT、指针／键盘、完整值、保存／另存为／失败写入／进行中旧保存不清新 dirty／外部冲突／取消关闭／独立重开、invalid／预算／迟到结果、分屏 stale 拒绝，以及显式私有 fixture 的真实远端保存回读。原生 OS 窗口、系统 IME、macOS 与性能仍按最终候选分别验收。
+
 <a id="csv-documents"></a>
 #### CSV／TSV 表格与保真编辑（#287、#288）
 

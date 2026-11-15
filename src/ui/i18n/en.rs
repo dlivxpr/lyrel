@@ -1987,6 +1987,64 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::EditorJsonEditUnsupported => "This node cannot be changed from the tree",
         L10nKey::EditorJsonEditRecordLine => "A JSONL record must stay on one line",
+        L10nKey::EditorTomlStructure => "Structure",
+        L10nKey::EditorTomlSource => "Source",
+        L10nKey::EditorTomlShowStructure => "Show structure",
+        L10nKey::EditorTomlShowSource => "Show source",
+        L10nKey::EditorTomlToggleStructure => "Toggle TOML structure / source",
+        L10nKey::EditorTomlParsing => "Parsing TOML",
+        L10nKey::EditorTomlInvalid => "TOML source could not be parsed",
+        L10nKey::EditorTomlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorTomlStructureUnavailable => "TOML structure unavailable",
+        L10nKey::EditorTomlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorTomlInputLimit => {
+            "TOML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorTomlNodeLimit => {
+            "TOML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorTomlPathLimit => {
+            "TOML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorTomlNodes => "{count} nodes",
+        L10nKey::EditorTomlReveal => "Reveal in source",
+        L10nKey::EditorTomlFullValue => "Full value",
+        L10nKey::EditorTomlCopyValue => "Copy value",
+        L10nKey::EditorTomlEditValue => "Edit value",
+        L10nKey::EditorTomlRename => "Rename",
+        L10nKey::EditorTomlAddKey => "Add key",
+        L10nKey::EditorTomlAddTable => "Add table",
+        L10nKey::EditorTomlAddArray => "Add array of tables",
+        L10nKey::EditorTomlAddEntry => "Add entry",
+        L10nKey::EditorTomlRemove => "Remove",
+        L10nKey::EditorTomlEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorTomlRenameTitle => "Rename · {path}",
+        L10nKey::EditorTomlAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorTomlAddTableTitle => "Add table to {path}",
+        L10nKey::EditorTomlAddArrayTitle => "Add array of tables to {path}",
+        L10nKey::EditorTomlKeyName => "Key",
+        L10nKey::EditorTomlValueName => "Value",
+        L10nKey::EditorTomlTableName => "Table name",
+        L10nKey::EditorTomlArrayName => "Array name",
+        L10nKey::EditorTomlKeyPlaceholder => "Key name",
+        L10nKey::EditorTomlValuePlaceholder => "TOML value",
+        L10nKey::EditorTomlTablePlaceholder => "Child table name",
+        L10nKey::EditorTomlArrayPlaceholder => "Array of tables name",
+        L10nKey::EditorTomlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorTomlEditInvalidKey => "Not one TOML key: {message}",
+        L10nKey::EditorTomlEditInvalidValue => "Not one TOML value: {message}",
+        L10nKey::EditorTomlEditDuplicate => "The target already has the key {key}",
+        L10nKey::EditorTomlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorTomlEditResultShape => {
+            "The edit did not land on the selected structure; nothing was written."
+        }
+        L10nKey::EditorTomlEditUnsupported => "This node cannot be changed from the tree",
         L10nKey::StructureEditApply => "Apply",
         L10nKey::EditorCsvTable => "Table",
         L10nKey::EditorCsvShowTable => "Show table",

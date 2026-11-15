@@ -1053,6 +1053,11 @@ impl LyrelApp {
             })
             .or_else(|| {
                 f.presentations
+                    .toml_existing(tab, group)
+                    .map(super::EditorInput::Toml)
+            })
+            .or_else(|| {
+                f.presentations
                     .csv_existing(tab, group)
                     .map(super::EditorInput::Csv)
             })
