@@ -1089,6 +1089,55 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
         1,
         "zooming keeps the same matches"
     );
+
+    // 关闭查找后仍在末页阅读／选字；缩放不能退回旧像素偏移对应的第 10 页，
+    // 更不能只保留“第 12 页”字段而让真实末页与选区移出视口。
+    cx.update(|window, cx| window.press("escape", cx));
+    settle(&mut cx);
+    // 停靠视口可能只容纳命中附近的一段；先适应整页，避免从视口外的页顶拖拽。
+    dispatch(&app, &mut cx, PdfFitPage);
+    until(&mut cx, |cx| {
+        view.read_with(cx, |view, _| view.text_page(11).is_some())
+    });
+    let bounds = cx.update(|window, _| window.find("pdf-page-11").bounds());
+    let from = bounds.origin + gpui_kit::point(bounds.size.width * 0.02, bounds.size.height * 0.02);
+    let to = bounds.origin + gpui_kit::point(bounds.size.width * 0.95, bounds.size.height * 0.22);
+    let viewport = view.read_with(&cx, |view, _| view.scroll().bounds());
+    assert!(from.y >= viewport.origin.y && to.y < viewport.origin.y + viewport.size.height);
+    cx.update(|window, cx| window.drag(from, to, cx));
+    until(&mut cx, |cx| {
+        view.read_with(cx, |view, _| view.has_selection())
+    });
+    cx.update(|window, cx| window.press(&secondary("c"), cx));
+    let expected = "lyrel #279 PDF page 12\nfidelity marker; common search target\nunique-page-12";
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some(expected.to_owned())
+    );
+    for id in [
+        "pdf-zoom-in",
+        "pdf-zoom-out",
+        "pdf-fit-page",
+        "pdf-fit-width",
+    ] {
+        cx.update(|window, cx| window.click(id, cx));
+        settle(&mut cx);
+        cx.update(|window, _| {
+            assert!(window.find("pdf-page-11").visible(), "last page after {id}");
+            assert!(
+                window.find("pdf-selection-11").visible(),
+                "the selected text remains in the real viewport after {id}"
+            );
+        });
+        assert_eq!(view.read_with(&cx, |view, _| view.page_number()), 12);
+    }
+    dispatch(&app, &mut cx, PdfActualSize);
+    cx.update(|window, _| assert!(window.find("pdf-selection-11").visible()));
+    dispatch(&app, &mut cx, PdfCopy);
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some(expected.to_owned())
+    );
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
 }
 

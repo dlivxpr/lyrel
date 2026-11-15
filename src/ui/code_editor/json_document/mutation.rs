@@ -9,8 +9,10 @@
 //! 应用由调用方交给共享 `Document` 的 `replace_ranges`：一次命令是一条
 //! 普通 history 记录，撤销/重做与其他源码编辑共用同一权威。
 //!
-//! JSONL／NDJSON 的记录编辑属于 #291，这里明确拒绝，避免把行记录当作
-//! JSON 文档修改。
+//! JSONL／NDJSON 的编辑只改选中的物理行：嵌套值／键／数组沿用同一
+//! occurrence 身份，插入记录写入一整条新行，删除记录只移除该行；其余行、
+//! 空行与混合行尾的 representation 不受影响。规划器仍以当前投影的
+//! `(path, range, key_range)` 重新解析目标，并按 revision 拒绝过期命令。
 
 use std::ops::Range;
 
@@ -18,7 +20,7 @@ use jsonc_parser::tokens::{Token, TokenAndRange};
 use jsonc_parser::{CollectOptions, CommentCollectionStrategy};
 
 use super::super::structure_view::Treelike;
-use super::projection::{JsonFormat, JsonNodeKind, JsonProjection, options, value_range};
+use super::projection::{JsonFormat, JsonNode, JsonNodeKind, JsonProjection, options, value_range};
 
 /// 目标节点的稳定身份。`range` 是值本身的 LF byte 范围；对象属性另有
 /// 原始键 token 的范围。重新解析时必须三者都匹配，不能只按属性名猜测。
@@ -53,18 +55,25 @@ pub(crate) enum Mutation {
     },
     /// 删除选中的 object 成员或 array 元素，连同它必要的分隔逗号。
     RemoveMember { target: NodeTarget },
+    /// 在选中记录（或文件末尾）之后插入一条新的单行记录。
+    AddRecord {
+        after: Option<NodeTarget>,
+        value: String,
+    },
+    /// 删除选中记录所在的整个物理行，保留其他行与空行。
+    RemoveRecord { target: NodeTarget },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MutationError {
-    /// 当前格式（JSONL／NDJSON）的记录编辑不在本视图内。
-    NotEditable,
     /// 文档 revision 已变化，或目标 occurrence 已不存在。
     Stale,
     /// 选中的节点不能执行这个命令（根、记录、非容器等）。
     Unsupported,
     /// 用户输入不是恰好一个 JSON 值。
     InvalidValue(String),
+    /// JSONL／NDJSON 的编辑必须保持一条记录占一行。
+    RecordNotSingleLine,
     /// 规划后的源码无法解析；拒绝写入而不是留下损坏文件。
     ResultInvalid {
         line: usize,
@@ -82,9 +91,18 @@ pub(crate) fn plan(
     format: JsonFormat,
     mutation: &Mutation,
 ) -> Result<Vec<(Range<usize>, String)>, MutationError> {
-    if format == JsonFormat::JsonLines {
-        return Err(MutationError::NotEditable);
+    match format {
+        JsonFormat::JsonLines => plan_records(text, projection, mutation),
+        JsonFormat::Json | JsonFormat::Jsonc => plan_document(text, projection, format, mutation),
     }
+}
+
+fn plan_document(
+    text: &str,
+    projection: &JsonProjection,
+    format: JsonFormat,
+    mutation: &Mutation,
+) -> Result<Vec<(Range<usize>, String)>, MutationError> {
     let tokens = tokens(text, format)?;
     let replacements = match mutation {
         Mutation::SetValue { target, value } => {
@@ -155,11 +173,266 @@ pub(crate) fn plan(
             let index = resolve(projection, target)?;
             remove_member(text, &tokens, projection, index)?
         }
+        Mutation::AddRecord { .. } | Mutation::RemoveRecord { .. } => {
+            return Err(MutationError::Unsupported);
+        }
     };
     if !replacements.is_empty() {
         verify_result(text, &replacements, format)?;
     }
     Ok(replacements)
+}
+
+/// JSONL／NDJSON 的编辑以一条物理记录为边界：嵌套命令只解析目标行并
+/// 重新解析修改后的该行；邻近的无效记录不参与校验，也不会被改写。
+fn plan_records(
+    text: &str,
+    projection: &JsonProjection,
+    mutation: &Mutation,
+) -> Result<Vec<(Range<usize>, String)>, MutationError> {
+    match mutation {
+        Mutation::AddRecord { after, value } => plan_add_record(text, projection, after, value),
+        Mutation::RemoveRecord { target } => plan_remove_record(text, projection, target),
+        Mutation::SetValue { target, value } => {
+            let index = resolve(projection, target)?;
+            let record = projection
+                .record_ancestor(index)
+                .ok_or(MutationError::Unsupported)?;
+            let node = &projection.nodes()[index];
+            let record_root = index == record;
+            if !record_root
+                && (!matches!(
+                    node.kind,
+                    JsonNodeKind::String
+                        | JsonNodeKind::Number
+                        | JsonNodeKind::Boolean
+                        | JsonNodeKind::Null
+                ) || node.range.is_empty())
+            {
+                return Err(MutationError::Unsupported);
+            }
+            let value = validate_record_value(value)?;
+            let replacements = match text.get(node.range.clone()) == Some(value.as_str()) {
+                true => Vec::new(),
+                false => vec![(node.range.clone(), value)],
+            };
+            verify_record_edit(text, projection, record, &replacements)?;
+            Ok(replacements)
+        }
+        Mutation::RenameKey { target, key } => {
+            let index = resolve(projection, target)?;
+            let record = projection
+                .record_ancestor(index)
+                .ok_or(MutationError::Unsupported)?;
+            let node = &projection.nodes()[index];
+            let key_range = node.key_range.clone().ok_or(MutationError::Unsupported)?;
+            let replacements = match node.key_text.as_deref() == Some(key.as_str()) {
+                true => Vec::new(),
+                false => {
+                    let quoted = quote_string(key);
+                    validate_key(&quoted, JsonFormat::Json)?;
+                    vec![(key_range, quoted)]
+                }
+            };
+            verify_record_edit(text, projection, record, &replacements)?;
+            Ok(replacements)
+        }
+        Mutation::AddMember {
+            container,
+            key,
+            value,
+        } => {
+            let index = resolve(projection, container)?;
+            let record = projection
+                .record_ancestor(index)
+                .ok_or(MutationError::Unsupported)?;
+            let record_node = &projection.nodes()[record];
+            let tokens = record_tokens(text, record_node)?;
+            let node = &projection.nodes()[index];
+            let value = validate_record_value(value)?;
+            let (member, last_start) = match node.kind {
+                JsonNodeKind::Object => {
+                    let key = key.as_deref().ok_or(MutationError::Unsupported)?;
+                    let quoted = quote_string(key);
+                    validate_key(&quoted, JsonFormat::Json)?;
+                    let colon = colon_style(text, projection, index);
+                    let last_start = projection
+                        .children(index)
+                        .last()
+                        .and_then(|child| projection.nodes()[*child].key_range.as_ref())
+                        .map(|range| range.start);
+                    (format!("{quoted}{colon}{value}"), last_start)
+                }
+                JsonNodeKind::Array => {
+                    let last_start = projection
+                        .children(index)
+                        .last()
+                        .map(|child| projection.nodes()[*child].range.start);
+                    (value, last_start)
+                }
+                _ => return Err(MutationError::Unsupported),
+            };
+            let replacements =
+                insert_member(text, &tokens, projection, index, &member, last_start)?;
+            verify_record_edit(text, projection, record, &replacements)?;
+            Ok(replacements)
+        }
+        Mutation::RemoveMember { target } => {
+            let index = resolve(projection, target)?;
+            let record = projection
+                .record_ancestor(index)
+                .ok_or(MutationError::Unsupported)?;
+            let record_node = &projection.nodes()[record];
+            let tokens = record_tokens(text, record_node)?;
+            let replacements = remove_member(text, &tokens, projection, index)?;
+            verify_record_edit(text, projection, record, &replacements)?;
+            Ok(replacements)
+        }
+    }
+}
+
+fn plan_add_record(
+    text: &str,
+    projection: &JsonProjection,
+    after: &Option<NodeTarget>,
+    value: &str,
+) -> Result<Vec<(Range<usize>, String)>, MutationError> {
+    let value = validate_record_value(value)?;
+    let (at, fragment) = match after {
+        Some(target) => {
+            let index = resolve(projection, target)?;
+            let record = projection
+                .record_ancestor(index)
+                .ok_or(MutationError::Unsupported)?;
+            let node = &projection.nodes()[record];
+            let line = record_line_range(text, node.range.start);
+            let indent = line_indent(text, node.range.start);
+            match line_ends_with_newline(text, &line) {
+                true => (line.end, format!("{indent}{value}\n")),
+                false => (line.end, format!("\n{indent}{value}")),
+            }
+        }
+        None => match text.is_empty() {
+            true => (0, value),
+            false => match text.ends_with('\n') {
+                true => (text.len(), format!("{value}\n")),
+                false => (text.len(), format!("\n{value}")),
+            },
+        },
+    };
+    // The insertion point is always a physical line boundary, and the new
+    // record is itself exactly one line. Neighboring bytes are untouched.
+    if at > 0 && !text[..at].ends_with('\n') && !fragment.starts_with('\n') {
+        return Err(MutationError::Unsupported);
+    }
+    Ok(vec![(at..at, fragment)])
+}
+
+fn plan_remove_record(
+    text: &str,
+    projection: &JsonProjection,
+    target: &NodeTarget,
+) -> Result<Vec<(Range<usize>, String)>, MutationError> {
+    let index = resolve(projection, target)?;
+    let record = projection
+        .record_ancestor(index)
+        .ok_or(MutationError::Unsupported)?;
+    let node = &projection.nodes()[record];
+    let line = record_line_range(text, node.range.start);
+    if line.is_empty() {
+        return Err(MutationError::Unsupported);
+    }
+    Ok(vec![(line, String::new())])
+}
+
+fn record_line_range(text: &str, record_start: usize) -> Range<usize> {
+    let start = text[..record_start].rfind('\n').map_or(0, |at| at + 1);
+    let end = text[record_start..]
+        .find('\n')
+        .map_or(text.len(), |at| record_start + at + 1);
+    start..end
+}
+
+fn line_ends_with_newline(text: &str, line: &Range<usize>) -> bool {
+    line.end > line.start && text.as_bytes().get(line.end - 1) == Some(&b'\n')
+}
+
+/// 解析目标记录自己的 token；offset 映射回整份 LF 源码。相邻记录即使
+/// 无效也不会让这里的解析失败，因为它们不在输入范围内。
+fn record_tokens<'a>(
+    text: &'a str,
+    record: &JsonNode,
+) -> Result<Vec<TokenAndRange<'a>>, MutationError> {
+    let body = text.get(record.range.clone()).ok_or(MutationError::Stale)?;
+    let parsed = jsonc_parser::parse_to_ast(
+        body,
+        &CollectOptions {
+            comments: CommentCollectionStrategy::Off,
+            tokens: true,
+        },
+        &options(JsonFormat::Json),
+    )
+    .map_err(|_| MutationError::Stale)?;
+    let mut tokens = parsed.tokens.ok_or(MutationError::Stale)?;
+    for token in &mut tokens {
+        token.range.start += record.range.start;
+        token.range.end += record.range.start;
+    }
+    Ok(tokens)
+}
+
+fn validate_record_value(fragment: &str) -> Result<String, MutationError> {
+    if fragment.contains(['\r', '\n']) {
+        return Err(MutationError::RecordNotSingleLine);
+    }
+    validate_value(fragment, JsonFormat::Json)
+}
+
+/// 验证一次记录内修改：所有替换都在该行内，修改后的整行仍是恰好一个
+/// JSON 值。不会解析或要求邻近记录有效。
+fn verify_record_edit(
+    text: &str,
+    projection: &JsonProjection,
+    record: usize,
+    replacements: &[(Range<usize>, String)],
+) -> Result<(), MutationError> {
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    let node = &projection.nodes()[record];
+    let line = record_line_range(text, node.range.start);
+    if replacements.iter().any(|(range, inserted)| {
+        range.start < line.start
+            || range.end > line.end
+            || inserted.contains(['\r', '\n'])
+            || (inserted.is_empty()
+                && text
+                    .get(range.clone())
+                    .is_some_and(|removed| removed.ends_with('\n')))
+    }) {
+        return Err(MutationError::Unsupported);
+    }
+    let result = apply_replacements(text, replacements);
+    let line_end = result[line.start..]
+        .find('\n')
+        .map_or(result.len(), |at| line.start + at);
+    let content = result[line.start..line_end].trim();
+    if content.is_empty() {
+        return Err(MutationError::ResultInvalid {
+            line: node.record_line.unwrap_or(1),
+            column: 1,
+            message: "The record would become empty".to_owned(),
+        });
+    }
+    validate_value(content, JsonFormat::Json).map_err(|error| match error {
+        MutationError::InvalidValue(message) => MutationError::ResultInvalid {
+            line: node.record_line.unwrap_or(1),
+            column: 1,
+            message,
+        },
+        other => other,
+    })?;
+    Ok(())
 }
 
 fn resolve(projection: &JsonProjection, target: &NodeTarget) -> Result<usize, MutationError> {
@@ -457,18 +730,16 @@ fn verify_result(
     replacements: &[(Range<usize>, String)],
     format: JsonFormat,
 ) -> Result<(), MutationError> {
-    let mut result = text.to_owned();
-    let mut ordered: Vec<_> = replacements.iter().collect();
-    ordered.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
-    for (range, inserted) in ordered {
-        if range.end > result.len()
-            || !result.is_char_boundary(range.start)
-            || !result.is_char_boundary(range.end)
+    for (range, _) in replacements {
+        if range.start > range.end
+            || range.end > text.len()
+            || !text.is_char_boundary(range.start)
+            || !text.is_char_boundary(range.end)
         {
             return Err(MutationError::Stale);
         }
-        result.replace_range(range.clone(), inserted);
     }
+    let result = apply_replacements(text, replacements);
     match jsonc_parser::parse_to_ast(&result, &CollectOptions::default(), &options(format)) {
         Ok(parsed) if parsed.value.is_some() => Ok(()),
         Ok(_) => Err(MutationError::ResultInvalid {
@@ -484,9 +755,8 @@ fn verify_result(
     }
 }
 
-/// 应用替换清单，供 GUI-free 测试和 verify 复用。
-#[cfg(test)]
-fn apply(text: &str, replacements: &[(Range<usize>, String)]) -> String {
+/// 应用替换清单，供 GUI-free 测试和 verify 复用。调用方先验证范围。
+fn apply_replacements(text: &str, replacements: &[(Range<usize>, String)]) -> String {
     let mut result = text.to_owned();
     let mut ordered: Vec<_> = replacements.to_vec();
     ordered.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
@@ -494,6 +764,11 @@ fn apply(text: &str, replacements: &[(Range<usize>, String)]) -> String {
         result.replace_range(range, &inserted);
     }
     result
+}
+
+#[cfg(test)]
+fn apply(text: &str, replacements: &[(Range<usize>, String)]) -> String {
+    apply_replacements(text, replacements)
 }
 
 #[cfg(test)]
@@ -760,18 +1035,18 @@ mod tests {
             ),
             Err(MutationError::Stale)
         );
-        assert!(matches!(
+        assert_eq!(
             plan(
                 text,
                 &projection,
-                JsonFormat::JsonLines,
-                &Mutation::SetValue {
-                    target: a,
+                JsonFormat::Json,
+                &Mutation::AddRecord {
+                    after: None,
                     value: "2".to_owned(),
                 },
             ),
-            Err(MutationError::NotEditable)
-        ));
+            Err(MutationError::Unsupported)
+        );
     }
 
     #[test]
@@ -814,5 +1089,169 @@ mod tests {
             },
         );
         assert_eq!(edited, "{\"a\":1, \"b\":2}");
+    }
+
+    #[test]
+    fn jsonl_mutations_touch_only_the_target_record_and_keep_invalid_neighbors() {
+        let text = "{\"a\": 1, \"dup\": 1, \"dup\": 2}\n\n{\"broken\": ,}\n{\"items\": [1e2, -0, \"\\u4e2d\"]}\n42\n";
+        let projection = build_projection(text, JsonFormat::JsonLines);
+        let edited = mutate(
+            text,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::SetValue {
+                target: target(&projection, "line 1[\"dup\"] #2"),
+                value: "\"changed\"".to_owned(),
+            },
+        );
+        assert_eq!(
+            edited,
+            "{\"a\": 1, \"dup\": 1, \"dup\": \"changed\"}\n\n{\"broken\": ,}\n{\"items\": [1e2, -0, \"\\u4e2d\"]}\n42\n"
+        );
+        let projection = build_projection(&edited, JsonFormat::JsonLines);
+        let edited = mutate(
+            &edited,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::RenameKey {
+                target: target(&projection, "line 1[\"a\"]"),
+                key: "键".to_owned(),
+            },
+        );
+        assert!(edited.starts_with("{\"键\": 1, \"dup\": 1, \"dup\": \"changed\"}\n"));
+        let projection = build_projection(&edited, JsonFormat::JsonLines);
+        let edited = mutate(
+            &edited,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::AddMember {
+                container: target(&projection, "line 4[\"items\"]"),
+                key: None,
+                value: "\"追加\"".to_owned(),
+            },
+        );
+        assert!(edited.contains("\"items\": [1e2, -0, \"\\u4e2d\", \"追加\"]"));
+        let projection = build_projection(&edited, JsonFormat::JsonLines);
+        let edited = mutate(
+            &edited,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::AddRecord {
+                after: Some(target(&projection, "line 1")),
+                value: "{\"id\": 9, \"name\": \"你好🙂\"}".to_owned(),
+            },
+        );
+        assert!(edited.starts_with(
+            "{\"键\": 1, \"dup\": 1, \"dup\": \"changed\"}\n{\"id\": 9, \"name\": \"你好🙂\"}\n\n"
+        ));
+        let projection = build_projection(&edited, JsonFormat::JsonLines);
+        let edited = mutate(
+            &edited,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::RemoveRecord {
+                target: target(&projection, "line 4"),
+            },
+        );
+        assert_eq!(
+            edited,
+            "{\"键\": 1, \"dup\": 1, \"dup\": \"changed\"}\n{\"id\": 9, \"name\": \"你好🙂\"}\n\n{\"items\": [1e2, -0, \"\\u4e2d\", \"追加\"]}\n42\n"
+        );
+        assert_eq!(
+            build_projection(&edited, JsonFormat::JsonLines).invalid_records(),
+            0
+        );
+    }
+
+    #[test]
+    fn jsonl_add_record_handles_append_interior_and_missing_final_newline() {
+        for (text, after, expected) in [
+            ("", None, "{\"b\":2}"),
+            ("{\"a\":1}", None, "{\"a\":1}\n{\"b\":2}"),
+            ("{\"a\":1}\n", None, "{\"a\":1}\n{\"b\":2}\n"),
+            ("{\"a\":1}", Some("line 1"), "{\"a\":1}\n{\"b\":2}"),
+            ("{\"a\":1}\n", Some("line 1"), "{\"a\":1}\n{\"b\":2}\n"),
+            (
+                "  {\"a\":1}\n",
+                Some("line 1"),
+                "  {\"a\":1}\n  {\"b\":2}\n",
+            ),
+        ] {
+            let projection = build_projection(text, JsonFormat::JsonLines);
+            let after = after.map(|path| target(&projection, path));
+            let edited = mutate(
+                text,
+                JsonFormat::JsonLines,
+                &projection,
+                Mutation::AddRecord {
+                    after: after.clone(),
+                    value: "{\"b\":2}".to_owned(),
+                },
+            );
+            assert_eq!(edited, expected, "text={text:?} after={after:?}");
+        }
+    }
+
+    #[test]
+    fn jsonl_rejects_multiline_values_and_stale_record_targets() {
+        let text = "{\"a\":1}\n{\"b\":2}\n";
+        let projection = build_projection(text, JsonFormat::JsonLines);
+        let target = target(&projection, "line 1");
+        assert_eq!(
+            plan(
+                text,
+                &projection,
+                JsonFormat::JsonLines,
+                &Mutation::SetValue {
+                    target: target.clone(),
+                    value: "{\n}".to_owned(),
+                },
+            ),
+            Err(MutationError::RecordNotSingleLine)
+        );
+        assert_eq!(
+            plan(
+                text,
+                &projection,
+                JsonFormat::JsonLines,
+                &Mutation::AddRecord {
+                    after: Some(target.clone()),
+                    value: "1\n2".to_owned(),
+                },
+            ),
+            Err(MutationError::RecordNotSingleLine)
+        );
+        let mut stale = target;
+        stale.range = 0..2;
+        assert_eq!(
+            plan(
+                text,
+                &projection,
+                JsonFormat::JsonLines,
+                &Mutation::RemoveRecord { target: stale },
+            ),
+            Err(MutationError::Stale)
+        );
+    }
+
+    #[test]
+    fn jsonl_invalid_record_can_be_replaced_as_a_whole_line() {
+        let text = "{\"a\":1}\n{broken\n";
+        let projection = build_projection(text, JsonFormat::JsonLines);
+        assert_eq!(projection.invalid_records(), 1);
+        let edited = mutate(
+            text,
+            JsonFormat::JsonLines,
+            &projection,
+            Mutation::SetValue {
+                target: target(&projection, "line 2"),
+                value: "{\"fixed\":true}".to_owned(),
+            },
+        );
+        assert_eq!(edited, "{\"a\":1}\n{\"fixed\":true}\n");
+        assert_eq!(
+            build_projection(&edited, JsonFormat::JsonLines).invalid_records(),
+            0
+        );
     }
 }

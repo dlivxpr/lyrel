@@ -19,6 +19,8 @@ backend = "hayro =0.8.0 (registry, Apache-2.0 OR MIT)"
 # #285：上游 GPUI 侧的选择/搜索/大纲交互未导入，Lyrel `PdfView` 以归一化几何重实现；
 # src/text.rs 的选择矩形/选字/`find_matches`/阅读顺序、`src/outline.rs` 的大纲/目的地/
 # 链接由本票直接消费；`ligature_text_document` 夹具为 Lyrel 原创（Type3 多码点 glyph）。
+# 原生阅读修复：端点先用与文本重建一致的阅读行分组，再匹配横向最近字形，
+# 避免低于同行其它字形的 descender 抢占行尾后的释放点；旋转坐标只对端点逆变换一次。
 
 [[source]]
 upstream = "crates/gpui-pdf/src/lib.rs"
