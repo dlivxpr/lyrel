@@ -172,3 +172,13 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 
 最终接受还必须使用固定参考的同源普通/长文/宽表/原始完整资源文档，完成连续输入与系统中文 IME、选择导航、fold/格式/列表、表格/code、图片/link、二维公式、Mermaid、source/live、Undo/Redo、local/真实 SSH 保存重开，并比较 light/dark、zoom、docked/full 与 native long-line。保留完整 fixtures 与全部历史；未运行、前提失败、实际回归及尚未接受的测量取舍都不能改为通过。
 
+
+### #283 SVG 文档：共享 Document 的第二个消费者
+
+`.svg` 由应用层 `src/ui/code_editor/svg_document.rs` 打开，不在本 crate 内建立 SVG 视图或渲染 provider。它复用同一个 `Document` 所有权：源码、逐行行尾、编码/BOM、revision 与 Undo/Redo 仍由 `Document` 持有；呈现使用 `EditorState::for_document` 后调用 `set_plain_source(true)`，关闭 Markdown 样式、列表/引用/表格延续、格式/高亮/writing 菜单与 caret 标记隐藏，保留 caret、选择、IME、滚动和普通文本输入。
+
+- 每文件一个 `SvgDocument`（共享 `Document` 与唯一预览），每标签页/分组一个 `SvgView`；分屏新组默认显示另一面，源码选择与预览取景由各自 view 持有。`EditorInput::Svg` 的文本能力仍从本 crate 的 presentation 读写，`TextSnapshot` 只持有相同 revision 的 `Arc<String>` 快照。
+- 保存、dirty、reload、conflict 与 close 仍由工作台 `saving.rs`/`buffers.rs` 负责。`source_document(cx)` 让 SVG 与 Markdown 共用逐行 `snapshot.encode()`、representation 指纹和 revision 校验；普通 Code 的 codec 分支不复用于 SVG。
+- 预览在 `markdown::images::decode_svg_source` 中用同一组安全 usvg/resvg 选项解析源码，两个资源 resolver 均关闭；debounce 后才取得共享快照，每文件最多一个在途解析，后续输入合并到最新修订。每文件只安装匹配 Document 身份和 revision 的结果，关闭会取消未开始的解析，失败保留可编辑源码。
+- 原生键盘输入覆盖选区后，后续连续 grapheme 与首次替换属于同一 Undo 事务；不合并之前的输入或程序化结构修改。SVG 工作台跨呈现 Undo/Redo 回归覆盖这一公共输入路径。
+- 窄入口：`cargo test --locked -p lyrel --lib svg_document`。夹具与映射 Host 均在测试内生成；真实产品窗口、系统 IME、真实 SSH、macOS 与性能仍由集成验收记录，不因本说明或 headless 测试通过。

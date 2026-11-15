@@ -154,9 +154,39 @@ impl EditorState {
     }
     pub fn set_source_only(&mut self, source_only: bool, cx: &mut Context<Self>) {
         self.finish_composition(cx);
-        self.source_only = source_only;
+        // Plain source is never Markdown; a caller cannot turn it back into a
+        // styled live document by relaxing source-only.
+        self.source_only = source_only || self.plain_source;
         if source_only {
             self.markdown_style = None;
+        }
+        self.invalidate_geometry();
+        cx.notify();
+    }
+    /// Whether this presentation is raw non-Markdown source.
+    pub fn is_plain_source(&self) -> bool {
+        self.plain_source
+    }
+    /// Turn the presentation into raw source for a format whose syntax is not
+    /// Markdown — SVG, for example. The shared [`Document`] remains the only
+    /// authority for text and history; this only stops Markdown styling and
+    /// editing assists (list continuation, inline formatting, the structural
+    /// context menu) from rewriting that source. Callers still own the
+    /// document and its save/conflict/close lifecycle.
+    pub fn set_plain_source(&mut self, plain: bool, cx: &mut Context<Self>) {
+        if self.plain_source == plain {
+            return;
+        }
+        self.finish_composition(cx);
+        self.plain_source = plain;
+        if plain {
+            self.source_only = true;
+            self.markdown_style = None;
+            self.menu = None;
+            self.table_menu = None;
+            self.image_menu = None;
+            self.prop_menu = None;
+            self.code_lang_menu = None;
         }
         self.invalidate_geometry();
         cx.notify();
@@ -305,7 +335,7 @@ impl EditorState {
         cx.notify();
     }
     pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
-        if self.source_only {
+        if self.source_only || self.plain_source {
             return;
         }
         self.finish_composition(cx);

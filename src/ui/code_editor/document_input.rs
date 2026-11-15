@@ -3,7 +3,7 @@ use super::image_document::ImageView;
 use super::pdf_document::PdfView;
 use super::text::TextSnapshot;
 use super::*;
-use lyrel_markdown_editor::EditorState as MarkdownEditor;
+use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
 use std::cell::RefCell;
 
 #[derive(Clone)]
@@ -14,6 +14,8 @@ pub(crate) enum EditorInput {
     Image(Entity<ImageView>),
     /// 只读 PDF：没有文本编辑，只有页、缩放与密码。
     Pdf(Entity<PdfView>),
+    /// SVG 文档：共享逐行保真 Document 的源码与安全原生预览。
+    Svg(Entity<SvgView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -25,6 +27,7 @@ pub(crate) enum EditorInput {
 pub(crate) enum TextInput<'a> {
     Code(&'a Entity<EditorState>),
     Markdown(&'a Entity<MarkdownEditor>),
+    Svg(&'a Entity<SvgView>),
 }
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
@@ -32,6 +35,7 @@ pub(crate) enum WeakEditorInput {
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
     Pdf(gpui_kit::WeakEntity<PdfView>),
+    Svg(gpui_kit::WeakEntity<SvgView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -40,6 +44,7 @@ impl WeakEditorInput {
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
             Self::Pdf(input) => input.upgrade().map(EditorInput::Pdf),
+            Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
         }
     }
 }
@@ -50,6 +55,7 @@ impl EditorInput {
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
             Self::Pdf(input) => WeakEditorInput::Pdf(input.downgrade()),
+            Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -76,6 +82,22 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn svg(&self) -> Option<&Entity<SvgView>> {
+        match self {
+            Self::Svg(input) => Some(input),
+            _ => None,
+        }
+    }
+    /// Markdown and SVG keep the same line-preserving source authority; every
+    /// save, reload and dirty comparison reads this document rather than a
+    /// presentation's cached text.
+    pub(crate) fn source_document(&self, cx: &gpui_kit::App) -> Option<Entity<Document>> {
+        match self {
+            Self::Markdown(view) => Some(view.read(cx).document().clone()),
+            Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Code(_) | Self::Image(_) => None,
+        }
+    }
     /// 这份输入的文本能力；只读图片返回 `None`。
     ///
     /// 需要文本的调用点从这里取能力再操作，而不是读一个伪造的空文档。
@@ -83,6 +105,7 @@ impl EditorInput {
         match self {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
+            Self::Svg(input) => Some(TextInput::Svg(input)),
             Self::Image(_) | Self::Pdf(_) => None,
         }
     }
@@ -93,6 +116,8 @@ impl EditorInput {
     pub(crate) fn finish_composition(&self, _: &mut Window, cx: &mut gpui_kit::App) {
         if let Some(input) = self.markdown() {
             input.update(cx, |state, cx| state.finish_composition(cx));
+        } else if let Some(view) = self.svg() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
         }
     }
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> InputRead<'a> {
@@ -124,6 +149,7 @@ impl EditorInput {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
+            Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -142,18 +168,26 @@ impl TextInput<'_> {
                 input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
             }
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
+            Self::Svg(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
         }
+    }
+    /// Whether this presentation keeps the shared line-preserving source and
+    /// its history (Markdown and SVG), rather than the ordinary code codec.
+    pub(crate) fn is_source(&self) -> bool {
+        matches!(self, Self::Markdown(_) | Self::Svg(_))
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
+            Self::Svg(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
         }
     }
     pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+            Self::Svg(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
         }
     }
     pub(crate) fn set_cursor_position(
@@ -169,6 +203,10 @@ impl TextInput<'_> {
             Self::Markdown(input) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 input.update(cx, |state, cx| state.select_range(at..at, cx));
+            }
+            Self::Svg(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
         }
     }
@@ -191,6 +229,58 @@ impl TextInput<'_> {
             Self::Markdown(input) => {
                 input.update(cx, |state, cx| state.replace_range(range, text, cx))
             }
+            Self::Svg(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
+        }
+    }
+    pub(crate) fn replace_ranges(
+        &self,
+        replacements: Vec<(std::ops::Range<usize>, String)>,
+        cx: &mut gpui_kit::App,
+    ) {
+        match self {
+            Self::Code(_) => {}
+            Self::Markdown(input) => {
+                input.update(cx, |state, cx| state.replace_ranges(replacements, cx))
+            }
+            Self::Svg(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+        }
+    }
+    pub(crate) fn replace_lines(
+        &self,
+        range: std::ops::Range<usize>,
+        lines: Vec<std::ops::Range<usize>>,
+        leading: bool,
+        trailing: bool,
+        cx: &mut gpui_kit::App,
+    ) {
+        match self {
+            Self::Code(_) => {}
+            Self::Markdown(input) => input.update(cx, |state, cx| {
+                state.replace_lines(range, lines, leading, trailing, cx)
+            }),
+            Self::Svg(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
+        }
+    }
+    pub(crate) fn set_history_selection(
+        &self,
+        before: std::ops::Range<usize>,
+        after: std::ops::Range<usize>,
+        cx: &mut gpui_kit::App,
+    ) {
+        match self {
+            Self::Code(_) => {}
+            Self::Markdown(input) => input.update(cx, |state, cx| {
+                state.set_history_selection(before, after, cx)
+            }),
+            Self::Svg(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
         }
     }
 }
@@ -206,6 +296,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
             EditorInput::Pdf(input) => input.read(self.cx).handle(),
+            EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -214,6 +305,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Pdf(input) => input.read(self.cx).scroll().offset(),
+            EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
         }
     }
 }
@@ -229,8 +321,17 @@ impl TextRead<'_> {
     pub(crate) fn text(&self) -> TextSnapshot {
         match self.input {
             TextInput::Code(input) => TextSnapshot::Code(input.read(self.cx).text().clone()),
-            TextInput::Markdown(input) => TextSnapshot::Markdown(
+            TextInput::Markdown(input) => TextSnapshot::Shared(
                 input
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+            TextInput::Svg(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
                     .read(self.cx)
                     .document()
                     .read(self.cx)
@@ -243,6 +344,7 @@ impl TextRead<'_> {
         match self.input {
             TextInput::Code(input) => input.read(self.cx).cursor(),
             TextInput::Markdown(input) => input.read(self.cx).cursor(),
+            TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).cursor(),
         }
     }
     pub(crate) fn cursor_position(&self) -> Position {
@@ -252,12 +354,14 @@ impl TextRead<'_> {
         match self.input {
             TextInput::Code(input) => input.read(self.cx).selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).selected_range(),
+            TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).selected_range(),
         }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
         match self.input {
             TextInput::Code(_) => self.selected_range(),
             TextInput::Markdown(input) => input.read(self.cx).occurrence_range(),
+            TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
         }
     }
     pub(crate) fn range_to_bounds(
@@ -267,6 +371,11 @@ impl TextRead<'_> {
         match self.input {
             TextInput::Code(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
+            TextInput::Svg(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
         }
     }
 }
@@ -287,6 +396,7 @@ pub(super) struct Presentations {
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
     pdfs: RefCell<Vec<(TabId, split::GroupId, Entity<PdfView>, Subscription)>>,
+    svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -408,12 +518,61 @@ impl Presentations {
         view
     }
 
+    /// An SVG document's presentation in one group. The first group uses the
+    /// document's own view; a split group gets its own mode, source caret and
+    /// preview framing over the same Document and preview entity.
+    pub(super) fn svg_view<E: 'static>(
+        &self,
+        primary: &Entity<SvgView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<SvgView> {
+        let mut views = self.svgs.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).selected_range(cx);
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let preview_scroll = primary.read(cx).preview_scroll_offset();
+            let view = cx.new(|cx| SvgView::new(document, mode, wrap, indent, cx));
+            view.update(cx, |view, cx| {
+                view.seed_presentation(selection, source_scroll, preview_scroll, cx)
+            });
+            view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
     pub(super) fn pdf_existing(
         &self,
         tab: TabId,
         group: split::GroupId,
     ) -> Option<Entity<PdfView>> {
         self.pdfs
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    pub(super) fn svg_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<SvgView>> {
+        self.svgs
             .borrow()
             .iter()
             .find(|(t, g, _, _)| *t == tab && *g == group)
@@ -469,6 +628,15 @@ impl Presentations {
         self.pdfs
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
+        // SVG 的源码呈现持有可提交的 preedit；离开分组时先结束自己的 lease，
+        // Document 与预览仍由文件的其余呈现或缓冲区持有。
+        self.svgs.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(
@@ -494,6 +662,9 @@ impl Presentations {
     }
     pub(super) fn set_soft_wrap(&self, wrap: bool, _: &EditorInput, cx: &mut gpui_kit::App) {
         for (_, _, view, _, _) in self.markdown.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.svgs.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }

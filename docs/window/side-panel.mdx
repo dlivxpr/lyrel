@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮已确认但尚未实现的文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。其中 PNG／JPEG／WebP／BMP／ICO 只读文档已由 #280 落地（见[静态图片文档](#static-image-documents)），PDF 的页／缩放／密码与既有批注／表单外观已由 #284 落地（见[PDF 阅读文档](#pdf-reading-documents)）；#285 的大纲、选字复制与搜索仍待实现。该设计其余部分不改变当前的文件大小限制或打开行为。
+本轮已确认但尚未实现的文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。其中 PNG／JPEG／WebP／BMP／ICO 只读文档已由 #280 落地（见[静态图片文档](#static-image-documents)），SVG 源码与安全原生预览已由 #283 落地（见[SVG 文档](#svg-documents)），PDF 的页／缩放／密码与既有批注／表单外观已由 #284 落地（见[PDF 阅读文档](#pdf-reading-documents)）；#285 的大纲、选字复制与搜索仍待实现。该设计其余部分不改变当前的文件大小限制或打开行为。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已落地的图片路径：#280 把 PNG／JPEG／WebP／BMP／ICO 作为只读文档接入工作台，#282 补齐 GIF 动画与多页 TIFF，见下方[图片文档](#static-image-documents)。#284 的 PDF 分页、缩放、密码与既有外观实现正在验证，见下方 [PDF 阅读文档](#pdf-reading-documents)；大纲、选字复制与搜索归 #285。其余格式仍待实现，不能把源码接入视为双平台验收通过。
+> 已落地部分：#280（切片 T01）已把 PNG／JPEG／WebP／BMP／ICO 作为只读文档接入现有工作台；#282 在同一文档上补齐 GIF 动画与多页 TIFF，见下方[图片文档](#static-image-documents)。#283 已接入 [SVG 源码与安全原生预览](#svg-documents)，#284 已接入 [PDF 阅读文档](#pdf-reading-documents)（大纲、选字复制与搜索归 #285）。下表其余格式仍待实现，不能把源码接入视为双平台验收通过。
 
 本节使用以下术语：
 
@@ -296,6 +296,21 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 状态与命令：PDF 文档显示格式、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符；保存、另存为、撤销、行号跳转、符号、LSP 与查找按 `EditorInput::is_text()` 让行，不写盘也不弹永久无效的输入条。外部重写重新读取并替换文档；删除显示既有无保存关闭提示。
 - 复用记录：GUI-free `crates/lyrel-pdf` 保留 pinned Zorite MIT parse／password／单页渲染／`keep_window`／缩放／文本／outline／只读表单枚举算法，换成 hayro 0.8 与 Lyrel 自己的文档身份、Host 字节和呈现；`UPSTREAM.toml` 记录逐文件原始摘要与适配，MIT notice 位于 crate 的 `licenses/` 并进入根 `LICENSE`。同一导入还修复了文本 `locate` 的多字节字节推进、裁剪栈、单栏阅读顺序、Type3 前进宽度与 CJK 空格，并补齐 named destination／目的地坐标与旋转页链接，作为 #285 的后端前提；#285 的完整选择／搜索 UI 仍未实现。
 - 证据边界：生产工作台接缝测试覆盖打开与页身份、翻页／缩放／分屏、密码错误与正确恢复、既有外观与无 AP 中文／多行叠加、页窗口淘汰与位图释放、迟到结果防护、malformed／超预算、外部重写、owning Host／映射 Host 字节归属、版本化读取与读取迟到时标签页已关闭；夹具由 `lyrel-pdf` 自身生成，不依赖协调目录。真实产品窗口、真实 SSH 图像、macOS、系统剪贴板／IME、原生 DPI 与性能不在本切片的后台证据内，不能由 headless 测试或编译成功代替。
+
+<a id="svg-documents"></a>
+#### SVG 源码与安全原生预览（#283 已实现）
+
+`.svg` 打开为可编辑的源码文档和同一文档的安全原生预览，不再交给系统浏览器或浏览器文档。
+
+- 权威与保真：`Document`（`lyrel-markdown-editor`）仍是唯一源码、逐行行尾、编码／BOM、revision 与 history 所有者；源码呈现是 `set_plain_source` 的 `EditorState`，不再是 Markdown。未触及的字节、注释与混合 CRLF/LF 在普通保存中保持原样，显式编辑只改目标 range；普通保存、另存为、外部重载、冲突与未保存关闭仍由 owning Host 的既有工作台生命周期负责。
+- 预览：`src/ui/code_editor/svg_document.rs` 持有每文件唯一的 `SvgDocument` 与按分组独立的 `SvgView`。短暂 debounce 后取得同一 Document 的共享快照，在 UI 线程外解析、栅格化；每文件最多一个在途解析，期间修改只保留最新请求。关闭后取消未开始的解析；Document 身份、revision 或请求代次不匹配的结果一律丢弃，失败不会覆盖源码。
+- 安全与预算：复用 `src/ui/code_editor/markdown/images.rs` 的 usvg/resvg 安全选项与纹理租约；两个资源 resolver 均关闭，脚本没有运行时，嵌套 file／network／data image 均被拒绝，远端文档不会读本机同名文件。预览沿用单边 8192 px、1600 万像素的预算；超限或解析失败显示具体错误，修正源码后重新请求。
+- 呈现：默认显示源码；工具栏和状态行提供 Source／Preview 切换，`ToggleDocumentPreview` 保留原 Action。分屏的新分组默认显示另一面，两个分组共享 Document、history 与预览实体，各自保留模式、源码光标和预览取景；预览提供适应窗口、1:1、缩放与方向键平移。
+- 入口：`.svg` 不再命中浏览器打开判定；打开失败或源码无效时仍留在编辑器内，系统关联不再是隐式回退。
+
+**复用记录与边界**：固定复用 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `crates/glim-services/src/svg_preview.rs`（原始 14,001 字节，SHA-256 `ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7`）中的默认视口与绝对单位换算，见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。属性读取适配为 usvg 重导出的 roxmltree；无 viewBox 时明确保留 300×150 默认视口，百分比按该视口换算，避免 usvg 随后按内容包围盒收缩尺寸。只调整光栅目标尺寸，不改原始源码或已解析几何；viewBox 尺寸仍由 usvg 负责。Glim 的流式净化、data-image 重编码、`qlmanage`／`sips`、临时文件与浏览器图像文档均未导入。渲染、纹理租约、保存与关闭所有者全部复用 Lyrel 现有模块。
+
+**证据边界**：工作台接缝回归覆盖源码输入、预览刷新、跨呈现 Undo、普通保存／另存为／外部重载／冲突／未保存关闭、独立重开、恶意脚本／嵌套文件／network／data image、超预算与失效迟到结果；夹具在测试内生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试、编译成功或位图存在代替。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

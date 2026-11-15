@@ -318,7 +318,7 @@ impl EditorBuffers {
                     .map(|(path, result)| match result {
                         Ok(file) => Some(file),
                         Err(error) => {
-                            if !is_markdown_path(&path) {
+                            if !is_markdown_path(&path) && !is_svg_path(&path) {
                                 return None;
                             }
                             let message = match error {
@@ -357,6 +357,8 @@ impl EditorBuffers {
                 file.presentations
                     .markdown_view(source, target.tab, group, window, cx),
             )
+        } else if let (Some(primary), Some(group)) = (file.input.svg(), target.group) {
+            EditorInput::Svg(file.presentations.svg_view(primary, target.tab, group, cx))
         } else {
             file.input.clone()
         };
@@ -542,13 +544,31 @@ impl EditorBuffers {
         };
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
-        let native_markdown = if untitled.is_some() {
+        let native_svg = untitled.is_none() && is_svg_path(&path);
+        let native_markdown = if native_svg {
+            false
+        } else if untitled.is_some() {
             matches!(kind, BufferKind::Markdown)
         } else {
             is_markdown_path(&path)
         };
         let id = BufferId::new();
-        let (input, popups, sub, observe) = if native_markdown {
+        let (input, popups, sub, observe) = if native_svg {
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let preview = cx.new(|cx| SvgDocument::new(document, cx));
+            let presentation =
+                cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx));
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Svg(presentation), None, sub, observe)
+        } else if native_markdown {
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(
                 &document,
@@ -613,12 +633,9 @@ impl EditorBuffers {
             let value = text.read(cx);
             Fingerprint::of_chunks(value.text().len(), value.text().chunks())
         };
-        let saved_representation = input.markdown().map(|view| {
-            view.read(cx)
-                .document()
-                .read(cx)
-                .representation_fingerprint()
-        });
+        let saved_representation = input
+            .source_document(cx)
+            .map(|document| document.read(cx).representation_fingerprint());
         self.files.push(OpenFile {
             id,
             path,
@@ -629,7 +646,7 @@ impl EditorBuffers {
             markdown_resources: None,
             dirty: false,
             saved,
-            format: (!native_markdown).then_some(format),
+            format: (!native_markdown && !native_svg).then_some(format),
             saved_format: format,
             saved_representation,
             config,
@@ -823,8 +840,8 @@ impl EditorBuffers {
         };
         let pending = file
             .input
-            .markdown()
-            .is_some_and(|view| view.read(cx).document().read(cx).has_composition());
+            .source_document(cx)
+            .is_some_and(|document| document.read(cx).has_composition());
         match classify_external_change(
             file.saving,
             file.dirty || pending,
@@ -863,22 +880,21 @@ impl EditorBuffers {
         let expected = target.clone();
         let host = file.host.clone();
         let host_id = host.id();
-        let markdown = file.input.markdown().is_some();
+        // Markdown and SVG decode through the strict source codec so mixed
+        // terminators and declared encodings survive a reload.
+        let source = file.input.source_document(cx);
+        let source_reload = source.is_some();
         let image = file.input.image().cloned();
         let pdf = file.input.pdf().cloned();
+        let input_lease = source.as_ref().map(|document| document.read(cx).revision());
+        let pending_lease = source
+            .as_ref()
+            .map(|document| document.read(cx).has_composition());
         // The document's own claim survives a rename or a probe-only open;
         // reload must not fall back to the extension and lose the format.
         let image_claimed = image
             .as_ref()
             .and_then(|view| view.read(cx).document().read(cx).claimed());
-        let input_lease = file
-            .input
-            .markdown()
-            .map(|view| view.read(cx).document().read(cx).revision());
-        let pending_lease = file
-            .input
-            .markdown()
-            .map(|view| view.read(cx).document().read(cx).has_composition());
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let edit_seq = file.reload_seq;
         file.reload_request = file.reload_request.wrapping_add(1);
@@ -918,7 +934,7 @@ impl EditorBuffers {
                         .map(|(content, mtime)| Reloaded::Pdf(content, mtime));
                 }
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = if markdown {
+                let decoded = if source_reload {
                     lyrel_text::decode_source(&bytes)?
                 } else {
                     lyrel_text::decode(&bytes)
@@ -985,9 +1001,9 @@ impl EditorBuffers {
                 };
                 if file.reload_seq != edit_seq
                     || input_lease.is_some_and(|lease| {
-                        file.input.markdown().is_none_or(|view| {
-                            view.read(cx).document().read(cx).revision() != lease
-                        })
+                        source
+                            .as_ref()
+                            .is_none_or(|document| document.read(cx).revision() != lease)
                     })
                 {
                     file.conflict = Some(DiskConflict::Changed(mtime));
@@ -996,10 +1012,9 @@ impl EditorBuffers {
                 }
                 if pending_lease.is_some_and(|pending| {
                     pending
-                        || file
-                            .input
-                            .markdown()
-                            .is_none_or(|view| view.read(cx).document().read(cx).has_composition())
+                        || source
+                            .as_ref()
+                            .is_none_or(|document| document.read(cx).has_composition())
                 }) {
                     file.conflict = Some(DiskConflict::Changed(mtime));
                     cx.notify();
@@ -1009,8 +1024,7 @@ impl EditorBuffers {
                 file.conflict = None;
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
-                if let Some(source) = input.markdown() {
-                    let document = source.read(cx).document().clone();
+                if let Some(document) = &source {
                     document.update(cx, |document, cx| {
                         document.reload(decoded.text, decoded.format, cx)
                     });
@@ -1321,7 +1335,7 @@ fn read_image(
 }
 
 fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
-    if is_markdown_path(path) {
+    if is_markdown_path(path) || is_svg_path(path) {
         lyrel_text::decode_source(bytes)
     } else {
         Ok(lyrel_text::decode(bytes))

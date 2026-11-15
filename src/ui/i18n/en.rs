@@ -1864,6 +1864,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorPdfFailed => "Couldn’t open PDF",
         L10nKey::EditorPdfTooLarge => "This PDF is larger than the 32 MiB viewing limit",
         L10nKey::EditorPdfRenderFailed => "Couldn’t render this page",
+        L10nKey::EditorSvgPreview => "Preview",
+        L10nKey::EditorSvgShowPreview => "Show preview",
+        L10nKey::EditorSvgShowSource => "Show source",
+        L10nKey::EditorSvgRendering => "Rendering preview",
+        L10nKey::EditorSvgPreviewFailed => "Preview failed",
+        L10nKey::EditorSvgInvalid => "SVG source could not be parsed",
+        L10nKey::EditorSvgLimit => {
+            "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
+        }
         L10nKey::EditorImagePageOf => "Page {page} of {pages}",
         L10nKey::EditorImagePageLoading => "Loading page",
         L10nKey::EditorImagePagePrevious => "Previous page",
