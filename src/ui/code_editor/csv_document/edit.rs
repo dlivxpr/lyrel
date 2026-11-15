@@ -354,10 +354,14 @@ fn escape_tsv(value: &str) -> String {
 }
 
 /// 解析剪贴板里的表格文本：制表符分隔，支持引号包裹的制表符与换行。
-/// 无法解析时退回单格原文，避免把用户复制的内容丢掉。
+/// 引号未闭合时退回单格原文：`csv` reader 在 EOF 处会宽松接受未闭合引号并
+/// 丢掉引号字符，而粘贴是显式用户操作，不能静默改写复制的内容。
 pub(crate) fn parse_clipboard(text: &str) -> Vec<Vec<String>> {
     if text.is_empty() {
         return Vec::new();
+    }
+    if !clipboard_quoting_is_closed(text) {
+        return vec![vec![text.to_owned()]];
     }
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
@@ -379,6 +383,45 @@ pub(crate) fn parse_clipboard(text: &str) -> Vec<Vec<String>> {
         row.resize(width, String::new());
     }
     rows
+}
+
+/// 剪贴板文本里的引号是否都在字段内闭合。只检查字段起始的引号；未闭合时
+/// 调用方保留原文，不让宽松 reader 丢掉引号。
+fn clipboard_quoting_is_closed(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut at_field_start = true;
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\t' | b'\n' | b'\r' => {
+                at_field_start = true;
+                cursor += 1;
+            }
+            b'"' if at_field_start => {
+                cursor += 1;
+                loop {
+                    if cursor >= bytes.len() {
+                        return false;
+                    }
+                    if bytes[cursor] == b'"' {
+                        if cursor + 1 < bytes.len() && bytes[cursor + 1] == b'"' {
+                            cursor += 2;
+                            continue;
+                        }
+                        cursor += 1;
+                        break;
+                    }
+                    cursor += 1;
+                }
+                at_field_start = false;
+            }
+            _ => {
+                at_field_start = false;
+                cursor += 1;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]

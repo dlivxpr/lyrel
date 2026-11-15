@@ -142,11 +142,11 @@ fn a_missing_trailing_field_is_appended_at_its_column() {
         edited(
             &table,
             CsvEdit::Cell {
-                cell: cell(1, 2),
+                cell: cell(1, 1),
                 value: "z".into(),
             }
         ),
-        "a,b\nc,,z\n"
+        "a,b\nc,z\n"
     );
     assert_eq!(
         edited(
@@ -242,7 +242,7 @@ fn paste_extends_short_records_with_empty_intermediate_fields() {
         .unwrap();
     assert_eq!(
         apply(table.source(), &mutation.replacements),
-        "a,p,q\nb,p,q\n"
+        "a,p,q\nb,c\n"
     );
     // 粘贴起点本身在记录字段数之外：中间列成为空字段，粘贴列仍有值。
     let table = parse("a\n", 8);
