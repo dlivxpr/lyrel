@@ -12,6 +12,11 @@
 - #293：TOML 接入共享逐行保真源码与无损结构树。使用正式 registry `toml_edit 0.25.19` 的只读 `Document::parse` 保留 ordinary/inline table、array of tables、dotted/quoted key 与 string/integer/float/boolean/datetime/array 的原字面拼写；不把 TOML 转成 JSON，也不用会被 `despan()` 的 `DocumentMut` 定位原区间。结构树支持真实指针／键盘导航、源码定位与完整值复制，以及改值、重命名键／表／表数组、加键／子表／表数组／entry 和删除；inline table 成员增删保留 inline 形态。删除按每个 header 自己的行、该表直接 key/value 行和显式后代行收集，交错无关表与 AoT entry 不被容器 span 误删；所有命令先校验新片段，写入前再解析结果并按 revision／目标 occurrence 拒绝过期或无效修改，替换清单经共享 `Document::replace_ranges` 成为一条普通 history。保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；1 MiB／20,000 节点／8 MiB 路径预算超限时源码仍可编辑保存。工作台回归入口覆盖映射 Host 与同名诱饵、BOM／混合行尾、表格形式、交错字节、分屏；真实 SSH 保存回读与原生窗口、系统 IME、macOS、性能按显式私有 fixture／最终候选分别执行并记录，不把未执行项当通过。
 - #285：只读 PDF 补齐大纲导航、选字复制与文档内搜索。左栏大纲按层级缩进，点击或 `↑`／`↓`＋Enter 跳转显式坐标、`/Names` name tree 与旧式 `/Dests` 命名目的地（`/Fit` 整页对齐）；页内／旋转页链接热点按归一化矩形命中，外部 `http(s)` URI 交系统打开。`Ctrl`／`Cmd`+`F` 打开查找条，后台单任务逐页提取并计数（结果与文本层均有预算），Enter／Shift+Enter 步进并回绕、当前命中描边；提取失败的页计为“N 页无法读取”，扫描页如实标注“无文本层”而不把空命中当无结果。拖拽按字形几何选中（CJK 不臆造空格、行间换行、连字展开为完整 Unicode），`Ctrl`／`Cmd`+`C` 复制解码后文本；分屏各自持有页／缩放／选区／查找，文档修订变化退休旧文本层与命中，迟到结果不串文档。仍不创建批注、不填表、不修改 PDF，也不做 OCR。
 
+### 修复
+
+- #285：PDF 缩放与适应模式切换按当前页内的归一化阅读位置重投影滚动偏移，关闭查找后选字阅读仍保持同一页；不再出现正文退回第 10 页、页码却停留第 12 页的取景错位。
+- #285：PDF 拖选先确定阅读行，再按横向位置确定末端字形；在一行右下方释放时，不再因 `g` 等字形的下伸部较低而漏掉该行后缀。旋转页仍通过同一页内坐标转换选择与复制。
+
 ## [0.3.4] - 2026-11-13
 
 ### 依赖升级
@@ -21,7 +26,9 @@
 ### 新增
 
 - #287：CSV／TSV 接入共享保真源码和虚拟化只读表格，保留 quoted／多行／不等长逻辑记录、完整字段查看与复制、键盘源码定位，以及每个呈现独立的视图筛选／排序。后台解析和查询按文档修订拒绝迟到结果；源码编辑、编码／BOM、逐行换行、历史与保存沿用现有 Host 文档。表格内修改仍归 #288；原生、真实远端与双平台验收另行记录。
-- #290：JSON／JSONC 结构树加入局部编辑：改标量值、只重命名选中的重复键 occurrence、向 object／array 末尾插入成员、删除成员。命令以 `(path, range, key_range)` 绑定当前投影并要求 revision 仍匹配源码权威，可见行号不是写入身份；新值片段与生成的键先由 `jsonc-parser` 校验，写入前再解析整篇结果。替换清单经共享 `Document` 的 `replace_ranges` 成为一条普通 history，保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；注释、键序、未选中转义和 `1e2`／`-0`／超浮点精度大整数保持原拼写。新增共享 `structure_edit` 单／双字段面板供后续结构格式复用；JSONL 记录编辑仍归 #291，本视图不显示记录修改控件。真实原生窗口、真实 SSH 产品路径、macOS、IME 与性能仍按最终验收记录。
+- #288：CSV／TSV 表格加入真实单元格输入、矩形复制与表格粘贴、行列插入／删除。每个逻辑操作是对共享 `Document` 的一次 revision 校验局部源替换，参与源码与表格共同的 Undo／Redo、dirty、保存、另存为、在途／失败写入、外部冲突与未保存关闭；完成较早的保存不会把更新的编辑标记为已保存。未触及字段的拼写、引号、分隔符、BOM／编码与逐行行尾保持原样，不等长记录不被补齐；排序／筛选仍只改视图，粘贴与行列操作按逻辑记录身份工作，过期解析不写回。生产工作台与 GUI-free 字节回归见 `src/ui/code_editor/csv_document`；原生、真实 SSH、macOS 与系统 IME 仍未验收。
+- #291：JSONL／NDJSON 记录视图加入逐行保真编辑：记录内标量值、重复键 occurrence、object／array 成员可局部修改；整条记录可作为一个单行 JSON 值替换，也可在选中记录后插入新记录或删除该物理行。命令复用 `(path, range, key_range)` 身份和共享 `Document` history，提交前要求已安装投影仍匹配源码 revision；嵌套命令只解析目标记录自己的 token，修改后只复核目标行，邻近无效记录不阻止合法记录编辑。新值必须单行且恰好一个严格 JSON 值；未触及行的 BOM／编码、逐行行尾、空行、exact number 与 escape 原拼写保留，不把文件转成 JSON 数组、不整篇序列化或格式化。记录预算与节点预算对齐为 19,999 条，超限仍保留完整源码编辑与保存。生产工作台回归覆盖映射 Host 同名诱饵、混合有效／无效记录、Unicode、插删后导航、过期命令与迟到解析、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭、独立重开及真实远端路由保存回读；真实原生窗口、系统 IME、macOS 与性能仍按最终验收记录。
+- #290：JSON／JSONC 结构树加入局部编辑：改标量值、只重命名选中的重复键 occurrence、向 object／array 末尾插入成员、删除成员。命令以 `(path, range, key_range)` 绑定当前投影并要求 revision 仍匹配源码权威，可见行号不是写入身份；新值片段与生成的键先由 `jsonc-parser` 校验，写入前再解析整篇结果。替换清单经共享 `Document` 的 `replace_ranges` 成为一条普通 history，保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；注释、键序、未选中转义和 `1e2`／`-0`／超浮点精度大整数保持原拼写。新增共享 `structure_edit` 单／双字段面板供后续结构格式复用；结构树持有键盘时 `Ctrl`／`Cmd`+`Z` 与 `Ctrl`／`Cmd`+`Shift`+`Z`（Windows／Linux 另含 `Ctrl`+`Y`）经同一源码 presentation 的 `EditorState::undo_document`／`redo_document` 撤销／重做，仍停在树上、不切换源码模式，也不另建 history。JSONL／NDJSON 的记录编辑见 #291。真实原生窗口、真实 SSH 产品路径、macOS、IME 与性能仍按最终验收记录。
 - #270：完整单色 Glyph Protocol 正常启用，GUI 对实际支持 `glyph-support` 的 pane endpoint 声明完整绘制能力；daemon 仅为当前 rendering controller 的 `s` 广告 `fmt=glyf`，state-only、observer、脱离及替代 controller 不继承能力声明。保留有界 `q/r/c`、注册／布局／保留态和单一实时回复所有者，不启用颜色格式、全局字体注入、磁盘 glyph cache 或默认关闭实验开关。正式 `omp/18.20.0` 已在隔离真实 PTY／生产消费者中完成 bundle 注册与绘制；该后台证据不替代 Windows 原生像素、WSL／真实 SSH 或最终组合验收。Windows fixture 显式完成 ConPTY 首次 DA1 初始化，真实客户端 harness 分开 shell source 引用与 argv，并禁止向 omp 注入 fixture 命令。
 - #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
 - #267：GUI Glyph 消费路径实现 pinned v1.12 §8.5 布局：pad → size → align，声明 extent（`aw`／`lh`／`ymin`）或未声明时的解码点 bbox 与 `contain` em 上限、五种 size、水平／垂直 align（含 baseline 与 descender）、分数 padding 与退化归零、未扣 padding 的 render span 裁剪；`width=2` 仅扩像素 span，末列、非空或已有邻格自行绘制时回退一列，保持 logical width、光标推进、换行、选择与复制。前景、单元格几何、主字体 baseline、span、注册 revision 与 display scale 每帧参与派生，字体／显示缩放不要求应用重注册。保留普通字体、Powerline／boxdraw、Kitty 与 native 路径；本切片仍不回复 `s`。真实 PTY→daemon→production consumer 与确定性边界结果见本票交付证据；Windows 原生像素／显示缩放、WSL、真实 SSH 与 macOS 未在本票宣称通过。
@@ -40,6 +47,8 @@
 - #296：SQLite 只读浏览补齐筛选、排序与完整值检查。筛选输入按 Glim 250 ms 防抖把单个绑定参数送入既有受限 predicate（`instr(lower(CAST(col AS TEXT)), lower(?1))`，覆盖所有列，不引入自由 SQL）；表头可排序列循环 降序→升序→还原，排序名指向 schema 列索引并随列窗映射，切表清空排序、刷新保留筛选与排序且由 view/epoch/query_rev 三重身份拒绝迟到结果。完整值检查器经同一 `SqliteQuery` 快照与 `sqlite_value` 按精确字节偏移分块读取（每块 ≤1 MiB），INTEGER/REAL 整块精确返回；BLOB 以偏移十六进制转储显示、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 转储并标注原因（不用替换字符冒充原值），NULL 提示无内容不置剪贴板，>8 MiB 值保持可翻页但拒绝部分复制并说明限额；检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。键盘 `secondary-f` 聚焦筛选、`enter` 检查选中单元格、`escape` 关闭检查器，均只在数据库文档持有焦点时生效。新增 Host conformance `sqlite_filters_sorts_and_reads_values_in_bounded_chunks` 由本地与真实 SSH 循环共用；工作台回归覆盖真实输入/表头点击、分块翻页与剪贴板、WAL writer 下打开视图保持快照且 main 文件字节不变、原件不被修改。原生窗口、系统 IME、macOS 与性能不记为已通过。
 
 ### 修复
+
+- #288：CSV／TSV 表格呈现挂接已有文档右键菜单，修复行列操作只有键盘路径、鼠标无法打开菜单的问题；生产工作台回归实际通过菜单插入行并核对局部源码及单步撤销。
 
 - #279：根分发许可证补齐固定 draw.io 引擎、图形资源和 Windows WebView2 SDK 的完整原始许可与声明；沿现有 ZIP／Inno／app／DMG 链分发。Windows MSVC 实际静态链接 SDK loader，移除误加到 CLI／server／所有测试的动态 DLL 暂存依赖；draw.io 预览仍需系统 WebView2 Runtime，缺失时不自动下载安装。
 - #283：SVG 图像自身按固有 CSS 像素与缩放比例设置宽高，不再继承居中视口的填充尺寸；修复 64×64 SVG 在 1:1／100% 时仍被放大铺满的问题。真实工作台回归检查图像 bounds 的 1:1／125%／fit，不只检查比例字段。

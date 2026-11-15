@@ -553,6 +553,30 @@ impl PdfView {
         cx.notify();
     }
 
+    fn rescale(&mut self, previous_width: f32, cx: &mut Context<Self>) {
+        if let Some(&dim) = self.dims.get(self.current) {
+            let offset = self.scroll.offset();
+            let page_fraction = (f32::from(-offset.y)
+                - lyrel_pdf::page_top_y(&self.dims, previous_width, self.current))
+                / lyrel_pdf::display_height(dim, previous_width).max(1.);
+            let width = self.page_width();
+            let viewport = self.viewport.unwrap_or_else(|| self.scroll.bounds().size);
+            let max_y =
+                (lyrel_pdf::content_height(&self.dims, width) - f32::from(viewport.height)).max(0.);
+            let max_x = (width + 2. * PAGE_PAD_X - f32::from(viewport.width)).max(0.);
+            // 保留当前页内的阅读锚点，包括查找定位在页顶之前留下的少量留边。
+            // 旧像素偏移不能直接用于新页宽，否则长文档会退回前面数页。
+            let y = lyrel_pdf::page_top_y(&self.dims, width, self.current)
+                + page_fraction * lyrel_pdf::display_height(dim, width);
+            self.scroll.set_offset(Point {
+                x: px((f32::from(offset.x) * width / previous_width).clamp(-max_x, 0.)),
+                y: px(-y.clamp(0., max_y)),
+            });
+            self.last_scroll_y = f32::from(-self.scroll.offset().y);
+        }
+        self.bump_generation(cx);
+    }
+
     fn set_viewport(&mut self, size: Size<Pixels>, cx: &mut Context<Self>) {
         let changed = self.viewport.is_none_or(|old| {
             f32::from(old.width - size.width).abs() > 0.5
@@ -561,9 +585,10 @@ impl PdfView {
         if !changed {
             return;
         }
+        let previous_width = self.page_width();
         self.viewport = Some(size);
         if self.fit.is_some() {
-            self.bump_generation(cx);
+            self.rescale(previous_width, cx);
         } else {
             cx.notify();
         }
@@ -573,34 +598,37 @@ impl PdfView {
         let current = self.page_width() / lyrel_pdf::PAGE_WIDTH;
         self.fit = None;
         self.zoom = (current * ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX);
-        self.bump_generation(cx);
+        self.rescale(current * lyrel_pdf::PAGE_WIDTH, cx);
     }
 
     pub(crate) fn zoom_out(&mut self, cx: &mut Context<Self>) {
         let current = self.page_width() / lyrel_pdf::PAGE_WIDTH;
         self.fit = None;
         self.zoom = (current / ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX);
-        self.bump_generation(cx);
+        self.rescale(current * lyrel_pdf::PAGE_WIDTH, cx);
     }
 
     pub(crate) fn fit_width(&mut self, cx: &mut Context<Self>) {
         if self.fit != Some(Fit::Width) {
+            let previous_width = self.page_width();
             self.fit = Some(Fit::Width);
-            self.bump_generation(cx);
+            self.rescale(previous_width, cx);
         }
     }
 
     pub(crate) fn fit_page(&mut self, cx: &mut Context<Self>) {
         if self.fit != Some(Fit::Page) {
+            let previous_width = self.page_width();
             self.fit = Some(Fit::Page);
-            self.bump_generation(cx);
+            self.rescale(previous_width, cx);
         }
     }
 
     pub(crate) fn actual_size(&mut self, cx: &mut Context<Self>) {
+        let previous_width = self.page_width();
         self.fit = None;
         self.zoom = 1.;
-        self.bump_generation(cx);
+        self.rescale(previous_width, cx);
     }
 
     fn go_to_page(&mut self, index: usize, cx: &mut Context<Self>) {
