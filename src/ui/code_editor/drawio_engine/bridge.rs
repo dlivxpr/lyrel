@@ -43,6 +43,24 @@ pub(crate) enum BridgeEvent {
         text: String,
         cut: bool,
     },
+    /// The page confirmed that the sync command with this native sequence was
+    /// serialized and its POST was accepted. The bytes travel through the
+    /// same commit sink; this acknowledgement binds a deferred save to the
+    /// request it actually sent rather than to any later document revision.
+    SyncConfirmed {
+        request: u64,
+    },
+    /// That sync POST was refused (HTTP or network). Only this request fails;
+    /// the session and the in-memory canvas stay alive.
+    SyncRejected {
+        request: u64,
+        reason: String,
+    },
+    /// An ordinary edit commit was refused. The canvas keeps its model, which
+    /// is now unsaved; the session is not retired.
+    CommitRejected {
+        reason: String,
+    },
     Failed {
         message: String,
     },
@@ -99,6 +117,11 @@ pub(crate) struct LiveSession {
     failed: bool,
     last_inbound: u64,
     last_outbound: u64,
+    /// The outbound command sequence of the newest `sync` request this
+    /// session sent and has not answered yet. A page acknowledgement or
+    /// failure must name exactly this request; an older sync can never
+    /// confirm a newer save.
+    pending_sync: Option<u64>,
     /// The newest engine commit sequence accepted on this session, so a
     /// POST that arrives after a later state can never roll bytes back.
     last_commit: u64,
@@ -135,6 +158,7 @@ impl LiveSession {
             failed: false,
             last_inbound: 0,
             last_outbound: 0,
+            pending_sync: None,
             last_commit: 0,
             pages: 0,
             page: 0,
@@ -315,6 +339,59 @@ impl LiveSession {
                 }
                 BridgeEvent::Paste
             }
+            "sync-done" => {
+                if !self.ready {
+                    return Err(Reject("sync-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("sync-after-failure"));
+                }
+                let request = payload
+                    .get("request")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or(Reject("sync-request"))?;
+                if self.pending_sync != Some(request) {
+                    return Err(Reject("sync-request"));
+                }
+                self.pending_sync = None;
+                BridgeEvent::SyncConfirmed { request }
+            }
+            "commit-failed" => {
+                if !self.ready {
+                    return Err(Reject("commit-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("commit-after-failure"));
+                }
+                let sync = payload
+                    .get("sync")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let status = payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let reason = rejection_reason(
+                    status,
+                    payload
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+                if sync {
+                    let request = payload
+                        .get("request")
+                        .and_then(serde_json::Value::as_u64)
+                        .ok_or(Reject("sync-request"))?;
+                    if self.pending_sync != Some(request) {
+                        return Err(Reject("sync-request"));
+                    }
+                    self.pending_sync = None;
+                    BridgeEvent::SyncRejected { request, reason }
+                } else {
+                    BridgeEvent::CommitRejected { reason }
+                }
+            }
             "clipboard" => {
                 if !self.ready {
                     return Err(Reject("clipboard-before-ready"));
@@ -392,6 +469,9 @@ impl LiveSession {
             _ => None,
         };
         self.last_outbound += 1;
+        if matches!(command, Command::Sync) {
+            self.pending_sync = Some(self.last_outbound);
+        }
         let mut message = serde_json::json!({
             "v": PROTOCOL_VERSION,
             "session": self.document.id.hex(),
@@ -413,6 +493,13 @@ impl LiveSession {
         Some(message.to_string())
     }
 
+    /// The sequence of the last command actually delivered to the page. A
+    /// surface that queues a sync returns it so the workbench can wait for
+    /// this exact acknowledgement.
+    pub(crate) fn outbound_seq(&self) -> u64 {
+        self.last_outbound
+    }
+
     #[cfg(test)]
     pub(crate) fn last_outbound(&self) -> u64 {
         self.last_outbound
@@ -427,6 +514,19 @@ fn sanitize_failure(message: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+/// A bounded, user-visible reason for a refused page request. The page may
+/// name a status; free text is sanitized and capped like every other failure.
+fn rejection_reason(status: u64, message: &str) -> String {
+    let message = sanitize_failure(message);
+    if !message.is_empty() {
+        return message;
+    }
+    match status {
+        1..=599 => format!("HTTP {status}"),
+        _ => "the diagram request failed".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -662,5 +762,102 @@ mod tests {
                 .contains("\"cmd\":\"fit\"")
         );
         assert_eq!(session.last_outbound(), 2);
+    }
+
+    #[test]
+    fn sync_acknowledgement_and_commit_failures_are_bound_to_their_request() {
+        let mut session = session();
+        ready(&mut session);
+        let command = session.command(&Command::Sync).expect("sync is sent");
+        assert!(command.contains("\"cmd\":\"sync\""));
+        let request = session.outbound_seq();
+        // Any other request number — a previous save included — is refused,
+        // and a refused message does not consume the inbound sequence.
+        for wrong in [request.saturating_sub(1), request + 1] {
+            assert_eq!(
+                session.accept(
+                    SHELL_URL,
+                    &wire(
+                        &session,
+                        2,
+                        "sync-done",
+                        serde_json::json!({"request": wrong})
+                    ),
+                ),
+                Err(Reject("sync-request"))
+            );
+        }
+        assert_eq!(
+            session.accept(
+                SHELL_URL,
+                &wire(
+                    &session,
+                    2,
+                    "sync-done",
+                    serde_json::json!({"request": request})
+                ),
+            ),
+            Ok(BridgeEvent::SyncConfirmed { request })
+        );
+        // Once answered, the same request cannot confirm another save.
+        assert_eq!(
+            session.accept(
+                SHELL_URL,
+                &wire(
+                    &session,
+                    3,
+                    "sync-done",
+                    serde_json::json!({"request": request})
+                ),
+            ),
+            Err(Reject("sync-request"))
+        );
+
+        // A refused sync and a refused ordinary commit name their reason and
+        // leave the session booted: neither retires the canvas.
+        session.command(&Command::Sync).expect("second sync");
+        let request = session.outbound_seq();
+        assert_eq!(
+            session.accept(
+                SHELL_URL,
+                &wire(
+                    &session,
+                    3,
+                    "commit-failed",
+                    serde_json::json!({"sync": true, "request": request, "status": 413})
+                ),
+            ),
+            Ok(BridgeEvent::SyncRejected {
+                request,
+                reason: "HTTP 413".into()
+            })
+        );
+        assert_eq!(
+            session.accept(
+                SHELL_URL,
+                &wire(
+                    &session,
+                    4,
+                    "commit-failed",
+                    serde_json::json!({"sync": false, "status": 0,
+                        "message": "the diagram request failed"})
+                ),
+            ),
+            Ok(BridgeEvent::CommitRejected {
+                reason: "the diagram request failed".into()
+            })
+        );
+        assert!(matches!(
+            session.accept(
+                SHELL_URL,
+                &wire(
+                    &session,
+                    5,
+                    "state",
+                    serde_json::json!({"page":0,"pages":1,"zoom":1})
+                ),
+            ),
+            Ok(BridgeEvent::State { .. })
+        ));
     }
 }

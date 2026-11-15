@@ -572,10 +572,21 @@ fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
     settle(&mut cx);
     app.read_with(&cx, |app, cx| {
         let file = app.editor.buffers.get(id).expect("still installed");
-        assert!(!file.dirty, "a refused commit changes nothing");
+        assert!(
+            file.dirty,
+            "the canvas holds a refused edit, so the document is unsaved"
+        );
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.edit_revision(), 0);
         assert_eq!(document.bytes().as_deref(), Some(original.as_slice()));
+        let reason = view_of(file)
+            .read(cx)
+            .unconfirmed_reason()
+            .expect("the refusal is visible");
+        assert!(
+            reason.contains("engine commit was refused"),
+            "got {reason:?}"
+        );
     });
 }
 
@@ -610,6 +621,8 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_file(id, false, window, cx);
     });
+    settle(&mut cx);
+    confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |_cx| {
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
     });
@@ -675,11 +688,10 @@ fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext)
     });
 }
 
-/// A byte-identical commit — the save-time sync flush — still advances the
-/// committed generation the deferred save waits on, without touching dirty
-/// state or pushing a history entry.
+/// A byte-identical commit — the save-time sync flush — does not touch dirty
+/// state or push a history entry; it is not an edit.
 #[gpui_kit::test]
-fn an_identical_commit_confirms_a_flush_without_an_edit(tcx: &mut TestAppContext) {
+fn an_identical_commit_is_not_an_edit(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = uncompressed(1);
@@ -703,13 +715,29 @@ fn an_identical_commit_confirms_a_flush_without_an_edit(tcx: &mut TestAppContext
         assert!(!file.dirty, "an identical sync is not an edit");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.edit_revision(), 0, "no content revision");
-        assert_eq!(document.committed(), 1, "the flush was confirmed");
         assert!(!document.can_undo());
     });
 }
 
 fn view_of(file: &OpenFile) -> &Entity<DrawioView> {
     file.input.drawio().expect("a draw.io document")
+}
+
+/// Answers the sync request a save just armed, then runs the frame sweep so
+/// the deferred write can re-enter. `None` means this save had no live
+/// surface to wait for and writes the document bytes directly. The test's
+/// `SyncConfirmed` is the same event the native hosts deliver after the
+/// page's own POST is accepted.
+fn confirm_pending_sync(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) -> Option<u64> {
+    let diagram = view(app, cx);
+    let request = diagram.read_with(cx, |view, _| view.pending_sync_token());
+    if let Some(request) = request {
+        let _ = diagram.update_in(cx, |view, _window, cx| {
+            view.on_surface_event(SurfaceEvent::SyncConfirmed { request }, cx);
+        });
+    }
+    app.update_in(cx, |app, window, cx| app.editor_sync(window, cx));
+    request
 }
 
 /// A remote diagram's committed bytes save back through the owning mapped
@@ -750,6 +778,8 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_file(id, false, window, cx);
     });
+    settle(&mut cx);
+    confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |_cx| {
         std::fs::read(remote_dir.join("remote.drawio"))
             .unwrap()
@@ -796,6 +826,8 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
     // The frame sweep owns the request: run it explicitly, then wait for the
     // Host write itself rather than for a dirty bit that may already be gone.
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    settle(&mut cx);
+    confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |_cx| {
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
     });
@@ -945,6 +977,9 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
             .into_bytes()
             .as_slice(),
     );
+    let request = views[0]
+        .read_with(&cx, |view, _| view.pending_sync_token())
+        .expect("the primary requested a sync");
     let _ = views[0].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -952,6 +987,14 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
             },
             cx,
         );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    assert!(
+        !target.exists(),
+        "a commit without this sync's own acknowledgement is not the save's confirmation"
+    );
+    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::SyncConfirmed { request }, cx);
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     until(&mut cx, |_cx| {
@@ -981,6 +1024,236 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
         let file = app.editor.buffers.get(id).expect("still installed");
         assert!(!file.dirty, "the confirmed model is on disk");
         assert_eq!(file.path.as_path(), target.as_path());
+    });
+}
+
+/// A save waits for every live presentation's own sync request: an ordinary
+/// commit, a sibling's confirmation, and a foreign token cannot release it.
+#[gpui_kit::test]
+fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "barrier.drawio", &original);
+    let target = dir.path().join("barrier-target.drawio");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the diagram splits");
+    });
+    settle(&mut cx);
+    let views = app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("diagram");
+        let mut views = vec![view_of(file).clone()];
+        for (_, _, view) in file.presentations.drawios() {
+            if !views.contains(&view) {
+                views.push(view);
+            }
+        }
+        views
+    });
+    assert_eq!(views.len(), 2, "two live presentations");
+    for view in &views {
+        let _ = view.update_in(&mut cx, |view, _window, cx| {
+            view.on_surface_event(SurfaceEvent::Ready, cx);
+            view.attach_test_surface(cx);
+        });
+    }
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_as_active(window, cx);
+    });
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
+    settle(&mut cx);
+    // Both engines were asked; each ticket names its own request.
+    let requests: Vec<u64> = views
+        .iter()
+        .map(|view| {
+            view.read_with(&cx, |view, _| view.pending_sync_token())
+                .expect("each presentation requested a sync")
+        })
+        .collect();
+    let (primary_request, sibling_request) = (requests[0], requests[1]);
+    // Each presentation numbers its own session from zero, so both tokens may
+    // be equal; what separates them is the view that owns the request.
+    let _ = views[1].update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: Arc::from(original.as_slice()),
+            },
+            cx,
+        );
+        view.on_surface_event(
+            SurfaceEvent::SyncConfirmed {
+                request: sibling_request,
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    assert!(
+        !target.exists(),
+        "the sibling's own confirmation does not release the primary's request"
+    );
+    // A request number this view never sent and an ordinary commit are not
+    // confirmations.
+    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::SyncConfirmed {
+                request: primary_request + 1,
+            },
+            cx,
+        );
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: Arc::from(original.as_slice()),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    assert!(
+        !target.exists(),
+        "only the primary's own request releases it"
+    );
+    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::SyncConfirmed {
+                request: primary_request,
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    until(&mut cx, |_cx| {
+        std::fs::read(&target).is_ok_and(|bytes| bytes.as_slice() == original.as_slice())
+    });
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "the confirmed model is on disk");
+    });
+}
+
+/// A refused canvas commit is unsaved work with a visible reason: it prompts
+/// before closing, and a save retries the engine instead of writing the older
+/// document bytes.
+#[gpui_kit::test]
+fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "refused.drawio", &original);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.attach_test_surface(cx);
+        view.on_surface_event(
+            SurfaceEvent::CommitRejected {
+                reason: "HTTP 413".into(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(
+            file.dirty,
+            "the document bytes are clean, but the canvas holds a refused edit"
+        );
+    });
+    cx.update(|window, _| {
+        let note = window.find("drawio-unconfirmed");
+        assert!(note.visible(), "the refusal is visible on the canvas");
+        assert_eq!(note.value(), Some("HTTP 413"));
+    });
+
+    // A clean close would drop the only copy: it prompts and Cancel keeps the
+    // tab and its draft.
+    let tab = app.read_with(&cx, |app, _| app.tabs[app.tabs.active_index()].id());
+    cx.dispatch_action(CloseActiveTab);
+    settle(&mut cx);
+    assert!(
+        cx.has_pending_prompt(),
+        "an unsaved canvas asks before closing"
+    );
+    cx.simulate_prompt_answer(t(L10nKey::Cancel));
+    settle(&mut cx);
+    app.read_with(&cx, |app, _| {
+        assert!(
+            app.tabs.iter().any(|entry| entry.id() == tab),
+            "cancelling keeps the tab"
+        );
+    });
+
+    // Saving retries the engine. Its refusal fails this exact request and
+    // leaves the file's last good bytes alone.
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    settle(&mut cx);
+    let request = view(&app, &cx)
+        .read_with(&cx, |view, _| view.pending_sync_token())
+        .expect("the save asked the canvas for its model");
+    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::SyncRejected {
+                request,
+                reason: "HTTP 413".into(),
+            },
+            cx,
+        );
+    });
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(file.drawio_flush.is_none(), "the refusal settles the save");
+        assert!(file.dirty, "the refused model is still unsaved");
+    });
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "a refused save never writes older document bytes"
+    );
+    until(&mut cx, |cx| {
+        cx.update(|window, _| {
+            window
+                .try_find("notification")
+                .is_some_and(|notification| notification.visible())
+        })
+    });
+    cx.update(|window, _| {
+        assert!(
+            window.try_find("notification").is_some_and(|n| n.visible()),
+            "the save failure is visible"
+        );
+    });
+
+    // Fixing the canvas (here: undoing back to the saved model) clears the
+    // warning and the unsaved state without a reload or a second authority.
+    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: Arc::from(original.as_slice()),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "the fixed canvas matches the saved bytes");
+    });
+    cx.update(|window, _| {
+        assert!(
+            window.try_find("drawio-unconfirmed").is_none(),
+            "the visible warning clears with the accepted model"
+        );
     });
 }
 
@@ -1103,17 +1376,8 @@ fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppCont
     });
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     settle(&mut cx);
-    // The engine answers the flush the save-as asked for.
-    let view = view(&app, &cx);
-    let _ = view.update_in(&mut cx, |view, _window, cx| {
-        view.on_surface_event(
-            SurfaceEvent::Commit {
-                bytes: committed.clone(),
-            },
-            cx,
-        );
-    });
-    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    // The engine answers the exact flush the save-as asked for.
+    confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |_cx| {
         std::fs::read(&target).is_ok_and(|bytes| bytes.as_slice() == committed.as_ref())
     });
@@ -1205,6 +1469,8 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_file(id, false, window, cx);
     });
+    settle(&mut cx);
+    confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| !app.editor.buffers.get(id).unwrap().dirty)
     });

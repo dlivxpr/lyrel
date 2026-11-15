@@ -26,8 +26,9 @@ use hayro::kurbo::Point;
 use crate::{NormRect, decode_pdf_string};
 
 /// What kind of input a form field takes. Pushbuttons are not represented.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FieldKind {
+    #[default]
     Text,
     Checkbox,
     Radio,
@@ -45,7 +46,8 @@ pub enum FieldAlignment {
 }
 
 /// One form widget described for read-only display.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct FormField {
     /// Fully-qualified field name (`/T` up the `/Parent` chain, dot-joined).
     pub name: String,
@@ -69,6 +71,18 @@ pub struct FormField {
 }
 
 impl FormField {
+    /// A widget with its required identity and an empty value; callers add
+    /// presentation fields as the document describes them.
+    pub fn new(name: String, kind: FieldKind, page: usize, rect: NormRect) -> Self {
+        Self {
+            name,
+            kind,
+            page,
+            rect,
+            ..Self::default()
+        }
+    }
+
     /// A text/choice value with no appearance stream needs the workbench's
     /// read-only overlay. Checkboxes/radios/annotations are left alone: their
     /// native appearances (or blank Off state) are already correct.

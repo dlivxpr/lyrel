@@ -844,7 +844,43 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
     });
     let text = source_text(&app, &cx);
     let at = text.find("\"one\"").expect("fixture value");
-    type_source(&app, &mut cx, at..at + "\"one\"".len(), "\"source\"");
+    // An equal-length edit keeps the target's path and token range identical,
+    // so the pending panel must be refused by its opening revision alone.
+    type_source(&app, &mut cx, at..at + "\"one\"".len(), "\"two\"");
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(
+        panel_error(&other, &mut cx).as_deref(),
+        Some(
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        )
+    );
+    apply_panel(&other, &mut cx);
+    assert_eq!(
+        source_text(&app, &cx),
+        "value: \"two\"\nother: true\n",
+        "the stale panel must not overwrite the newer equal-length value"
+    );
+    assert!(
+        panel_open(&other, &mut cx),
+        "a stale command stays open for a decision"
+    );
+    cancel_panel(&other, &mut cx);
+
+    // A length-changing edit no longer matches the target's range; the stale
+    // command still cannot write.
+    click_row(&other, &mut cx, "$[\"value\"]");
+    click_button(&other, &mut cx, "yaml-edit-value");
+    assert!(panel_open(&other, &mut cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    let text = source_text(&app, &cx);
+    let at = text.find("\"two\"").expect("edited value");
+    type_source(&app, &mut cx, at..at + "\"two\"".len(), "\"source\"");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),

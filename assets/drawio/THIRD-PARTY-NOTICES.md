@@ -1,7 +1,7 @@
 # draw.io viewer engine — third-party notices
 
-Lyrel distributes one fixed draw.io viewer bundle for the read-only diagram
-preview:
+Lyrel distributes one fixed draw.io viewer bundle for the workbench's local
+diagram preview and editing:
 
 - `viewer-static.min.js` — the official `jgraph/drawio` v32.6.10 release build
   named `js/viewer-static.min.js` in `draw.war`.
@@ -89,8 +89,11 @@ The embedding layer is Lyrel-owned (`shell.html`, `shell.js`, `engine.html`,
 - treats `extensions.min.js`, plugins, cloud services, remote export and
   on-demand external libraries as unavailable rather than silently dropping
   diagram content;
-- renders read-only: no save, merge, patch, upload or remote-export path is
-  forwarded by the native bridge.
+- renders and edits locally: the engine's current model returns only as a
+  serialized mxfile through this session's own sequence-gated commit/sync
+  POST, and the workbench writes the file only for Save or Save As through the
+  owning Host. No merge, patch, upload, remote-export, cloud or arbitrary-path
+  request is forwarded by the native bridge.
 
 DOMPurify 3.4.17 is the fixed sanitizer contained in this release; the older
 v30 audit findings do not apply to this bundle. The preview also runs inside a

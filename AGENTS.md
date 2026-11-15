@@ -57,7 +57,7 @@ flowchart LR
 
 Windows：表中的 `cargo build`／`cargo test` 改用 `pwsh scripts/cargo-windows.ps1 build`／`pwsh scripts/cargo-windows.ps1 test`，其余参数不变；脚本从 Cargo JSON 的实际 executable 路径暂存固定 ConPTY，不依赖 Cargo 1.100 已改变的 `deps/`／`OUT_DIR` 布局。`cargo dev`／`cargo run` 前先完成同配置的 wrapper build。准备目录与独立产物契约见 `assets/windows/conpty/README.md`。
 
-Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 下的 `native_markdown` 与 `native_terminal` 两个真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
+Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text`、`lyrel-epub` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 下的 `native_markdown` 与 `native_terminal` 两个真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
 
 Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`。`.gitattributes` 已为 `.sh` 固定 LF；先排除行尾问题，不通过扩大 allowlist 掩盖。
 

@@ -74,9 +74,8 @@ enum DrawioContent {
 /// every presentation that served an older revision reloads its engine.
 /// `edit` counts content-changing commits on top of the current bytes; a
 /// sibling's commit bumps it so every stale surface reloads to the newer
-/// document instead of overwriting it. `committed` counts every accepted
-/// engine commit including byte-identical sync flushes, so a deferred save
-/// can wait for a confirmed revision.
+/// document instead of overwriting it. A deferred save waits on the sync
+/// request it actually sent, not on a shared revision counter.
 ///
 /// Undo and redo are document state, not engine state: every presentation
 /// shares this one history, so an edit made in one split is undone through
@@ -87,7 +86,6 @@ pub(crate) struct DrawioDocument {
     reloading: bool,
     revision: u64,
     edit: u64,
-    committed: u64,
     fingerprint: super::Fingerprint,
     past: std::collections::VecDeque<DrawioContent>,
     future: Vec<DrawioContent>,
@@ -114,7 +112,6 @@ impl DrawioDocument {
             reloading: false,
             revision: 0,
             edit: 0,
-            committed: 0,
             fingerprint,
             past: Default::default(),
             future: Vec::new(),
@@ -130,7 +127,6 @@ impl DrawioDocument {
     ) {
         self.revision = self.revision.wrapping_add(1);
         self.edit = self.edit.wrapping_add(1);
-        self.committed = self.committed.wrapping_add(1);
         self.fingerprint = fingerprint(&bytes);
         self.content = match parsed {
             Ok(source) => DrawioContent::Ready { bytes, source },
@@ -148,10 +144,10 @@ impl DrawioDocument {
     /// The bytes one live engine just committed become the document. A body
     /// that no longer parses is refused — the last good bytes stay the
     /// authority rather than being overwritten by a truncated serialization.
-    /// A byte-identical commit (a save sync flush) advances `committed` but
-    /// leaves content, history and dirty state untouched. The revision does
-    /// not move, so the committing presentation keeps its engine session
-    /// while every sibling reloads to the newer bytes.
+    /// A byte-identical commit (a save sync flush) leaves content, history
+    /// and dirty state untouched. The revision does not move, so the
+    /// committing presentation keeps its engine session while every sibling
+    /// reloads to the newer bytes.
     pub(crate) fn commit(
         &mut self,
         bytes: Arc<[u8]>,
@@ -162,14 +158,12 @@ impl DrawioDocument {
         }
         let fingerprint = fingerprint(&bytes);
         if fingerprint == self.fingerprint {
-            self.committed = self.committed.wrapping_add(1);
             cx.notify();
             return Ok(());
         }
         let source = super::drawio_engine::parse(&bytes)?;
         self.push_past();
         self.edit = self.edit.wrapping_add(1);
-        self.committed = self.committed.wrapping_add(1);
         self.fingerprint = fingerprint;
         self.content = DrawioContent::Ready { bytes, source };
         cx.notify();
@@ -266,13 +260,6 @@ impl DrawioDocument {
         self.edit
     }
 
-    /// Every accepted engine commit, including byte-identical sync flushes.
-    /// A deferred save waits on this advancing, not on `edit`, so an
-    /// unchanged model still confirms its flush.
-    pub(crate) fn committed(&self) -> u64 {
-        self.committed
-    }
-
     /// A cheap digest of the authoritative bytes, recomputed once per
     /// accepted revision so the dirty comparison stays a comparison — undo
     /// back to the saved bytes reads clean again.
@@ -325,6 +312,20 @@ enum EngineStatus {
     Unsupported(SharedString),
 }
 
+/// How a deferred save's sync request stands on one live presentation.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SyncResolution {
+    /// The page has not answered this exact request yet.
+    Pending,
+    /// The request was answered and its bytes are the newest document.
+    Confirmed,
+    /// The request failed; the reason is visible and the save must not write.
+    Rejected(SharedString),
+    /// The session that would answer was replaced, so it no longer owns a
+    /// newer model. The save is not waiting on it.
+    Retired,
+}
+
 pub(crate) struct DrawioView {
     document: Entity<DrawioDocument>,
     focus: FocusHandle,
@@ -351,6 +352,16 @@ pub(crate) struct DrawioView {
     /// editor's frame sweep drains it into the same Host save path as a
     /// toolbar save.
     save_requested: bool,
+    /// The native command sequence of the sync this view last queued. A
+    /// deferred save waits for this exact request, not for any later commit.
+    sync_pending: Option<u64>,
+    /// The answer to the newest sync request: `Ok` after the page confirmed
+    /// its POST, `Err` with the visible reason when it was refused.
+    sync_result: Option<(u64, Result<(), SharedString>)>,
+    /// The canvas holds a model the document has not accepted (an HTTP,
+    /// parse or size refusal). It is unsaved work until a commit succeeds,
+    /// and a deferred save must not write the older bytes underneath it.
+    unconfirmed: Option<SharedString>,
     _document_observed: Subscription,
 }
 
@@ -391,6 +402,9 @@ impl DrawioView {
             revision,
             edit,
             save_requested: false,
+            sync_pending: None,
+            sync_result: None,
+            unconfirmed: None,
             _document_observed: observed,
         }
     }
@@ -540,14 +554,55 @@ impl DrawioView {
     }
 
     /// Asks the live engine to serialize and commit its current model, so
-    /// the deferred save captures what is actually on the canvas. False
-    /// means no live session can answer, so the caller saves the committed
-    /// bytes directly.
-    pub(crate) fn flush(&mut self) -> bool {
-        let Some(surface) = &mut self.surface else {
-            return false;
+    /// the deferred save captures what is actually on the canvas. The
+    /// returned request is this sync command's native sequence: the save
+    /// waits for that exact answer, so a previous save's commit cannot
+    /// release it. `None` means no live session accepted the request, so the
+    /// caller saves the committed bytes directly.
+    pub(crate) fn flush(&mut self) -> Option<u64> {
+        let request = {
+            let surface = self.surface.as_mut()?;
+            match surface.command(Command::Sync) {
+                Ok(Some(request)) => request,
+                _ => return None,
+            }
         };
-        matches!(surface.command(Command::Sync), Ok(true))
+        self.sync_pending = Some(request);
+        self.sync_result = None;
+        Some(request)
+    }
+
+    /// How a deferred save's request stands on this presentation. A retired
+    /// request (the session was replaced) needs no answer: that engine no
+    /// longer owns a newer model, or its unconfirmed canvas is checked below.
+    pub(crate) fn sync_resolution(&self, request: u64) -> SyncResolution {
+        if let Some((answered, result)) = &self.sync_result
+            && *answered == request
+        {
+            return match result {
+                Ok(()) if self.unconfirmed.is_none() => SyncResolution::Confirmed,
+                Ok(()) => SyncResolution::Rejected(
+                    self.unconfirmed
+                        .clone()
+                        .unwrap_or_else(|| SharedString::from("the engine commit was refused")),
+                ),
+                Err(reason) => SyncResolution::Rejected(reason.clone()),
+            };
+        }
+        match self.sync_pending {
+            Some(pending) if pending == request => SyncResolution::Pending,
+            _ => SyncResolution::Retired,
+        }
+    }
+
+    /// Whether the canvas holds a change the document has not accepted.
+    pub(crate) fn has_unconfirmed_changes(&self) -> bool {
+        self.unconfirmed.is_some()
+    }
+
+    /// The visible reason a save or close must stop on.
+    pub(crate) fn unconfirmed_reason(&self) -> Option<SharedString> {
+        self.unconfirmed.clone()
     }
 
     /// Test-only live surface: the production `flush`, clipboard and page
@@ -566,6 +621,11 @@ impl DrawioView {
             .as_ref()
             .map(SurfaceHost::test_commands)
             .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_sync_token(&self) -> Option<u64> {
+        self.sync_pending
     }
 
     /// Drained by the editor's frame sweep: the engine asked for the Host's
@@ -619,6 +679,15 @@ impl DrawioView {
         } else {
             self.page.min(count - 1)
         };
+        if self.unconfirmed.is_some() && self.surface.is_some() {
+            // The engine is the only copy of a model the document refused.
+            // A sibling's commit replaces the document bytes; reloading this
+            // canvas over them would erase the draft and hide the failure.
+            // Keep the live session and its visible warning until its own
+            // sync commits or the user closes the tab.
+            cx.notify();
+            return;
+        }
         // A new document is a new session. The old WebView token and URL must
         // not survive a reload.
         self.surface = None;
@@ -627,6 +696,9 @@ impl DrawioView {
         self.surface_attempted = false;
         self.surface_visible = false;
         self.blocked = None;
+        self.sync_pending = None;
+        self.sync_result = None;
+        self.unconfirmed = None;
         self.engine = EngineStatus::Idle;
         self.zoom = 1.;
         self.bounds = None;
@@ -802,13 +874,40 @@ impl DrawioView {
                         let document = self.document.read(cx);
                         self.revision = document.revision();
                         self.edit = document.edit_revision();
+                        // The whole canvas model is now the document; any
+                        // earlier refusal no longer leaves newer work behind.
+                        self.unconfirmed = None;
                     }
                     Err(error) => {
-                        self.blocked = Some(SharedString::from(format!(
+                        // The canvas keeps the model the document refused.
+                        // That draft is unsaved work and must stay visible:
+                        // a clean close would drop the only copy.
+                        self.unconfirmed = Some(SharedString::from(format!(
                             "engine commit was refused: {error}"
                         )));
                     }
                 }
+            }
+            SurfaceEvent::SyncConfirmed { request } => {
+                // Only the outstanding request can be answered; the session
+                // already refused any other sequence.
+                if self.sync_pending == Some(request) {
+                    self.sync_pending = None;
+                    self.sync_result = Some((request, Ok(())));
+                }
+            }
+            SurfaceEvent::SyncRejected { request, reason } => {
+                if self.sync_pending == Some(request) {
+                    self.sync_pending = None;
+                    let reason = SharedString::from(reason);
+                    self.sync_result = Some((request, Err(reason.clone())));
+                    self.unconfirmed = Some(reason);
+                }
+            }
+            SurfaceEvent::CommitRejected { reason } => {
+                // An ordinary edit was refused over HTTP or by the network.
+                // The session and canvas stay; the model is unsaved.
+                self.unconfirmed = Some(SharedString::from(reason));
             }
             SurfaceEvent::Save => {
                 // The engine's own Ctrl+S: flush its live model into the
@@ -858,6 +957,9 @@ impl DrawioView {
         self.surface_attempted = false;
         self.surface_visible = false;
         self.blocked = None;
+        self.sync_pending = None;
+        self.sync_result = None;
+        self.unconfirmed = None;
         self.engine = EngineStatus::Idle;
         self.last_paint = Instant::now();
         cx.notify();
@@ -1016,6 +1118,7 @@ impl Render for DrawioView {
         let reloading = self.document.read(cx).reloading();
         let engine = self.engine.clone();
         let blocked = self.blocked.clone();
+        let unconfirmed = self.unconfirmed.clone();
         let zoom = self.zoom_label();
         let surface_started = self.surface.is_some();
 
@@ -1135,29 +1238,55 @@ impl Render for DrawioView {
                     } else {
                         None
                     };
-                    let blocked_note = blocked.map(|reason| {
-                        v_flex()
-                            .absolute()
-                            .left_2()
-                            .right_2()
-                            .bottom_2()
-                            .px_2()
-                            .py_1()
-                            .border_1()
-                            .border_color(warning)
-                            .child(
-                                div()
-                                    .id("drawio-blocked")
-                                    .test_support()
-                                    .text_xs()
-                                    .text_color(foreground)
-                                    .child(t_fmt(
-                                        L10nKey::EditorDrawioBlocked,
-                                        &[("what", reason.as_ref())],
-                                    )),
-                            )
-                            .into_any_element()
-                    });
+                    let blocked_note = match unconfirmed {
+                        Some(reason) => Some(
+                            v_flex()
+                                .absolute()
+                                .left_2()
+                                .right_2()
+                                .bottom_2()
+                                .px_2()
+                                .py_1()
+                                .border_1()
+                                .border_color(warning)
+                                .child(
+                                    div()
+                                        .id("drawio-unconfirmed")
+                                        .test_support()
+                                        .aria_value(reason.clone())
+                                        .text_xs()
+                                        .text_color(foreground)
+                                        .child(t_fmt(
+                                            L10nKey::EditorDrawioUnconfirmed,
+                                            &[("reason", reason.as_ref())],
+                                        )),
+                                )
+                                .into_any_element(),
+                        ),
+                        None => blocked.map(|reason| {
+                            v_flex()
+                                .absolute()
+                                .left_2()
+                                .right_2()
+                                .bottom_2()
+                                .px_2()
+                                .py_1()
+                                .border_1()
+                                .border_color(warning)
+                                .child(
+                                    div()
+                                        .id("drawio-blocked")
+                                        .test_support()
+                                        .text_xs()
+                                        .text_color(foreground)
+                                        .child(t_fmt(
+                                            L10nKey::EditorDrawioBlocked,
+                                            &[("what", reason.as_ref())],
+                                        )),
+                                )
+                                .into_any_element()
+                        }),
+                    };
                     v_flex()
                         .flex_1()
                         .min_w_0()

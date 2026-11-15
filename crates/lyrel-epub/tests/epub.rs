@@ -371,16 +371,30 @@ fn rights_encryption_and_non_font_cipher_targets_are_refused() {
     ));
     let font_target = encrypted("OPS/Fonts/f.ttf", "font/ttf");
     let file = std::fs::File::open(&font_target.path).unwrap();
+    let book = open_book(
+        file,
+        "a".repeat(64),
+        "x",
+        &Limits::default(),
+        &CancellationToken::new(),
+    )
+    .expect("font obfuscation is the one allowed algorithm and only for fonts");
+    let file = std::fs::File::open(&font_target.path).unwrap();
+    let chapter = read_chapter(
+        &book,
+        file,
+        0,
+        ImageMode::Include,
+        &Limits::default(),
+        &CancellationToken::new(),
+    )
+    .expect("a DRM-free font-obfuscated book still reads");
     assert!(
-        open_book(
-            file,
-            "a".repeat(64),
-            "x",
-            &Limits::default(),
-            &CancellationToken::new()
-        )
-        .is_ok(),
-        "font obfuscation is the one allowed algorithm and only for fonts"
+        chapter
+            .blocks
+            .iter()
+            .any(|block| block.text.contains("One")),
+        "the chapter content survives the allowed font obfuscation"
     );
 }
 

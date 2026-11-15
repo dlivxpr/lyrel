@@ -21,18 +21,36 @@ use crate::NormRect;
 
 /// A point in normalized page coordinates (0..1, top-left origin).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NormPoint {
     pub x: f32,
     pub y: f32,
 }
 
+impl NormPoint {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
 /// A drag selection: the selected text as one quote, the occurrence that
 /// re-locates it, and the rectangles to draw.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Selection {
     pub quote: String,
     pub occurrence: usize,
     pub rects: Vec<NormRect>,
+}
+
+impl Selection {
+    pub fn new(quote: String, occurrence: usize, rects: Vec<NormRect>) -> Self {
+        Self {
+            quote,
+            occurrence,
+            rects,
+        }
+    }
 }
 
 /// Compatible name for consumers that distinguish a PDF text selection from

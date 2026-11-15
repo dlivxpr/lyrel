@@ -481,6 +481,36 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
         fixtures::forms_document(true),
         "overlay display leaves the source untouched"
     );
+
+    // A PDFDocEncoding value keeps its real characters in the same read-only
+    // overlay instead of showing Latin-1 control bytes.
+    let docenc = fixtures::pdf_doc_encoding_form_document();
+    let docenc_path = fixture(dir.path(), "docenc.pdf", &docenc);
+    open(&app, &mut cx, &docenc_path);
+    until(&mut cx, |cx| {
+        ready(&app, cx)
+            && pdf_view(&app, cx).read_with(cx, |view, _| !view.loaded_pages().is_empty())
+    });
+    let view = pdf_view(&app, &cx);
+    view.read_with(&cx, |view, cx| {
+        let fields = view.document.read(cx).ready().unwrap().fields().to_vec();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].value, "Doc \u{02d8} \u{2022} \u{fb01} \u{20ac} é");
+        assert!(fields[0].needs_text_overlay());
+    });
+    cx.update(|window, _| {
+        let field = window.find("pdf-field-docenc279");
+        assert!(field.visible());
+        assert_eq!(
+            field.label(),
+            Some("Doc \u{02d8} \u{2022} \u{fb01} \u{20ac} é")
+        );
+    });
+    assert_eq!(
+        std::fs::read(&docenc_path).unwrap(),
+        docenc,
+        "PDFDocEncoding display leaves the source untouched"
+    );
 }
 
 #[gpui_kit::test]

@@ -44,11 +44,27 @@ pub(crate) enum SurfaceEvent {
     /// The engine asked for the document's own undo/redo.
     Undo,
     Redo,
-    /// The engine asked for the system clipboard's text.
+    /// The engine asked the system clipboard's text.
     Paste,
     /// Serialized cells the engine copied or cut.
     Clipboard {
         text: String,
+    },
+    /// The page confirmed this exact sync request (native command sequence)
+    /// after its POST was accepted.
+    SyncConfirmed {
+        request: u64,
+    },
+    /// This sync request failed in the page or over HTTP. The session and the
+    /// canvas stay alive; only the save waiting on this request fails.
+    SyncRejected {
+        request: u64,
+        reason: String,
+    },
+    /// An ordinary edit commit was refused. The canvas model is newer than
+    /// the document and must stay visibly unsaved.
+    CommitRejected {
+        reason: String,
     },
     Blocked {
         reason: String,
@@ -158,6 +174,7 @@ impl ParentWindow {
 #[cfg(test)]
 pub(crate) struct TestSurface {
     pub(crate) commands: std::cell::RefCell<Vec<Command>>,
+    pub(crate) sequence: std::cell::Cell<u64>,
 }
 
 #[cfg(test)]
@@ -165,6 +182,7 @@ impl TestSurface {
     pub(crate) fn new() -> Self {
         Self {
             commands: std::cell::RefCell::new(Vec::new()),
+            sequence: std::cell::Cell::new(0),
         }
     }
 }
@@ -255,15 +273,17 @@ impl SurfaceHost {
         self.inner.focus();
     }
 
-    /// Queues one command for the engine. `Ok(true)` means the message was
-    /// accepted for delivery — the session is live and not failed; `Ok(false)`
+    /// Queues one command for the engine. `Ok(Some(seq))` means the message
+    /// was accepted for delivery and carries that native sequence; `Ok(None)`
     /// means the surface is up but the engine is not ready to receive it, so
     /// callers waiting on an answer must not wait on this surface.
-    pub(crate) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
+    pub(crate) fn command(&mut self, command: Command) -> Result<Option<u64>, SurfaceError> {
         #[cfg(test)]
         {
             self.inner.commands.borrow_mut().push(command);
-            return Ok(true);
+            let sequence = self.inner.sequence.get() + 1;
+            self.inner.sequence.set(sequence);
+            return Ok(Some(sequence));
         }
         #[cfg(all(windows, not(test)))]
         return self.inner.command(command);
@@ -838,7 +858,7 @@ mod windows_host {
             }
         }
 
-        pub(super) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
+        pub(super) fn command(&mut self, command: Command) -> Result<Option<u64>, SurfaceError> {
             let message = {
                 let mut state = self.shared.borrow_mut();
                 if state.closed {
@@ -846,13 +866,14 @@ mod windows_host {
                         "the diagram surface is closed".into(),
                     ));
                 }
-                state
-                    .session
-                    .as_mut()
-                    .and_then(|session| session.command(&command))
+                state.session.as_mut().and_then(|session| {
+                    session
+                        .command(&command)
+                        .map(|message| (message, session.outbound_seq()))
+                })
             };
-            let Some(message) = message else {
-                return Ok(false);
+            let Some((message, sequence)) = message else {
+                return Ok(None);
             };
             let webview = self.shared.borrow().webview.clone();
             let Some(webview) = webview else {
@@ -865,7 +886,7 @@ mod windows_host {
                     .PostWebMessageAsJson(&HSTRING::from(message))
                     .map_err(|error| SurfaceError::Platform(error.to_string()))?;
             }
-            Ok(true)
+            Ok(Some(sequence))
         }
     }
 
@@ -966,6 +987,15 @@ mod windows_host {
             BridgeEvent::Redo => emit(shared, SurfaceEvent::Redo),
             BridgeEvent::Paste => emit(shared, SurfaceEvent::Paste),
             BridgeEvent::Clipboard { text, .. } => emit(shared, SurfaceEvent::Clipboard { text }),
+            BridgeEvent::SyncConfirmed { request } => {
+                emit(shared, SurfaceEvent::SyncConfirmed { request })
+            }
+            BridgeEvent::SyncRejected { request, reason } => {
+                emit(shared, SurfaceEvent::SyncRejected { request, reason })
+            }
+            BridgeEvent::CommitRejected { reason } => {
+                emit(shared, SurfaceEvent::CommitRejected { reason })
+            }
             BridgeEvent::Failed { message } => emit(shared, SurfaceEvent::Failed { message }),
         }
     }
@@ -1273,7 +1303,7 @@ mod macos_host {
             }
         }
 
-        pub(super) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
+        pub(super) fn command(&mut self, command: Command) -> Result<Option<u64>, SurfaceError> {
             let message = {
                 let mut state = self.shared.lock();
                 if state.closed {
@@ -1281,10 +1311,13 @@ mod macos_host {
                         "the diagram surface is closed".into(),
                     ));
                 }
-                state.session.command(&command)
+                state
+                    .session
+                    .command(&command)
+                    .map(|message| (message, state.session.outbound_seq()))
             };
-            let Some(message) = message else {
-                return Ok(false);
+            let Some((message, sequence)) = message else {
+                return Ok(None);
             };
             let webview = self.webview.borrow();
             let Some(webview) = webview.as_ref() else {
@@ -1295,7 +1328,7 @@ mod macos_host {
             webview
                 .evaluate_script(&format!("window.__lyrel.nativeMessage({message})"))
                 .map_err(|error| SurfaceError::Platform(error.to_string()))?;
-            Ok(true)
+            Ok(Some(sequence))
         }
     }
 
@@ -1347,6 +1380,11 @@ mod macos_host {
             BridgeEvent::Redo => SurfaceEvent::Redo,
             BridgeEvent::Paste => SurfaceEvent::Paste,
             BridgeEvent::Clipboard { text, .. } => SurfaceEvent::Clipboard { text },
+            BridgeEvent::SyncConfirmed { request } => SurfaceEvent::SyncConfirmed { request },
+            BridgeEvent::SyncRejected { request, reason } => {
+                SurfaceEvent::SyncRejected { request, reason }
+            }
+            BridgeEvent::CommitRejected { reason } => SurfaceEvent::CommitRejected { reason },
             BridgeEvent::Failed { message } => SurfaceEvent::Failed { message },
         };
         let _ = sender.try_send(event);

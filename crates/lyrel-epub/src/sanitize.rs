@@ -34,7 +34,8 @@ pub enum Part {
 }
 
 /// A named location inside one block.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct Anchor {
     pub id: String,
     /// Byte offset into [`BlockFragment::text`].
@@ -42,7 +43,8 @@ pub struct Anchor {
 }
 
 /// One sanitized top-level fragment, the unit a presentation virtualizes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct BlockFragment {
     parts: Vec<Part>,
     /// The fragment's already-rendered HTML.
@@ -56,6 +58,7 @@ pub struct BlockFragment {
 
 /// What the reader refused to carry out of a chapter.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Omissions {
     pub scripts: usize,
     pub styles: usize,

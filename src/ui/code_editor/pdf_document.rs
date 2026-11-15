@@ -1124,10 +1124,10 @@ impl PdfView {
             if probe >= top && probe < top + height {
                 return Some((
                     index,
-                    lyrel_pdf::NormPoint {
-                        x: ((f32::from(position.x) - column_x) / page_width).clamp(0., 1.),
-                        y: ((probe - top) / height.max(1.)).clamp(0., 1.),
-                    },
+                    lyrel_pdf::NormPoint::new(
+                        ((f32::from(position.x) - column_x) / page_width).clamp(0., 1.),
+                        ((probe - top) / height.max(1.)).clamp(0., 1.),
+                    ),
                 ));
             }
         }

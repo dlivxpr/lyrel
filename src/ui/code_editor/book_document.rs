@@ -756,12 +756,12 @@ impl BookDocument {
             false
         } else {
             let label = label.chars().take(120).collect::<String>();
-            self.record.bookmarks.push(Bookmark {
+            self.record.bookmarks.push(Bookmark::new(
                 chapter,
                 block,
-                fraction: fraction.clamp(0., 1.),
+                fraction.clamp(0., 1.),
                 label,
-            });
+            ));
             if self.record.bookmarks.len() > 500 {
                 self.record.bookmarks.remove(0);
             }

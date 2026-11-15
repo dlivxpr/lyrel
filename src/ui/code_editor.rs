@@ -185,12 +185,16 @@ pub(crate) enum DiskConflict {
 const DRAWIO_FLUSH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(if cfg!(test) { 60 } else { 3_000 });
 
-/// A save that must not capture bytes older than the engine's live model:
-/// it waits for one committed revision newer than `from_edit`, with a
-/// deadline so a dead surface cannot wedge the whole save path.
+/// A save that must not capture bytes older than the engines' live models.
+/// It records one ticket per presentation that accepted its own sync command
+/// and waits for each of those exact confirmations, with a deadline so a dead
+/// surface cannot wedge the whole save path.
 #[derive(Clone)]
 struct DrawioFlush {
-    from_edit: u64,
+    tickets: Vec<(gpui_kit::WeakEntity<drawio_document::DrawioView>, u64)>,
+    /// A canvas already known to hold a refused model when the save started;
+    /// no ticket can repair it, so the save fails without writing.
+    refused: Option<gpui_kit::SharedString>,
     deadline: std::time::Instant,
     force: bool,
     target: Option<PathBuf>,
@@ -2822,12 +2826,18 @@ impl LyrelApp {
                         Self::editor_bridge(),
                     );
                 }
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Rejected { reason } => {
+                    // A page or HTTP refusal is request-scoped: the canvas
+                    // keeps its model, the document keeps the last accepted
+                    // bytes, and the save fails where the user can see it.
+                    self.drawio_flush_failed(id, Some(reason), window, cx);
+                }
                 crate::ui::code_editor::buffers::DrawioFlushReadiness::Expired => {
                     // The engine never confirmed: writing the bytes we have
                     // would silently drop the model on its canvas. Fail the
                     // save the way any other failed write does — the dirty
                     // document stays, and a pending close is cancelled.
-                    self.drawio_flush_failed(id, window, cx);
+                    self.drawio_flush_failed(id, None, window, cx);
                 }
             }
         }
@@ -2864,11 +2874,18 @@ impl LyrelApp {
         self.editor_record_sessions(cx);
     }
 
-    /// A deferred diagram save whose engine never confirmed its model is a
-    /// failed save, not a licence to write older bytes: the same toast a
-    /// failed write raises, the document stays dirty, and any close that was
-    /// waiting on this save is cancelled instead of dropping the work.
-    fn drawio_flush_failed(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+    /// A deferred diagram save whose engine refused or never confirmed its
+    /// model is a failed save, not a licence to write older bytes: the same
+    /// toast a failed write raises, the document stays dirty, and any close
+    /// that was waiting on this save is cancelled instead of dropping the
+    /// work. A refused request keeps its own reason visible.
+    fn drawio_flush_failed(
+        &mut self,
+        id: BufferId,
+        reason: Option<gpui_kit::SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(label) = self
             .editor
             .buffers
@@ -2878,14 +2895,18 @@ impl LyrelApp {
             return;
         };
         let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);
+        let (kind, message) = match reason {
+            Some(reason) => (std::io::ErrorKind::Other, reason.to_string()),
+            None => (
+                std::io::ErrorKind::TimedOut,
+                "the diagram engine did not confirm its current model".to_string(),
+            ),
+        };
         crate::ui::host_ops::HostOps::notify_err(
             window,
             cx,
             &context,
-            &std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "the diagram engine did not confirm its current model",
-            ),
+            &std::io::Error::new(kind, message),
         );
         self.editor.saves_failed(id);
         cx.notify();

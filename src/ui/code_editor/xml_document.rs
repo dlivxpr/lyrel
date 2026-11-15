@@ -1734,7 +1734,7 @@ impl XmlView {
                         .overflow_scroll()
                         .px_2()
                         .pb_2()
-                        .font_family("Menlo")
+                        .font_family(cx.theme().mono_font_family.clone())
                         .text_xs()
                         .whitespace_normal()
                         .child(text),
@@ -1761,6 +1761,7 @@ impl Render for XmlView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode;
         let focus = self.focus.clone();
+        let focus_ring = cx.theme().primary;
         let item = v_flex()
             .id(("xml-document", cx.entity_id()))
             .size_full()
@@ -1776,6 +1777,7 @@ impl Render for XmlView {
             XmlMode::Structure => {
                 item.key_context(KEY_CONTEXT)
                     .track_focus(&focus)
+                    .focus_visible(move |style| style.border_1().border_color(focus_ring))
                     .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
                     .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
                     .on_mouse_down(

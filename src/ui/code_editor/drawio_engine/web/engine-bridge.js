@@ -44,7 +44,8 @@
             // smuggle a key the native side does not expect.
             post({ v: 1, kind: kind, page: data.page, pages: data.pages,
                 zoom: data.zoom, text: data.text, cut: data.cut,
-                message: data.message }, ORIGIN);
+                request: data.request, status: data.status,
+                sync: data.sync, message: data.message }, ORIGIN);
         } catch (error) {
             // Nothing else can report a failed parent post.
         }
@@ -159,9 +160,10 @@
     // One edit, undo, redo or explicit sync becomes the document's newest
     // bytes. Commits travel over an HTTP POST to this session's own commit
     // path — never through postMessage, which the host caps far below the
-    // document budget. A page the workbench replaced underneath us is refused
-    // by the session's sequence check; the resync decides the content.
-    function commitNow(sync) {
+    // document budget. A refused POST is not swallowed: the workbench shows
+    // the canvas as unsaved and keeps the in-memory document, while a sync
+    // answer names the exact native request it belongs to.
+    function commitNow(sync, request) {
         if (suppress > 0 || !loaded || commitPath === null) {
             return;
         }
@@ -181,6 +183,16 @@
         }
         editSeq += 1;
         var path = (sync === true ? syncPath : commitPath) + "/" + editSeq;
+        var refusal = function (response) {
+            report("commit-failed", {
+                sync: sync === true,
+                request: sync === true ? request : undefined,
+                status: response !== null && typeof response === "object" &&
+                    Number.isInteger(response.status) ? response.status : 0,
+                message: response === null || typeof response !== "object"
+                    ? "the diagram request failed" : ""
+            });
+        };
         try {
             postFile(path, {
                 method: "POST",
@@ -189,12 +201,22 @@
                 redirect: "error",
                 referrerPolicy: "no-referrer",
                 body: xml
-            }).catch(function () {
-                // A refused commit is not fatal: the next edit, save sync or
-                // reload re-offers the same in-memory document.
+            }).then(function (response) {
+                if (response !== null && typeof response === "object" && response.ok) {
+                    if (sync === true) {
+                        report("sync-done", { request: request });
+                    }
+                    return;
+                }
+                // 403/413/other non-success: the POST was refused, the page
+                // model still holds the edit and a later edit or save
+                // re-offers it.
+                refusal(response);
+            }, function () {
+                refusal(null);
             });
         } catch (error) {
-            // Same: the in-memory document still holds the edit.
+            refusal(null);
         }
     }
 
@@ -387,7 +409,7 @@
         event.stopPropagation();
     }
 
-    function applyCommand(kind, text) {
+    function applyCommand(kind, text, request) {
         if (viewer === null || !loaded) {
             return;
         }
@@ -396,10 +418,14 @@
             case "sync":
                 // The active label editor has not reached the model yet.
                 // Finish it before serializing the confirmed save revision.
+                if (!Number.isInteger(request) || request <= 0) {
+                    fail("the save request has no sequence");
+                    return;
+                }
                 if (g !== null && g.isEditing()) {
                     g.stopEditing(false);
                 }
-                commitNow(true);
+                commitNow(true, request);
                 break;
             case "paste":
                 pasteText(text);
@@ -607,9 +633,11 @@
         } else if (message.kind === "fit" || message.kind === "zoomIn" ||
             message.kind === "zoomOut" || message.kind === "actual") {
             applyZoom(message.kind);
+        } else if (message.kind === "sync") {
+            applyCommand("sync", null, Number.isInteger(message.seq) ? message.seq : 0);
         } else if (message.kind === "undo" || message.kind === "redo" ||
-            message.kind === "sync" || message.kind === "copy" ||
-            message.kind === "cut" || message.kind === "delete") {
+            message.kind === "copy" || message.kind === "cut" ||
+            message.kind === "delete") {
             applyCommand(message.kind, null);
         } else if (message.kind === "paste" && typeof message.text === "string") {
             applyCommand("paste", message.text);

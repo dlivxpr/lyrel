@@ -627,6 +627,47 @@ pub fn forms_document(missing_appearance: bool) -> Vec<u8> {
     builder.serialize(catalog, None)
 }
 
+/// One page with a single read-only text widget whose `/V` is a PDFDocEncoding
+/// literal string with no `/AP`: bytes that Latin-1 would render as controls
+/// must arrive as the Annex D characters the form actually stores.
+pub fn pdf_doc_encoding_form_document() -> Vec<u8> {
+    let mut base = Base::new(1);
+    let font = base.font;
+    let widget = {
+        let builder = &mut base.builder;
+        let mut object =
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (docenc279) /V (Doc ".to_vec();
+        object.extend_from_slice(&[0x18, b' ', 0x80, b' ', 0x93, b' ', 0xa0, b' ', 0xe9]);
+        object.extend_from_slice(b") /Rect [48 600 360 644] /DA (/F1 18 Tf 0 g) /F 4 >>");
+        builder.add(object)
+    };
+    base.page(
+        "BT /F1 20 Tf 48 740 Td (Owned PDFDocEncoding fixture) Tj ET",
+        &format!("/Annots [{widget} 0 R]"),
+    );
+    let Base {
+        mut builder,
+        pages: pages_id,
+        page_ids,
+        ..
+    } = base;
+    builder.set(
+        pages_id,
+        format!("<< /Type /Pages /Count 1 /Kids [{} 0 R] >>", page_ids[0]).into_bytes(),
+    );
+    let catalog = builder.reserve();
+    builder.set(
+        catalog,
+        format!(
+            "<< /Type /Catalog /Pages {pages_id} 0 R \
+             /AcroForm << /Fields [{widget} 0 R] /NeedAppearances true \
+             /DA (/F1 18 Tf 0 g) /DR << /Font << /F1 {font} 0 R >> >> >> >>"
+        )
+        .into_bytes(),
+    );
+    builder.serialize(catalog, None)
+}
+
 /// One page with a generated 16×16 RGB image and no text operators.
 pub fn scan_only_document() -> Vec<u8> {
     let mut builder = Builder::new();

@@ -167,7 +167,10 @@ pub fn resolve(base: &str, href: &str) -> Option<String> {
     if path.contains([':', '\\', '\0']) {
         return None;
     }
-    let mut components = if path.starts_with('/') {
+    let mut components = if path.starts_with('/') || base.is_empty() {
+        // An absolute reference, or a reference to a document with no base
+        // path (META-INF/encryption.xml's CipherReference), resolves from the
+        // archive root: there is no containing directory to drop.
         Vec::new()
     } else {
         base.split('/')
@@ -176,7 +179,7 @@ pub fn resolve(base: &str, href: &str) -> Option<String> {
             .collect::<Vec<_>>()
     };
     if !path.is_empty() {
-        if !path.starts_with('/') {
+        if !path.starts_with('/') && !base.is_empty() {
             components.pop();
         }
         for part in path.split('/') {
@@ -227,6 +230,21 @@ mod tests {
         assert_eq!(
             resolve("OPS/one.xhtml", "two.xhtml?q=1#x"),
             Some("OPS/two.xhtml#x".into())
+        );
+        // META-INF/encryption.xml has no containing document: its relative
+        // CipherReference resolves from the archive root.
+        assert_eq!(
+            resolve("", "OPS/Fonts/f.ttf"),
+            Some("OPS/Fonts/f.ttf".into())
+        );
+        assert_eq!(
+            resolve("", "OPS/Text/one.xhtml#frag"),
+            Some("OPS/Text/one.xhtml#frag".into())
+        );
+        assert_eq!(resolve("", "../secret"), None);
+        assert_eq!(
+            resolve("", "/OPS/Fonts/f.ttf"),
+            Some("OPS/Fonts/f.ttf".into())
         );
         for href in [
             "../../../secret",

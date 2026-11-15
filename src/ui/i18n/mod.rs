@@ -1710,6 +1710,7 @@ l10n_keys! {
     EditorDrawioPagePrevious,
     EditorDrawioPageNext,
     EditorDrawioBlocked,
+    EditorDrawioUnconfirmed,
     EditorDrawioUnavailable,
     EditorDrawioRetry,
     EditorDrawioDelete,

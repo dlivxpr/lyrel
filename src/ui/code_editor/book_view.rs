@@ -22,8 +22,8 @@ use gpui_kit::base::{TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Icon, IconName, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, ListState, Render, SharedString,
-    Subscription, Task, Window, div, px, relative, rems,
+    AnyElement, App, Context, ElementId, Entity, FocusHandle, Focusable, ListState, Render,
+    SharedString, Subscription, Task, Window, div, px, relative, rems,
 };
 use lyrel_epub::{
     CancellationToken, Limits, ReaderPrefs, ReaderTheme, ReadingPosition, html_with_marks,
@@ -74,20 +74,64 @@ struct BlockState {
     _subscription: Subscription,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BookmarkKey {
+    chapter: usize,
+    block: usize,
+    fraction_bits: u32,
+}
+
+impl BookmarkKey {
+    fn of(bookmark: &lyrel_epub::Bookmark) -> Self {
+        Self {
+            chapter: bookmark.chapter,
+            block: bookmark.block,
+            fraction_bits: bookmark.fraction.to_bits(),
+        }
+    }
+
+    /// A 20-byte [`ElementId`] with a role byte, the chapter/block anchor and
+    /// the exact fraction bits. It names the bookmark itself, so deleting an
+    /// earlier row does not move keyed focus or state onto another bookmark.
+    fn element_id(self, role: u8) -> ElementId {
+        let mut id = [0u8; 20];
+        id[0] = role;
+        id[1..5].copy_from_slice(&(self.chapter as u32).to_le_bytes());
+        id[5..9].copy_from_slice(&(self.block as u32).to_le_bytes());
+        id[9..13].copy_from_slice(&self.fraction_bits.to_le_bytes());
+        ElementId::from(id)
+    }
+}
+
 #[derive(Clone)]
 enum Intent {
     Follow(String),
-    Contents(String),
-    Bookmark(usize),
-    DeleteBookmark(usize),
+    Contents(SharedString),
+    Bookmark(BookmarkKey),
+    DeleteBookmark(BookmarkKey),
 }
 
 /// One contents/bookmarks row, independent of render closure lifetimes.
 struct SideRow {
     label: SharedString,
     depth: usize,
-    bookmark: Option<usize>,
-    href: Option<String>,
+    bookmark: Option<BookmarkKey>,
+    href: Option<SharedString>,
+}
+
+impl SideRow {
+    /// A stable, domain-derived identity for the row's repeated Button. TOC
+    /// entries use their resolved href and depth; bookmarks use their anchor.
+    fn item_id(&self) -> ElementId {
+        match self.bookmark {
+            Some(key) => key.element_id(1),
+            None => ElementId::from((self.href.clone().unwrap_or_default(), self.depth)),
+        }
+    }
+
+    fn remove_id(&self) -> Option<ElementId> {
+        self.bookmark.map(|key| key.element_id(2))
+    }
 }
 
 pub(crate) struct BookView {
@@ -212,11 +256,7 @@ impl BookView {
             pending_anchor: None,
             loading: true,
             chapter_error: None,
-            position: ReadingPosition {
-                chapter,
-                block,
-                fraction: document_reading.fraction,
-            },
+            position: ReadingPosition::new(chapter, block, document_reading.fraction),
             save_task: None,
             intent_tx,
             _listener: listener,
@@ -405,15 +445,15 @@ impl BookView {
         self.rebuild_marks();
         self.loading = false;
         self.chapter_error = None;
-        self.position = ReadingPosition {
-            chapter: self.chapter,
-            block: target,
-            fraction: if self.blocks <= 1 {
+        self.position = ReadingPosition::new(
+            self.chapter,
+            target,
+            if self.blocks <= 1 {
                 0.
             } else {
                 target as f32 / (self.blocks - 1) as f32
             },
-        };
+        );
         let document = self.document.clone();
         document.update(cx, |document, cx| {
             document.set_reading(self.position);
@@ -429,11 +469,10 @@ impl BookView {
                 .read(cx)
                 .bookmarks()
                 .iter()
-                .enumerate()
-                .map(|(index, bookmark)| SideRow {
+                .map(|bookmark| SideRow {
                     label: bookmark.label.clone().into(),
                     depth: 0,
-                    bookmark: Some(index),
+                    bookmark: Some(BookmarkKey::of(bookmark)),
                     href: None,
                 })
                 .collect()
@@ -446,7 +485,7 @@ impl BookView {
                     label: entry.title.into(),
                     depth: entry.depth.min(8),
                     bookmark: None,
-                    href: Some(entry.href),
+                    href: Some(entry.href.into()),
                 })
                 .collect()
         }
@@ -460,13 +499,38 @@ impl BookView {
         }
     }
 
+    /// The stable id of the side row whose visible label is `label`. Tests
+    /// click the same button the user does, without deriving an index.
+    #[cfg(test)]
+    pub(crate) fn test_side_item_id(&self, label: &str, cx: &App) -> Option<ElementId> {
+        self.side_rows(cx)
+            .into_iter()
+            .find(|row| row.label.as_ref() == label)
+            .map(|row| row.item_id())
+    }
+
+    /// The stable id of that bookmark row's remove button.
+    #[cfg(test)]
+    pub(crate) fn test_side_remove_id(&self, label: &str, cx: &App) -> Option<ElementId> {
+        self.side_rows(cx)
+            .iter()
+            .find(|row| row.label.as_ref() == label)
+            .and_then(SideRow::remove_id)
+    }
+
     fn act(&mut self, intent: Intent, cx: &mut Context<Self>) {
         match intent {
             Intent::Follow(href) => self.follow(&href, cx),
-            Intent::Contents(href) => self.go_to_href(&href, cx),
-            Intent::Bookmark(index) => self.go_to_bookmark(index, cx),
-            Intent::DeleteBookmark(index) => {
-                let bookmark = self.document.read(cx).bookmarks().get(index).cloned();
+            Intent::Contents(href) => self.go_to_href(href.as_ref(), cx),
+            Intent::Bookmark(key) => self.go_to_bookmark(key, cx),
+            Intent::DeleteBookmark(key) => {
+                let bookmark = self
+                    .document
+                    .read(cx)
+                    .bookmarks()
+                    .iter()
+                    .find(|bookmark| BookmarkKey::of(bookmark) == key)
+                    .cloned();
                 if let Some(bookmark) = bookmark {
                     self.document.update(cx, |document, cx| {
                         document.toggle_bookmark(
@@ -531,15 +595,15 @@ impl BookView {
                 item_ix: block,
                 offset_in_item: px(0.),
             });
-            self.position = ReadingPosition {
+            self.position = ReadingPosition::new(
                 chapter,
                 block,
-                fraction: if self.blocks <= 1 {
+                if self.blocks <= 1 {
                     0.
                 } else {
                     block as f32 / (self.blocks - 1) as f32
                 },
-            };
+            );
             self.visible = block..(block + 1).min(self.blocks);
             self.ensure_states(block, cx);
             self.document.update(cx, |document, cx| {
@@ -558,11 +622,7 @@ impl BookView {
         self.chapter_error = None;
         self.pending_restore = Some(block);
         self.pending_anchor = anchor;
-        self.position = ReadingPosition {
-            chapter,
-            block,
-            fraction: 0.,
-        };
+        self.position = ReadingPosition::new(chapter, block, 0.);
         self.document.update(cx, |document, cx| {
             document.set_reading(self.position);
             document.persist(cx);
@@ -572,8 +632,15 @@ impl BookView {
         cx.notify();
     }
 
-    fn go_to_bookmark(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(bookmark) = self.document.read(cx).bookmarks().get(index).cloned() else {
+    fn go_to_bookmark(&mut self, key: BookmarkKey, cx: &mut Context<Self>) {
+        let bookmark = self
+            .document
+            .read(cx)
+            .bookmarks()
+            .iter()
+            .find(|bookmark| BookmarkKey::of(bookmark) == key)
+            .cloned();
+        let Some(bookmark) = bookmark else {
             return;
         };
         self.go_to_chapter(bookmark.chapter, bookmark.block, None, cx);
@@ -667,11 +734,7 @@ impl BookView {
         self.document.update(cx, |document, cx| {
             document.toggle_bookmark(self.chapter, index, fraction, label, cx);
         });
-        self.position = ReadingPosition {
-            chapter: self.chapter,
-            block: index,
-            fraction,
-        };
+        self.position = ReadingPosition::new(self.chapter, index, fraction);
         self.refresh_side_count(cx);
         cx.notify();
     }
@@ -932,11 +995,7 @@ impl BookView {
         } else {
             block as f32 / (blocks - 1) as f32
         };
-        self.position = ReadingPosition {
-            chapter: self.chapter,
-            block,
-            fraction,
-        };
+        self.position = ReadingPosition::new(self.chapter, block, fraction);
         let position = self.position;
         self.document
             .update(cx, |document, _| document.set_reading(position));
@@ -1269,15 +1328,16 @@ impl BookView {
             } else {
                 Intent::Follow(String::new())
             };
+            let item_id = row.item_id();
+            let remove_id = row.remove_id();
             let tx = tx.clone();
             let mut element = h_flex()
-                .id(("book-side-row", index))
                 .w_full()
                 .min_w_0()
                 .pl(rems(0.25 + row.depth as f32 * 0.75))
                 .pr_1()
                 .child(
-                    Button::new(("book-side-item", index))
+                    Button::new(item_id)
                         .ghost()
                         .xsmall()
                         .flex_1()
@@ -1287,10 +1347,10 @@ impl BookView {
                             let _ = tx.send_blocking(intent.clone());
                         }),
                 );
-            if bookmarks && let Some(bookmark) = row.bookmark {
+            if bookmarks && let (Some(bookmark), Some(remove_id)) = (row.bookmark, remove_id) {
                 let remove = remove_tx.clone();
                 element = element.child(
-                    Button::new(("book-side-remove", bookmark))
+                    Button::new(remove_id)
                         .ghost()
                         .xsmall()
                         .icon(IconName::Close)

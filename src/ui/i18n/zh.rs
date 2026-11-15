@@ -2035,6 +2035,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorDrawioPagePrevious => "上一页",
         L10nKey::EditorDrawioPageNext => "下一页",
         L10nKey::EditorDrawioBlocked => "图请求了{what}，已被阻止",
+        L10nKey::EditorDrawioUnconfirmed => {
+            "画布改动尚未保存：{reason}。请修正图形后重试保存，或关闭并放弃。"
+        }
         L10nKey::EditorDrawioUnavailable => "draw.io 引擎不可用",
         L10nKey::EditorDrawioRetry => "重试",
         L10nKey::EditorDrawioDelete => "删除",

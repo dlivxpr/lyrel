@@ -9,7 +9,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 ## 可执行程序与共享核心
 
-workspace 包含六个 crate；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`。
+workspace 包含八个 crate；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`，EPUB 与 PDF 的 GUI-free 读取分别属于 `lyrel-epub` 与 `lyrel-pdf`。
 
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
@@ -19,6 +19,8 @@ workspace 包含六个 crate；桌面 GUI、CLI 和 headless server 复用 `lyre
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
 | `lyrel-text` | 编码、BOM、逐行行尾与 EditorConfig 策略，供普通文件工作台和 Markdown Document 复用 | 不依赖 GPUI、app 或 Host |
 | `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
+| `lyrel-epub` | DRM-free 可重排 EPUB 的容器、OPF、目录、章节清洗、本地插图与阅读状态模型 | 不打开文件、不持有 Host/path、不执行 publisher CSS/字体、不写回 EPUB |
+| `lyrel-pdf` | PDF 解析、页度量与栅格化、文本层、大纲／链接、只读表单描述与文本字符串编码 | 不打开文件、不持有 Host/path、不写回或重排 PDF |
 | 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
@@ -101,10 +103,10 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
-| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 17 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标与版本化分段读取 |
+| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 18 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标、版本化分段读取与只读 SQLite 浏览 |
 | pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 19 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c17p19`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c18p19`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 

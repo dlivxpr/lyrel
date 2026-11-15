@@ -10,7 +10,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, MouseButton, MouseDownEvent, SharedString,
-    TestSupportExt as _, Window, div, px, relative, rems,
+    TestSupportExt as _, Window, div, relative, rems,
 };
 use lyrel_markdown_editor::EditorState as SourceEditor;
 
@@ -55,11 +55,15 @@ pub(crate) fn structure_row(
         .flex()
         .items_center()
         .gap_2()
-        .h(px(30.))
-        .pl(px(10. + data.depth.min(24) as f32 * 14.))
+        // Row height, indent and the chevron slot are part of the ordinary
+        // zoom scale: `rems` keeps the 30/10/14px ratio at the base 16px font
+        // and follows the theme's base font with the virtual list's measured
+        // item height.
+        .h(rems(1.875))
+        .pl(rems(0.625 + data.depth.min(24) as f32 * 0.875))
         .pr_3()
         .text_sm()
-        .font_family("Menlo")
+        .font_family(cx.theme().mono_font_family.clone())
         .when(data.striped, |row| {
             row.bg(cx.theme().foreground.opacity(0.025))
         })
@@ -67,7 +71,7 @@ pub(crate) fn structure_row(
         .cursor_pointer()
         .child(
             div()
-                .w(px(14.))
+                .w(rems(0.875))
                 .flex_shrink_0()
                 .when(data.expandable, |spacer| {
                     spacer.child(Icon::new(if data.expanded {

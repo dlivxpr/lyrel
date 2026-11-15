@@ -33,6 +33,7 @@ pub use text::{NormPoint, PageText, Selection, TextSelection};
 /// A rectangle in normalized page coordinates: fractions of the page's
 /// displayed width/height with a top-left origin, independent of zoom and DPI.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct NormRect {
     pub x: f32,
     pub y: f32,
@@ -214,10 +215,23 @@ impl fmt::Debug for PdfDocument {
 }
 
 /// A rasterized page composited over white, row-major opaque RGBA.
+#[derive(Default)]
+#[non_exhaustive]
 pub struct RenderedPage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+impl RenderedPage {
+    /// A page of `width × height` pixels with its `rgba` rows.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            rgba,
+        }
+    }
 }
 
 impl fmt::Debug for RenderedPage {
@@ -374,8 +388,11 @@ pub fn bounded_scale(page_pt: (f32, f32), scale: f32) -> f32 {
     scale.clamp(0.05, MAX_RENDER_SCALE).min(max_scale)
 }
 
-/// Decode a PDF text string: UTF-16BE with a BOM, otherwise PDFDocEncoding
-/// treated as Latin-1 (the same lossy stand-in the pinned viewer uses).
+/// Decode a PDF text string (ISO 32000-1 §7.9.2.2): UTF-16BE with a BOM,
+/// UTF-8 with a BOM (PDF 2.0), otherwise the complete PDFDocEncoding table
+/// from Annex D. PDFDocEncoding is not Latin-1 in `0x18..=0x1F` or
+/// `0x80..=0xA0`; mapping those bytes as controls silently loses form values,
+/// outline titles and named destinations.
 pub(crate) fn decode_pdf_string(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = rest
@@ -385,13 +402,63 @@ pub(crate) fn decode_pdf_string(bytes: &[u8]) -> String {
             .map(|chunk| u16::from_be_bytes(*chunk))
             .collect();
         String::from_utf16_lossy(&units).trim().to_string()
+    } else if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(rest).trim().to_string()
     } else {
         bytes
             .iter()
-            .map(|&byte| byte as char)
+            .map(|&byte| pdf_doc_encoding(byte))
             .collect::<String>()
             .trim()
             .to_string()
+    }
+}
+
+/// One PDFDocEncoding code point (ISO 32000-1 Annex D, Table D.2).
+fn pdf_doc_encoding(byte: u8) -> char {
+    match byte {
+        0x18 => '\u{02d8}',                         // BREVE
+        0x19 => '\u{02c7}',                         // CARON
+        0x1a => '\u{02c6}',                         // MODIFIER LETTER CIRCUMFLEX ACCENT
+        0x1b => '\u{02d9}',                         // DOT ABOVE
+        0x1c => '\u{02dd}',                         // DOUBLE ACUTE ACCENT
+        0x1d => '\u{02db}',                         // OGONEK
+        0x1e => '\u{02da}',                         // RING ABOVE
+        0x1f => '\u{02dc}',                         // SMALL TILDE
+        0x7f | 0x9f => char::REPLACEMENT_CHARACTER, // undefined in the table
+        0x80 => '\u{2022}',                         // BULLET
+        0x81 => '\u{2020}',                         // DAGGER
+        0x82 => '\u{2021}',                         // DOUBLE DAGGER
+        0x83 => '\u{2026}',                         // HORIZONTAL ELLIPSIS
+        0x84 => '\u{2014}',                         // EM DASH
+        0x85 => '\u{2013}',                         // EN DASH
+        0x86 => '\u{0192}',                         // LATIN SMALL LETTER F WITH HOOK
+        0x87 => '\u{2044}',                         // FRACTION SLASH
+        0x88 => '\u{2039}',                         // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+        0x89 => '\u{203a}',                         // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+        0x8a => '\u{2212}',                         // MINUS SIGN
+        0x8b => '\u{2030}',                         // PER MILLE SIGN
+        0x8c => '\u{201e}',                         // DOUBLE LOW-9 QUOTATION MARK
+        0x8d => '\u{201c}',                         // LEFT DOUBLE QUOTATION MARK
+        0x8e => '\u{201d}',                         // RIGHT DOUBLE QUOTATION MARK
+        0x8f => '\u{2018}',                         // LEFT SINGLE QUOTATION MARK
+        0x90 => '\u{2019}',                         // RIGHT SINGLE QUOTATION MARK
+        0x91 => '\u{201a}',                         // SINGLE LOW-9 QUOTATION MARK
+        0x92 => '\u{2122}',                         // TRADE MARK SIGN
+        0x93 => '\u{fb01}',                         // LATIN SMALL LIGATURE FI
+        0x94 => '\u{fb02}',                         // LATIN SMALL LIGATURE FL
+        0x95 => '\u{0141}',                         // LATIN CAPITAL LETTER L WITH STROKE
+        0x96 => '\u{0152}',                         // LATIN CAPITAL LIGATURE OE
+        0x97 => '\u{0160}',                         // LATIN CAPITAL LETTER S WITH CARON
+        0x98 => '\u{0178}',                         // LATIN CAPITAL LETTER Y WITH DIAERESIS
+        0x99 => '\u{017d}',                         // LATIN CAPITAL LETTER Z WITH CARON
+        0x9a => '\u{0131}',                         // LATIN SMALL LETTER DOTLESS I
+        0x9b => '\u{0142}',                         // LATIN SMALL LETTER L WITH STROKE
+        0x9c => '\u{0153}',                         // LATIN SMALL LIGATURE OE
+        0x9d => '\u{0161}',                         // LATIN SMALL LETTER S WITH CARON
+        0x9e => '\u{017e}',                         // LATIN SMALL LETTER Z WITH CARON
+        0xa0 => '\u{20ac}',                         // EURO SIGN
+        other => other as char,                     // 0x00..=0x17, 0x20..=0x7e and Latin-1
     }
 }
 
@@ -422,12 +489,39 @@ mod tests {
     }
 
     #[test]
-    fn pdf_text_strings_decode_utf16_and_latin1() {
+    fn pdf_text_strings_decode_pdfdoc_and_bom_encodings() {
         assert_eq!(
             decode_pdf_string(&[0xFE, 0xFF, 0x00, b'H', 0x00, b'i']),
             "Hi"
         );
+        // PDFDocEncoding replaces the Latin-1 control block with accents and
+        // the high half with typographic characters.
+        assert_eq!(decode_pdf_string(&[0x18]), "\u{02d8}");
+        assert_eq!(decode_pdf_string(&[0x80]), "\u{2022}");
+        assert_eq!(decode_pdf_string(&[0x93]), "\u{fb01}");
+        assert_eq!(decode_pdf_string(&[0xa0]), "\u{20ac}");
         assert_eq!(decode_pdf_string(&[b'C', 0xE9]), "Cé");
+        // A UTF-8 BOM is a legal PDF 2.0 text string.
+        assert_eq!(
+            decode_pdf_string(&[0xEF, 0xBB, 0xBF, 0xE4, 0xB8, 0xAD]),
+            "中"
+        );
+    }
+
+    #[test]
+    fn pdfdoc_values_reach_a_real_form_without_rewriting_the_source() {
+        let bytes = fixtures::pdf_doc_encoding_form_document();
+        let document = PdfDocument::load(Arc::new(bytes.clone()), "").expect("docenc forms");
+        let fields = document.fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "docenc279");
+        assert_eq!(fields[0].value, "Doc \u{02d8} \u{2022} \u{fb01} \u{20ac} é");
+        assert!(fields[0].needs_text_overlay());
+        assert_eq!(
+            document.bytes().as_slice(),
+            bytes.as_slice(),
+            "reading a text string never rewrites the original bytes"
+        );
     }
 
     use crate::fixtures;

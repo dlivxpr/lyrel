@@ -2263,6 +2263,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorDrawioPagePrevious => "Previous page",
         L10nKey::EditorDrawioPageNext => "Next page",
         L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
+        L10nKey::EditorDrawioUnconfirmed => {
+            "Canvas changes are not saved: {reason}. Fix the diagram and save again, or close and discard."
+        }
         L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
         L10nKey::EditorDrawioRetry => "Try again",
         L10nKey::EditorDrawioDelete => "Delete",

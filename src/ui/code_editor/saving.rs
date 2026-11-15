@@ -200,16 +200,13 @@ impl EditorPanelState {
         }
         // A diagram save must write the engine's live model, not the last
         // committed bytes: defer the write through every live surface's sync
-        // flush until a newer committed revision (or the deadline) confirms.
+        // flush until each request it actually sent is confirmed.
         let flushed = std::mem::take(&mut file.drawio_flush_done);
         if file.input.drawio().is_some() && file.drawio_flush.is_none() && !flushed {
-            let Some((from_edit, has_bytes)) = file
+            let has_bytes = file
                 .input
                 .drawio_document(cx)
-                .map(|document| (document.committed(), document.bytes().is_some()))
-            else {
-                return;
-            };
+                .is_some_and(|document| document.bytes().is_some());
             if !has_bytes {
                 // A failed document has no ready bytes to write.
                 return;
@@ -224,16 +221,23 @@ impl EditorPanelState {
                 }
             }
             // Every live presentation must flush: a short-circuit would leave
-            // an engine whose model is newer than the committed bytes.
-            let mut live = false;
+            // an engine whose model is newer than the committed bytes. Each
+            // queued request keeps its own ticket, so an earlier commit, a
+            // sibling's callback or a previous save cannot release this one.
+            let mut tickets = Vec::new();
+            let mut refused = None;
             for view in &views {
-                if view.update(cx, |view, _| view.flush()) {
-                    live = true;
+                if let Some(request) = view.update(cx, |view, _| view.flush()) {
+                    tickets.push((view.downgrade(), request));
+                }
+                if refused.is_none() {
+                    refused = view.read(cx).unconfirmed_reason();
                 }
             }
-            if live {
+            if !tickets.is_empty() || refused.is_some() {
                 file.drawio_flush = Some(DrawioFlush {
-                    from_edit,
+                    tickets,
+                    refused,
                     deadline: std::time::Instant::now() + super::DRAWIO_FLUSH_TIMEOUT,
                     force,
                     target: save_as,

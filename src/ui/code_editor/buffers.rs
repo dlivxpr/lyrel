@@ -31,13 +31,39 @@ const EDITORCONFIG_DEPTH: usize = 16;
 /// Document identity and I/O lifetime. Tabs only retain presentation relations;
 /// replacing an editing presentation does not replace the document.
 /// What one deferred draw.io save turned into: a confirmed engine revision
-/// ready to write, or a flush that never arrived.
+/// ready to write, a refusal that must fail visibly, or a flush that never
+/// arrived.
 pub(super) enum DrawioFlushReadiness {
     Confirmed {
         force: bool,
         target: Option<PathBuf>,
     },
+    Rejected {
+        reason: SharedString,
+    },
     Expired,
+}
+
+/// Every live draw.io presentation for one buffer, primary first. The weak
+/// ticket uses this shape too; strong handles here are only for one frame.
+fn drawio_views(file: &OpenFile) -> Vec<Entity<DrawioView>> {
+    let mut views = Vec::new();
+    if let Some(primary) = file.input.drawio() {
+        views.push(primary.clone());
+    }
+    for (_, _, view) in file.presentations.drawios() {
+        if !views.contains(&view) {
+            views.push(view);
+        }
+    }
+    views
+}
+
+/// Whether any canvas of this buffer holds a model the document refused.
+fn drawio_has_unconfirmed_changes(file: &OpenFile, cx: &gpui_kit::App) -> bool {
+    drawio_views(file)
+        .iter()
+        .any(|view| view.read(cx).has_unconfirmed_changes())
 }
 
 pub(super) struct EditorBuffers {
@@ -228,11 +254,15 @@ impl EditorBuffers {
         if file.input.drawio().is_some() {
             // Engine commits already landed on the document; its content
             // digest carries undo-to-saved semantics, so editing back to the
-            // last-written bytes reads clean again.
-            file.dirty = file
-                .input
-                .drawio_document(cx)
-                .is_some_and(|document| document.fingerprint() != file.saved);
+            // last-written bytes reads clean again. A canvas whose commit was
+            // refused still holds newer work: it is unsaved even when the
+            // document bytes equal the file.
+            let unconfirmed = drawio_has_unconfirmed_changes(file, cx);
+            file.dirty = unconfirmed
+                || file
+                    .input
+                    .drawio_document(cx)
+                    .is_some_and(|document| document.fingerprint() != file.saved);
             file.reload_seq = file.reload_seq.wrapping_add(1);
             return;
         }
@@ -265,8 +295,9 @@ impl EditorBuffers {
             let Some(primary) = file.input.drawio().cloned() else {
                 continue;
             };
+            let unconfirmed = drawio_has_unconfirmed_changes(file, cx);
             if let Some(document) = file.input.drawio_document(cx) {
-                file.dirty = document.fingerprint() != file.saved;
+                file.dirty = unconfirmed || document.fingerprint() != file.saved;
             }
             let mut views = vec![primary];
             for (_, _, view) in file.presentations.drawios().iter() {
@@ -279,30 +310,62 @@ impl EditorBuffers {
         pending
     }
 
-    /// Resolves deferred draw.io saves. A flush writes only once the engine
-    /// has committed a revision newer than the marker: the deadline is not
-    /// permission to write older bytes, so an unconfirmed flush reports
-    /// `Expired` and the caller fails the save visibly instead.
+    /// Resolves deferred draw.io saves. A save wrote a sync request to every
+    /// live presentation; it writes only once each of those exact requests is
+    /// confirmed. A page refusal fails the save at once; a request whose
+    /// session was replaced no longer owns newer bytes. The deadline is not
+    /// permission to write older bytes, so an unanswered request expires.
     pub(super) fn take_drawio_flush_resolutions(
         &mut self,
         cx: &gpui_kit::App,
     ) -> Vec<(BufferId, DrawioFlushReadiness)> {
+        use super::drawio_document::SyncResolution;
+
         let now = std::time::Instant::now();
         let mut ready = Vec::new();
         for file in &mut self.files {
             let Some(flush) = file.drawio_flush.clone() else {
                 continue;
             };
-            let confirmed = file
-                .input
-                .drawio_document(cx)
-                .is_some_and(|document| document.committed() > flush.from_edit);
-            if !confirmed && now < flush.deadline {
+            if let Some(reason) = flush.refused {
+                file.drawio_flush = None;
+                ready.push((file.id(), DrawioFlushReadiness::Rejected { reason }));
+                continue;
+            }
+            let mut pending = false;
+            let mut rejected = None;
+            for (view, request) in &flush.tickets {
+                let Some(view) = view.upgrade() else {
+                    continue;
+                };
+                match view.read(cx).sync_resolution(*request) {
+                    SyncResolution::Pending => pending = true,
+                    SyncResolution::Confirmed => {}
+                    SyncResolution::Rejected(reason) => rejected = Some(reason),
+                    SyncResolution::Retired => {}
+                }
+            }
+            // A confirmation only proves the page accepted *its* POST; the
+            // document may still have refused the bytes (parse or size), in
+            // which case the canvas holds newer, unsaved work.
+            if rejected.is_none()
+                && !pending
+                && let Some(reason) = flush
+                    .tickets
+                    .iter()
+                    .filter_map(|(view, _)| view.upgrade())
+                    .find_map(|view| view.read(cx).unconfirmed_reason())
+            {
+                rejected = Some(reason);
+            }
+            if rejected.is_none() && pending && now < flush.deadline {
                 continue;
             }
             file.drawio_flush = None;
-            if confirmed {
-                // This save already waited for the engine: the re-entered
+            if let Some(reason) = rejected {
+                ready.push((file.id(), DrawioFlushReadiness::Rejected { reason }));
+            } else if !pending {
+                // This save already waited for the engines: the re-entered
                 // write must not flush again, or it would never reach disk.
                 file.drawio_flush_done = true;
                 ready.push((

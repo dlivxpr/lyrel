@@ -54,6 +54,7 @@ pub const MAX_QUERY_BYTES: usize = 512;
 /// The budgets a caller may observe. Kept as a struct so tests can exercise a
 /// tight budget without building a giant fixture.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Limits {
     pub input_bytes: u64,
     pub archive_entries: usize,

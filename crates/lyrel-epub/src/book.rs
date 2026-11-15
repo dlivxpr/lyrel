@@ -19,6 +19,7 @@ use crate::{CancellationToken, EpubError};
 /// Bibliographic metadata. Never used as document identity: a Host-scoped
 /// canonical path is the identity, and this metadata can repeat across books.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Metadata {
     pub title: String,
     pub authors: Vec<String>,
@@ -33,21 +34,36 @@ impl Metadata {
 
 /// One spine entry in reading order.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SpineItem {
     pub href: String,
     pub title: String,
 }
 
+impl SpineItem {
+    pub fn new(href: String, title: String) -> Self {
+        Self { href, title }
+    }
+}
+
 /// One contents entry. `depth` is zero-based nesting.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TocEntry {
     pub title: String,
     pub href: String,
     pub depth: usize,
 }
 
+impl TocEntry {
+    pub fn new(title: String, href: String, depth: usize) -> Self {
+        Self { title, href, depth }
+    }
+}
+
 /// One local illustration read from the archive.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ChapterImage {
     /// The exact `src` written into the sanitized HTML.
     pub source: String,
@@ -57,12 +73,33 @@ pub struct ChapterImage {
     pub bytes: Vec<u8>,
 }
 
+impl ChapterImage {
+    pub fn new(source: String, path: String, bytes: Vec<u8>) -> Self {
+        Self {
+            source,
+            path,
+            bytes,
+        }
+    }
+}
+
 /// A named location mapped to a sanitized block.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AnchorLocation {
     pub id: String,
     pub block: usize,
     pub text_offset: usize,
+}
+
+impl AnchorLocation {
+    pub fn new(id: String, block: usize, text_offset: usize) -> Self {
+        Self {
+            id,
+            block,
+            text_offset,
+        }
+    }
 }
 
 /// Whether chapter loading reads illustration bytes.
@@ -74,6 +111,7 @@ pub enum ImageMode {
 
 /// A parsed, reflowable EPUB.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct EpubBook {
     pub metadata: Metadata,
     pub spine: Vec<SpineItem>,
@@ -83,6 +121,20 @@ pub struct EpubBook {
 }
 
 impl EpubBook {
+    pub fn new(
+        metadata: Metadata,
+        spine: Vec<SpineItem>,
+        toc: Vec<TocEntry>,
+        fingerprint: String,
+    ) -> Self {
+        Self {
+            metadata,
+            spine,
+            toc,
+            fingerprint,
+        }
+    }
+
     pub fn title(&self) -> &str {
         &self.metadata.title
     }
@@ -101,7 +153,8 @@ impl EpubBook {
 }
 
 /// One sanitized chapter.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct Chapter {
     pub index: usize,
     pub href: String,

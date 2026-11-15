@@ -191,6 +191,43 @@
             send(message.kind, {});
             return;
         }
+        if (message.kind === "sync-done") {
+            var request = typeof message.request === "number" &&
+                Number.isInteger(message.request) && message.request > 0
+                ? message.request : 0;
+            if (request <= 0) {
+                return;
+            }
+            send("sync-done", { request: request });
+            return;
+        }
+        if (message.kind === "commit-failed") {
+            var status = typeof message.status === "number" &&
+                Number.isInteger(message.status) && message.status >= 0 &&
+                message.status <= 599 ? message.status : 0;
+            var reason = typeof message.message === "string" ? shortText(message.message) : "";
+            if (message.sync === true) {
+                var syncRequest = typeof message.request === "number" &&
+                    Number.isInteger(message.request) && message.request > 0
+                    ? message.request : 0;
+                if (syncRequest <= 0) {
+                    return;
+                }
+                send("commit-failed", {
+                    sync: true,
+                    request: syncRequest,
+                    status: status,
+                    message: reason
+                });
+            } else {
+                send("commit-failed", {
+                    sync: false,
+                    status: status,
+                    message: reason
+                });
+            }
+            return;
+        }
         if (message.kind === "clipboard" && typeof message.text === "string") {
             send("clipboard", { text: message.text, cut: message.cut === true });
             return;
@@ -228,9 +265,9 @@
             message.cmd === "zoomOut" || message.cmd === "actual" ||
             message.cmd === "sync" || message.cmd === "copy" ||
             message.cmd === "cut" || message.cmd === "delete") {
-            postToEngine({ v: 1, kind: message.cmd });
+            postToEngine({ v: 1, kind: message.cmd, seq: message.seq });
         } else if (message.cmd === "paste" && typeof message.text === "string") {
-            postToEngine({ v: 1, kind: "paste", text: message.text });
+            postToEngine({ v: 1, kind: "paste", text: message.text, seq: message.seq });
         }
     }
 

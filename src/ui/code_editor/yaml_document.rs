@@ -234,6 +234,10 @@ struct EditSession {
     panel: Entity<StructureEditPanel>,
     kind: EditKind,
     target: NodeTarget,
+    /// The source revision the panel was opened against. An equal-length edit
+    /// elsewhere keeps every target path and range valid, so only this guard
+    /// can refuse a command composed from the older document.
+    revision: u64,
     edited_notice: Option<SharedString>,
     _events: Subscription,
 }
@@ -952,10 +956,12 @@ impl YamlView {
             },
         );
         panel.update(cx, |panel, cx| panel.focus_first(window, cx));
+        let revision = self.document.read(cx).document().read(cx).revision();
         self.editing = Some(EditSession {
             panel,
             kind,
             target,
+            revision,
             edited_notice,
             _events: events,
         });
@@ -985,6 +991,10 @@ impl YamlView {
         let Some(session) = self.editing.as_ref() else {
             return;
         };
+        if self.document.read(cx).document().read(cx).revision() != session.revision {
+            self.mark_edit_stale(cx);
+            return;
+        }
         let panel = session.panel.clone();
         let kind = session.kind;
         let target = session.target.clone();
@@ -1808,6 +1818,7 @@ impl Render for YamlView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode;
         let focus = self.focus.clone();
+        let focus_ring = cx.theme().primary;
         let item = v_flex()
             .id(("yaml-document", cx.entity_id()))
             .size_full()
@@ -1823,6 +1834,7 @@ impl Render for YamlView {
             YamlMode::Structure => {
                 item.key_context(KEY_CONTEXT)
                     .track_focus(&focus)
+                    .focus_visible(move |style| style.border_1().border_color(focus_ring))
                     .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
                     .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
                     .on_mouse_down(

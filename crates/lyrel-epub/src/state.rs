@@ -32,6 +32,7 @@ pub enum ReaderTheme {
 /// Typography that applies to every chapter of one book.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ReaderPrefs {
     /// Body size in rem, relative to the window's interface scale.
     pub font_scale: f32,
@@ -57,6 +58,7 @@ impl Default for ReaderPrefs {
 /// Where the reader was, in spine and block coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ReadingPosition {
     pub chapter: usize,
     pub block: usize,
@@ -66,6 +68,14 @@ pub struct ReadingPosition {
 }
 
 impl ReadingPosition {
+    pub fn new(chapter: usize, block: usize, fraction: f32) -> Self {
+        Self {
+            chapter,
+            block,
+            fraction,
+        }
+    }
+
     /// Clamps coordinates against a book's actual shape.
     pub fn clamp(&mut self, chapters: usize, blocks: usize) {
         self.chapter = self.chapter.min(chapters.saturating_sub(1));
@@ -79,6 +89,7 @@ impl ReadingPosition {
 
 /// One bookmark: a stable chapter/block anchor plus a readable label.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bookmark {
     pub chapter: usize,
     pub block: usize,
@@ -86,8 +97,20 @@ pub struct Bookmark {
     pub label: String,
 }
 
+impl Bookmark {
+    pub fn new(chapter: usize, block: usize, fraction: f32, label: String) -> Self {
+        Self {
+            chapter,
+            block,
+            fraction,
+            label,
+        }
+    }
+}
+
 /// One book's persisted reading record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReaderRecord {
     pub schema: u32,
     /// Owning Host identity (`HostId.0`); equal paths on different Hosts are

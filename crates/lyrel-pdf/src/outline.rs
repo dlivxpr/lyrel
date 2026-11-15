@@ -22,7 +22,8 @@ use crate::NormRect;
 use crate::decode_pdf_string;
 
 /// One outline entry, flattened depth-first.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct OutlineItem {
     pub title: String,
     /// 0 = top level.
@@ -42,7 +43,8 @@ impl OutlineItem {
 /// An internal destination: a 0-based page plus a normalized point. `x`/`y`
 /// are fractions of the target page's crop box with a top-left origin; they
 /// are absent for `/Fit` and for arrays whose coordinates were null/invalid.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct Destination {
     pub page: usize,
     pub x: Option<f32>,
@@ -58,12 +60,20 @@ pub enum LinkTarget {
 
 /// A clickable `/Link` annotation in normalized page coordinates.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PdfLink {
     pub x: f32,
     pub y: f32,
     pub w: f32,
     pub h: f32,
     pub target: LinkTarget,
+}
+
+impl PdfLink {
+    /// A link rectangle with its resolved target.
+    pub fn new(x: f32, y: f32, w: f32, h: f32, target: LinkTarget) -> Self {
+        Self { x, y, w, h, target }
+    }
 }
 
 const MAX_ITEMS: usize = 10_000;

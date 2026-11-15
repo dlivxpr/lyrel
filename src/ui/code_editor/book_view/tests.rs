@@ -67,6 +67,30 @@ fn open(
     app.read_with(cx, |app, _| app.active_buffer().unwrap().id())
 }
 
+fn side_item_id(
+    app: &Entity<LyrelApp>,
+    cx: &VisualTestContext,
+    label: &str,
+) -> gpui_kit::ElementId {
+    active(app, cx)
+        .read_with(cx, |view, cx| view.test_side_item_id(label, cx))
+        .unwrap_or_else(|| panic!("no side row labelled {label:?}"))
+}
+
+fn click_side_item(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, label: &str) {
+    let id = side_item_id(app, cx, label);
+    cx.update(|window, cx| window.click(id, cx));
+    settle(cx);
+}
+
+fn click_side_remove(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, label: &str) {
+    let id = active(app, cx)
+        .read_with(cx, |view, cx| view.test_side_remove_id(label, cx))
+        .unwrap_or_else(|| panic!("no removable side row labelled {label:?}"));
+    cx.update(|window, cx| window.click(id, cx));
+    settle(cx);
+}
+
 fn fixture(dir: &Path, name: &str, fixed: bool) -> PathBuf {
     let path = dir.join(name);
     let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
@@ -162,7 +186,7 @@ fn spine_navigation_and_full_book_search_reach_the_last_chapter(tcx: &mut TestAp
             view.chapter() == 0 && view.block_text(0) == Some("Spine first chapter")
         })
     });
-    cx.update(|window, cx| window.click(("book-side-item", 1usize), cx));
+    click_side_item(&app, &mut cx, "Final chapter");
     until(&mut cx, |cx| {
         active(&app, cx).read_with(cx, |view, _| {
             view.chapter() == 1 && view.block_text(0) == Some("Final chapter")
@@ -197,7 +221,7 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     assert_ne!(chosen.line_height, before.line_height);
     assert_ne!(chosen.page_width_rem, before.page_width_rem);
     assert_eq!(chosen.theme, lyrel_epub::ReaderTheme::Dark);
-    cx.update(|window, cx| window.click(("book-side-item", 1usize), cx));
+    click_side_item(&app, &mut cx, "Final chapter");
     until(&mut cx, |cx| {
         active(&app, cx).read_with(cx, |view, _| {
             view.chapter() == 1 && view.block_text(0) == Some("Final chapter")
@@ -231,10 +255,59 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
         assert_eq!(doc.prefs(), chosen);
         assert_eq!(doc.bookmarks()[0].chapter, 1);
     });
+    // A second bookmark in the other chapter at a later block, then remove
+    // the earlier one: the remaining row keeps its stable id, its model block
+    // and navigates to its own chapter. The first row was added through the
+    // toolbar; the second uses the same document command so the list is the
+    // consumer under test.
+    app.update_in(&mut cx, |app, _, cx| {
+        let view = app
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .expect("EPUB reader");
+        view.update(cx, |view, cx| {
+            view.document().update(cx, |document, cx| {
+                document.toggle_bookmark(
+                    0,
+                    1,
+                    0.25,
+                    "Earlier chapter, later block".to_string(),
+                    cx,
+                );
+            });
+        });
+    });
+    settle(&mut cx);
+    let labels: Vec<String> = active(&app, &cx).read_with(&cx, |view, cx| {
+        view.document()
+            .read(cx)
+            .bookmarks()
+            .iter()
+            .map(|bookmark| bookmark.label.clone())
+            .collect()
+    });
+    assert_eq!(labels.len(), 2);
+    assert_ne!(labels[0], labels[1]);
     cx.update(|window, cx| window.click("book-bookmarks", cx));
     settle(&mut cx);
-    cx.update(|window, cx| window.click(("book-side-item", 0usize), cx));
-    settle(&mut cx);
+    let remaining_id = side_item_id(&app, &cx, &labels[1]);
+    click_side_remove(&app, &mut cx, &labels[0]);
+    active(&app, &cx).read_with(&cx, |view, cx| {
+        let doc = view.document().read(cx);
+        assert_eq!(doc.bookmarks().len(), 1);
+        assert_eq!(doc.bookmarks()[0].label, labels[1]);
+        assert_eq!(doc.bookmarks()[0].chapter, 0);
+        assert_eq!(doc.bookmarks()[0].block, 1);
+    });
+    assert_eq!(
+        side_item_id(&app, &cx, &labels[1]),
+        remaining_id,
+        "deleting an earlier row does not move keyed identity to another bookmark"
+    );
+    cx.update(|window, cx| window.click(remaining_id, cx));
+    until(&mut cx, |cx| {
+        active(&app, cx).read_with(cx, |view, _| view.chapter() == 0)
+    });
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
