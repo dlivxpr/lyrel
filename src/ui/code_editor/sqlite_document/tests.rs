@@ -353,8 +353,15 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer()
+                .filter(|file| file.path == empty)
                 .and_then(|file| file.input.sqlite().cloned())
-                .is_some_and(|view| view.read_with(cx, |view, _| view.state.objects.is_empty()))
+                .is_some_and(|view| {
+                    view.read_with(cx, |view, _| {
+                        view.state.view.is_some()
+                            && !view.state.busy
+                            && view.state.objects.is_empty()
+                    })
+                })
         })
     });
     cx.update(|window, _| assert!(window.find("sqlite-no-objects").visible()));
@@ -401,32 +408,47 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
             .expect("visible tab")
             .id();
         let other = code.split.as_ref().expect("second group").id;
-        let primary = file.input.sqlite().expect("primary view").clone();
+        let primary = file
+            .presentations
+            .sqlite_existing(tab, code.group)
+            .expect("the focused group rendered its presentation");
         let second = file
             .presentations
             .sqlite_existing(tab, other)
             .expect("the split group rendered its presentation");
         (primary, second, code.group, other)
     });
-    assert_ne!(
-        primary.entity_id(),
-        second.entity_id(),
-        "each group has its own presentation"
-    );
-    assert_ne!(first_group, second_group);
     assert!(!dump(&primary, &cx).1.is_empty());
     assert!(!dump(&second, &cx).1.is_empty());
 
     let primary_focus = primary.read_with(&cx, |view, cx| view.focus_handle(cx));
     let second_focus = second.read_with(&cx, |view, cx| view.focus_handle(cx));
     cx.update(|window, cx| primary_focus.focus(window, cx));
+    settle(&mut cx);
+    app.read_with(&cx, |app, _| {
+        assert_eq!(app.tab_code().unwrap().group, first_group);
+    });
     cx.update(|window, _| {
         assert!(primary_focus.is_focused(window));
         assert!(!second_focus.is_focused(window));
     });
     cx.update(|window, cx| second_focus.focus(window, cx));
+    settle(&mut cx);
+    app.read_with(&cx, |app, _| {
+        assert_eq!(app.tab_code().unwrap().group, second_group);
+    });
     cx.update(|window, _| {
         assert!(second_focus.is_focused(window));
         assert!(!primary_focus.is_focused(window));
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("the other presentation stays open");
+        assert!(!code.is_split());
+        assert_eq!(code.group, first_group);
+        assert_eq!(code.active_id(), Some(id));
     });
 }

@@ -755,7 +755,7 @@ pub(crate) struct SqliteView {
     grid: Entity<TableState<SqliteGrid>>,
     state: UiState,
     synced_revision: u64,
-    synced_grid_revision: u64,
+    synced_grid_revision: Option<u64>,
     page_marker: Option<(u64, u32)>,
     _observe: Subscription,
 }
@@ -769,7 +769,6 @@ impl SqliteView {
         let grid = cx.new(|cx| TableState::new(SqliteGrid::new(), window, cx));
         let state = document.read(cx).snapshot();
         let revision = document.read(cx).revision();
-        let grid_revision = document.read(cx).grid_revision();
         let observe = cx.observe(&document, |view, _, cx| {
             view.sync(cx);
             cx.notify();
@@ -780,7 +779,7 @@ impl SqliteView {
             grid,
             state,
             synced_revision: revision,
-            synced_grid_revision: grid_revision,
+            synced_grid_revision: None,
             page_marker: None,
             _observe: observe,
         };
@@ -800,8 +799,8 @@ impl SqliteView {
             self.synced_revision = revision;
             self.state = self.document.read(cx).snapshot();
         }
-        if grid_revision != self.synced_grid_revision {
-            self.synced_grid_revision = grid_revision;
+        if self.synced_grid_revision != Some(grid_revision) {
+            self.synced_grid_revision = Some(grid_revision);
             let (columns, page, busy) = {
                 let document = self.document.read(cx);
                 (
@@ -930,11 +929,6 @@ impl SqliteView {
     #[cfg(test)]
     pub(super) fn error_text(&self) -> Option<&SharedString> {
         self.state.error.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(super) fn notice_text(&self) -> Option<&SharedString> {
-        self.state.notice.as_ref()
     }
 
     #[cfg(test)]
@@ -1370,6 +1364,8 @@ impl SqliteView {
             .when_some(self.state.error.clone(), |column, error| {
                 column.child(
                     div()
+                        .id("sqlite-error")
+                        .test_support()
                         .max_w(rems(35.))
                         .text_xs()
                         .text_color(muted)
@@ -1448,6 +1444,7 @@ impl Render for SqliteView {
                 .child(toolbar)
                 .child(
                     h_flex()
+                        .items_stretch()
                         .flex_1()
                         .min_h_0()
                         .w_full()

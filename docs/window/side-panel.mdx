@@ -290,7 +290,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 读取视图：每次打开建立一条只读连接与 `BEGIN DEFERRED` 读取事务，schema、列与页共享同一数据库版本。视图有 30 秒闲置上限、180 秒绝对上限与单 Host 64 个视图上限；过期后显示刷新提示，刷新打开新身份。只读打开不得写数据／schema、改变 journal 模式、checkpoint 源库或加载扩展；可能改变 `-shm` 的正常 SQLite 协调与禁止的数据写入分开表述，需要恢复才能打开的 WAL 被明确拒绝。
 - 值与取消：NULL、精确 INTEGER、非有限 REAL、原始 TEXT 与 BLOB 都以类型化值穿过 wire；页面携带页号、列窗与 `more`。取消绑定到具体请求，旧取消不会停止同一视图上的新页；查询有秒预算、行数／行宽与返回大小上限。
 - 呈现：`src/ui/code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。
-- 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。实际 native 窗口、真实 SSH、系统 IME、macOS 与性能结果由集成验收单独记录；workbench seam、Host conformance 与 stdio transport 不能互相冒充。
+- 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。生产工作台回归覆盖类型化值、原件不变与分屏独立焦点；Linux 私有回环 SSH 已执行共享读取契约。该客户端与远端共享测试文件系统，不代替 Windows 远端、独立物理主机、native 窗口、系统 IME、macOS 或性能验收。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

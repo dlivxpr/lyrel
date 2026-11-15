@@ -58,12 +58,18 @@ pub(crate) fn opening(connection: &Connection) -> rusqlite::Result<(String, Vec<
 /// its primary key (then every column).
 pub(crate) fn columns(connection: &Connection, table: &str) -> rusqlite::Result<SqliteColumns> {
     let entries = {
-        let mut statement = connection
-            .prepare("SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden != 1 ORDER BY cid")?;
-        let rows = statement.query_map([table], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
+        // A table-valued pragma initializes a virtual table and triggers
+        // schema-write authorization even for this metadata read. Use the
+        // direct read-only pragma instead; identifiers still use `quote`.
+        let mut statement = connection.prepare(&format!("PRAGMA table_xinfo({})", quote(table)))?;
+        let mut rows = statement.query([])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            if row.get::<_, i64>(6)? != 1 {
+                entries.push((row.get::<_, String>(1)?, row.get::<_, i64>(5)?));
+            }
+        }
+        entries
     };
     let names = entries
         .iter()
@@ -222,8 +228,8 @@ fn preview_projection(column: &str) -> [String; 3] {
         format!("typeof({name})"),
         format!(
             "CASE typeof({name}) \
-             WHEN 'text' THEN substr(CAST({name} AS BLOB),1,{TEXT_PREVIEW_BYTES}) \
-             WHEN 'blob' THEN substr({name},1,{BLOB_PREVIEW_BYTES}) \
+             WHEN 'text' THEN coalesce(substr(CAST({name} AS BLOB),1,{TEXT_PREVIEW_BYTES}),x'') \
+             WHEN 'blob' THEN coalesce(substr({name},1,{BLOB_PREVIEW_BYTES}),x'') \
              WHEN 'integer' THEN {name} \
              WHEN 'real' THEN {name} \
              ELSE NULL END"
@@ -342,8 +348,8 @@ pub(crate) fn value(
     let sql = format!(
         "SELECT typeof({name}), \
          CASE typeof({name}) \
-         WHEN 'text' THEN substr(CAST({name} AS BLOB),{start},{size}) \
-         WHEN 'blob' THEN substr({name},{start},{size}) \
+         WHEN 'text' THEN coalesce(substr(CAST({name} AS BLOB),{start},{size}),x'') \
+         WHEN 'blob' THEN coalesce(substr({name},{start},{size}),x'') \
          WHEN 'integer' THEN {name} \
          WHEN 'real' THEN {name} \
          ELSE NULL END, \

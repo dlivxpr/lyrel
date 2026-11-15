@@ -179,6 +179,24 @@ fn every_storage_class_survives_the_wire_value() {
         panic!("expected text");
     };
     assert_eq!(preview.len(), 8);
+    for row in 1..=3 {
+        assert_eq!(
+            page.rows[row][4],
+            SqliteValue::Blob {
+                preview: Vec::new(),
+                total: 0
+            }
+        );
+        assert_eq!(
+            service
+                .value(view, &query, row as u32, 4, 0, VALUE_CHUNK_BYTES, &cancel)
+                .unwrap(),
+            SqliteValue::Blob {
+                preview: Vec::new(),
+                total: 0
+            },
+        );
+    }
 }
 
 #[test]
@@ -453,6 +471,9 @@ fn a_wal_needing_recovery_is_reported_instead_of_repaired() {
     let wal = sidecar(&path, "-wal");
     let wal_before = fs::read(&wal).unwrap();
     drop(connection);
+    // NO_CKPT_ON_CLOSE intentionally keeps the WAL and its coordination
+    // file. Model a crashed writer by removing only this fixture's SHM.
+    fs::remove_file(sidecar(&path, "-shm")).unwrap();
     assert!(wal.exists(), "the writer left a WAL to recover");
     assert!(!sidecar(&path, "-shm").exists());
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();

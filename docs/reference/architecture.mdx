@@ -227,7 +227,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。`lyrel-core/src/host/sqlite/` 移植 Glim `browser.rs` 的标识符引用、单绑定参数 predicate、稳定顺序、列窗、count、page 与 value 分块；`sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制被明确排除。
 
-- 打开时以 `READ_ONLY` 连接、`query_only`、`DEFENSIVE`、`trusted_schema=OFF` 与拒绝写／ATTACH／带值 PRAGMA 的 authorizer 固定一条 `BEGIN DEFERRED` 读取视图；schema 列表、列元数据与每一页都来自同一数据库版本。只读打开仍可能正常协调或创建 `-shm`，但不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；需要 WAL 恢复才能打开时返回明确拒绝，不升级为写打开。
+- 打开时以 `READ_ONLY` 连接、`query_only`、`DEFENSIVE`、`trusted_schema=OFF` 与拒绝写／ATTACH／通用带值 PRAGMA 的 authorizer 固定一条 `BEGIN DEFERRED` 读取视图；仅为列元数据开放带表名的 `table_xinfo`，不放行 journal／恢复操作。schema 列表、列元数据与每一页都来自同一数据库版本。只读打开仍可能正常协调或创建 `-shm`，但不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；需要 WAL 恢复才能打开时返回明确拒绝，不升级为写打开。
 - 每个视图有 30 秒 idle 与 180 秒绝对寿命，进程级 reaper 在无后续请求时也会退役；单 Host 最多 64 个视图。过期视图以 `StaleView` 返回，GUI 显示刷新提示并打开新身份，不把旧页冒充当前数据。
 - 取消绑定到请求而非视图：`Requests` 的请求级 interrupt hook 调用 `sqlite3_interrupt`，progress handler 同时检查令牌与查询秒预算；旧 cancel 不能停止同一视图上后续页。连接断开时服务端清空该连接的全部视图。
 - wire 为 control v18 的 `ControlRequest::Sqlite`／`ReplyOk::Sqlite`，能力名 `sqlite-browse-v1`。缺少能力的 peer 在发送前返回 `Unsupported`，不返回假空 schema。GUI 不在本地读取同名路径：`RemoteHost` 把请求发给实际 daemon，映射 Host 在测试宿主中同样转到其根目录。

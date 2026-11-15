@@ -29,6 +29,9 @@
 
 ### 修复
 
+- #295：列元数据改为受限只读 `table_xinfo`；空 TEXT／BLOB 的预览和完整值分块保留原类型，可能触发恢复的 schema 读取保留 WAL 拒绝原因。Linux 真实回环 SSH 共享读取契约已通过；不将该场景扩展为 Windows 远端、独立物理主机或原生 UI 验收。
+
+- #295：SQLite 分屏首次建立时立即装入文档当前分页，不把尚未填充的 grid 误标为已同步；点击／键盘焦点同步到工作台当前分组，关闭等命令只操作实际聚焦的一侧。工作台回归按真实分组身份验证两侧数据、焦点切换与关闭后另一呈现仍保留，不把原输入句柄误认成新建分组。
 - #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。
 - #270：将 Glyph glossary 投影与字体 coverage 应答凭证分开：CLI／observer 继续接收已协商的 `GlyphState`，但仅实际声明 `SubscribeGlyphRender` 的当前 controller 接收 `GlyphQuery`；没有字体应答端时保持协议规定的静默，不让查询积压到忽略该帧的 CLI。移除无调用的 attach／observe 兼容包装，公开 `RetainedGlyph` 记录标为非穷尽，不改 wire kind、协议版本或 GUI 字体权威。
 - #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。

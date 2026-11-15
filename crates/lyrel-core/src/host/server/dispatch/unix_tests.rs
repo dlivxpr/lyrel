@@ -448,10 +448,11 @@ fn sqlite_views_belong_to_the_connection_that_opened_them() {
     let second = pair_with(host);
     let cancel = SqliteCancel::default();
     let opened = first.host.sqlite_open(&path, &cancel).unwrap();
+    let columns = first.host.sqlite_columns(opened.view, "items", &cancel).unwrap();
     let query = SqliteQuery {
         table: "items".into(),
-        columns: vec!["id".into(), "value".into()],
-        order: vec!["rowid".into()],
+        columns: columns.names,
+        order: columns.order,
         ..SqliteQuery::default()
     };
     assert_eq!(

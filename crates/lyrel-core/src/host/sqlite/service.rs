@@ -157,7 +157,7 @@ impl SqliteService {
                 "PRAGMA query_only=ON; PRAGMA cache_size=-{};",
                 super::CACHE_KIB
             ))
-            .map_err(map_error)?;
+            .map_err(|error| open_error(path, error))?;
         // Read-only by construction from here on: the request shapes never
         // carry DML, and this refuses the classes that could write or attach
         // another database if a malicious schema asked for them.
@@ -176,8 +176,8 @@ impl SqliteService {
         // metadata and later pages all belong to one database version.
         connection
             .execute_batch("BEGIN DEFERRED")
-            .map_err(map_error)?;
-        let opened = browser::opening(&connection).map_err(map_error);
+            .map_err(|error| open_error(path, error))?;
+        let opened = browser::opening(&connection).map_err(|error| open_error(path, error));
         clear_budget(&mut connection);
         drop(hook);
         let (journal_mode, objects) = match opened {
@@ -497,7 +497,8 @@ fn clear_budget(connection: &mut Connection) {
 /// schema-change classes here means even a hostile view cannot make browsing
 /// write, attach another file, or change the journal mode. Reads, SELECTs,
 /// built-in functions and read-only pragmas stay available; extension loading
-/// is not compiled into this build, and the pragma with a value is denied.
+/// is not compiled into this build. Pragma arguments are allowed only for
+/// the read-only table_xinfo metadata operation.
 fn read_only_authorizer(context: AuthContext<'_>) -> Authorization {
     match context.action {
         AuthAction::Read { .. }
@@ -506,6 +507,12 @@ fn read_only_authorizer(context: AuthContext<'_>) -> Authorization {
         | AuthAction::Recursive => Authorization::Allow,
         AuthAction::Pragma {
             pragma_value: None, ..
+        } => Authorization::Allow,
+        // The sole argument-taking pragma in browser query shapes is a
+        // metadata read, not a setter. Never permit arbitrary pragma values.
+        AuthAction::Pragma {
+            pragma_name: "table_xinfo",
+            ..
         } => Authorization::Allow,
         AuthAction::Transaction {
             operation:
