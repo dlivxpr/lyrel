@@ -93,8 +93,9 @@ impl Drop for YamlDocument {
 
 impl YamlDocument {
     pub(super) fn new(document: Entity<Document>, cx: &mut Context<Self>) -> Self {
-        let watch =
-            cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.invalidate(cx));
+        let watch = cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| {
+            this.invalidate(cx)
+        });
         let mut this = Self {
             document,
             projection: None,
@@ -232,6 +233,7 @@ struct EditSession {
     panel: Entity<StructureEditPanel>,
     kind: EditKind,
     target: NodeTarget,
+    edited_notice: Option<SharedString>,
     _events: Subscription,
 }
 
@@ -381,15 +383,6 @@ impl YamlView {
     }
 
     #[cfg(any(test, feature = "native-markdown-tests"))]
-    pub(crate) fn edit_texts(&self, cx: &App) -> Option<(Option<String>, String)> {
-        let session = self.editing.as_ref()?;
-        Some((
-            session.panel.read(cx).key_text(cx),
-            session.panel.read(cx).value_text(cx),
-        ))
-    }
-
-    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(crate) fn mutation_notice(&self) -> Option<SharedString> {
         self.mutation_notice.clone()
     }
@@ -520,8 +513,9 @@ impl YamlView {
         after: Range<usize>,
         cx: &mut Context<Self>,
     ) {
-        self.source
-            .update(cx, |source, cx| source.set_history_selection(before, after, cx));
+        self.source.update(cx, |source, cx| {
+            source.set_history_selection(before, after, cx)
+        });
     }
 
     pub(crate) fn seed_presentation(
@@ -600,6 +594,46 @@ impl YamlView {
         cx.notify();
     }
 
+    /// Block scalars and complex keys keep their exact layout by opening the
+    /// occurrence in Source instead of guessing a re-rendered fragment. This
+    /// is an explicit tree action, not a silent refusal: the same Document
+    /// history, save, conflict and reopen lifecycle apply.
+    fn open_source_range(
+        &mut self,
+        range: Range<usize>,
+        notice: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_edit(None, cx);
+        self.finish_composition(cx);
+        self.mutation_error = None;
+        self.mutation_notice = Some(notice);
+        self.mode = YamlMode::Source;
+        self.source
+            .update(cx, |source, cx| source.select_range(range, cx));
+        let focus = self.source.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn handoff_notice(
+        &self,
+        node: &projection::YamlNode,
+        key: bool,
+        projection: &YamlProjection,
+        base: L10nKey,
+    ) -> SharedString {
+        let mut notice = t(base).to_owned();
+        if let Some((anchor, count)) = self.effective_anchor(node, key, projection)
+            && let Some(extra) = self.anchor_notice(&Some(anchor), count, key)
+        {
+            notice.push(' ');
+            notice.push_str(&extra);
+        }
+        notice.into()
+    }
+
     fn current_projection(&self, cx: &App) -> Option<Arc<YamlProjection>> {
         let document = self.document.read(cx);
         let projection = document.projection.clone()?;
@@ -613,7 +647,10 @@ impl YamlView {
         Some(source.read(cx).snapshot().shared_text())
     }
 
-    fn selected_node<'a>(&self, projection: &'a YamlProjection) -> Option<&'a projection::YamlNode> {
+    fn selected_node<'a>(
+        &self,
+        projection: &'a YamlProjection,
+    ) -> Option<&'a projection::YamlNode> {
         projection.nodes().get(self.selected?)
     }
 
@@ -630,8 +667,8 @@ impl YamlView {
         let Some(node) = self.selected_node(&projection) else {
             return caps;
         };
-        caps.value = node.value_editable();
-        caps.key = node.rename_key_editable();
+        caps.value = node.value_editable() || node.block_scalar;
+        caps.key = node.rename_key_editable() || (node.entry && node.key_detail_range.is_some());
         caps.add = node.can_add();
         caps.add_is_sequence = node.container == Some(ContainerKind::Sequence);
         caps.remove = node.can_remove();
@@ -645,6 +682,17 @@ impl YamlView {
         let Some(node) = self.selected_node(&projection) else {
             return;
         };
+        if node.block_scalar {
+            let range = node.content_range.clone();
+            let notice = self.handoff_notice(
+                node,
+                false,
+                &projection,
+                L10nKey::EditorYamlBlockScalarSource,
+            );
+            self.open_source_range(range, notice, window, cx);
+            return;
+        }
         if !node.value_editable() {
             self.mutation_error = Some(self.edit_unsupported(node));
             cx.notify();
@@ -661,10 +709,8 @@ impl YamlView {
         };
         let target = NodeTarget::of(node);
         let title = t_fmt(L10nKey::EditorYamlEditValueTitle, &[("path", &node.path)]).into();
-        let notice = self
-            .effective_anchor(node, false, &projection)
-            .map(|(anchor, count)| self.anchor_notice(&Some(anchor), count, false))
-            .flatten();
+        let (notice, edited_notice) =
+            self.impact_notices(self.effective_anchor(node, false, &projection), false);
         self.open_edit(
             window,
             cx,
@@ -672,6 +718,7 @@ impl YamlView {
             target,
             title,
             notice,
+            edited_notice,
             None,
             EditField::new(
                 t(L10nKey::EditorYamlValueName),
@@ -689,8 +736,18 @@ impl YamlView {
             return;
         };
         if !node.rename_key_editable() {
-            self.mutation_error = Some(self.edit_unsupported(node));
-            cx.notify();
+            if let Some(range) = node.key_detail_range.clone() {
+                let notice = self.handoff_notice(
+                    node,
+                    true,
+                    &projection,
+                    L10nKey::EditorYamlComplexKeySource,
+                );
+                self.open_source_range(range, notice, window, cx);
+            } else {
+                self.mutation_error = Some(self.edit_unsupported(node));
+                cx.notify();
+            }
             return;
         }
         let Some(raw) = node.key_text.clone() else {
@@ -698,10 +755,8 @@ impl YamlView {
         };
         let target = NodeTarget::of(node);
         let title = t_fmt(L10nKey::EditorYamlRenameKeyTitle, &[("path", &node.path)]).into();
-        let notice = self
-            .effective_anchor(node, true, &projection)
-            .map(|(anchor, count)| self.anchor_notice(&Some(anchor), count, true))
-            .flatten();
+        let (notice, edited_notice) =
+            self.impact_notices(self.effective_anchor(node, true, &projection), true);
         self.open_edit(
             window,
             cx,
@@ -709,6 +764,7 @@ impl YamlView {
             target,
             title,
             notice,
+            edited_notice,
             None,
             EditField::new(
                 t(L10nKey::EditorYamlKeyName),
@@ -725,15 +781,12 @@ impl YamlView {
         let Some(node) = self.selected_node(&projection) else {
             return;
         };
-        let notice = self
-            .effective_anchor(node, false, &projection)
-            .map(|(anchor, count)| self.anchor_notice(&Some(anchor), count, false))
-            .flatten();
+        let (notice, edited_notice) =
+            self.impact_notices(self.effective_anchor(node, false, &projection), false);
         match node.container {
             Some(ContainerKind::Mapping) => {
                 let target = NodeTarget::of(node);
-                let title =
-                    t_fmt(L10nKey::EditorYamlAddKeyTitle, &[("path", &node.path)]).into();
+                let title = t_fmt(L10nKey::EditorYamlAddKeyTitle, &[("path", &node.path)]).into();
                 self.open_edit(
                     window,
                     cx,
@@ -741,6 +794,7 @@ impl YamlView {
                     target,
                     title,
                     notice,
+                    edited_notice,
                     Some(EditField::new(
                         t(L10nKey::EditorYamlKeyName),
                         t(L10nKey::EditorYamlKeyPlaceholder),
@@ -755,8 +809,7 @@ impl YamlView {
             }
             Some(ContainerKind::Sequence) => {
                 let target = NodeTarget::of(node);
-                let title =
-                    t_fmt(L10nKey::EditorYamlAddItemTitle, &[("path", &node.path)]).into();
+                let title = t_fmt(L10nKey::EditorYamlAddItemTitle, &[("path", &node.path)]).into();
                 self.open_edit(
                     window,
                     cx,
@@ -764,6 +817,7 @@ impl YamlView {
                     target,
                     title,
                     notice,
+                    edited_notice,
                     None,
                     EditField::new(
                         t(L10nKey::EditorYamlValueName),
@@ -783,11 +837,11 @@ impl YamlView {
         let Some(target) = self.selected_target(cx) else {
             return;
         };
-        let impact = self.impact_for(&target, true, cx);
+        let edited_notice = self.selected_edited_notice(cx, false);
         match self.apply_mutation(Mutation::Remove { target }, cx) {
             Ok(()) => {
                 self.mutation_error = None;
-                self.mutation_notice = impact.and_then(|impact| impact.edited);
+                self.mutation_notice = edited_notice;
                 cx.notify();
             }
             Err(error) => {
@@ -806,6 +860,7 @@ impl YamlView {
         target: NodeTarget,
         title: SharedString,
         notice: Option<SharedString>,
+        edited_notice: Option<SharedString>,
         key: Option<EditField>,
         value: EditField,
     ) {
@@ -830,6 +885,7 @@ impl YamlView {
             panel,
             kind,
             target,
+            edited_notice,
             _events: events,
         });
         cx.notify();
@@ -861,41 +917,30 @@ impl YamlView {
         let panel = session.panel.clone();
         let kind = session.kind;
         let target = session.target.clone();
-        let (impact, mutation) = match kind {
-            EditKind::Value => (
-                self.impact_for(&target, true, cx),
-                Mutation::SetValue {
-                    target,
-                    value: panel.read(cx).value_text(cx),
-                },
-            ),
-            EditKind::Key => (
-                self.impact_for(&target, false, cx),
-                Mutation::RenameKey {
-                    target,
-                    key: panel.read(cx).value_text(cx),
-                },
-            ),
-            EditKind::AddMember => (
-                self.impact_for(&target, true, cx),
-                Mutation::AddMember {
-                    container: target,
-                    key: panel.read(cx).key_text(cx).unwrap_or_default(),
-                    value: panel.read(cx).value_text(cx),
-                },
-            ),
-            EditKind::AddItem => (
-                self.impact_for(&target, true, cx),
-                Mutation::AddItem {
-                    container: target,
-                    value: panel.read(cx).value_text(cx),
-                },
-            ),
+        let edited_notice = session.edited_notice.clone();
+        let mutation = match kind {
+            EditKind::Value => Mutation::SetValue {
+                target,
+                value: panel.read(cx).value_text(cx),
+            },
+            EditKind::Key => Mutation::RenameKey {
+                target,
+                key: panel.read(cx).value_text(cx),
+            },
+            EditKind::AddMember => Mutation::AddMember {
+                container: target,
+                key: panel.read(cx).key_text(cx).unwrap_or_default(),
+                value: panel.read(cx).value_text(cx),
+            },
+            EditKind::AddItem => Mutation::AddItem {
+                container: target,
+                value: panel.read(cx).value_text(cx),
+            },
         };
         match self.apply_mutation(mutation, cx) {
             Ok(()) => {
                 self.mutation_error = None;
-                self.mutation_notice = impact.and_then(|impact| impact.edited);
+                self.mutation_notice = edited_notice;
                 self.close_edit(Some(window), cx);
             }
             Err(error) => {
@@ -934,7 +979,12 @@ impl YamlView {
     }
 
     fn edit_unsupported(&self, node: &projection::YamlNode) -> SharedString {
-        let key = match (node.alias.is_some(), node.block_scalar, node.entry, node.key_editable) {
+        let key = match (
+            node.alias.is_some(),
+            node.block_scalar,
+            node.entry,
+            node.key_editable,
+        ) {
             (true, _, _, _) => L10nKey::EditorYamlEditAlias,
             (_, true, _, _) => L10nKey::EditorYamlEditBlockScalar,
             (_, _, true, false) => L10nKey::EditorYamlEditComplexKey,
@@ -964,15 +1014,12 @@ impl YamlView {
             MutationError::Unsupported(UnsupportedEdit::NotScalar) => {
                 t(L10nKey::EditorYamlEditNotScalar).into()
             }
-            MutationError::Unsupported(UnsupportedEdit::LastBlockItem) => {
-                t(L10nKey::EditorYamlEditLastBlockItem).into()
-            }
             MutationError::Unsupported(UnsupportedEdit::EmptyDocument) => {
                 t(L10nKey::EditorYamlEditEmptyDocument).into()
             }
-            MutationError::Unsupported(
-                UnsupportedEdit::NotContainer,
-            ) => t(L10nKey::EditorYamlEditUnsupported).into(),
+            MutationError::Unsupported(UnsupportedEdit::NotContainer) => {
+                t(L10nKey::EditorYamlEditUnsupported).into()
+            }
             MutationError::InvalidFragment(message) => t_fmt(
                 L10nKey::EditorYamlEditInvalidValue,
                 &[("message", &message)],
@@ -1207,7 +1254,7 @@ impl YamlView {
         });
         let has_detail = self.selected_location(cx).is_some();
         let caps = self.edit_caps(cx);
-        let editable = self.current_projection(cx).is_some();
+        let editable = self.mode == YamlMode::Structure && self.current_projection(cx).is_some();
         let mutation_error = self.mutation_error.clone();
         let mutation_notice = self.mutation_notice.clone();
         let mode = self.mode;
@@ -1236,13 +1283,7 @@ impl YamlView {
             .py_1()
             .border_b_1()
             .border_color(border)
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("YAML"),
-            )
+            .child(div().flex_none().text_xs().text_color(muted).child("YAML"))
             .when_some(documents, |row, documents| {
                 row.child(
                     div()
@@ -1321,7 +1362,7 @@ impl YamlView {
             .when_some(mutation_notice, |row, notice| {
                 row.child(
                     div()
-                        .id(("yaml-anchor-notice", entity))
+                        .id(("yaml-notice", entity))
                         .test_support()
                         .aria_value(notice.clone())
                         .flex_none()
@@ -1474,8 +1515,11 @@ impl YamlView {
                             | YamlNodeKind::Empty => cx.theme().muted_foreground,
                         };
                         let badge = badge_for(node, projection);
-                        let row_id =
-                            SharedString::from(format!("yaml-row-{}-{}", entity.as_u64(), row.node));
+                        let row_id = SharedString::from(format!(
+                            "yaml-row-{}-{}",
+                            entity.as_u64(),
+                            row.node
+                        ));
                         let index = row.node;
                         structure_row(
                             StructureRowData {
@@ -1493,23 +1537,19 @@ impl YamlView {
                                 error: node.alias_error.clone().map(SharedString::from),
                                 aria_label: node.path.clone().into(),
                             },
-                            cx.listener(
-                                |view, _: &gpui_kit::MouseDownEvent, window, cx| {
-                                    view.focus.focus(window, cx);
-                                    cx.stop_propagation();
-                                },
-                            ),
-                            cx.listener(
-                                move |view, event: &gpui_kit::ClickEvent, window, cx| {
-                                    view.focus.focus(window, cx);
-                                    if event.click_count() > 1 {
-                                        view.select_node(index, cx);
-                                        view.reveal_selected_source(window, cx);
-                                    } else {
-                                        view.activate_node(index, cx);
-                                    }
-                                },
-                            ),
+                            cx.listener(|view, _: &gpui_kit::MouseDownEvent, window, cx| {
+                                view.focus.focus(window, cx);
+                                cx.stop_propagation();
+                            }),
+                            cx.listener(move |view, event: &gpui_kit::ClickEvent, window, cx| {
+                                view.focus.focus(window, cx);
+                                if event.click_count() > 1 {
+                                    view.select_node(index, cx);
+                                    view.reveal_selected_source(window, cx);
+                                } else {
+                                    view.activate_node(index, cx);
+                                }
+                            }),
                             cx,
                         )
                     })
@@ -1542,6 +1582,37 @@ impl YamlView {
 
     /// 选中节点自身或最近的带锚点祖先。编辑锚定 collection 的后代同样会
     /// 改变别名解析结果，因此影响说明不能只看直接值。
+    fn impact_notices(
+        &self,
+        impact: Option<(String, usize)>,
+        key: bool,
+    ) -> (Option<SharedString>, Option<SharedString>) {
+        let Some((name, count)) = impact else {
+            return (None, None);
+        };
+        let notice = self.anchor_notice(&Some(name.clone()), count, key);
+        let edited = Some(self.anchor_edited(&name, count));
+        (notice, edited)
+    }
+
+    fn anchor_edited(&self, name: &str, count: usize) -> SharedString {
+        t_fmt(
+            match count {
+                0 => L10nKey::EditorYamlAnchorEditedNone,
+                _ => L10nKey::EditorYamlAnchorEdited,
+            },
+            &[("anchor", name), ("count", &count.to_string())],
+        )
+        .into()
+    }
+
+    fn selected_edited_notice(&self, cx: &App, key: bool) -> Option<SharedString> {
+        let projection = self.current_projection(cx)?;
+        let node = self.selected_node(&projection)?;
+        let (name, count) = self.effective_anchor(node, key, &projection)?;
+        Some(self.anchor_edited(&name, count))
+    }
+
     fn effective_anchor(
         &self,
         node: &projection::YamlNode,
@@ -1573,7 +1644,6 @@ impl YamlView {
         key: bool,
     ) -> Option<SharedString> {
         let name = anchor.as_ref()?;
-        let anchor = format!("&{name}");
         let where_ = if key {
             t(L10nKey::EditorYamlKeyName)
         } else {
@@ -1586,7 +1656,7 @@ impl YamlView {
                     _ => L10nKey::EditorYamlAnchorImpact,
                 },
                 &[
-                    ("anchor", &anchor),
+                    ("anchor", &name),
                     ("count", &aliases.to_string()),
                     ("field", where_),
                 ],
@@ -1594,36 +1664,6 @@ impl YamlView {
             .into(),
         )
     }
-
-    fn impact_for(
-        &self,
-        target: &NodeTarget,
-        value: bool,
-        cx: &App,
-    ) -> Option<AnchorImpact> {
-        let projection = self.current_projection(cx)?;
-        let node = projection
-            .nodes()
-            .iter()
-            .find(|node| node.path == target.path && node.range == target.range)?;
-        let (name, count) = self.effective_anchor(node, !value, &projection)?;
-        let anchor = format!("&{name}");
-        let edited: SharedString = t_fmt(
-            match count {
-                0 => L10nKey::EditorYamlAnchorEditedNone,
-                _ => L10nKey::EditorYamlAnchorEdited,
-            },
-            &[("anchor", &anchor), ("count", &count.to_string())],
-        )
-        .into();
-        Some(AnchorImpact {
-            edited: Some(edited),
-        })
-    }
-}
-
-struct AnchorImpact {
-    edited: Option<SharedString>,
 }
 
 fn badge_for(node: &projection::YamlNode, projection: &YamlProjection) -> Option<SharedString> {
@@ -1709,22 +1749,21 @@ impl Render for YamlView {
         };
         let item = item.child(body);
         match mode {
-            YamlMode::Structure => item
-                .key_context(KEY_CONTEXT)
-                .track_focus(&focus)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.focus.focus(window, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .on_key_down(
-                    cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            YamlMode::Structure => {
+                item.key_context(KEY_CONTEXT)
+                    .track_focus(&focus)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.focus.focus(window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         this.key(event, window, cx)
-                    }),
-                )
-                .into_any_element(),
+                    }))
+                    .into_any_element()
+            }
             YamlMode::Source => item.into_any_element(),
         }
     }

@@ -153,13 +153,6 @@ fn click_row(view: &Entity<YamlView>, cx: &mut VisualTestContext, label: &str) {
     settle(cx);
 }
 
-fn double_click_row(view: &Entity<YamlView>, cx: &mut VisualTestContext, label: &str) {
-    let snapshot = row(view, cx, label);
-    let id = snapshot.path().last().cloned().expect("a row element id");
-    cx.update(|window, cx| window.double_click(id, cx));
-    settle(cx);
-}
-
 fn selected_slice(
     app: &Entity<LyrelApp>,
     view: &Entity<YamlView>,
@@ -324,7 +317,11 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
         YamlMode::Structure
     );
     cx.update(|window, _| {
-        assert!(window.find(("yaml-mode-toggle", view.entity_id())).visible());
+        assert!(
+            window
+                .find(("yaml-mode-toggle", view.entity_id()))
+                .visible()
+        );
         assert!(window.find("status-yaml-mode").visible());
         assert!(window.find("status-yaml-count").visible());
         assert!(window.try_find("status-image-readonly").is_none());
@@ -385,10 +382,7 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
     let slice = selected_slice(&app, &view, &cx).expect("selected entry");
     assert!(slice.contains("retries: 3"), "selected slice: {slice:?}");
     reveal_selected(&app, &mut cx);
-    assert_eq!(
-        view.read_with(&cx, |view, _| view.mode()),
-        YamlMode::Source
-    );
+    assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
     let source_range = view.read_with(&cx, |view, cx| view.source().read(cx).selected_range());
     let text = source_text(&app, &cx);
     assert!(text[source_range].contains("retries"));
@@ -410,6 +404,55 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
     // Untouched save writes the same BOM and every mixed terminator.
     save(&app, &mut cx);
     assert_eq!(std::fs::read(&remote_file).unwrap(), original());
+
+    // A block scalar is a real edit path: the tree opens its exact source
+    // range, where the layout and chomping can be changed without guessing.
+    click_row(&view, &mut cx, "$#1[\"block\"]");
+    click_button(&view, &mut cx, "yaml-edit-value");
+    assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
+    let range = view.read_with(&cx, |view, cx| view.source().read(cx).selected_range());
+    let text = source_text(&app, &cx);
+    let selected = &text[range];
+    assert!(
+        selected.starts_with("|-") && selected.contains("第一行"),
+        "block scalar handoff selection: {selected:?}"
+    );
+    assert!(
+        view.read_with(&cx, |view, _| view.mutation_notice())
+            .is_some_and(|notice| notice.contains("Block scalar opened"))
+    );
+    let at = text.find("第一行").expect("block body");
+    type_source(&app, &mut cx, at..at + "第一行".len(), "改行");
+    toggle_mode(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(
+        source_text(&app, &cx).contains("|-\n  改行\n  第二行"),
+        "block source: {:?}",
+        source_text(&app, &cx)
+    );
+
+    // A complex key likewise opens its complete source syntax; no scalar
+    // replacement is generated for a key the tree cannot rewrite losslessly.
+    click_row(&view, &mut cx, "$#1[\"[left, right]\"]");
+    click_button(&view, &mut cx, "yaml-rename-key");
+    assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
+    let range = view.read_with(&cx, |view, cx| view.source().read(cx).selected_range());
+    assert_eq!(&source_text(&app, &cx)[range], "[left, right]");
+    assert!(
+        view.read_with(&cx, |view, _| view.mutation_notice())
+            .is_some_and(|notice| notice.contains("Complex key opened"))
+    );
+    let text = source_text(&app, &cx);
+    let at = text.find("[left, right]").expect("complex key");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "[left, right]".len(),
+        "[left, third]",
+    );
+    toggle_mode(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(source_text(&app, &cx).contains("[left, third]"));
 
     // Editing a value inside the anchored mapping explains the alias impact,
     // and the alias itself remains a reference.
@@ -450,9 +493,17 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
 
     save(&app, &mut cx);
     let edited = replace_bytes(
-        &replace_bytes(original(), b"retries: 3", b"retries: 5"),
-        "\"原样\"".as_bytes(),
-        "\"改后\"".as_bytes(),
+        &replace_bytes(
+            &replace_bytes(
+                &replace_bytes(original(), b"retries: 3", b"retries: 5"),
+                "\"原样\"".as_bytes(),
+                "\"改后\"".as_bytes(),
+            ),
+            "第一行".as_bytes(),
+            "改行".as_bytes(),
+        ),
+        b"[left, right]",
+        b"[left, third]",
     );
     assert_eq!(std::fs::read(&remote_file).unwrap(), edited);
     assert_eq!(
@@ -465,12 +516,8 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
     // edited value, not an expanded copy.
     use yaml_edit::{AnchorRegistry, YamlFile};
     let saved = std::fs::read(&remote_file).unwrap();
-    let text = std::str::from_utf8(
-        saved
-            .strip_prefix(&[0xef, 0xbb, 0xbf])
-            .expect("saved BOM"),
-    )
-    .unwrap();
+    let text =
+        std::str::from_utf8(saved.strip_prefix(&[0xef, 0xbb, 0xbf]).expect("saved BOM")).unwrap();
     let file = YamlFile::parse(text).tree();
     let document = file.documents().next().expect("first document");
     let registry = AnchorRegistry::from_document(&document);
@@ -521,6 +568,12 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
         row_value(&reopened, &mut cx, "$#1[\"copy\"]").as_deref(),
         Some("*defaults")
     );
+    assert!(
+        row_value(&reopened, &mut cx, "$#1[\"block\"]")
+            .as_deref()
+            .is_some_and(|value| value.contains("改行") && value.contains("|-"))
+    );
+    assert!(maybe_row(&reopened, &mut cx, "$#1[\"[left, third]\"]").is_some());
     assert_eq!(
         source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
         edited
@@ -528,9 +581,7 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(
-    tcx: &mut TestAppContext,
-) {
+fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let text = "# head\r\nflow: {a: 1, b: [x, y]}\r\nblock:\r\n  one: 1\r\n  two: 2\r\nitems:\r\n  - alpha\r\n  - beta\r\n# tail\r\n";
@@ -563,7 +614,11 @@ fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(
     replace_panel_text(&view, &mut cx, "structure-edit-value", "z");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    assert!(source_text(&app, &cx).contains("b: [x, y, z]"));
+    assert!(
+        source_text(&app, &cx).contains("b: [x, y, z]"),
+        "flow item source: {:?}",
+        source_text(&app, &cx)
+    );
 
     // Insert into a block mapping and a block sequence.
     click_row(&view, &mut cx, "$[\"block\"]");
@@ -595,7 +650,9 @@ fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(
     assert!(source_text(&app, &cx).contains("# head"));
     assert!(source_text(&app, &cx).contains("# tail"));
 
-    // Undo and redo are the same shared history.
+    // Undo and redo are the same shared history. The source presentation owns
+    // the keyboard action; the tree merely reflects the resulting revision.
+    toggle_mode(&view, &mut cx);
     press(&app, &mut cx, &secondary("z"));
     until(&mut cx, |cx| is_ready(&view, cx));
     assert!(source_text(&app, &cx).contains("b: [x, y, z]"));
@@ -609,6 +666,106 @@ fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(
     assert_eq!(
         source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
         expected.as_bytes()
+    );
+}
+
+#[gpui_kit::test]
+fn removing_the_last_block_member_keeps_an_empty_flow_collection(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let text = "one:\r\n  only: 1\r\ntwo:\r\n  - only\r\n";
+    let path = fixture(dir.path(), "last.yaml", text.as_bytes());
+    let host: SharedHost = FileHost::new(HostId(2925));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host, &path);
+
+    click_row(&view, &mut cx, "$[\"one\"][\"only\"]");
+    click_button(&view, &mut cx, "yaml-remove-member");
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(
+        source_text(&app, &cx).contains("one:\n  {}\n"),
+        "empty mapping: {:?}",
+        source_text(&app, &cx)
+    );
+
+    click_row(&view, &mut cx, "$[\"two\"][0]");
+    click_button(&view, &mut cx, "yaml-remove-member");
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(
+        source_text(&app, &cx).contains("two:\n  []\n"),
+        "empty sequence: {:?}",
+        source_text(&app, &cx)
+    );
+
+    save(&app, &mut cx);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"one:\r\n  {}\r\ntwo:\r\n  []\r\n"
+    );
+}
+
+#[gpui_kit::test]
+fn utf16le_bom_and_line_endings_survive_a_tree_edit(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let text = "name: \"中文\"\r\nlist:\r\n  - one\r\n";
+    let mut bytes = vec![0xff, 0xfe];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    let path = fixture(dir.path(), "utf16.yaml", &bytes);
+    let host: SharedHost = FileHost::new(HostId(2926));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (id, view) = open_ready(&app, &mut cx, host.clone(), &path);
+    app.read_with(&cx, |app, cx| {
+        let format = app
+            .editor
+            .buffers
+            .get(id)
+            .expect("document")
+            .format(cx)
+            .expect("format");
+        assert_eq!(format.encoding, encoding_rs::UTF_16LE);
+        assert!(format.bom);
+    });
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"name\"]").as_deref(),
+        Some("\"中文\"")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"list\"][0]").as_deref(),
+        Some("one")
+    );
+
+    click_row(&view, &mut cx, "$[\"name\"]");
+    click_button(&view, &mut cx, "yaml-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"改后\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    save(&app, &mut cx);
+
+    let saved = std::fs::read(&path).unwrap();
+    assert_eq!(&saved[..2], &[0xff, 0xfe]);
+    let (decoded, _, _) = encoding_rs::UTF_16LE.decode(&saved[2..]);
+    assert!(decoded.contains("name: \"改后\"\r\n"));
+    assert!(decoded.contains("list:\r\n  - one\r\n"));
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        saved
+    );
+
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &path);
+    assert_eq!(
+        row_value(&reopened, &mut cx, "$[\"name\"]").as_deref(),
+        Some("\"改后\"")
     );
 }
 
@@ -648,7 +805,10 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
         other.read_with(&cx, |view, _| view.mode()),
         YamlMode::Structure
     );
-    assert_eq!(front.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        YamlMode::Source
+    );
 
     click_row(&other, &mut cx, "$[\"value\"]");
     click_button(&other, &mut cx, "yaml-edit-value");
@@ -696,7 +856,16 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
     assert!(source_text(&app, &cx).contains("\"unterminated"));
     cancel_panel(&other, &mut cx);
 
-    // Repairing lets a fresh command land in the one shared history.
+    // Repairing lets a fresh command land in the one shared history. Focus the
+    // source presentation explicitly: closing the panel returned focus to the
+    // structure group.
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
     let text = source_text(&app, &cx);
     let at = text.find("\"unterminated").expect("broken value");
     type_source(
@@ -731,7 +900,9 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
     let text = source_text(&app, &cx);
     let at = text.find("\"repaired\"").expect("repaired value");
     type_source(&app, &mut cx, at..at + "\"repaired\"".len(), "\"older\"");
-    until(&mut cx, |_| entered.load(std::sync::atomic::Ordering::SeqCst));
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::SeqCst)
+    });
     let text = source_text(&app, &cx);
     let at = text.find("\"older\"").expect("paused value");
     type_source(&app, &mut cx, at..at + "\"older\"".len(), "\"latest\"");
@@ -746,7 +917,11 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
     );
 
     save(&app, &mut cx);
-    assert!(std::fs::read(&original).unwrap().starts_with(b"value: \"latest\""));
+    assert!(
+        std::fs::read(&original)
+            .unwrap()
+            .starts_with(b"value: \"latest\"")
+    );
 }
 
 #[gpui_kit::test]
@@ -778,7 +953,11 @@ fn budget_limits_keep_source_editable_and_hide_tree_edits(tcx: &mut TestAppConte
     assert!(detail.contains("1 MiB"), "detail: {detail}");
     cx.update(|window, _| {
         assert!(window.find("status-yaml-error").visible());
-        assert!(window.try_find(("yaml-edit-value", view.entity_id())).is_none());
+        assert!(
+            window
+                .try_find(("yaml-edit-value", view.entity_id()))
+                .is_none()
+        );
     });
     toggle_mode(&view, &mut cx);
     assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
@@ -799,13 +978,14 @@ fn budget_limits_keep_source_editable_and_hide_tree_edits(tcx: &mut TestAppConte
         .expect("node budget error");
     assert!(title.contains("unavailable"), "title: {title}");
     assert!(detail.contains("20000"), "detail: {detail}");
-    assert!(many.read_with(&cx, |view, cx| view.node_count(cx)).is_none());
+    assert!(
+        many.read_with(&cx, |view, cx| view.node_count(cx))
+            .is_none()
+    );
 }
 
 #[gpui_kit::test]
-fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
-    tcx: &mut TestAppContext,
-) {
+fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.yaml", b"text: \"one\"\n");

@@ -295,6 +295,7 @@ core-foundation-sys 0.8.7
 core-graphics 0.24.0
 core-graphics-types 0.2.0
 core-text 21.0.0
+countme 3.0.1
 cpubits 0.1.1
 cpufeatures 0.3.0
 crc32c 0.6.8
@@ -590,6 +591,7 @@ ring 0.17.14 (also applies: Apache-2.0 AND ISC)
 rio-unicode 0.5.30
 rle-decode-fast 1.0.3
 ropey 2.0.0-beta.1
+rowan 0.16.1
 roxmltree 0.20.0
 roxmltree 0.21.1
 rsa 0.10.0-rc.18
@@ -667,6 +669,7 @@ system-configuration-sys 0.6.0
 tauri-winrt-notification 0.8.1
 tempfile 3.27.0
 tendril 0.4.3
+text-size 1.1.1
 thiserror 1.0.69
 thiserror 2.0.20
 thiserror-impl 1.0.69

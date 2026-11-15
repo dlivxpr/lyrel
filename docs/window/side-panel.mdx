@@ -339,9 +339,9 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 
 - 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，编码／BOM、逐行换行、revision、history、保存、另存为、外部重载、冲突与未保存关闭都沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不写回、不复制第二份可变文档，也不经 JSON／`YamlValue` 转换。多文档、mapping／sequence、flow／block、注释、锚点、别名、tag、标量原拼写、block scalar 与 complex key 均保留原字节；未提及的源码不受局部编辑影响。
 - 解析：使用 registry 的 `yaml-edit = 0.3.6`（Apache-2.0，`default-features = false`）rowan 无损 CST。CST 只在后台 worker 内存在，跨线程返回拥有型的节点范围与显示文本，不在 UI 线程解析或传递可变 Rc AST。每份文档一个 worker，只安装与当前 Document 身份、revision 与请求代次匹配的投影。
-- 局部编辑：选中标量可改值，选中 entry 可只重命名标量键，选中 mapping／sequence 可在末尾加入标量成员或项，选中成员／项可删除。命令绑定当前投影的 `(path, range)`，提交前要求已安装投影的 revision 仍等于源码权威。用户输入是一个 YAML scalar 片段的原拼写，由同一 parser 在探针中校验；替换清单是源码上的最小 splice，写入前再解析整篇结果，任何会破坏文档的规划都被拒绝。替换经共享 `Document::replace_ranges` 成为一条普通 history，不整篇序列化、不做全 source 格式化。
+- 局部编辑：选中标量可改值，选中 entry 可只重命名标量键，选中 mapping／sequence 可在末尾加入标量成员或项，选中成员／项可删除；block 集合删空时替换为等价的 `{}`／`[]`。block scalar 与复杂键的树命令把该 occurrence 精确定位到源码，在源码中保留原布局或语法编辑。命令绑定当前投影的 `(path, range)`，提交前要求已安装投影的 revision 仍等于源码权威。用户输入是一个 YAML scalar 片段的原拼写，由同一 parser 在探针中校验；替换清单是源码上的最小 splice，写入前再解析整篇结果，任何会破坏文档的规划都被拒绝。替换经共享 `Document::replace_ranges` 成为一条普通 history，不整篇序列化、不做全 source 格式化。
 - 锚点与别名：别名始终显示为 `*name` 引用，不展开成副本，也不在树中生成被引用值的第二个子树。编辑带锚点的值或键时，共享编辑面板说明该锚点当前被多少别名引用，提交后再次说明别名现在解析到的新值；取消不写。删除会悬空外部别名的节点在写入前被拒绝并给出可见原因，不静默 retarget、detach 或复制。tag 与锚点徽标随节点显示，编辑标量内容不会移除它们。
-- 明确保留源码访问的构造：别名节点不可直接改值；block scalar 的面板编辑、非标量复杂键的重命名、以及 block 集合最后一项的删除都明确拒绝并指向源码；空文档的成员插入同样指向源码。这些不是伪控件或静默 no-op，也不把无法无损表达的构造强行转成 JSON。
+- 明确保留源码访问的构造：别名节点不可直接改值，编辑时提示其锚点；block scalar 与复杂键的树命令会打开该 occurrence 的精确源码范围，在源码里保留原有布局或语法并以同一 history／保存契约修改，不在面板里猜写替代片段；block 集合最后一项删除会写成等价的空 flow 集合（`{}`／`[]`），而不是拒绝合法删除；空文档的成员插入仍指向源码。这些不是伪控件或静默 no-op，也不把无法无损表达的构造强行转成 JSON。
 - 预算与迟到：输入最多 1 MiB、结构最多 20,000 节点、完整路径文本合计最多 8 MiB、嵌套最多 512 层；超限时结构视图明确报错，源码仍可编辑与保存。暂时无效的 YAML 显示解析错误并保留全部内容；修正后重新投影。Document revision 或请求代次不匹配的迟到结果一律丢弃；结构变化后仍打开的编辑面板显示“文档已变化”并拒绝写入。
 - 呈现：默认显示结构树；工具栏与状态行提供 Structure／Source 切换、文档与节点计数、选中节点行列、Reveal in source 与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 或双击在源码中选中该 occurrence；分屏的每个分组有独立模式、折叠、选择、编辑面板和结构滚动，同时共享同一 Document 与 history。
 

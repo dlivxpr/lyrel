@@ -2010,9 +2010,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorYamlValueName => "Value",
         L10nKey::EditorYamlKeyName => "Key",
         L10nKey::EditorYamlKeyPlaceholder => "Scalar key",
-        L10nKey::EditorYamlValuePlaceholder => {
-            "One scalar, e.g. 42, \"text\", 'text' or null"
-        }
+        L10nKey::EditorYamlValuePlaceholder => "One scalar, e.g. 42, \"text\", 'text' or null",
         L10nKey::EditorYamlEditValueTitle => "Edit value · {path}",
         L10nKey::EditorYamlRenameKeyTitle => "Rename key · {path}",
         L10nKey::EditorYamlAddKeyTitle => "Add key to {path}",
@@ -2029,14 +2027,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorYamlEditComplexKey => {
             "Complex or tagged non-scalar keys keep their source form; rename them in Source."
         }
+        L10nKey::EditorYamlBlockScalarSource => {
+            "Block scalar opened in Source at its exact range; edit its layout there. The same history and save apply."
+        }
+        L10nKey::EditorYamlComplexKeySource => {
+            "Complex key opened in Source at its exact range; edit its syntax there. The same history and save apply."
+        }
         L10nKey::EditorYamlEditMissingValue => {
             "This entry has no editable scalar value; use Source."
         }
         L10nKey::EditorYamlEditMultiLine => "Multi-line values are edited in Source.",
         L10nKey::EditorYamlEditNotScalar => "This node is not a scalar value.",
-        L10nKey::EditorYamlEditLastBlockItem => {
-            "The last item of a block collection cannot be removed from the tree; use Source."
-        }
         L10nKey::EditorYamlEditEmptyDocument => {
             "An empty document has no member to add from the tree; use Source."
         }

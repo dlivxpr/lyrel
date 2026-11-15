@@ -1495,25 +1495,21 @@ impl JsonView {
                                 error: error.map(SharedString::from),
                                 aria_label: path.into(),
                             },
-                            cx.listener(
-                                |view, _: &gpui_kit::MouseDownEvent, window, cx| {
-                                    view.focus.focus(window, cx);
-                                    cx.stop_propagation();
-                                },
-                            ),
-                            cx.listener(
-                                move |view, event: &gpui_kit::ClickEvent, window, cx| {
-                                    view.focus.focus(window, cx);
-                                    if event.click_count() > 1 {
-                                        view.select_node(index, cx);
-                                        if has_detail {
-                                            view.open_selected_full_value(cx);
-                                        }
-                                    } else {
-                                        view.activate_node(index, cx);
+                            cx.listener(|view, _: &gpui_kit::MouseDownEvent, window, cx| {
+                                view.focus.focus(window, cx);
+                                cx.stop_propagation();
+                            }),
+                            cx.listener(move |view, event: &gpui_kit::ClickEvent, window, cx| {
+                                view.focus.focus(window, cx);
+                                if event.click_count() > 1 {
+                                    view.select_node(index, cx);
+                                    if has_detail {
+                                        view.open_selected_full_value(cx);
                                     }
-                                },
-                            ),
+                                } else {
+                                    view.activate_node(index, cx);
+                                }
+                            }),
                             cx,
                         )
                     })

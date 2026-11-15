@@ -5,7 +5,7 @@
 //! 这里不持有投影、文档或可写范围，也不把任何格式的语义塞进共享类型。
 
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, Icon, IconName, spinner::Spinner, v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, spinner::Spinner, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -48,11 +48,9 @@ pub(crate) fn structure_row(
         .test_support()
         .role(gpui_kit::Role::TreeItem)
         .aria_label(data.aria_label)
-        .aria_value(value)
+        .aria_value(value.clone())
         .aria_selected(data.selected)
-        .when_some(data.badge.clone(), |row, badge| {
-            row.aria_description(badge)
-        })
+        .when_some(data.badge.clone(), |row, badge| row.aria_description(badge))
         .when(data.expandable, |row| row.aria_expanded(data.expanded))
         .flex()
         .items_center()

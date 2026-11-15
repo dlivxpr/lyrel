@@ -77,6 +77,9 @@ pub(crate) struct YamlNode {
     pub(crate) value: String,
     pub(crate) range: Range<usize>,
     pub(crate) key_range: Option<Range<usize>>,
+    /// 完整键节点范围，包含复杂键／tag／anchor；用于把不可无损改写的键
+    /// 精确定位到源码，而不是在树里猜一个新键。
+    pub(crate) key_detail_range: Option<Range<usize>>,
     /// 键的原始源码文本（含引号），仅用于预填重命名字段。
     pub(crate) key_text: Option<String>,
     pub(crate) value_range: Option<Range<usize>>,
@@ -323,13 +326,18 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn file_node(&mut self, documents: usize, range: Range<usize>) -> Result<usize, ProjectionFailure> {
+    fn file_node(
+        &mut self,
+        documents: usize,
+        range: Range<usize>,
+    ) -> Result<usize, ProjectionFailure> {
         self.add(YamlNode {
             key: String::new(),
             path: "$".to_owned(),
             value: format!("{documents} documents"),
             range,
             key_range: None,
+            key_detail_range: None,
             key_text: None,
             value_range: None,
             content_range: 0..0,
@@ -372,6 +380,7 @@ impl<'a> Builder<'a> {
             value: "(empty document)".to_owned(),
             range: range.clone(),
             key_range: None,
+            key_detail_range: None,
             key_text: None,
             value_range: None,
             content_range: range,
@@ -422,6 +431,7 @@ impl<'a> Builder<'a> {
             value: String::new(),
             range: value_range(&value),
             key_range: None,
+            key_detail_range: None,
             key_text: None,
             value_range: None,
             content_range: value_range(&value),
@@ -478,6 +488,7 @@ impl<'a> Builder<'a> {
             value: String::new(),
             range: key.range.start..end,
             key_range: key.raw_range.clone(),
+            key_detail_range: (!key.range.is_empty()).then_some(key.range.clone()),
             key_text: raw_text,
             value_range: None,
             content_range: key.range.clone(),
@@ -530,6 +541,7 @@ impl<'a> Builder<'a> {
             value: String::new(),
             range: range.clone(),
             key_range: None,
+            key_detail_range: None,
             key_text: None,
             value_range: None,
             content_range: range,
@@ -726,25 +738,16 @@ impl<'a> Builder<'a> {
             self.nodes[index].children = children;
         } else if let Some(scalar) = tagged.value() {
             let scalar_range = scalar_range(&scalar);
-            self.nodes[index].kind = YamlNodeKind::Scalar(
-                match tagged.tag().as_deref() {
-                    Some("!!str") => YamlScalarKind::String,
-                    _ => scalar_kind(&scalar),
-                },
-            );
-            self.nodes[index].value = snippet(
-                self.text
-                    .get(scalar_range.clone())
-                    .unwrap_or_default(),
-            );
+            self.nodes[index].kind = YamlNodeKind::Scalar(match tagged.tag().as_deref() {
+                Some("!!str") => YamlScalarKind::String,
+                _ => scalar_kind(&scalar),
+            });
+            self.nodes[index].value =
+                snippet(self.text.get(scalar_range.clone()).unwrap_or_default());
             self.nodes[index].block_scalar = scalar.is_block();
             self.nodes[index].value_range = (!scalar.is_block()).then_some(scalar_range);
         } else {
-            self.nodes[index].value = snippet(
-                self.text
-                    .get(range.clone())
-                    .unwrap_or_default(),
-            );
+            self.nodes[index].value = snippet(self.text.get(range.clone()).unwrap_or_default());
         }
         if !self.nodes[index].entry && !self.nodes[index].item {
             self.nodes[index].range = range;
@@ -783,16 +786,16 @@ impl<'a> Builder<'a> {
                         continue;
                     };
                     let range = held_range(syntax);
-                    if let Some(&target_index) = by_range
-                        .get(&(source.document, range.start, range.end))
+                    if let Some(&target_index) =
+                        by_range.get(&(source.document, range.start, range.end))
                     {
                         self.nodes[source.node].alias_target = Some(target_index);
                         self.nodes[target_index].alias_refs += 1;
                         if self.nodes[target_index].anchor.is_none() {
                             self.nodes[target_index].anchor = Some(source.alias.name());
                         }
-                    } else if let Some(&target_index) = by_key
-                        .get(&(source.document, range.start, range.end))
+                    } else if let Some(&target_index) =
+                        by_key.get(&(source.document, range.start, range.end))
                     {
                         self.nodes[target_index].key_alias_refs += 1;
                         if self.nodes[target_index].key_anchor.is_none() {
@@ -844,9 +847,7 @@ fn document_value(document: &Document) -> Option<AstYamlNode> {
         return Some(AstYamlNode::TaggedNode(tagged));
     }
     let syntax = document.as_node()?;
-    syntax
-        .children()
-        .find_map(AstYamlNode::from_syntax)
+    syntax.children().find_map(AstYamlNode::from_syntax)
 }
 
 fn key_info(entry: &MappingEntry) -> KeyInfo {
@@ -926,10 +927,7 @@ fn node_properties(node: &SyntaxNode) -> Properties {
             match token.kind() {
                 SyntaxKind::ANCHOR => {
                     if properties.anchor.is_none() {
-                        properties.anchor = token
-                            .text()
-                            .strip_prefix('&')
-                            .map(str::to_owned);
+                        properties.anchor = token.text().strip_prefix('&').map(str::to_owned);
                     }
                 }
                 SyntaxKind::TAG => {
@@ -1049,10 +1047,7 @@ fn sequence_range(sequence: &Sequence) -> Range<usize> {
 }
 
 fn tagged_range(tagged: &TaggedNode) -> Range<usize> {
-    tagged
-        .as_node()
-        .map(syntax_range)
-        .unwrap_or_default()
+    tagged.as_node().map(syntax_range).unwrap_or_default()
 }
 
 fn alias_range(alias: &Alias) -> Range<usize> {

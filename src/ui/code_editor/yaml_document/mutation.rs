@@ -34,15 +34,26 @@ impl NodeTarget {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Mutation {
-    SetValue { target: NodeTarget, value: String },
-    RenameKey { target: NodeTarget, key: String },
+    SetValue {
+        target: NodeTarget,
+        value: String,
+    },
+    RenameKey {
+        target: NodeTarget,
+        key: String,
+    },
     AddMember {
         container: NodeTarget,
         key: String,
         value: String,
     },
-    AddItem { container: NodeTarget, value: String },
-    Remove { target: NodeTarget },
+    AddItem {
+        container: NodeTarget,
+        value: String,
+    },
+    Remove {
+        target: NodeTarget,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +65,6 @@ pub(crate) enum UnsupportedEdit {
     MultiLine,
     NotContainer,
     NotScalar,
-    LastBlockItem,
     EmptyDocument,
 }
 
@@ -271,11 +281,7 @@ fn validate_key(raw: &str) -> Result<(), MutationError> {
     Ok(())
 }
 
-fn validate_entry_fragment(
-    key: &str,
-    value: &str,
-    flow: bool,
-) -> Result<(), MutationError> {
+fn validate_entry_fragment(key: &str, value: &str, flow: bool) -> Result<(), MutationError> {
     let probe = match flow {
         true => format!("{{{key}: {value}}}\n"),
         false => format!("{key}: {value}\n"),
@@ -339,7 +345,11 @@ fn insert_member(
         let prefix = flow_insert_prefix(text, close, !node.children.is_empty());
         return Ok(vec![(close..close, format!("{prefix}{line}"))]);
     }
-    let Some(last) = node.children.last().and_then(|&child| projection.nodes().get(child)) else {
+    let Some(last) = node
+        .children
+        .last()
+        .and_then(|&child| projection.nodes().get(child))
+    else {
         return Err(MutationError::Unsupported(UnsupportedEdit::NotContainer));
     };
     let insert = block_insert_position(text, last);
@@ -363,13 +373,20 @@ fn insert_item(
         .container_range
         .clone()
         .ok_or(MutationError::Unsupported(UnsupportedEdit::NotContainer))?;
-    let line = format!("- {value}");
+    let line = match node.flow {
+        true => value.to_owned(),
+        false => format!("- {value}"),
+    };
     if node.flow {
         let close = flow_close(text, range.clone())?;
         let prefix = flow_insert_prefix(text, close, !node.children.is_empty());
         return Ok(vec![(close..close, format!("{prefix}{line}"))]);
     }
-    let Some(last) = node.children.last().and_then(|&child| projection.nodes().get(child)) else {
+    let Some(last) = node
+        .children
+        .last()
+        .and_then(|&child| projection.nodes().get(child))
+    else {
         return Err(MutationError::Unsupported(UnsupportedEdit::NotContainer));
     };
     let insert = block_insert_position(text, last);
@@ -415,7 +432,14 @@ fn remove(
         flow_removal_range(text, parent, node)?
     } else {
         if parent.children.len() == 1 {
-            return Err(MutationError::Unsupported(UnsupportedEdit::LastBlockItem));
+            let replacements = empty_last_block(text, parent)?;
+            if let Some((name, count)) = alias_conflict(projection, &replacements[0].0, index) {
+                return Err(MutationError::AliasesReference {
+                    name: Some(name),
+                    count,
+                });
+            }
+            return Ok(replacements);
         }
         let start = line_start(text, node.range.start);
         let end = block_entry_end(text, node.range.end);
@@ -428,6 +452,39 @@ fn remove(
         });
     }
     Ok(vec![(range, String::new())])
+}
+
+/// Removing the last member of a block collection leaves no block syntax to
+/// represent it. Replace the member range with the empty flow form instead of
+/// refusing a legitimate edit; the key line, indentation and comments stay.
+fn empty_last_block(
+    text: &str,
+    parent: &YamlNode,
+) -> Result<Vec<(Range<usize>, String)>, MutationError> {
+    let kind = parent
+        .container
+        .ok_or(MutationError::Unsupported(UnsupportedEdit::NotContainer))?;
+    let empty = match kind {
+        ContainerKind::Mapping => "{}",
+        ContainerKind::Sequence => "[]",
+    };
+    let range = parent
+        .container_range
+        .clone()
+        .ok_or(MutationError::Unsupported(UnsupportedEdit::NotContainer))?;
+    if parent.flow {
+        return Err(MutationError::Stale);
+    }
+    // The collection range starts at its first member, so replacing just that
+    // range keeps the key line, its indentation and any comment intact. A block
+    // collection node may own the line break after its last member; keep that
+    // terminator instead of gluing the next key onto the empty flow form.
+    let ending = match text.get(range.clone()).unwrap_or_default() {
+        span if span.ends_with("\r\n") => "\r\n",
+        span if span.ends_with('\n') => "\n",
+        _ => "",
+    };
+    Ok(vec![(range, format!("{empty}{ending}"))])
 }
 
 fn alias_conflict(
@@ -443,7 +500,9 @@ fn alias_conflict(
         if node.alias_target == Some(removed) || range.contains(&node.range.start) {
             continue;
         }
-        let Some(target) = node.alias_target.and_then(|target| projection.nodes().get(target))
+        let Some(target) = node
+            .alias_target
+            .and_then(|target| projection.nodes().get(target))
         else {
             continue;
         };
@@ -464,9 +523,15 @@ fn overlaps(left: &Range<usize>, right: &Range<usize>) -> bool {
 }
 
 fn flow_close(text: &str, range: Range<usize>) -> Result<usize, MutationError> {
-    let close = range.end.checked_sub(1).ok_or(MutationError::Stale)?;
-    match text.get(close..range.end) {
-        Some("}") | Some("]") => Ok(close),
+    let span = text.get(range.clone()).ok_or(MutationError::Stale)?;
+    let trimmed = span.trim_end_matches([' ', '\t', '\r', '\n']);
+    let close = range
+        .start
+        .checked_add(trimmed.len())
+        .and_then(|end| end.checked_sub(1))
+        .ok_or(MutationError::Stale)?;
+    match text.as_bytes().get(close) {
+        Some(b'}') | Some(b']') => Ok(close),
         _ => Err(MutationError::Unsupported(UnsupportedEdit::NotContainer)),
     }
 }
@@ -475,10 +540,11 @@ fn flow_insert_prefix(text: &str, close: usize, has_children: bool) -> &'static 
     if !has_children {
         return "";
     }
-    match text
-        .get(..close)
-        .is_some_and(|before| before.trim_end_matches([' ', '\t', '\r', '\n']).ends_with(','))
-    {
+    match text.get(..close).is_some_and(|before| {
+        before
+            .trim_end_matches([' ', '\t', '\r', '\n'])
+            .ends_with(',')
+    }) {
         true => " ",
         false => ", ",
     }
@@ -583,10 +649,7 @@ fn line_indent(text: &str, offset: usize) -> &str {
     &rest[..len]
 }
 
-fn verify_result(
-    text: &str,
-    replacements: &[(Range<usize>, String)],
-) -> Result<(), MutationError> {
+fn verify_result(text: &str, replacements: &[(Range<usize>, String)]) -> Result<(), MutationError> {
     let mut result = text.to_owned();
     let mut ordered: Vec<_> = replacements.iter().collect();
     ordered.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
