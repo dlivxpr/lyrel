@@ -993,6 +993,24 @@ fn apply_panel(view: &Entity<JsonView>, cx: &mut VisualTestContext) {
     settle(cx);
 }
 
+fn dismiss_save_error(cx: &mut VisualTestContext) {
+    // 失败通知会遮住右下角的 Apply；像用户一样先关闭通知，不等待动画碰巧移开。
+    until(cx, |cx| {
+        cx.update(|window, _| {
+            window
+                .try_find("notification")
+                .is_some_and(|notification| notification.visible())
+        })
+    });
+    cx.update(|window, cx| {
+        window.hover("notification", cx);
+        window.within("notification").click("close", cx);
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("notification").is_none())
+    });
+}
+
 fn cancel_panel(view: &Entity<JsonView>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.click(("structure-edit-cancel", view.entity_id()), cx));
     settle(cx);
@@ -1230,6 +1248,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         })
     });
     assert_eq!(std::fs::read(&target).unwrap(), saved);
+    dismiss_save_error(&mut cx);
     save(&app, &mut cx);
     let retried = replace_bytes(&saved, b"\"changed\"", b"\"retried\"");
     assert_eq!(std::fs::read(&target).unwrap(), retried);
@@ -1241,6 +1260,18 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"kept\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
+    let pending_edit = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    assert!(
+        pending_edit.is_none(),
+        "the tree edit must be committed before the external rewrite: {pending_edit:?}"
+    );
+    assert!(source_text(&app, &cx).contains("\"kept\""));
+    assert!(
+        app.read_with(&cx, |app, _| app
+            .active_buffer()
+            .is_some_and(|file| file.dirty)),
+        "the committed tree edit must be dirty before the external rewrite"
+    );
     std::fs::write(&target, b"{\"external\": true}\n").unwrap();
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
@@ -1264,11 +1295,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     click_row(&view, &mut cx, "$[\"text\"]");
     click_button(&view, &mut cx, "json-edit-value");
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"still-open\"");
-    // Apply with the panel's production Enter command. The Apply button's
-    // pointer path is exercised by the earlier edits in this test; after the
-    // conflict/save state its synthetic click did not emit while Enter did.
-    cx.update(|window, cx| window.press("enter", cx));
-    settle(&mut cx);
+    apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     let panel = view.read_with(&cx, |view, cx| view.edit_texts(cx));
     let error = panel_error(&view, &mut cx);
@@ -1381,12 +1408,8 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     });
     let text = source_text(&app, &cx);
     let at = text.find("\"a\\u0062\"").expect("fixture value");
-    type_source(
-        &app,
-        &mut cx,
-        at..at + "\"a\\u0062\"".len(),
-        "\"source-wins\"",
-    );
+    // 同长度修改保留 path 与 token range；旧面板仍必须按打开时的 revision 拒绝。
+    type_source(&app, &mut cx, at..at + "\"a\\u0062\"".len(), "\"changed\"");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
@@ -1396,7 +1419,7 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     );
     apply_panel(&other, &mut cx);
     let text = source_text(&app, &cx);
-    assert!(text.contains("\"source-wins\""));
+    assert!(text.contains("\"changed\""));
     assert!(!text.contains("\"a\\u0062\""));
     assert!(
         panel_open(&other, &mut cx),
@@ -1417,11 +1440,11 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
         app.editor_split_follow_focus(window, cx);
     });
     let text = source_text(&app, &cx);
-    let at = text.find("\"source-wins\"").expect("edited value");
+    let at = text.find("\"changed\"").expect("edited value");
     type_source(
         &app,
         &mut cx,
-        at..at + "\"source-wins\"".len(),
+        at..at + "\"changed\"".len(),
         "\"unterminated",
     );
     until(&mut cx, |cx| {
@@ -1796,6 +1819,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
         })
     });
     assert_eq!(std::fs::read(&target).unwrap(), saved);
+    dismiss_save_error(&mut cx);
     save(&app, &mut cx);
     let failed = replace_bytes(&saved, b"\"name\":\"one\"", "\"name\":\"失败\"".as_bytes());
     assert_eq!(std::fs::read(&target).unwrap(), failed);
@@ -1807,6 +1831,18 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"保留\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
+    let pending_edit = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    assert!(
+        pending_edit.is_none(),
+        "the record edit must be committed before the external rewrite: {pending_edit:?}"
+    );
+    assert!(source_text(&app, &cx).contains("\"保留\""));
+    assert!(
+        app.read_with(&cx, |app, _| app
+            .active_buffer()
+            .is_some_and(|file| file.dirty)),
+        "the committed record edit must be dirty before the external rewrite"
+    );
     std::fs::write(&target, b"{\"external\":true}\n").unwrap();
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
@@ -1825,11 +1861,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     click_row(&view, &mut cx, "line 3[\"name\"]");
     click_button(&view, &mut cx, "json-edit-value");
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"关闭\"");
-    // After the conflict/save state the synthetic Apply click has not emitted
-    // in this harness; use the panel's production Enter command instead, as
-    // the corresponding #290 lifecycle consumer does.
-    cx.update(|window, cx| window.press("enter", cx));
-    settle(&mut cx);
+    apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     let panel = view.read_with(&cx, |view, cx| view.edit_texts(cx));
     let error = panel_error(&view, &mut cx);
