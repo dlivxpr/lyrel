@@ -27,6 +27,16 @@ const EDITORCONFIG_DEPTH: usize = 16;
 
 /// Document identity and I/O lifetime. Tabs only retain presentation relations;
 /// replacing an editing presentation does not replace the document.
+/// What one deferred draw.io save turned into: a confirmed engine revision
+/// ready to write, or a flush that never arrived.
+pub(super) enum DrawioFlushReadiness {
+    Confirmed {
+        force: bool,
+        target: Option<PathBuf>,
+    },
+    Expired,
+}
+
 pub(super) struct EditorBuffers {
     files: Vec<OpenFile>,
     next_untitled: u32,
@@ -212,6 +222,17 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else { return };
         // A read-only image has no edits to compare: it is never unsaved, so
         // closing it never asks, and Save has nothing to write.
+        if file.input.drawio().is_some() {
+            // Engine commits already landed on the document; its content
+            // digest carries undo-to-saved semantics, so editing back to the
+            // last-written bytes reads clean again.
+            file.dirty = file
+                .input
+                .drawio_document(cx)
+                .is_some_and(|document| document.fingerprint() != file.saved);
+            file.reload_seq = file.reload_seq.wrapping_add(1);
+            return;
+        }
         let Some(text) = file.input.text() else {
             return;
         };
@@ -226,6 +247,73 @@ impl EditorBuffers {
         file.dirty = !same
             || file.format(cx) != Some(file.saved_format)
             || file.representation_fingerprint(cx) != file.saved_representation;
+    }
+
+    /// Once a frame for each draw.io buffer: engine commits already landed
+    /// on the document, so only the dirty comparison needs a sweep here. The
+    /// returned views carry pending workbench requests (the engine's own
+    /// Ctrl+S); the caller drains them through the same Host save path.
+    pub(super) fn drawio_pending(
+        &mut self,
+        cx: &gpui_kit::App,
+    ) -> Vec<(BufferId, Vec<Entity<DrawioView>>)> {
+        let mut pending = Vec::new();
+        for file in &mut self.files {
+            let Some(primary) = file.input.drawio().cloned() else {
+                continue;
+            };
+            if let Some(document) = file.input.drawio_document(cx) {
+                file.dirty = document.fingerprint() != file.saved;
+            }
+            let mut views = vec![primary];
+            for (_, _, view) in file.presentations.drawios().iter() {
+                if !views.iter().any(|existing| existing == view) {
+                    views.push(view.clone());
+                }
+            }
+            pending.push((file.id(), views));
+        }
+        pending
+    }
+
+    /// Resolves deferred draw.io saves. A flush writes only once the engine
+    /// has committed a revision newer than the marker: the deadline is not
+    /// permission to write older bytes, so an unconfirmed flush reports
+    /// `Expired` and the caller fails the save visibly instead.
+    pub(super) fn take_drawio_flush_resolutions(
+        &mut self,
+        cx: &gpui_kit::App,
+    ) -> Vec<(BufferId, DrawioFlushReadiness)> {
+        let now = std::time::Instant::now();
+        let mut ready = Vec::new();
+        for file in &mut self.files {
+            let Some(flush) = file.drawio_flush.clone() else {
+                continue;
+            };
+            let confirmed = file
+                .input
+                .drawio_document(cx)
+                .is_some_and(|document| document.committed() > flush.from_edit);
+            if !confirmed && now < flush.deadline {
+                continue;
+            }
+            file.drawio_flush = None;
+            if confirmed {
+                // This save already waited for the engine: the re-entered
+                // write must not flush again, or it would never reach disk.
+                file.drawio_flush_done = true;
+                ready.push((
+                    file.id(),
+                    DrawioFlushReadiness::Confirmed {
+                        force: flush.force,
+                        target: flush.target,
+                    },
+                ));
+            } else {
+                ready.push((file.id(), DrawioFlushReadiness::Expired));
+            }
+        }
+        ready
     }
 
     /// Loading is host-bound; the target guard runs before allocating a buffer.
@@ -497,6 +585,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -524,6 +614,7 @@ impl EditorBuffers {
         } = drawio;
         let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
         let id = BufferId::new();
+        let saved = Fingerprint::of_bytes(&bytes);
         let document = cx.new(|cx| DrawioDocument::new(bytes, source, cx));
         let view = cx.new(|cx| DrawioView::new(document, cx));
         let sub = cx.observe(&view, |_, _, cx| cx.notify());
@@ -537,7 +628,7 @@ impl EditorBuffers {
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
-            saved: Fingerprint::default(),
+            saved,
             format: None,
             saved_format: TextFormat::default(),
             saved_representation: None,
@@ -549,6 +640,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -601,6 +694,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -649,6 +744,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -697,6 +794,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -921,6 +1020,8 @@ impl EditorBuffers {
             save_as_pending: None,
             reload_seq: 0,
             reload_request: 0,
+            drawio_flush: None,
+            drawio_flush_done: false,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -1280,9 +1381,18 @@ impl EditorBuffers {
                     // by the document revision change.
                     Reloaded::Drawio(drawio) => {
                         file.disk_mtime = drawio.mtime;
+                        if file.dirty {
+                            // The freshest bytes stay on disk while the engine
+                            // edits live in the document; "Keep mine" now has
+                            // a real side to keep.
+                            file.conflict = Some(DiskConflict::Changed(drawio.mtime));
+                            cx.notify();
+                            return;
+                        }
                         file.conflict = None;
                         if let Some(view) = file.input.drawio().cloned() {
                             let LoadedDrawio { bytes, source, .. } = drawio;
+                            file.saved = Fingerprint::of_bytes(&bytes);
                             let document = view.read(cx).document().clone();
                             document.update(cx, |document, cx| document.replace(bytes, source, cx));
                         }

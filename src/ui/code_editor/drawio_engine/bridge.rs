@@ -27,6 +27,21 @@ pub(crate) enum BridgeEvent {
         pages: usize,
         zoom: f32,
     },
+    /// The engine's own Ctrl+S: the workbench decides which Host file the
+    /// request writes; the page never learns a path.
+    Save,
+    /// Engine-native Ctrl+Z / Ctrl+Y. The document decides whether the live
+    /// session replays it or reloads canonical bytes.
+    Undo,
+    Redo,
+    /// The engine needs the system clipboard read and handed back.
+    Paste,
+    /// Serialized cells the engine copied (or cut); `cut` only records intent —
+    /// the deletion already landed in the document bytes this engine commits.
+    Clipboard {
+        text: String,
+        cut: bool,
+    },
     Failed {
         message: String,
     },
@@ -35,23 +50,40 @@ pub(crate) enum BridgeEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Reject(pub(crate) &'static str);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Command {
     Page(usize),
     Fit,
     ZoomIn,
     ZoomOut,
     ActualSize,
+    /// Serialize and deliver the current engine state even without new edits,
+    /// so a deferred save can capture the live page's model.
+    Sync,
+    /// Cells the system clipboard offered. The engine decides whether it is
+    /// diagram XML or plain text.
+    Paste(String),
+    /// Copy the selection through the engine's own clipboard.
+    CopyCells,
+    /// Copy the selection and remove it as one undoable edit.
+    CutCells,
+    /// Delete the selection as one undoable edit.
+    DeleteCells,
 }
 
 impl Command {
-    fn wire_name(self) -> &'static str {
+    fn wire_name(&self) -> &'static str {
         match self {
             Self::Page(_) => "page",
             Self::Fit => "fit",
             Self::ZoomIn => "zoomIn",
             Self::ZoomOut => "zoomOut",
             Self::ActualSize => "actual",
+            Self::Sync => "sync",
+            Self::Paste(_) => "paste",
+            Self::CopyCells => "copy",
+            Self::CutCells => "cut",
+            Self::DeleteCells => "delete",
         }
     }
 }
@@ -66,6 +98,9 @@ pub(crate) struct LiveSession {
     failed: bool,
     last_inbound: u64,
     last_outbound: u64,
+    /// The newest engine commit sequence accepted on this session, so a
+    /// POST that arrives after a later state can never roll bytes back.
+    last_commit: u64,
     pages: usize,
     page: usize,
     zoom: f32,
@@ -98,6 +133,7 @@ impl LiveSession {
             failed: false,
             last_inbound: 0,
             last_outbound: 0,
+            last_commit: 0,
             pages: 0,
             page: 0,
             zoom: 1.,
@@ -109,7 +145,6 @@ impl LiveSession {
         self.document.path()
     }
 
-    #[cfg(not(test))]
     pub(crate) fn document(&self) -> &DocumentSession {
         &self.document
     }
@@ -242,6 +277,64 @@ impl LiveSession {
                     zoom: self.zoom,
                 }
             }
+            "save" => {
+                if !self.ready {
+                    return Err(Reject("save-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("save-after-failure"));
+                }
+                BridgeEvent::Save
+            }
+            "undo" => {
+                if !self.ready {
+                    return Err(Reject("undo-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("undo-after-failure"));
+                }
+                BridgeEvent::Undo
+            }
+            "redo" => {
+                if !self.ready {
+                    return Err(Reject("redo-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("redo-after-failure"));
+                }
+                BridgeEvent::Redo
+            }
+            "paste" => {
+                if !self.ready {
+                    return Err(Reject("paste-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("paste-after-failure"));
+                }
+                BridgeEvent::Paste
+            }
+            "clipboard" => {
+                if !self.ready {
+                    return Err(Reject("clipboard-before-ready"));
+                }
+                if self.failed {
+                    return Err(Reject("clipboard-after-failure"));
+                }
+                let text = payload
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or(Reject("clipboard-text"))?;
+                if text.is_empty() || text.len() > super::assets::MAX_DOCUMENT_BYTES {
+                    return Err(Reject("clipboard-text"));
+                }
+                BridgeEvent::Clipboard {
+                    text: text.to_string(),
+                    cut: payload
+                        .get("cut")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                }
+            }
             "failed" => {
                 let message = payload
                     .get("message")
@@ -260,10 +353,30 @@ impl LiveSession {
         Ok(event)
     }
 
+    /// One engine commit POST: the newest serialized mxfile the live engine
+    /// produced. Only `POST` reaches here; `sync` is a flush whose sequence
+    /// may equal the last applied one, while a real commit must be newer so a
+    /// reordered request cannot resurrect old bytes.
+    pub(crate) fn commit(&mut self, seq: u64, body: &[u8], sync: bool) -> Result<(), Reject> {
+        if !self.ready || self.failed {
+            return Err(Reject("not-ready"));
+        }
+        if seq == 0 || body.is_empty() || body.len() > super::assets::MAX_DOCUMENT_BYTES {
+            return Err(Reject("commit-size"));
+        }
+        if seq < self.last_commit || (seq == self.last_commit && !sync) {
+            return Err(Reject("commit-stale"));
+        }
+        if seq > self.last_commit {
+            self.last_commit = seq;
+        }
+        Ok(())
+    }
+
     /// Builds one native-to-shell command. Commands are refused until the
     /// engine has booted, so a page that never lay out does not receive
     /// document-changing work it cannot answer.
-    pub(crate) fn command(&mut self, command: Command) -> Option<String> {
+    pub(crate) fn command(&mut self, command: &Command) -> Option<String> {
         if !self.ready || self.failed {
             return None;
         }
@@ -272,8 +385,7 @@ impl LiveSession {
                 if self.pages == 0 {
                     return None;
                 }
-                let page = page.min(self.pages - 1);
-                Some(page)
+                Some((*page).min(self.pages - 1))
             }
             _ => None,
         };
@@ -286,6 +398,15 @@ impl LiveSession {
         });
         if let Some(page) = page {
             message["page"] = serde_json::json!(page);
+        }
+        if let Command::Paste(text) = command {
+            // The system clipboard is already validated text; the 64 KiB
+            // message budget still applies, so an oversized paste is refused
+            // rather than truncated into the page.
+            if text.len() > MAX_MESSAGE_BYTES / 2 {
+                return None;
+            }
+            message["text"] = serde_json::json!(text);
         }
         Some(message.to_string())
     }
@@ -509,9 +630,9 @@ mod tests {
             session.accept(SHELL_URL, &vec![b'x'; MAX_MESSAGE_BYTES + 1]),
             Err(Reject("size"))
         );
-        assert!(session.command(Command::Page(0)).is_none());
+        assert!(session.command(&Command::Page(0)).is_none());
         ready(&mut session);
-        assert!(session.command(Command::Page(0)).is_none());
+        assert!(session.command(&Command::Page(0)).is_none());
         assert_eq!(
             session.accept(
                 SHELL_URL,
@@ -528,13 +649,13 @@ mod tests {
                 zoom: 1.0
             })
         );
-        let command = session.command(Command::Page(99)).unwrap();
+        let command = session.command(&Command::Page(99)).unwrap();
         assert!(command.contains("\"cmd\":\"page\""));
         assert!(command.contains("\"page\":1"));
         assert_eq!(session.last_outbound(), 1);
         assert!(
             session
-                .command(Command::Fit)
+                .command(&Command::Fit)
                 .unwrap()
                 .contains("\"cmd\":\"fit\"")
         );

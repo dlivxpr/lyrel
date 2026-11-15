@@ -1,4 +1,7 @@
-//! The narrow native surface for the fixed diagram engine.
+//! The narrow native surface for the fixed diagram engine. Beyond GET it
+//! also answers the session's own commit/sync POST — the only write the
+//! engine can make, sequence-gated by the live session and budgeted by the
+//! document size cap.
 //!
 //! On Windows this is a WebView2 child window created directly through
 //! `webview2-com`; there is no general-purpose browser, address bar, tab strip,
@@ -13,7 +16,6 @@ use gpui_kit::Window;
 use gpui_kit::{Bounds, Pixels};
 #[cfg(not(test))]
 use smol::channel::Sender;
-#[cfg(not(test))]
 use std::sync::Arc;
 
 use super::bridge::Command;
@@ -21,12 +23,32 @@ use super::bridge::Command;
 use super::session::PreviewTheme;
 
 #[derive(Clone, Debug, PartialEq)]
+// Undo, Redo, Paste and Clipboard are produced only by the platform hosts,
+// so automated builds never construct them.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) enum SurfaceEvent {
     Ready,
     State {
         page: usize,
         pages: usize,
         zoom: f32,
+    },
+    /// The newest document the live engine produced — an edit, an engine
+    /// replay of undo/redo, or a save flush. The owning document decides
+    /// whether it is the canonical revision.
+    Commit {
+        bytes: Arc<[u8]>,
+    },
+    /// The engine asked for a workbench save (its own Ctrl+S).
+    Save,
+    /// The engine asked for the document's own undo/redo.
+    Undo,
+    Redo,
+    /// The engine asked for the system clipboard's text.
+    Paste,
+    /// Serialized cells the engine copied or cut.
+    Clipboard {
+        text: String,
     },
     Blocked {
         reason: String,
@@ -38,6 +60,9 @@ pub(crate) enum SurfaceEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+// The platform arms are built only by the native hosts; automated builds
+// keep the wording but never construct them.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) enum SurfaceError {
     /// Produced only by the Windows host's own geometry contract.
     #[cfg(all(not(test), windows))]
@@ -126,16 +151,48 @@ impl ParentWindow {
 /// Creates and owns one native child surface. Windows uses WebView2 directly;
 /// macOS uses a WKWebView through wry's registry host. Both expose the same
 /// session, bridge, asset and lifecycle contract.
+/// The test-only stand-in for a live engine surface: it records the
+/// commands production code sends and answers whether the engine would take
+/// them, so the save flush, clipboard and page paths run through
+/// `SurfaceHost::command` instead of a no-op.
+#[cfg(test)]
+pub(crate) struct TestSurface {
+    pub(crate) commands: std::cell::RefCell<Vec<Command>>,
+}
+
+#[cfg(test)]
+impl TestSurface {
+    pub(crate) fn new() -> Self {
+        Self {
+            commands: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
 pub(crate) struct SurfaceHost {
     #[cfg(all(windows, not(test)))]
     inner: windows_host::Host,
     #[cfg(all(target_os = "macos", not(test)))]
     inner: macos_host::Host,
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(test)]
+    inner: TestSurface,
+    #[cfg(not(any(windows, target_os = "macos", test)))]
     _unsupported: std::marker::PhantomData<()>,
 }
 
 impl SurfaceHost {
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        Self {
+            inner: TestSurface::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_commands(&self) -> Vec<Command> {
+        self.inner.commands.borrow().clone()
+    }
+
     #[cfg(not(test))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
@@ -198,19 +255,21 @@ impl SurfaceHost {
         self.inner.focus();
     }
 
-    pub(crate) fn command(&mut self, command: Command) -> Result<(), SurfaceError> {
+    /// Queues one command for the engine. `Ok(true)` means the message was
+    /// accepted for delivery — the session is live and not failed; `Ok(false)`
+    /// means the surface is up but the engine is not ready to receive it, so
+    /// callers waiting on an answer must not wait on this surface.
+    pub(crate) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
+        #[cfg(test)]
+        {
+            self.inner.commands.borrow_mut().push(command);
+            return Ok(true);
+        }
         #[cfg(all(windows, not(test)))]
         return self.inner.command(command);
         #[cfg(all(target_os = "macos", not(test)))]
         return self.inner.command(command);
-        #[cfg(all(test, any(windows, target_os = "macos")))]
-        {
-            let _ = command;
-            Err(SurfaceError::Platform(
-                "the native diagram surface is not started by automated tests".into(),
-            ))
-        }
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", test)))]
         {
             let _ = command;
             Err(SurfaceError::Unsupported(
@@ -779,7 +838,7 @@ mod windows_host {
             }
         }
 
-        pub(super) fn command(&mut self, command: Command) -> Result<(), SurfaceError> {
+        pub(super) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
             let message = {
                 let mut state = self.shared.borrow_mut();
                 if state.closed {
@@ -790,10 +849,10 @@ mod windows_host {
                 state
                     .session
                     .as_mut()
-                    .and_then(|session| session.command(command))
+                    .and_then(|session| session.command(&command))
             };
             let Some(message) = message else {
-                return Ok(());
+                return Ok(false);
             };
             let webview = self.shared.borrow().webview.clone();
             let Some(webview) = webview else {
@@ -804,8 +863,9 @@ mod windows_host {
             unsafe {
                 webview
                     .PostWebMessageAsJson(&HSTRING::from(message))
-                    .map_err(|error| SurfaceError::Platform(error.to_string()))
+                    .map_err(|error| SurfaceError::Platform(error.to_string()))?;
             }
+            Ok(true)
         }
     }
 
@@ -901,6 +961,11 @@ mod windows_host {
             BridgeEvent::State { page, pages, zoom } => {
                 emit(shared, SurfaceEvent::State { page, pages, zoom })
             }
+            BridgeEvent::Save => emit(shared, SurfaceEvent::Save),
+            BridgeEvent::Undo => emit(shared, SurfaceEvent::Undo),
+            BridgeEvent::Redo => emit(shared, SurfaceEvent::Redo),
+            BridgeEvent::Paste => emit(shared, SurfaceEvent::Paste),
+            BridgeEvent::Clipboard { text, .. } => emit(shared, SurfaceEvent::Clipboard { text }),
             BridgeEvent::Failed { message } => emit(shared, SurfaceEvent::Failed { message }),
         }
     }
@@ -929,17 +994,58 @@ mod windows_host {
         if uri.starts_with("data:") || uri.starts_with("blob:") {
             return;
         }
-        let response = {
-            let state = match shared.try_borrow() {
+        // A commit carries the diagram in its body; every other request is a
+        // plain GET. The body is read with a hard cap so an engine page can
+        // never make the host buffer an unbounded upload.
+        let mut post_body: Option<Vec<u8>> = None;
+        if method == "POST" {
+            let Ok(content) = (unsafe { request.Content() }) else {
+                return;
+            };
+            let Some(body) = (unsafe { read_request_body(&content) }) else {
+                return;
+            };
+            post_body = Some(body);
+        }
+        let (response, commit) = {
+            let mut state = match shared.try_borrow_mut() {
                 Ok(state) => state,
                 Err(_) => return,
             };
-            let session = state.session.as_ref().map(|session| session.document());
-            assets::respond(&method, &uri, session)
+            assets::respond(&method, &uri, state.session.as_mut(), post_body.as_deref())
         };
+        if let Some(bytes) = commit {
+            emit(shared, SurfaceEvent::Commit { bytes });
+        }
         if let Ok(native) = native_response(env, &response) {
             let _ = unsafe { args.SetResponse(&native) };
         }
+    }
+
+    /// Reads a POST request stream with a hard ceiling: anything larger than
+    /// the document budget plus slack is cut off and refused by `respond`.
+    unsafe fn read_request_body(stream: &windows::Win32::System::Com::IStream) -> Option<Vec<u8>> {
+        const LIMIT: usize = assets::MAX_DOCUMENT_BYTES + 1;
+        let mut body = Vec::with_capacity(64 * 1024);
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            let mut read = 0u32;
+            let result = unsafe {
+                stream.Read(
+                    chunk.as_mut_ptr().cast(),
+                    chunk.len() as u32,
+                    Some(&mut read),
+                )
+            };
+            if !result.is_ok() || read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read as usize]);
+            if body.len() > LIMIT {
+                break;
+            }
+        }
+        Some(body)
     }
 
     fn native_response(
@@ -1016,7 +1122,6 @@ mod macos_host {
         ) -> Result<Self, SurfaceError> {
             let session = LiveSession::start_for(document, assets::MAC_SHELL_URL)
                 .map_err(|error| SurfaceError::Platform(error.to_string()))?;
-            let snapshot = session.document().clone();
             let shared = Rc::new(RefCell::new(Shared {
                 session,
                 sender: events.clone(),
@@ -1024,11 +1129,33 @@ mod macos_host {
             }));
             let slot: Rc<RefCell<Option<WebView>>> = Rc::new(RefCell::new(None));
 
+            let protocol_shared = shared.clone();
             let protocol = move |_id: &str, request: wry::http::Request<Vec<u8>>| {
-                let method = request.method().as_str();
+                let method = request.method().as_str().to_string();
                 let uri = request.uri().to_string();
-                let response =
-                    assets::respond_from(method, &uri, assets::MAC_ORIGIN, Some(&snapshot));
+                let body = request.body().clone();
+                let (response, commit) = {
+                    let mut state = match protocol_shared.try_borrow_mut() {
+                        Ok(state) => state,
+                        Err(_) => return HttpResponse::new(Cow::Owned(Vec::new())),
+                    };
+                    if state.closed {
+                        return HttpResponse::new(Cow::Owned(Vec::new()));
+                    }
+                    assets::respond_from(
+                        &method,
+                        &uri,
+                        assets::MAC_ORIGIN,
+                        Some(&mut state.session),
+                        Some(body.as_slice()),
+                    )
+                };
+                if let Some(bytes) = commit {
+                    let _ = protocol_shared
+                        .borrow()
+                        .sender
+                        .try_send(SurfaceEvent::Commit { bytes });
+                }
                 http_response(response)
             };
 
@@ -1148,7 +1275,7 @@ mod macos_host {
             }
         }
 
-        pub(super) fn command(&mut self, command: Command) -> Result<(), SurfaceError> {
+        pub(super) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
             let message = {
                 let mut state = self.shared.borrow_mut();
                 if state.closed {
@@ -1156,10 +1283,10 @@ mod macos_host {
                         "the diagram surface is closed".into(),
                     ));
                 }
-                state.session.command(command)
+                state.session.command(&command)
             };
             let Some(message) = message else {
-                return Ok(());
+                return Ok(false);
             };
             let webview = self.webview.borrow();
             let Some(webview) = webview.as_ref() else {
@@ -1169,7 +1296,8 @@ mod macos_host {
             };
             webview
                 .evaluate_script(&format!("window.__lyrel.nativeMessage({message})"))
-                .map_err(|error| SurfaceError::Platform(error.to_string()))
+                .map_err(|error| SurfaceError::Platform(error.to_string()))?;
+            Ok(true)
         }
     }
 
@@ -1219,6 +1347,11 @@ mod macos_host {
         let event = match event {
             BridgeEvent::Ready => SurfaceEvent::Ready,
             BridgeEvent::State { page, pages, zoom } => SurfaceEvent::State { page, pages, zoom },
+            BridgeEvent::Save => SurfaceEvent::Save,
+            BridgeEvent::Undo => SurfaceEvent::Undo,
+            BridgeEvent::Redo => SurfaceEvent::Redo,
+            BridgeEvent::Paste => SurfaceEvent::Paste,
+            BridgeEvent::Clipboard { text, .. } => SurfaceEvent::Clipboard { text },
             BridgeEvent::Failed { message } => SurfaceEvent::Failed { message },
         };
         let _ = sender.try_send(event);

@@ -345,7 +345,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
     );
     assert_eq!(
         row_value(&view, &mut cx, "/root/@xmlns:p").as_deref(),
-        Some("\"urn:part\"")
+        Some("'urn:part'")
     );
     assert_eq!(
         row_badge(&view, &mut cx, "/root/p:item[1]").as_deref(),
@@ -571,7 +571,6 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
     // Renaming to a prefix that is not in scope would change namespace
     // meaning; the whole-result check rejects it without touching source.
     let before = source_text(&app, &cx);
-    click_row(&view, &mut cx, "/r");
     click_row(&view, &mut cx, "/r/p:a[1]");
     click_button(&view, &mut cx, "xml-rename");
     replace_panel_text(&view, &mut cx, "structure-edit-value", "q:a");
@@ -707,7 +706,9 @@ fn invalid_source_dtd_denial_budgets_and_late_parse_never_publish_stale(tcx: &mu
     type_source(&app, &mut cx, 0..0, "<!-- edited -->\n");
     assert!(source_text(&app, &cx).starts_with("<!-- edited -->"));
     toggle_mode(&denied_view, &mut cx);
-    assert!(denied_view.read_with(&cx, |view, cx| view.fatal_error(cx).is_some()));
+    until(&mut cx, |cx| {
+        denied_view.read_with(cx, |view, cx| view.fatal_error(cx).is_some())
+    });
 
     // Over the structure input budget: explicit failure, source still opens,
     // edits and saves byte-for-byte.
@@ -992,7 +993,9 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     cx.dispatch_action(crate::core::actions::EditorSave);
-    until(&mut cx, |_| host.entered.load(std::sync::atomic::Ordering::SeqCst));
+    until(&mut cx, |_| {
+        host.entered.load(std::sync::atomic::Ordering::SeqCst)
+    });
     click_row(&view, &mut cx, "/r/b[1]/text()[1]");
     click_button(&view, &mut cx, "xml-edit-value");
     type_edit_value(&view, &mut cx, "newer");

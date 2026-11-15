@@ -22,7 +22,7 @@ fn asset_bytes(path: &str) -> &'static [u8] {
 }
 
 fn request(path: &str) -> assets::EngineResponse {
-    assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None)
+    assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None, None).0
 }
 
 #[test]
@@ -208,42 +208,65 @@ fn requests_are_exact_get_manifest_only() {
         "POST",
         &format!("{}{}", assets::ORIGIN, assets::SHELL_PATH),
         None,
+        Some(b"<mxfile/>"),
     );
-    assert_eq!(post.status, 405);
-    let foreign = assets::respond("GET", "https://example.invalid/drawio/shell.html", None);
-    assert_eq!(foreign.status, 403);
-    let data = assets::respond("GET", "data:text/html,<script></script>", None);
-    assert_eq!(data.status, 403);
+    assert_eq!(post.0.status, 403);
+    let foreign = assets::respond(
+        "GET",
+        "https://example.invalid/drawio/shell.html",
+        None,
+        None,
+    );
+    assert_eq!(foreign.0.status, 403);
+    let data = assets::respond("GET", "data:text/html,<script></script>", None, None);
+    assert_eq!(data.0.status, 403);
 }
 
 #[test]
 fn only_the_live_session_document_is_addressable() {
     let body: Arc<[u8]> = Arc::from(b"<mxfile><diagram id=\"a\" name=\"A\"/></mxfile>".as_slice());
-    let session = DocumentSession::new(body).unwrap();
-    let path = session.path();
-    let response = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), Some(&session));
-    assert_eq!(response.status, 200);
-    assert_eq!(response.content_type, "application/xml; charset=utf-8");
-    assert!(matches!(response.body, EngineBody::Shared(_)));
+    let mut session = LiveSession::start(body).unwrap();
+    let path = session.document_path();
+    let response = assets::respond(
+        "GET",
+        &format!("{}{path}", assets::ORIGIN),
+        Some(&mut session),
+        None,
+    );
+    assert_eq!(response.0.status, 200);
+    assert_eq!(response.0.content_type, "application/xml; charset=utf-8");
+    assert!(matches!(response.0.body, EngineBody::Shared(_)));
     assert!(
         response
+            .0
             .headers
             .iter()
             .any(|(name, value)| *name == "Content-Security-Policy" && value.contains("sandbox"))
     );
-    let other = DocumentSession::new(Arc::from(b"<mxfile/>".as_slice())).unwrap();
-    let refused = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), Some(&other));
-    assert_eq!(refused.status, 403);
-    let missing = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None);
-    assert_eq!(missing.status, 403);
+    let mut other = LiveSession::start(Arc::from(b"<mxfile/>".as_slice())).unwrap();
+    let refused = assets::respond(
+        "GET",
+        &format!("{}{path}", assets::ORIGIN),
+        Some(&mut other),
+        None,
+    );
+    assert_eq!(refused.0.status, 403);
+    let missing = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None, None);
+    assert_eq!(missing.0.status, 403);
     let oversized =
         DocumentSession::new(Arc::from(vec![b' '; assets::MAX_DOCUMENT_BYTES + 1])).unwrap();
+    let mut oversized = LiveSession::for_test(
+        oversized.body.clone(),
+        oversized.id,
+        SessionToken::random().unwrap(),
+    );
     let too_large = assets::respond(
         "GET",
-        &format!("{}{}", assets::ORIGIN, oversized.path()),
-        Some(&oversized),
+        &format!("{}{}", assets::ORIGIN, oversized.document_path()),
+        Some(&mut oversized),
+        None,
     );
-    assert_eq!(too_large.status, 413);
+    assert_eq!(too_large.0.status, 413);
 }
 
 #[test]
@@ -300,12 +323,12 @@ fn the_native_shell_handshake_retires_tokens_and_sequences() {
             zoom: 1.25
         })
     );
-    let page = session.command(Command::Page(2)).unwrap();
+    let page = session.command(&Command::Page(2)).unwrap();
     let page: serde_json::Value = serde_json::from_str(&page).unwrap();
     assert_eq!(page["cmd"], "page");
     assert_eq!(page["page"], 2);
     assert_eq!(page["seq"], 1);
-    let fit = session.command(Command::Fit).unwrap();
+    let fit = session.command(&Command::Fit).unwrap();
     assert!(fit.contains("\"cmd\":\"fit\""));
 
     // A different surface cannot replay the old stream, even with a fresh
@@ -364,4 +387,166 @@ fn engine_urls_are_reserved_and_never_resolve() {
     let paths: Vec<_> = assets::asset_paths().collect();
     assert!(paths.contains(&assets::SHELL_PATH));
     assert!(paths.contains(&assets::ENGINE_PATH));
+}
+
+/// The only write the engine gets: commits must arrive on the live session's
+/// own path with a fresh sequence, and a sync may re-offer the same one.
+#[test]
+fn engine_commits_are_session_scoped_and_sequence_gated() {
+    let mut session = LiveSession::start(Arc::from(b"<mxfile/>".as_slice())).unwrap();
+    let base = session.document_path().replace("/document", "");
+    let ready = serde_json::json!({
+        "v": 1,
+        "session": session.session_hex(),
+        "token": session.token_hex(),
+        "seq": 1,
+        "kind": "ready",
+        "payload": {},
+    })
+    .to_string()
+    .into_bytes();
+    assert_eq!(session.accept(SHELL_URL, &ready), Ok(BridgeEvent::Ready));
+    let committed: &[u8] = b"<mxfile><diagram/></mxfile>";
+    let (response, bytes) = assets::respond(
+        "POST",
+        &format!("{}{}/commit/1", assets::ORIGIN, base),
+        Some(&mut session),
+        Some(committed),
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(bytes.as_deref(), Some(committed));
+    // The same sequence cannot be replayed as a commit; a sync may repeat it.
+    let (stale, _) = assets::respond(
+        "POST",
+        &format!("{}{}/commit/1", assets::ORIGIN, base),
+        Some(&mut session),
+        Some(committed),
+    );
+    assert_eq!(stale.status, 403);
+    let (sync, sync_bytes) = assets::respond(
+        "POST",
+        &format!("{}{}/sync/1", assets::ORIGIN, base),
+        Some(&mut session),
+        Some(committed),
+    );
+    assert_eq!(sync.status, 200);
+    assert_eq!(sync_bytes.as_deref(), Some(committed));
+    // A foreign-shaped path, a missing or empty body, a GET on the commit
+    // route, an overflowing sequence and a bogus suffix all fail closed.
+    for (method, target, body) in [
+        ("POST", format!("{base}/commit/2"), None),
+        ("POST", format!("{base}/commit/2"), Some(&b""[..])),
+        ("GET", format!("{base}/commit/2"), Some(committed)),
+        (
+            "POST",
+            format!("{base}/commit/999999999999999999999"),
+            Some(committed),
+        ),
+        ("POST", format!("{base}/sync/2/extra"), Some(committed)),
+        ("POST", format!("{base}/commit/0"), Some(committed)),
+    ] {
+        let (response, bytes) = assets::respond(
+            method,
+            &format!("{}{}", assets::ORIGIN, target),
+            Some(&mut session),
+            body,
+        );
+        assert_eq!(response.status, 403, "{method} {target} was accepted");
+        assert!(bytes.is_none());
+    }
+    // A session the document does not own is refused too.
+    let mut other = LiveSession::start(Arc::from(b"<mxfile/>".as_slice())).unwrap();
+    let (foreign, _) = assets::respond(
+        "POST",
+        &format!("{}{}/commit/2", assets::ORIGIN, base),
+        Some(&mut other),
+        Some(committed),
+    );
+    assert_eq!(foreign.status, 403);
+    // An oversized body is a 413, never a silent truncation.
+    let big = vec![b' '; assets::MAX_DOCUMENT_BYTES + 1];
+    let (response, _) = assets::respond(
+        "POST",
+        &format!("{}{}/commit/2", assets::ORIGIN, base),
+        Some(&mut session),
+        Some(&big),
+    );
+    assert_eq!(response.status, 413);
+}
+
+/// The engine's own Ctrl+S and editing keys ride the bridge as events, while
+/// the workbench's answers are ordinary commands on the same grammar.
+#[test]
+fn the_bridge_carries_editing_events_and_commands() {
+    let mut session = LiveSession::start(Arc::from(b"<mxfile/>".as_slice())).unwrap();
+    let (session_hex, token_hex) = (session.session_hex(), session.token_hex());
+    let message = |seq: u64, kind: &str, payload: serde_json::Value| {
+        serde_json::json!({
+            "v": 1,
+            "session": session_hex,
+            "token": token_hex,
+            "seq": seq,
+            "kind": kind,
+            "payload": payload,
+        })
+        .to_string()
+        .into_bytes()
+    };
+    assert_eq!(
+        session.accept(SHELL_URL, &message(1, "save", serde_json::json!({}))),
+        Err(super::bridge::Reject("save-before-ready"))
+    );
+    assert_eq!(
+        session.accept(SHELL_URL, &message(1, "ready", serde_json::json!({}))),
+        Ok(BridgeEvent::Ready)
+    );
+    assert_eq!(
+        session.accept(SHELL_URL, &message(2, "save", serde_json::json!({}))),
+        Ok(BridgeEvent::Save)
+    );
+    assert_eq!(
+        session.accept(SHELL_URL, &message(3, "undo", serde_json::json!({}))),
+        Ok(BridgeEvent::Undo)
+    );
+    assert_eq!(
+        session.accept(SHELL_URL, &message(4, "redo", serde_json::json!({}))),
+        Ok(BridgeEvent::Redo)
+    );
+    assert_eq!(
+        session.accept(SHELL_URL, &message(5, "paste", serde_json::json!({}))),
+        Ok(BridgeEvent::Paste)
+    );
+    assert_eq!(
+        session.accept(
+            SHELL_URL,
+            &message(
+                6,
+                "clipboard",
+                serde_json::json!({"text": "<mxGraphModel/>", "cut": true}),
+            ),
+        ),
+        Ok(BridgeEvent::Clipboard {
+            text: "<mxGraphModel/>".into(),
+            cut: true,
+        })
+    );
+    // A second save is one more event on the same stream.
+    assert_eq!(
+        session.accept(SHELL_URL, &message(7, "save", serde_json::json!({}))),
+        Ok(BridgeEvent::Save)
+    );
+    for command in [
+        Command::Sync,
+        Command::CopyCells,
+        Command::CutCells,
+        Command::DeleteCells,
+    ] {
+        let wire = session.command(&command).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(wire["session"], session.session_hex());
+    }
+    let paste = session.command(&Command::Paste("cells".into())).unwrap();
+    let paste: serde_json::Value = serde_json::from_str(&paste).unwrap();
+    assert_eq!(paste["cmd"], "paste");
+    assert_eq!(paste["text"], "cells");
 }

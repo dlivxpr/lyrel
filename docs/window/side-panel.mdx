@@ -221,7 +221,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
 | SQLite | 表／视图、schema、分页记录、筛选、排序与完整单元格查看 | 所属 Host 上的只读查询，只传必要结果；不下载整个远端库，不修改源库，不执行任意写 SQL 或加载扩展；不增加自由 SQL 控制台 |
-| draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298 再接可视化编辑、dirty／undo／保存与冲突；不以有限基本形状渲染器或 Zorite 白板替代。查看器不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 已在隔离产品窗口实际渲染 flow、AWS stencils、压缩 XML 和内嵌 SVG（draw.io marker-less base64 约定），macOS 已有 wry WKWebView 宿主源码但未在本机/CI 运行 |
+| draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298：同一固定引擎上的真实可视化编辑——引擎编辑经会话 commit POST 回到 owning 文档，工作台共享 undo/redo、dirty、保存／另存为与外部冲突处理；引擎自身 Ctrl+S 与剪贴板走同一桥。不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 已在隔离产品窗口实际渲染 flow、AWS stencils、压缩 XML 和内嵌 SVG（draw.io marker-less base64 约定），macOS 已有 wry WKWebView 宿主源码但未在本机/CI 运行 |
 
 Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT／PPTX 的专用预览或编辑，也不新增 `.ipynb` 专用阅读、单元格编辑、kernel、执行会话或 Plotly 输出。不新增 HTML 网页、音视频、压缩包、字体、其他电子书或专业设计格式。已有普通文本／源码、Markdown 和系统外部打开行为不因排除清单而删除。
 
@@ -252,7 +252,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 1. 共享文件打开入口与 Host 有界读取基础，接入常见位图和 SVG。
 2. 接入 PDF 与 EPUB，验证长文档阅读、搜索、文本选择和内存回收。
 3. 接入 CSV 及 JSON／YAML／TOML／XML 的保真格式编辑，验证源码、视图和共享历史。
-4. SQLite 的只读表／视图、schema、分页、筛选、排序与完整值检查已由 #295／#296 落地。draw.io 的离线引擎、保存与冲突处理仍待实现。
+4. SQLite 的只读表／视图、schema、分页、筛选、排序与完整值检查已由 #295／#296 落地；draw.io 由 #297 落地离线引擎、#298 落地编辑、保存与冲突处理。
 
 每种格式分别记录 Windows／macOS、本地／真实远端的结果。只读预览检查原件未修改；格式编辑检查真实输入、Undo／Redo、保存、关闭与独立重开。结构化文本还要逐字节核对未修改部分，覆盖注释、重复键、大整数、引用、混合内容、编码和换行。
 

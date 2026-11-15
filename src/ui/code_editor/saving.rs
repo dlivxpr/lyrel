@@ -157,7 +157,7 @@ impl EditorPanelState {
         self.save_at(id, force, None, root, window, cx, bridge);
     }
 
-    fn save_at<E: 'static>(
+    pub(super) fn save_at<E: 'static>(
         &mut self,
         id: BufferId,
         force: bool,
@@ -167,12 +167,12 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
-        // A picture is read-only: Save and Save As do nothing here rather than
-        // writing text bytes over the file a reader is looking at.
+        // Read-only content — a picture, database, book or PDF — has no bytes
+        // the workbench may write back, so Save and Save As do nothing here.
         if self
             .buffers
             .get(id)
-            .is_some_and(|file| !file.input.is_text())
+            .is_some_and(|file| !file.input.is_savable())
         {
             return;
         }
@@ -193,6 +193,50 @@ impl EditorPanelState {
         if file.untitled.is_some() && save_as.is_none() {
             self.save_as(id, root, window, cx, bridge);
             return;
+        }
+        // A diagram save must write the engine's live model, not the last
+        // committed bytes: defer the write through every live surface's sync
+        // flush until a newer committed revision (or the deadline) confirms.
+        let flushed = std::mem::take(&mut file.drawio_flush_done);
+        if file.input.drawio().is_some() && file.drawio_flush.is_none() && !flushed {
+            let Some((from_edit, has_bytes)) = file
+                .input
+                .drawio_document(cx)
+                .map(|document| (document.committed(), document.bytes().is_some()))
+            else {
+                return;
+            };
+            if !has_bytes {
+                // A failed document has no ready bytes to write.
+                return;
+            }
+            let mut views = Vec::new();
+            if let Some(primary) = file.input.drawio() {
+                views.push(primary.clone());
+            }
+            for (_, _, view) in file.presentations.drawios().iter() {
+                if !views.iter().any(|existing| existing == view) {
+                    views.push(view.clone());
+                }
+            }
+            // Every live presentation must flush: a short-circuit would leave
+            // an engine whose model is newer than the committed bytes.
+            let mut live = false;
+            for view in &views {
+                if view.update(cx, |view, _| view.flush()) {
+                    live = true;
+                }
+            }
+            if live {
+                file.drawio_flush = Some(DrawioFlush {
+                    from_edit,
+                    deadline: std::time::Instant::now() + super::DRAWIO_FLUSH_TIMEOUT,
+                    force,
+                    target: save_as,
+                });
+                cx.notify();
+                return;
+            }
         }
         // Markdown hard breaks and unknown syntax are source: ordinary saves do
         // not apply code cleanup. Explicit workbench cleanup remains undoable.
@@ -290,9 +334,7 @@ impl EditorPanelState {
                         if editor.buffers.get(id).is_some_and(|file| {
                             file.dirty
                                 || revision.is_some_and(|saved_revision| {
-                                    file.input.source_document(cx).is_some_and(|document| {
-                                        document.read(cx).revision() != saved_revision
-                                    })
+                                    file.input.source_edit_revision(cx) != Some(saved_revision)
                                 })
                         }) {
                             // New edits/representation changes retire this close.
@@ -440,11 +482,11 @@ impl EditorPanelState {
         bridge: EditorBridge<E>,
     ) {
         // A read-only picture must not open a path picker it can never write
-        // through: Save As is about text bytes this document does not have.
+        // through: Save As is about bytes this document does not have.
         if self
             .buffers
             .get(id)
-            .is_some_and(|file| !file.input.is_text())
+            .is_some_and(|file| !file.input.is_savable())
         {
             return;
         }

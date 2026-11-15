@@ -90,7 +90,10 @@ pub(crate) use book_view::{
 };
 /// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
 pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
-pub(crate) use drawio_document::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
+pub(crate) use drawio_document::{
+    DrawioActualSize, DrawioCopy, DrawioCut, DrawioDelete, DrawioFit, DrawioPaste, DrawioRedo,
+    DrawioUndo, DrawioZoomIn, DrawioZoomOut,
+};
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 /// JSON 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
@@ -134,6 +137,16 @@ impl Fingerprint {
         Self::of_chunks(text.len(), std::iter::once(text))
     }
 
+    fn of_bytes(bytes: &[u8]) -> Self {
+        use std::hash::Hasher as _;
+        let mut hasher = std::hash::DefaultHasher::new();
+        hasher.write(bytes);
+        Self {
+            len: bytes.len(),
+            hash: hasher.finish(),
+        }
+    }
+
     fn of_chunks<'a>(len: usize, chunks: impl Iterator<Item = &'a str>) -> Self {
         use std::hash::Hasher as _;
         // SipHash buffers its input, so the same bytes hash the same however
@@ -158,6 +171,23 @@ pub(crate) enum DiskConflict {
     Changed(Option<MTime>),
     /// The file is gone. The buffer is all that is left of it.
     Deleted,
+}
+
+/// How long a deferred diagram save waits for the engine to confirm its
+/// current model. A test deadline stays short so a stalled flush is proven
+/// without sleeping the production three seconds.
+const DRAWIO_FLUSH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(if cfg!(test) { 60 } else { 3_000 });
+
+/// A save that must not capture bytes older than the engine's live model:
+/// it waits for one committed revision newer than `from_edit`, with a
+/// deadline so a dead surface cannot wedge the whole save path.
+#[derive(Clone)]
+struct DrawioFlush {
+    from_edit: u64,
+    deadline: std::time::Instant,
+    force: bool,
+    target: Option<PathBuf>,
 }
 
 /// One open file, shared by every tab that shows it.
@@ -194,6 +224,12 @@ pub(crate) struct OpenFile {
     save_as_pending: Option<PathBuf>,
     reload_seq: u64,
     reload_request: u64,
+    /// A save deferred until the engine confirms its latest serialization
+    /// committed through the document. Absent for every other input.
+    drawio_flush: Option<DrawioFlush>,
+    /// Set when the deferred save's flush was confirmed and the write is
+    /// being re-entered: the engine must not be asked to sync a second time.
+    drawio_flush_done: bool,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) wrap: bool,
     /// Git change markers — see `gutter`.
@@ -2267,8 +2303,9 @@ impl LyrelApp {
         if input.sqlite().is_some() {
             return sqlite_document::menu_entries(menu);
         }
-        // A draw.io preview is read-only here: page and zoom controls are the
-        // only true actions, and there is no edit or save command to offer.
+        // The diagram keeps its own undo, clipboard and page commands: every
+        // entry lands on the shared document or the live engine, never on a
+        // text input it does not have.
         if let Some(drawio) = input.drawio() {
             let multipage = drawio.read(cx).page_count(cx) > 1;
             return drawio_document::menu_entries(menu, multipage);
@@ -2677,6 +2714,46 @@ impl LyrelApp {
         }
         self.editor_adopt_orphans(window, cx);
         self.editor_restore_active(window, cx);
+        for (id, readiness) in self.editor.buffers.take_drawio_flush_resolutions(cx) {
+            match readiness {
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Confirmed {
+                    force,
+                    target,
+                } => {
+                    // A confirmed flush takes the same Host write path as a
+                    // synchronous save: conflicts, prompts and identity
+                    // checks still apply to the bytes that are current now.
+                    let root = self.editor_save_root();
+                    self.editor.save_at(
+                        id,
+                        force,
+                        target,
+                        &root,
+                        window,
+                        cx,
+                        Self::editor_bridge(),
+                    );
+                }
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Expired => {
+                    // The engine never confirmed: writing the bytes we have
+                    // would silently drop the model on its canvas. Fail the
+                    // save the way any other failed write does — the dirty
+                    // document stays, and a pending close is cancelled.
+                    self.drawio_flush_failed(id, window, cx);
+                }
+            }
+        }
+        for (id, views) in self.editor.buffers.drawio_pending(cx) {
+            for view in views {
+                let requested = view.update(cx, |view, _| view.take_save_request());
+                if requested {
+                    // The engine's own Ctrl+S rides the same Host save path
+                    // as the toolbar action: conflicts, prompts and write
+                    // identity stay exactly one authority.
+                    self.editor_save_file(id, false, window, cx);
+                }
+            }
+        }
         for file in self.editor.buffers.iter() {
             let id = file.id();
             file.presentations.retain(
@@ -2697,6 +2774,33 @@ impl LyrelApp {
             );
         }
         self.editor_record_sessions(cx);
+    }
+
+    /// A deferred diagram save whose engine never confirmed its model is a
+    /// failed save, not a licence to write older bytes: the same toast a
+    /// failed write raises, the document stays dirty, and any close that was
+    /// waiting on this save is cancelled instead of dropping the work.
+    fn drawio_flush_failed(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(label) = self
+            .editor
+            .buffers
+            .get(id)
+            .map(|file| file.label().to_string())
+        else {
+            return;
+        };
+        let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);
+        crate::ui::host_ops::HostOps::notify_err(
+            window,
+            cx,
+            &context,
+            &std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the diagram engine did not confirm its current model",
+            ),
+        );
+        self.editor.saves_failed(id);
+        cx.notify();
     }
 
     fn editor_adopt_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2982,7 +3086,7 @@ impl LyrelApp {
         );
         let conflict_banner = self
             .active_buffer()
-            .and_then(|f| f.conflict.map(|c| (f.id(), c, f.input.is_text())))
+            .and_then(|f| f.conflict.map(|c| (f.id(), c, f.input.is_savable())))
             .map(|(id, c, text)| self.render_editor_conflict_banner(id, c, text, cx));
         let bar = self.render_editor_bar(cx);
 
@@ -4291,8 +4395,8 @@ impl LyrelApp {
                         .child(status),
                 )
             })
-            // A draw.io preview has no caret, wrap, encoding or save path;
-            // its status names the engine, pages and zoom instead.
+            // A draw.io document has no caret, wrap or encoding; its status
+            // names the engine, pages and zoom instead.
             .when_some(drawio_status, |this, status| {
                 this.child(
                     div()
@@ -4316,10 +4420,10 @@ impl LyrelApp {
             .when(drawio.is_some(), |this| {
                 this.child(
                     div()
-                        .id("status-drawio-readonly")
+                        .id("status-drawio-editable")
                         .test_support()
                         .flex_none()
-                        .child(t(L10nKey::EditorImageReadOnly)),
+                        .child(t(L10nKey::EditorDrawioEditable)),
                 )
             })
             .when_some(drawio_zoom, |this, zoom| {
@@ -4399,9 +4503,9 @@ impl LyrelApp {
             )
     }
 
-    /// `text` is the document's text capability: a read-only picture can be
+    /// `text` is the document's save capability: a read-only picture can be
     /// reloaded or closed, but offering "Save" or "Keep mine" would promise a
-    /// write that has no text to write.
+    /// write that has no bytes to write. A diagram does have them.
     fn render_editor_conflict_banner(
         &self,
         id: BufferId,

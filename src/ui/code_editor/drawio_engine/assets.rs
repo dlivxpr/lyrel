@@ -12,7 +12,6 @@
 
 use std::sync::Arc;
 
-use super::session::DocumentSession;
 use super::session::SessionId;
 
 /// A reserved origin (RFC 2606 `.invalid`) that can never resolve. WebView2
@@ -132,7 +131,7 @@ const PROVENANCE: [(&str, &str, &str); 8] = [
     ),
     (
         "/drawio/shell.js",
-        "ee5288bc2030df0779f43271918d7f0d88db4bd33890b41ec9fdee195a214693",
+        "eec006c6c0e99710f435eef1554003cd2f5e5eaea0160c07a3dda2d9ee4913bd",
         "Lyrel Apache-2.0",
     ),
     (
@@ -152,7 +151,7 @@ const PROVENANCE: [(&str, &str, &str); 8] = [
     ),
     (
         "/drawio/engine-bridge.js",
-        "f675fcc5c086186e149bdcf6f094bdf27446c74eec3f0d860029f0692b959eec",
+        "dbf8cb4724362ff56f2af84cde1e7472df66fd539f9c893e8454b691adce81cd",
         "Lyrel Apache-2.0",
     ),
     (
@@ -246,30 +245,31 @@ fn asset_response(asset: &Asset) -> EngineResponse {
     }
 }
 
-/// Answers one WebView request. Any method other than a plain GET, any query
-/// or fragment, any percent escape and any path not in the manifest is
-/// refused. The active session's document is the one dynamic response.
+/// Answers one WebView request. Any query or fragment, any percent escape and
+/// any path not in the manifest is refused. The active session's document is
+/// the one dynamic GET; a commit or sync `POST` under the same session is the
+/// only write, answered by the document the shell proves belongs to it.
 pub(crate) fn respond(
     method: &str,
     target: &str,
-    session: Option<&DocumentSession>,
-) -> EngineResponse {
-    respond_from(method, target, ORIGIN, session)
+    session: Option<&mut super::bridge::LiveSession>,
+    body: Option<&[u8]>,
+) -> (EngineResponse, Option<Arc<[u8]>>) {
+    respond_from(method, target, ORIGIN, session, body)
 }
 
 /// The same exact-manifest policy for a platform-specific origin. Windows
 /// intercepts `ORIGIN`; macOS serves the same paths from a custom scheme.
+/// Returns the response and, for an accepted commit, the bytes it delivered.
 pub(crate) fn respond_from(
     method: &str,
     target: &str,
     origin: &str,
-    session: Option<&DocumentSession>,
-) -> EngineResponse {
-    if method != "GET" {
-        return EngineResponse::method_not_allowed();
-    }
+    mut session: Option<&mut super::bridge::LiveSession>,
+    body: Option<&[u8]>,
+) -> (EngineResponse, Option<Arc<[u8]>>) {
     let Some(path) = target.strip_prefix(origin) else {
-        return EngineResponse::forbidden();
+        return (EngineResponse::forbidden(), None);
     };
     if path.is_empty()
         || path.contains('?')
@@ -279,40 +279,93 @@ pub(crate) fn respond_from(
         || path.contains("..")
         || path.contains("//")
     {
-        return EngineResponse::forbidden();
+        return (EngineResponse::forbidden(), None);
+    }
+    if method == "POST" {
+        // The only write the engine gets: the serialized mxfile under its own
+        // session id, newest sequence first. A stale or oversized body is a
+        // plain refusal; the accepted bytes leave through the sink, not the
+        // response, so no diagram content is served back to the page.
+        let Some((session_id, rest)) = session_target(path) else {
+            return (EngineResponse::forbidden(), None);
+        };
+        let (seq, sync) = match rest {
+            SessionRest::Commit(seq) => (seq, false),
+            SessionRest::Sync(seq) => (seq, true),
+            SessionRest::Document => return (EngineResponse::forbidden(), None),
+        };
+        let Some(session) = session
+            .as_mut()
+            .map(|session| &mut **session)
+            .filter(|session| session.document().id == session_id)
+        else {
+            return (EngineResponse::forbidden(), None);
+        };
+        let Some(bytes) = body.filter(|bytes| !bytes.is_empty()) else {
+            return (EngineResponse::forbidden(), None);
+        };
+        if bytes.len() > MAX_DOCUMENT_BYTES {
+            return (EngineResponse::too_large(), None);
+        }
+        if session.commit(seq, bytes, sync).is_err() {
+            return (EngineResponse::forbidden(), None);
+        }
+        let bytes: Arc<[u8]> = Arc::from(bytes);
+        return (
+            EngineResponse {
+                status: 200,
+                reason: "OK",
+                content_type: "text/plain; charset=utf-8",
+                headers: base_headers(),
+                body: EngineBody::Static(b""),
+            },
+            Some(bytes),
+        );
+    }
+    if method != "GET" {
+        return (EngineResponse::method_not_allowed(), None);
     }
     if let Some(asset) = ASSETS.iter().find(|asset| asset.path == path) {
-        return asset_response(asset);
+        return (asset_response(asset), None);
     }
-    if let Some((session_id, rest)) = document_target(path)
-        && rest.is_empty()
-    {
-        let Some(session) = session.filter(|session| session.id == session_id) else {
-            return EngineResponse::forbidden();
+    if let Some((session_id, SessionRest::Document)) = session_target(path) {
+        let Some(session) = session.filter(|session| session.document().id == session_id) else {
+            return (EngineResponse::forbidden(), None);
         };
-        if session.body.len() > MAX_DOCUMENT_BYTES {
-            return EngineResponse::too_large();
+        if session.document().body.len() > MAX_DOCUMENT_BYTES {
+            return (EngineResponse::too_large(), None);
         }
         let mut headers = base_headers();
         headers.push((
             "Content-Security-Policy",
             "default-src 'none'; sandbox".to_string(),
         ));
-        return EngineResponse {
-            status: 200,
-            reason: "OK",
-            content_type: "application/xml; charset=utf-8",
-            headers,
-            body: EngineBody::Shared(session.body.clone()),
-        };
+        return (
+            EngineResponse {
+                status: 200,
+                reason: "OK",
+                content_type: "application/xml; charset=utf-8",
+                headers,
+                body: EngineBody::Shared(session.document().body.clone()),
+            },
+            None,
+        );
     }
-    EngineResponse::forbidden()
+    (EngineResponse::forbidden(), None)
 }
 
-/// Splits `/drawio/session/<32 hex>/document` into the session and the empty
-/// remainder. A revision never appears in the URL: replacing the document
+/// The remainder of `/drawio/session/<32 hex>/`: the document a GET serves,
+/// plus the commit and sync sequences a POST may append.
+enum SessionRest {
+    Document,
+    Commit(u64),
+    Sync(u64),
+}
+
+/// Splits `/drawio/session/<32 hex>/<rest>` into the session and its trailing
+/// route. A revision never appears in the URL: replacing the document
 /// creates a new session instead of letting an old URL address new bytes.
-fn document_target(path: &str) -> Option<(SessionId, &str)> {
+fn session_target(path: &str) -> Option<(SessionId, SessionRest)> {
     let rest = path.strip_prefix("/drawio/session/")?;
     let (id, rest) = rest.split_at_checked(32)?;
     let rest = rest.strip_prefix('/')?;
@@ -323,8 +376,19 @@ fn document_target(path: &str) -> Option<(SessionId, &str)> {
         return None;
     }
     let id = SessionId::parse(id)?;
-    let rest = rest.strip_prefix("document")?;
-    Some((id, rest))
+    if rest == "document" {
+        return Some((id, SessionRest::Document));
+    }
+    let (kind, seq) = rest.split_once('/')?;
+    if !seq.bytes().all(|byte| byte.is_ascii_digit()) || seq.len() > 20 {
+        return None;
+    }
+    let seq: u64 = seq.parse().ok()?;
+    match kind {
+        "commit" => Some((id, SessionRest::Commit(seq))),
+        "sync" => Some((id, SessionRest::Sync(seq))),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,23 @@ impl SaveContent {
                 representation: Some(snapshot.representation_fingerprint()),
                 revision: Some(document.revision()),
             })
+        } else if let Some(document) = file.input.drawio_document(cx) {
+            // The engine already serialized: its last committed bytes are the
+            // document, fingerprinted once at capture so a later commit can
+            // never silently pass as saved.
+            let bytes = document
+                .bytes()
+                .expect("a savable diagram has ready bytes")
+                .to_vec();
+            let written = Fingerprint::of_bytes(&bytes);
+            let revision = Some(document.edit_revision());
+            Ok(Self {
+                bytes,
+                written,
+                format: TextFormat::default(),
+                representation: None,
+                revision,
+            })
         } else {
             // Only a text document reaches save: a read-only picture never
             // gets here, so text() and format() are the same capability.

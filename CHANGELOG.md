@@ -46,6 +46,8 @@
 
 - #296：SQLite 只读浏览补齐筛选、排序与完整值检查。筛选输入按 Glim 250 ms 防抖把单个绑定参数送入既有受限 predicate（`instr(lower(CAST(col AS TEXT)), lower(?1))`，覆盖所有列，不引入自由 SQL）；表头可排序列循环 降序→升序→还原，排序名指向 schema 列索引并随列窗映射，切表清空排序、刷新保留筛选与排序且由 view/epoch/query_rev 三重身份拒绝迟到结果。完整值检查器经同一 `SqliteQuery` 快照与 `sqlite_value` 按精确字节偏移分块读取（每块 ≤1 MiB），INTEGER/REAL 整块精确返回；BLOB 以偏移十六进制转储显示、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 转储并标注原因（不用替换字符冒充原值），NULL 提示无内容不置剪贴板，>8 MiB 值保持可翻页但拒绝部分复制并说明限额；检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。键盘 `secondary-f` 聚焦筛选、`enter` 检查选中单元格、`escape` 关闭检查器，均只在数据库文档持有焦点时生效。新增 Host conformance `sqlite_filters_sorts_and_reads_values_in_bounded_chunks` 由本地与真实 SSH 循环共用；工作台回归覆盖真实输入/表头点击、分块翻页与剪贴板、WAL writer 下打开视图保持快照且 main 文件字节不变、原件不被修改。原生窗口、系统 IME、macOS 与性能不记为已通过。
 
+- #298：draw.io 图在同一固定离线引擎上获得真实可视化编辑。引擎侧的模型修改、删除、剪贴板与页面切换经会话内的 commit POST（按会话 id 与单调序列校验、体积预算拒绝、sync 允许同序列重放）回到 owning 文档，解析失败的提交被拒绝并保留上一份正常字节；同字节 sync 只推进已确认修订。工作台 undo/redo 是文档级共享历史——任一 presentation 的编辑可在另一 presentation 撤销，不存在引擎本地第二历史；保存先经 sync flush 等待引擎提交当前模型再走同一 Host 写路径，外部重写下 dirty 图如实冲突。引擎自身 Ctrl+S、剪贴板复制／剪切／删除与粘贴经同一桥接；页面、缩放、多页切换与原 session/token/资源白名单不变。本机原生 WebView 验收、真实 SSH 远端编辑与双平台边界按实际执行另行记录，不预先声明。
+
 ### 修复
 
 - #288：CSV／TSV 表格呈现挂接已有文档右键菜单，修复行列操作只有键盘路径、鼠标无法打开菜单的问题；生产工作台回归实际通过菜单插入行并核对局部源码及单步撤销。
