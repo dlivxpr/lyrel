@@ -916,26 +916,39 @@ fn key_info(entry: &MappingEntry) -> KeyInfo {
 fn node_properties(node: &SyntaxNode) -> Properties {
     let mut properties = Properties::default();
     let mut current = Some(node.clone());
-    for _ in 0..3 {
+    for depth in 0..3 {
         let Some(candidate) = current else {
             break;
         };
-        for child in candidate.children_with_tokens() {
-            let Some(token) = child.as_token() else {
-                continue;
-            };
-            match token.kind() {
-                SyntaxKind::ANCHOR => {
-                    if properties.anchor.is_none() {
-                        properties.anchor = token.text().strip_prefix('&').map(str::to_owned);
+        // parser 把值／键的 anchor 与 tag 放在包着它的节点里（KEY、VALUE、
+        // SEQUENCE_ENTRY、TAGGED_NODE、DOCUMENT），collection 自己的标注也在
+        // 包着它的节点上，而不是 collection 的 token 子节点。祖先 collection
+        // 一旦参与扫描，每个子节点都要走完整份兄弟列表：平铺的 20000 项文件
+        // 会退化成二次方，节点预算还没命中就先耗尽消费者的等待期限。节点自身
+        // 仍扫描一次，那是一次线性于它自己子节点数的成本。
+        let scans_siblings = depth == 0
+            || !matches!(
+                candidate.kind(),
+                SyntaxKind::MAPPING | SyntaxKind::SEQUENCE | SyntaxKind::ROOT
+            );
+        if scans_siblings {
+            for child in candidate.children_with_tokens() {
+                let Some(token) = child.as_token() else {
+                    continue;
+                };
+                match token.kind() {
+                    SyntaxKind::ANCHOR => {
+                        if properties.anchor.is_none() {
+                            properties.anchor = token.text().strip_prefix('&').map(str::to_owned);
+                        }
                     }
-                }
-                SyntaxKind::TAG => {
-                    if properties.tag.is_none() {
-                        properties.tag = Some(token.text().to_owned());
+                    SyntaxKind::TAG => {
+                        if properties.tag.is_none() {
+                            properties.tag = Some(token.text().to_owned());
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         current = candidate.parent();
