@@ -831,6 +831,9 @@ impl LyrelApp {
                     file.presentations
                         .book_existing(tab, group)
                         .map(EditorInput::Book)
+                })
+                .or_else(|| {
+                    file.presentations
                         .pdf_existing(tab, group)
                         .map(EditorInput::Pdf)
                 })
