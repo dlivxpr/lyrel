@@ -417,3 +417,98 @@ fn concurrent_connections_can_all_write_the_tree() {
         "every operation landed exactly once"
     );
 }
+
+fn sqlite_fixture(dir: &Path, name: &str) -> (std::path::PathBuf, rusqlite::Connection) {
+    let path = dir.join(name);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;\
+             CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT);\
+             INSERT INTO items(value) VALUES ('one'),('two'),('three');",
+        )
+        .unwrap();
+    (path, connection)
+}
+
+fn sqlite_wal_busy(path: &Path) -> i64 {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn sqlite_views_belong_to_the_connection_that_opened_them() {
+    use crate::host::sqlite::{SqliteCancel, SqliteQuery, is_stale_view};
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, _writer) = sqlite_fixture(dir.path(), "shared.sqlite");
+    let host = crate::host::local::LocalHost::new();
+    let first = pair_with(Arc::clone(&host));
+    let second = pair_with(host);
+    let cancel = SqliteCancel::default();
+    let opened = first.host.sqlite_open(&path, &cancel).unwrap();
+    let columns = first
+        .host
+        .sqlite_columns(opened.view, "items", &cancel)
+        .unwrap();
+    let query = SqliteQuery {
+        table: "items".into(),
+        columns: columns.names,
+        order: columns.order,
+        ..SqliteQuery::default()
+    };
+    assert_eq!(
+        first
+            .host
+            .sqlite_count(opened.view, &query, &cancel)
+            .unwrap(),
+        3
+    );
+    // Another connection cannot address this view, even on the same Host.
+    let error = second
+        .host
+        .sqlite_page(opened.view, &query, &cancel)
+        .unwrap_err();
+    assert!(is_stale_view(&error), "{error}");
+    // Closing it through the wrong connection is a no-op there and does not
+    // take it away from the owner.
+    second.host.sqlite_close(opened.view);
+    std::thread::sleep(Duration::from_millis(75));
+    assert_eq!(
+        first
+            .host
+            .sqlite_page(opened.view, &query, &cancel)
+            .unwrap()
+            .rows
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn a_dropped_link_releases_its_sqlite_read_view() {
+    use crate::host::sqlite::SqliteCancel;
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, _writer) = sqlite_fixture(dir.path(), "link.sqlite");
+    let pair = pair();
+    let cancel = SqliteCancel::default();
+    let opened = pair.host.sqlite_open(&path, &cancel).unwrap();
+    assert_ne!(opened.view, 0);
+    assert_eq!(sqlite_wal_busy(&path), 1);
+    // Dropping the client shuts the link down; the server clears every view
+    // the connection opened, which rolls its read transaction back.
+    drop(pair);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if sqlite_wal_busy(&path) == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the dropped link kept its SQLite read transaction"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_ne!(opened.view, 0);
+}

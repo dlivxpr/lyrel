@@ -1,6 +1,8 @@
 use super::pdf_document::{PdfDocument, PdfLoaded, PdfView};
+use super::sqlite_document::{SqliteDocument, SqliteView};
 use super::*;
 use lyrel_core::core::session::WorkspaceId;
+use lyrel_core::host::sqlite::{SqliteCancel, SqliteOpened};
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
@@ -252,6 +254,7 @@ impl EditorBuffers {
         }
         self.pending.insert(key.clone(), seq);
         let requested = path.to_path_buf();
+        let guard_host = host.clone();
         HostOps::run_in(
             host.clone(),
             window,
@@ -260,13 +263,16 @@ impl EditorBuffers {
             move |view, result, window, cx| {
                 let current = access(view).pending.get(&key).copied() == Some(seq);
                 if !current {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 }
                 access(view).pending.remove(&key);
                 if !valid(view, target, cx) {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 }
                 let Some(current) = access(view).foreground.get(&target.tab).copied() else {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 };
                 let front = current == seq;
@@ -304,6 +310,7 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
+        let guard_host = host.clone();
         HostOps::run_in(
             host,
             window,
@@ -316,6 +323,7 @@ impl EditorBuffers {
             },
             move |view, loaded, window, cx| {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
+                    close_unclaimed_batch(&guard_host, &loaded);
                     return;
                 }
                 let loaded = loaded
@@ -380,11 +388,17 @@ impl EditorBuffers {
         edited: Edited<E>,
     ) -> (BufferId, bool) {
         if let Some(id) = self.at(host.id(), loaded.path()) {
+            if let Loaded::Sqlite(sqlite) = loaded
+                && let Ok(opened) = sqlite.opened
+            {
+                host.sqlite_close(opened.view);
+            }
             return (id, false);
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
             Loaded::Drawio(drawio) => (self.create_drawio(host, drawio, cx), true),
+            Loaded::Sqlite(sqlite) => (self.create_sqlite(host, sqlite, window, cx), true),
             Loaded::Book(book) => (self.create_book(host, book, window, cx), true),
             Loaded::Pdf {
                 path,
@@ -506,6 +520,58 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Drawio(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// 数据库读取视图在所属 Host 建立，文档拥有并在关闭时释放它。
+    fn create_sqlite<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        sqlite: LoadedSqlite,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let LoadedSqlite {
+            path,
+            mtime,
+            opened,
+        } = sqlite;
+        let id = BufferId::new();
+        let document_host = host.clone();
+        let document = cx.new(|cx| SqliteDocument::new(document_host, path.clone(), opened, cx));
+        let view = cx.new(|cx| SqliteView::new(document.clone(), window, cx));
+        document.update(cx, |document, cx| document.start(window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Sqlite(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -998,6 +1064,7 @@ impl EditorBuffers {
             let document = view.read(cx).document().clone();
             document.update(cx, |document, cx| document.begin_reload(cx));
         }
+        let sqlite = file.input.sqlite().cloned();
         let book = file
             .input
             .book()
@@ -1027,6 +1094,8 @@ impl EditorBuffers {
             document.update(cx, |document, cx| document.begin_reload(cx));
         }
         let image_reload = image.is_some();
+        let sqlite_reload = sqlite.is_some();
+        let guard_host = host.clone();
         let pdf_reload = pdf.is_some();
         HostOps::run_in(
             host,
@@ -1052,6 +1121,10 @@ impl EditorBuffers {
                         source,
                         mtime: meta.mtime,
                     }));
+                }
+                if sqlite_reload {
+                    let meta = h.stat(&target)?;
+                    return Ok(Reloaded::Sqlite(load_sqlite(h, target, meta)));
                 }
                 if book.is_some() {
                     let meta = h.stat(&target)?;
@@ -1088,9 +1161,11 @@ impl EditorBuffers {
             },
             move |view, result: std::io::Result<Reloaded>, window, cx| {
                 let Some(file) = access(view).get_mut(id) else {
+                    close_unclaimed_sqlite(&guard_host, &result);
                     return;
                 };
                 if file.reload_request != seq || !file.is_at(host_id, &expected) {
+                    close_unclaimed_sqlite(&guard_host, &result);
                     return;
                 }
                 let reloaded = match result {
@@ -1167,6 +1242,24 @@ impl EditorBuffers {
                             .map(|view| view.read(cx).document().clone());
                         if let Some(document) = document {
                             document.update(cx, |document, cx| document.replace(image.result, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    // A database is read-only here too: the freshest view
+                    // replaces the old one, and late pages of the old view
+                    // are rejected by its identity.
+                    Reloaded::Sqlite(sqlite) => {
+                        file.disk_mtime = sqlite.mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .sqlite()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| {
+                                document.replace(sqlite.opened, window, cx)
+                            });
                         }
                         cx.notify();
                         return;
@@ -1280,6 +1373,8 @@ pub(super) enum Loaded {
     /// A draw.io file. Parsing its page list happened on the Host thread;
     /// failure is part of the document, not a reason to fall back to text.
     Drawio(LoadedDrawio),
+    /// 读取视图由所属 Host 建立；失败也保留独立文档和可见错误。
+    Sqlite(LoadedSqlite),
     /// A coherent book copy and its package answer. A corrupt or protected
     /// EPUB is still a document with a place and a visible reason.
     Book(LoadedBook),
@@ -1299,6 +1394,12 @@ pub(super) struct LoadedDrawio {
     mtime: Option<MTime>,
 }
 
+pub(super) struct LoadedSqlite {
+    path: PathBuf,
+    mtime: Option<MTime>,
+    opened: std::io::Result<SqliteOpened>,
+}
+
 pub(super) struct LoadedImage {
     path: PathBuf,
     /// What the name or magic claimed; the failure label when the bytes do
@@ -1314,6 +1415,7 @@ impl Loaded {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
             Self::Drawio(drawio) => &drawio.path,
+            Self::Sqlite(sqlite) => &sqlite.path,
             Self::Book(book) => &book.path,
             Self::Pdf { path, .. } => path,
         }
@@ -1325,6 +1427,7 @@ enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
     Drawio(LoadedDrawio),
+    Sqlite(LoadedSqlite),
     Book(LoadedBook),
     Pdf(PdfLoaded, Option<MTime>),
 }
@@ -1357,6 +1460,11 @@ fn load_file(
     }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
+    }
+    // 数据库不能被当作文本读进内存：整库下载已经被数据库浏览本身排除。
+    // 名称是唯一不读文件内容的判据；真正的识别与错误由只读打开给出。
+    if is_sqlite_path(&path) {
+        return Ok(Loaded::Sqlite(load_sqlite(h, path, meta)));
     }
     if meta.len > MAX_FILE_BYTES {
         return Err(EditorOpenError::Message(t_fmt(
@@ -1420,6 +1528,52 @@ fn load_file(
         mtime: meta.mtime,
         config,
     })
+}
+
+/// A reloaded read view that never reached a live document is closed here,
+/// not left for the Host's idle reaper: a tab that closed mid-read should not
+/// keep a transaction open.
+fn close_unclaimed_sqlite(host: &SharedHost, result: &std::io::Result<Reloaded>) {
+    if let Ok(Reloaded::Sqlite(sqlite)) = result
+        && let Ok(opened) = &sqlite.opened
+    {
+        host.sqlite_close(opened.view);
+    }
+}
+
+/// The same release for a first open whose target was closed or replaced
+/// before it landed.
+fn close_unclaimed_loaded(host: &SharedHost, result: &Result<Loaded, EditorOpenError>) {
+    if let Ok(Loaded::Sqlite(sqlite)) = result
+        && let Ok(opened) = &sqlite.opened
+    {
+        host.sqlite_close(opened.view);
+    }
+}
+
+/// And for a restore batch that reached no live tab.
+fn close_unclaimed_batch(host: &SharedHost, loaded: &[(PathBuf, Result<Loaded, EditorOpenError>)]) {
+    for (_, result) in loaded {
+        close_unclaimed_loaded(host, result);
+    }
+}
+
+/// Opens a read-only view on the owning Host, still on its thread. The view
+/// is not read or copied here: only the bounded metadata and page requests
+/// that follow cross the transport. An open failure is carried into the
+/// document so the reader can see the reason and retry.
+fn load_sqlite(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> LoadedSqlite {
+    let cancel = SqliteCancel::new();
+    let opened = h.sqlite_open(&path, &cancel);
+    LoadedSqlite {
+        path,
+        mtime: meta.mtime,
+        opened,
+    }
 }
 
 /// Recognises a book before generic text and ZIP handling.

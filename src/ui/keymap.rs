@@ -198,15 +198,21 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The database reader's one command. Refresh opens a new read view; it is
+    // bound only while a database presentation holds the keyboard.
+    {
+        use crate::ui::code_editor::SqliteRefresh;
+        let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
+        bindings.push(load_binding("secondary-r", SqliteRefresh, sqlite, cx));
+    }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a
     // shell or the terminal.
     {
         use crate::ui::code_editor::{
             BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
-            BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter,
-            BookPreviousPage, BookPreviousResult, BookSearch, BookToggleBookmarks,
-            BookToggleContents,
+            BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
+            BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
         };
         let book = Some(crate::ui::code_editor::BOOK_KEY_CONTEXT);
         bindings.extend([

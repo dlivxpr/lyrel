@@ -14,15 +14,17 @@
 use encoding_rs::Encoding;
 use roxmltree::Document;
 
-use crate::limits::Limits;
 use crate::EpubError;
+use crate::limits::Limits;
 
 /// Decodes one XML member.
 pub(crate) fn decode(bytes: &[u8]) -> Result<String, EpubError> {
     let encoding = xml_encoding(bytes);
     let (text, _, errors) = encoding.decode(bytes);
     if errors {
-        return Err(EpubError::encoding("the bytes are not valid in their declared encoding"));
+        return Err(EpubError::encoding(
+            "the bytes are not valid in their declared encoding",
+        ));
     }
     let mut text = text.into_owned();
     if text.contains('\0') {
@@ -260,7 +262,8 @@ mod tests {
         let mut public = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html/>"#.to_owned();
         strip_doctype(&mut public).unwrap();
         assert_eq!(public, "<html/>");
-        let mut subset = r#"<!DOCTYPE book [<!ENTITY a SYSTEM "file:///secret">]><book/>"#.to_owned();
+        let mut subset =
+            r#"<!DOCTYPE book [<!ENTITY a SYSTEM "file:///secret">]><book/>"#.to_owned();
         assert!(strip_doctype(&mut subset).is_err());
     }
 }

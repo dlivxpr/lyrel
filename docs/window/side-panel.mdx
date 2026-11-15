@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮已确认但尚未实现的文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。其中 PNG／JPEG／WebP／BMP／ICO 只读文档已由 #280 落地（见[静态图片文档](#static-image-documents)），SVG 源码与安全原生预览已由 #283 落地（见[SVG 文档](#svg-documents)），PDF 的页／缩放／密码与既有批注／表单外观已由 #284 落地（见[PDF 阅读文档](#pdf-reading-documents)）；#285 的大纲、选字复制与搜索仍待实现。该设计其余部分不改变当前的文件大小限制或打开行为。
+本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码与既有外观](#pdf-reading-documents)、#286 EPUB 阅读及 [SQLite 基础浏览](#sqlite-documents)。#285 的 PDF 大纲／选字／搜索及其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已落地部分：#280（切片 T01）已把 PNG／JPEG／WebP／BMP／ICO 作为只读文档接入现有工作台；#282 在同一文档上补齐 GIF 动画与多页 TIFF，见下方[图片文档](#static-image-documents)。#283 已接入 [SVG 源码与安全原生预览](#svg-documents)，#284 已接入 [PDF 阅读文档](#pdf-reading-documents)（大纲、选字复制与搜索归 #285）。下表其余格式仍待实现，不能把源码接入视为双平台验收通过。
+> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#295 的 [SQLite 数据库文档](#sqlite-documents)。PDF 大纲／选字复制／搜索归 #285，SQLite 筛选／排序／完整值检查归 #296；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
 
 本节使用以下术语：
 
@@ -252,7 +252,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 1. 共享文件打开入口与 Host 有界读取基础，接入常见位图和 SVG。
 2. 接入 PDF 与 EPUB，验证长文档阅读、搜索、文本选择和内存回收。
 3. 接入 CSV 及 JSON／YAML／TOML／XML 的保真格式编辑，验证源码、视图和共享历史。
-4. 接入 SQLite 的 headless 只读查询，以及 draw.io 的离线引擎、保存与冲突处理。
+4. SQLite 的只读表／视图、schema 与基础分页已由 #295 落地；筛选、排序与完整值检查留给 #296。draw.io 的离线引擎、保存与冲突处理仍待实现。
 
 每种格式分别记录 Windows／macOS、本地／真实远端的结果。只读预览检查原件未修改；格式编辑检查真实输入、Undo／Redo、保存、关闭与独立重开。结构化文本还要逐字节核对未修改部分，覆盖注释、重复键、大整数、引用、混合内容、编码和换行。
 
@@ -279,6 +279,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - TIFF：用正式 registry `tiff` 解码器枚举 IFD 页表，像素只在该 presentation 请求某页时后台解码；页选择属于 presentation，分屏两边可以停在不同的页。单页上限 8192 边／1600 万像素，页数与单页解码缓冲另有显式预算；迟到页结果只装回自己的页，不能替换当前页。页身份显示为“第 N 页，共 M 页”，翻页可用工具栏、右键菜单与 PageUp／PageDown。
 - 复用与许可：GIF 移植的固定来源、原始 blob 摘要与本地适配见 `src/ui/code_editor/image_document/UPSTREAM.toml`；Glim MIT notice 进入根 `LICENSE` 附录。`gif`／`tiff` 是正式 registry 依赖，不是 Git 或 path 覆盖。
 - 呈现：`src/ui/code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份文档。
+- 缩放尺寸：居中滚动区域可以大于图片；图像自身按原始像素宽高乘取景比例，再除显示缩放系数换算为逻辑点。fit 不放大小图片；1:1 表示一个原像素对应一个显示物理像素。状态百分比与实际图像 bounds 使用同一比例，不把图片拉伸到整块视口。
 - 文本契约不变：保存、另存为、未保存关闭、撤销、行号跳转、符号、查找、Git gutter 与 LSP 都经 `EditorInput::is_text()` 保持原有行为；对图片执行这些命令不写盘、不弹永久无效的输入条。
 - 证据边界：本轮 `pwsh scripts/cargo-windows.ps1 test --locked -p lyrel --lib image_document` 的 lib test 编译为零 warning；对该次构建的测试二进制执行 `image_document` 过滤，34/34 通过（GIF 6、TIFF 8、工作台 20）。覆盖五种静态格式、GIF 合成与有限循环、可见性暂停与关闭、异尺寸 TIFF 页、迟到页、分屏不同页、缓存淘汰不收回仍在显示的纹理、损坏／截断／字节与像素／单边预算、外部重写、异 Host 与映射 Host 的字节归属、读取迟到时标签页已关闭，以及文本命令隔离。真实产品窗口、SSH、DPI、macOS 与性能尚未由这些测试或编译成功覆盖。
 
@@ -332,6 +333,17 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 完整解析预算见 `crates/lyrel-epub/src/limits.rs`。解析／阅读状态的固定来源与原始摘要见该 crate 的 `UPSTREAM.toml`，GUI 交互的适配记录见 `src/ui/code_editor/book_view/UPSTREAM.toml`；Glim MIT notice 随根 `LICENSE` 分发。
 
 证据范围：Windows 生产工作台的完整章节末尾搜索、偏好／书签／阅读位置保存重开和损坏／不支持状态三项通过，原件未写；同次编译零 warning。另由 GUI-free 消费者通过新增的 Unicode 搜索范围与有界上下文回归。上述不代替最终组合候选的原生窗口、真实 SSH、macOS、显示缩放、系统 IME 或性能验收。
+
+<a id="sqlite-documents"></a>
+#### SQLite 数据库文档（#295 已实现）
+
+#295 交付表、视图、schema 与存储 SQL 定义、基础分页记录和按列窗浏览；筛选、排序、完整单元格检查与更细的完整值交互属于 #296，本切片不显示这些无效控件，也不提供任意 SQL 控制台。扩展名 `.sqlite`、`.sqlite3`、`.db`、`.db3` 进入数据库文档；其他名字不因内容猜测被抢走。
+
+- 身份与打开：打开请求发给实际所属 Host。本机 `LocalHost` 在进程内打开，远端 `RemoteHost` 经 control v18 的 `sqlite-browse-v1` 请求；映射 Host 把路径解析到自己的根目录，测试中使用同路径本机替身证明数据仍来自该 Host。数据库字节不下载到桌面，分页与值请求都限制在 Host 侧。
+- 读取视图：每次打开建立一条只读连接与 `BEGIN DEFERRED` 读取事务，schema、列与页共享同一数据库版本。视图有 30 秒闲置上限、180 秒绝对上限与单 Host 64 个视图上限；过期后显示刷新提示，刷新打开新身份。只读打开不得写数据／schema、改变 journal 模式、checkpoint 源库或加载扩展；可能改变 `-shm` 的正常 SQLite 协调与禁止的数据写入分开表述，需要恢复才能打开的 WAL 被明确拒绝。
+- 值与取消：NULL、精确 INTEGER、非有限 REAL、原始 TEXT 与 BLOB 都以类型化值穿过 wire；页面携带页号、列窗与 `more`。取消绑定到具体请求，旧取消不会停止同一视图上的新页；查询有秒预算、行数／行宽与返回大小上限。
+- 呈现：`src/ui/code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。
+- 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。生产工作台回归覆盖类型化值、原件不变与分屏独立焦点；Linux 私有回环 SSH 已执行共享读取契约。该客户端与远端共享测试文件系统，不代替 Windows 远端、独立物理主机、native 窗口、系统 IME、macOS 或性能验收。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

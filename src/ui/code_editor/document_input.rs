@@ -3,6 +3,7 @@ use super::book_view::BookView;
 use super::drawio_document::DrawioView;
 use super::image_document::ImageView;
 use super::pdf_document::PdfView;
+use super::sqlite_document::SqliteView;
 use super::text::TextSnapshot;
 use super::*;
 use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
@@ -14,6 +15,8 @@ pub(crate) enum EditorInput {
     Markdown(Entity<MarkdownEditor>),
     /// 只读静态图片：没有文本，只有取景。
     Image(Entity<ImageView>),
+    /// 只读 SQLite 数据库：没有文本，只有表结构与分页数据。
+    Sqlite(Entity<SqliteView>),
     /// 只读 EPUB：章节、目录、搜索与阅读位置由书文档拥有。
     Book(Entity<BookView>),
     /// 只读 PDF：没有文本编辑，只有页、缩放与密码。
@@ -40,6 +43,7 @@ pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
+    Sqlite(gpui_kit::WeakEntity<SqliteView>),
     Book(gpui_kit::WeakEntity<BookView>),
     Pdf(gpui_kit::WeakEntity<PdfView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
@@ -51,6 +55,7 @@ impl WeakEditorInput {
             Self::Code(input) => input.upgrade().map(EditorInput::Code),
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
+            Self::Sqlite(input) => input.upgrade().map(EditorInput::Sqlite),
             Self::Book(input) => input.upgrade().map(EditorInput::Book),
             Self::Pdf(input) => input.upgrade().map(EditorInput::Pdf),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
@@ -64,6 +69,7 @@ impl EditorInput {
             Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
+            Self::Sqlite(input) => WeakEditorInput::Sqlite(input.downgrade()),
             Self::Book(input) => WeakEditorInput::Book(input.downgrade()),
             Self::Pdf(input) => WeakEditorInput::Pdf(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
@@ -85,6 +91,12 @@ impl EditorInput {
     pub(crate) fn image(&self) -> Option<&Entity<ImageView>> {
         match self {
             Self::Image(input) => Some(input),
+            _ => None,
+        }
+    }
+    pub(crate) fn sqlite(&self) -> Option<&Entity<SqliteView>> {
+        match self {
+            Self::Sqlite(input) => Some(input),
             _ => None,
         }
     }
@@ -119,9 +131,12 @@ impl EditorInput {
         match self {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
-            Self::Code(_) | Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Drawio(_) => {
-                None
-            }
+            Self::Code(_)
+            | Self::Image(_)
+            | Self::Pdf(_)
+            | Self::Book(_)
+            | Self::Sqlite(_)
+            | Self::Drawio(_) => None,
         }
     }
     /// 这份输入的文本能力；只读图片返回 `None`。
@@ -132,7 +147,9 @@ impl EditorInput {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
-            Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Drawio(_) => None,
+            Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) | Self::Drawio(_) => {
+                None
+            }
         }
     }
     /// 有文本可编辑、可查找、可保存的输入。图片和 draw.io 图不是。
@@ -171,6 +188,9 @@ impl EditorInput {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
+            // 表格的滚动属于呈现自己的 `TableState`；打开文档时的光标放置
+            // 不适用于数据库，因此这里不假装有第二个滚动所有者。
+            Self::Sqlite(_) => {}
             // A book's position is block/chapter state stored in its document,
             // not a free pixel offset that a tab restore could impose.
             Self::Book(_) => {}
@@ -327,6 +347,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
+            EditorInput::Sqlite(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Book(input) => input.read(self.cx).handle(),
             EditorInput::Pdf(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
@@ -338,6 +359,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
+            EditorInput::Sqlite(_) => gpui_kit::Point::default(),
             EditorInput::Book(_) => gpui_kit::Point::default(),
             EditorInput::Pdf(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
@@ -431,6 +453,7 @@ pub(super) struct Presentations {
         )>,
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
+    sqlite: RefCell<Vec<(TabId, split::GroupId, Entity<SqliteView>, Subscription)>>,
     books: RefCell<Vec<(TabId, split::GroupId, Entity<BookView>, Subscription)>>,
     pdfs: RefCell<Vec<(TabId, split::GroupId, Entity<PdfView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
@@ -525,6 +548,42 @@ impl Presentations {
         group: split::GroupId,
     ) -> Option<Entity<ImageView>> {
         self.images
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    /// 每个数据库分组保留独立焦点与表格状态，共享同一份读取结果。
+    pub(super) fn sqlite_view<E: 'static>(
+        &self,
+        primary: &Entity<SqliteView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<SqliteView> {
+        let mut views = self.sqlite.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| SqliteView::new(document, window, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn sqlite_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<SqliteView>> {
+        self.sqlite
             .borrow()
             .iter()
             .find(|(t, g, _, _)| *t == tab && *g == group)
@@ -737,6 +796,11 @@ impl Presentations {
         // 图片呈现没有进行中的输入法组合，也没有缓存的地图与公式：退场只需
         // 让最后一个句柄落下，解码结果由文档本身继续持有。
         self.images
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
+        // 数据库呈现同样没有输入组合；读取视图与页数据由文档持有，退场只让
+        // 这个分组的焦点、滚动与表格选择落下。
+        self.sqlite
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
         self.books

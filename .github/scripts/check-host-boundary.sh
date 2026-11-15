@@ -52,6 +52,14 @@ src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 # local config dir, like the themes above — not a file in any workspace.
 src/ui/editor_session.rs|std::fs::read
 
+# EPUB 章节与全书索引只打开 host.open_read 已复制出的 NamedTempFile；
+# 阅读记录只在本机 config_path("reader-state") 下，Host/path 仅用于记录键。
+# 保留逐调用模式，不能豁免此模块对未来工作区路径的其它本机操作。
+src/ui/code_editor/book_document.rs|std::fs::File::open(&temp)
+src/ui/code_editor/book_document.rs|std::fs::File::open(&path)
+src/ui/code_editor/book_document.rs|std::fs::read(path)
+src/ui/code_editor/book_document.rs|std::fs::create_dir_all(parent)
+
 # 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
 # Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
 src/ui/notification_history.rs|std::fs::read

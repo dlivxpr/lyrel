@@ -6385,6 +6385,7 @@ dependencies = [
  "rio-graphics",
  "rio-unicode",
  "rio-vt",
+ "rusqlite",
  "russh",
  "russh-sftp",
  "serde",

@@ -46,6 +46,11 @@ macro_rules! for_each_host_case {
             open_read_refuses_an_oversized_segment,
             open_read_detects_a_same_size_rewrite,
             open_read_detects_a_replacement,
+            sqlite_schema_pages_and_typed_values,
+            sqlite_wal_writer_keeps_one_read_view,
+            sqlite_refuses_missing_non_database_and_directories,
+            sqlite_reports_a_cancelled_page_without_retiring_the_view,
+            sqlite_validates_identifiers_against_the_open_view,
             skills_browse_is_readonly_and_host_bound,
             write_file_creates_and_overwrites,
             write_file_reports_its_own_metadata,
@@ -1679,6 +1684,259 @@ pub fn separator_matches_hello(h: &dyn Host, sb: &dyn Sandbox) {
         h.join(sandbox, "x").to_string_lossy().contains(sep),
         "join must use the reported separator"
     );
+}
+
+fn sqlite_query(h: &dyn Host, view: u64, table: &str) -> crate::host::sqlite::SqliteQuery {
+    let cancel = crate::host::sqlite::SqliteCancel::default();
+    let columns = h.sqlite_columns(view, table, &cancel).unwrap();
+    crate::host::sqlite::SqliteQuery {
+        table: table.to_owned(),
+        columns: columns.names,
+        order: columns.order,
+        ..crate::host::sqlite::SqliteQuery::default()
+    }
+}
+
+fn sqlite_text(value: &crate::host::sqlite::SqliteValue) -> Option<&[u8]> {
+    match value {
+        crate::host::sqlite::SqliteValue::Text { preview, .. } => Some(preview),
+        _ => None,
+    }
+}
+
+fn sqlite_sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn sqlite_checkpoint(write: &rusqlite::Connection) -> i64 {
+    write
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        .unwrap()
+}
+
+pub fn sqlite_schema_pages_and_typed_values(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::{SqliteCancel, SqliteObjectKind, SqliteValue, is_stale_view};
+    let path = h.join(sb.path(), "conformance.sqlite");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(include_str!("../../tests/fixtures/glim-reader-sqlite.sql"))
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE typed(n, r, t, b);\
+                 INSERT INTO typed VALUES (9007199254740993, 3.5, CAST(x'C3A9' AS TEXT), x'00ff');\
+                 INSERT INTO typed VALUES (NULL, 1e400, CAST(x'FF41' AS TEXT), NULL);",
+            )
+            .unwrap();
+    }
+    let cancel = SqliteCancel::default();
+    let opened = h.sqlite_open(&path, &cancel).unwrap();
+    assert_ne!(opened.view, 0);
+    assert_eq!(opened.journal_mode, "delete");
+    assert!(opened.idle_millis > 0 && opened.max_age_millis >= opened.idle_millis);
+    let alpha = opened
+        .objects
+        .iter()
+        .find(|object| object.name == "alpha")
+        .expect("the table is in the schema");
+    assert_eq!(alpha.kind, SqliteObjectKind::Table);
+    assert!(alpha.sql.contains("CREATE TABLE alpha"));
+    assert!(opened.objects.iter().any(|object| object.name == "beta"));
+
+    let mut query = sqlite_query(h, opened.view, "alpha");
+    assert_eq!(query.columns[1], "名,称");
+    assert_eq!(h.sqlite_count(opened.view, &query, &cancel).unwrap(), 520);
+    let first = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    assert_eq!(first.rows.len(), 500);
+    assert!(first.more);
+    query.page = 1;
+    let second = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    assert_eq!(second.rows.len(), 20);
+    assert!(!second.more);
+    assert_eq!(
+        sqlite_text(&second.rows[19][1]).unwrap(),
+        "中文 520".as_bytes()
+    );
+
+    let typed = sqlite_query(h, opened.view, "typed");
+    let page = h.sqlite_page(opened.view, &typed, &cancel).unwrap();
+    assert_eq!(
+        page.rows[0][0],
+        SqliteValue::Integer {
+            value: 9007199254740993
+        }
+    );
+    assert_eq!(page.rows[0][1].real_value(), Some(3.5));
+    assert_eq!(sqlite_text(&page.rows[0][2]).unwrap(), &[0xc3, 0xa9]);
+    assert!(matches!(page.rows[0][3], SqliteValue::Blob { .. }));
+    assert_eq!(page.rows[1][0], SqliteValue::Null);
+    assert!(page.rows[1][1].real_value().is_some_and(f64::is_infinite));
+    assert_eq!(sqlite_text(&page.rows[1][2]).unwrap(), &[0xff, b'A']);
+    assert_eq!(page.rows[1][3], SqliteValue::Null);
+
+    h.sqlite_close(opened.view);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match h.sqlite_page(opened.view, &query, &cancel) {
+            Err(error) if is_stale_view(&error) => break,
+            Ok(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(_) => panic!("the closed read view still answered a page"),
+            Err(error) => panic!("unexpected error after close: {error}"),
+        }
+    }
+}
+
+pub fn sqlite_wal_writer_keeps_one_read_view(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::SqliteCancel;
+    let path = h.join(sb.path(), "wal.sqlite");
+    let writer = rusqlite::Connection::open(&path).unwrap();
+    writer
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;\
+             CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT);\
+             INSERT INTO items(value) VALUES ('one'),('two'),('three'),('four'),('five');",
+        )
+        .unwrap();
+    let cancel = SqliteCancel::default();
+    let opened = h.sqlite_open(&path, &cancel).unwrap();
+    assert_eq!(opened.journal_mode, "wal");
+    let query = sqlite_query(h, opened.view, "items");
+    assert_eq!(h.sqlite_count(opened.view, &query, &cancel).unwrap(), 5);
+
+    writer
+        .execute("INSERT INTO items(value) VALUES ('six')", [])
+        .unwrap();
+    // The view opened before the commit keeps its snapshot.
+    assert_eq!(h.sqlite_count(opened.view, &query, &cancel).unwrap(), 5);
+    let page = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    assert_eq!(page.rows.len(), 5);
+
+    // Only the refreshed view, and only after the writer finished, may change
+    // what is counted; from here on the source is quiescent.
+    let main_before = std::fs::read(&path).unwrap();
+    let wal_before = std::fs::read(sqlite_sidecar(&path, "-wal")).unwrap();
+    let refreshed = h.sqlite_open(&path, &cancel).unwrap();
+    assert_ne!(refreshed.view, opened.view);
+    let refreshed_query = sqlite_query(h, refreshed.view, "items");
+    assert_eq!(
+        h.sqlite_count(refreshed.view, &refreshed_query, &cancel)
+            .unwrap(),
+        6
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), main_before);
+    assert_eq!(
+        std::fs::read(sqlite_sidecar(&path, "-wal")).unwrap(),
+        wal_before
+    );
+    assert!(!sqlite_sidecar(&path, "-journal").exists());
+
+    // An open read view holds a read mark; closing both (a posted close on a
+    // remote Host) lets the writer checkpoint again.
+    assert_eq!(sqlite_checkpoint(&writer), 1);
+    h.sqlite_close(opened.view);
+    h.sqlite_close(refreshed.view);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if sqlite_checkpoint(&writer) == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closing the read views did not release their read transactions"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+pub fn sqlite_refuses_missing_non_database_and_directories(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::SqliteCancel;
+    let cancel = SqliteCancel::default();
+    let missing = h.join(sb.path(), "missing.sqlite");
+    let error = h.sqlite_open(&missing, &cancel).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(!missing.exists());
+
+    let text = h.join(sb.path(), "not-a-database.db");
+    write(h, &text, "hello");
+    let error = h.sqlite_open(&text, &cancel).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+
+    let directory = h.join(sb.path(), "folder.sqlite");
+    h.create_dir(&directory, false).unwrap();
+    let error = h.sqlite_open(&directory, &cancel).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::IsADirectory, "{error}");
+}
+
+pub fn sqlite_reports_a_cancelled_page_without_retiring_the_view(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::SqliteCancel;
+    let path = h.join(sb.path(), "cancel.sqlite");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE items(id INTEGER); INSERT INTO items VALUES (1);\
+                 CREATE VIEW slow AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n) SELECT x FROM n;",
+            )
+            .unwrap();
+    }
+    let cancel = SqliteCancel::default();
+    let opened = h.sqlite_open(&path, &cancel).unwrap();
+    let mut slow = sqlite_query(h, opened.view, "slow");
+    slow.seconds = crate::host::sqlite::QUERY_SECONDS_MAX;
+    let page_cancel = SqliteCancel::new();
+    let error = std::thread::scope(|scope| {
+        let worker = {
+            let page_cancel = page_cancel.clone();
+            let slow = slow.clone();
+            scope.spawn(move || h.sqlite_page(opened.view, &slow, &page_cancel))
+        };
+        std::thread::sleep(Duration::from_millis(150));
+        page_cancel.cancel();
+        worker.join().unwrap().unwrap_err()
+    });
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted, "{error}");
+
+    // The cancellation was bound to that request; the view and its next page
+    // are still usable.
+    let items = sqlite_query(h, opened.view, "items");
+    let page = h
+        .sqlite_page(opened.view, &items, &SqliteCancel::default())
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+}
+
+pub fn sqlite_validates_identifiers_against_the_open_view(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::{SqliteCancel, SqliteQuery};
+    let path = h.join(sb.path(), "validate.sqlite");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch("CREATE TABLE t(id INTEGER); INSERT INTO t VALUES (1);")
+            .unwrap();
+    }
+    let cancel = SqliteCancel::default();
+    let opened = h.sqlite_open(&path, &cancel).unwrap();
+    let mut query = sqlite_query(h, opened.view, "t");
+    query.columns = vec!["missing\"column".into()];
+    let error = h.sqlite_page(opened.view, &query, &cancel).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+    let error = h
+        .sqlite_columns(opened.view, "no_such_table", &cancel)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    let empty = SqliteQuery {
+        table: "t".into(),
+        ..SqliteQuery::default()
+    };
+    let error = h.sqlite_page(opened.view, &empty, &cancel).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+    h.sqlite_close(opened.view);
+    h.sqlite_close(opened.view);
 }
 
 #[cfg(test)]

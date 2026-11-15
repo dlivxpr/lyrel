@@ -36,11 +36,7 @@ pub(crate) fn rootfile(
     if !container {
         return Err(EpubError::NotEpub);
     }
-    let bytes = archive.entry(
-        "META-INF/container.xml",
-        limits.xml_bytes as u64,
-        cancel,
-    )?;
+    let bytes = archive.entry("META-INF/container.xml", limits.xml_bytes as u64, cancel)?;
     let text = decode(&bytes)?;
     let document = xml(&text, limits)?;
     let root = descendants(document.root_element(), "rootfile")
@@ -266,11 +262,7 @@ pub(crate) fn check_protection(
     if !archive.has("META-INF/encryption.xml") {
         return Ok(());
     }
-    let bytes = archive.entry(
-        "META-INF/encryption.xml",
-        limits.xml_bytes as u64,
-        cancel,
-    )?;
+    let bytes = archive.entry("META-INF/encryption.xml", limits.xml_bytes as u64, cancel)?;
     let text = decode(&bytes)?;
     let document = xml(&text, limits)?;
     let mut seen = false;
@@ -360,10 +352,7 @@ fn parse_nav(
     for link in descendants(toc, "a") {
         cancel.check()?;
         if entries.len() >= limits.toc_entries {
-            return Err(EpubError::limit(
-                "TOC entries",
-                limits.toc_entries as u64,
-            ));
+            return Err(EpubError::limit("TOC entries", limits.toc_entries as u64));
         }
         let Some(href) = attribute(link, "href").and_then(|href| resolve(nav_path, href)) else {
             continue;
@@ -393,10 +382,7 @@ fn parse_ncx(
     for point in descendants(document.root_element(), "navPoint") {
         cancel.check()?;
         if entries.len() >= limits.toc_entries {
-            return Err(EpubError::limit(
-                "TOC entries",
-                limits.toc_entries as u64,
-            ));
+            return Err(EpubError::limit("TOC entries", limits.toc_entries as u64));
         }
         let label = descendants(point, "navLabel")
             .next()
@@ -432,18 +418,16 @@ pub(crate) fn finalize(
     limits: &Limits,
 ) -> Result<(), EpubError> {
     for chapter in spine.iter_mut() {
-        if let Some(label) = toc.iter().find(|entry| {
-            entry.href.split('#').next() == Some(chapter.href.as_str())
-        }) {
+        if let Some(label) = toc
+            .iter()
+            .find(|entry| entry.href.split('#').next() == Some(chapter.href.as_str()))
+        {
             chapter.title.clone_from(&label.title);
         }
     }
     if toc.is_empty() {
         if spine.len() > limits.toc_entries {
-            return Err(EpubError::limit(
-                "TOC entries",
-                limits.toc_entries as u64,
-            ));
+            return Err(EpubError::limit("TOC entries", limits.toc_entries as u64));
         }
         *toc = spine
             .iter()

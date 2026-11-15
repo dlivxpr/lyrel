@@ -27,10 +27,7 @@ pub enum EpubError {
     /// The document declares a fixed (pre-paginated) layout.
     FixedLayout { global: bool, items: usize },
     /// A byte, node, entry, chapter, or block budget was exceeded.
-    Limit {
-        resource: &'static str,
-        limit: u64,
-    },
+    Limit { resource: &'static str, limit: u64 },
     /// The caller cancelled the read.
     Cancelled,
     /// The underlying archive or file I/O failed.

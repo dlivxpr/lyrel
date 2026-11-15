@@ -5,18 +5,18 @@
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
+use lyrel_epub::open_book;
 use lyrel_epub::{
     BLOCKED_IMAGE_SOURCE, CancellationToken, EpubError, ImageMode, Limits, read_chapter,
 };
-use lyrel_epub::open_book;
 
 /// A 1×1 opaque PNG. The bytes are a fixture, not a decoder assertion.
 const PNG: &[u8] = &[
     0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, b'I', b'H', b'D', b'R',
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15,
-    0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, b'I', b'D', b'A', b'T', 0x78, 0x9c, 0x63, 0x00, 0x01,
-    0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, b'\xb4', 0x00, 0x00, 0x00, 0x00, b'I', b'E',
-    b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0a, b'I', b'D', b'A', b'T', 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, b'\xb4', 0x00, 0x00, 0x00, 0x00, b'I', b'E', b'N', b'D',
+    0xae, 0x42, 0x60, 0x82,
 ];
 
 struct Fixture {
@@ -123,7 +123,9 @@ fn reflowable_entries() -> Vec<(&'static str, Vec<u8>)> {
         ),
         (
             "OPS/toc.xhtml",
-            nav(r#"<li><a href="Text/two.xhtml#final">Final</a><ol><li><a href="Text/one.xhtml#start">First</a></li></ol></li><li><a href="Text/three.xhtml">Third</a></li>"#),
+            nav(
+                r#"<li><a href="Text/two.xhtml#final">Final</a><ol><li><a href="Text/one.xhtml#start">First</a></li></ol></li><li><a href="Text/three.xhtml">Third</a></li>"#,
+            ),
         ),
         ("OPS/Text/one.xhtml", first.as_bytes().to_vec()),
         ("OPS/Text/two.xhtml", second.into_bytes()),
@@ -148,7 +150,11 @@ fn spine_navigation_blocks_and_local_illustrations_survive_active_content() {
             .iter()
             .map(|item| item.href.as_str())
             .collect::<Vec<_>>(),
-        ["OPS/Text/two.xhtml", "OPS/Text/one.xhtml", "OPS/Text/three.xhtml"]
+        [
+            "OPS/Text/two.xhtml",
+            "OPS/Text/one.xhtml",
+            "OPS/Text/three.xhtml"
+        ]
     );
     assert_eq!(book.spine[0].title, "Final");
     assert_eq!(book.spine[1].title, "First");
@@ -161,9 +167,24 @@ fn spine_navigation_blocks_and_local_illustrations_survive_active_content() {
     assert_eq!(first.images.len(), 1);
     assert_eq!(first.images[0].path, "OPS/Images/pixel.png");
     assert_eq!(first.images[0].bytes, PNG);
-    assert!(!first.blocks.iter().any(|block| block.html.contains("bad()")));
-    assert!(!first.blocks.iter().any(|block| block.html.contains("iframe")));
-    assert!(!first.blocks.iter().any(|block| block.html.contains("tracker")));
+    assert!(
+        !first
+            .blocks
+            .iter()
+            .any(|block| block.html.contains("bad()"))
+    );
+    assert!(
+        !first
+            .blocks
+            .iter()
+            .any(|block| block.html.contains("iframe"))
+    );
+    assert!(
+        !first
+            .blocks
+            .iter()
+            .any(|block| block.html.contains("tracker"))
+    );
     assert!(
         first
             .blocks
@@ -271,7 +292,13 @@ fn fixed_layout_is_declared_unsupported_globally_and_per_spine_item() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert!(matches!(error, EpubError::FixedLayout { global: false, items: 1 }));
+    assert!(matches!(
+        error,
+        EpubError::FixedLayout {
+            global: false,
+            items: 1
+        }
+    ));
 }
 
 #[test]
@@ -455,7 +482,10 @@ fn ordinary_xhtml_entities_render_and_a_plain_zip_is_not_a_book() {
     let path = dir.path().join("plain.zip");
     write_zip(
         &path,
-        &[("mimetype", b"application/zip".to_vec()), ("a.txt", b"x".to_vec())],
+        &[
+            ("mimetype", b"application/zip".to_vec()),
+            ("a.txt", b"x".to_vec()),
+        ],
     );
     let file = std::fs::File::open(&path).unwrap();
     assert!(matches!(
