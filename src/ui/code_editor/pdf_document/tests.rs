@@ -773,6 +773,9 @@ fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext)
 pub(super) enum Work {
     FirstPage,
     Unlock,
+    /// 全文扫掠的后台解释阶段；`block` 在进入后台任务后等待，`finish`
+    /// 在收集完（或取消返回）时置位。
+    Search,
 }
 
 pub(super) struct WorkGate {
@@ -829,4 +832,496 @@ pub(super) fn take_work(work: Work) -> Option<WorkGate> {
             None
         }
     })
+}
+
+// #285：大纲/链接跳转、选区复制与文档内查找的工作台行为。它们仍然只走真实
+// 键位、按钮与拖拽——不触碰内部状态去伪造一次成功。
+
+fn find_count(cx: &mut VisualTestContext) -> String {
+    cx.update(|window, _| {
+        window
+            .find("pdf-find-count")
+            .label()
+            .unwrap_or_default()
+            .to_string()
+    })
+}
+
+#[gpui_kit::test]
+fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = fixtures::reading_document();
+    let path = fixture(dir.path(), "outline.pdf", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, _| assert!(window.find("pdf-toc-toggle").visible()));
+    cx.update(|window, cx| window.click("pdf-toc-toggle", cx));
+    settle(&mut cx);
+    cx.update(|window, _| {
+        assert!(window.find("pdf-toc").visible(), "the outline panel");
+        assert_eq!(
+            window.find("pdf-toc-0").label(),
+            Some("First explicit page")
+        );
+        assert_eq!(
+            window.find("pdf-toc-1").label(),
+            Some("Middle named destination")
+        );
+        assert_eq!(window.find("pdf-toc-2").label(), Some("Last named action"));
+    });
+
+    // 指针点击中间条目：命名目的地指向第 6 页的坐标锚点。
+    cx.update(|window, cx| window.click("pdf-toc-1", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.page_number(), 6, "the named destination page");
+        let offset = view.scroll_offset();
+        assert!(
+            f32::from(offset.y) < 0.,
+            "the destination anchor scrolls off page top: {:?}",
+            offset
+        );
+    });
+
+    // 键盘：下/上移动游标、Enter 跳到最后一页（无坐标的 /Fit 目的地）。
+    cx.update(|window, cx| window.press("down", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.page_number(), 12, "the named action jumps to its page")
+    });
+    cx.update(|window, _| assert!(window.find("pdf-page-11").visible()));
+
+    cx.update(|window, cx| window.press("up", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.page_number()),
+        6,
+        "the previous outline entry"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
+}
+
+#[gpui_kit::test]
+fn page_link_annotations_jump_to_their_destination(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "links.pdf", &fixtures::links_document());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, _| {
+        assert!(window.find("pdf-link-0-0").visible(), "internal link");
+        assert!(window.find("pdf-link-0-1").visible(), "external link");
+    });
+    // 旋转 90° 页上的内部链接：归一化矩形换算后仍指向第二页。
+    cx.update(|window, cx| window.click("pdf-link-0-0", cx));
+    settle(&mut cx);
+    assert_eq!(view.read_with(&cx, |view, _| view.page_number()), 2);
+    cx.update(|window, _| assert!(window.find("pdf-link-1-0").visible()));
+
+    // 目标页上的命名链接指回其自身的 /Fit 目的地，不发生导航漂移。
+    cx.update(|window, cx| window.click("pdf-link-1-0", cx));
+    settle(&mut cx);
+    assert_eq!(view.read_with(&cx, |view, _| view.page_number()), 2);
+}
+
+#[gpui_kit::test]
+fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = fixtures::links_document();
+    let path = fixture(dir.path(), "rotated.pdf", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    // 首页带 /Rotate 90：文本层的归一化矩形按显示后的页面给出，拖拽仍应
+    // 选中同一段文字，复制出解码后的字符串而不是按未旋转坐标错位。
+    let page_bounds = cx.update(|window, _| window.find("pdf-page-0").bounds());
+    assert!(
+        page_bounds.size.width > page_bounds.size.height,
+        "the rotated page is displayed landscape: {:?}",
+        page_bounds.size
+    );
+    let from = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.02,
+            page_bounds.size.height * 0.02,
+        );
+    let to = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.98,
+            page_bounds.size.height * 0.98,
+        );
+    cx.update(|window, cx| window.drag(from, to, cx));
+    until(&mut cx, |cx| {
+        pdf_view(&app, cx).read_with(cx, |view, _| {
+            view.has_selection() && view.text_page(0).is_some()
+        })
+    });
+    cx.update(|window, cx| window.press(&secondary("c"), cx));
+    settle(&mut cx);
+    let copied = cx
+        .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        .unwrap_or_default();
+    assert!(
+        copied.contains("Rotated link page"),
+        "the rotated page's text is selectable: {copied:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
+}
+
+#[gpui_kit::test]
+fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "find.pdf", &fixtures::reading_document());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, cx| window.click("pdf-find", cx));
+    settle(&mut cx);
+    cx.update(|window, _| assert!(window.find("pdf-find-bar").visible()));
+
+    cx.update(|window, cx| window.input("unique-page-1", cx));
+    // 12 页里匹配 "unique-page-10"、"unique-page-11"、"unique-page-12" 三个。
+    until(&mut cx, |cx| find_count(cx).starts_with("1 / 3"));
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.match_count(), 3);
+        assert_eq!(view.current_match_index(), Some(0));
+        assert_eq!(view.page_number(), 10, "the first match jumps to its page");
+    });
+    cx.update(|window, _| assert!(window.find("pdf-match-9").visible()));
+
+    // Enter 前进并翻页；Shift+Enter 后退；末位回绕到第一命中。
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.current_match_index(), Some(1));
+        assert_eq!(view.page_number(), 11);
+    });
+    cx.update(|window, _| assert!(window.find("pdf-match-10").visible()));
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| window.press("shift-enter", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.current_match_index(), Some(1));
+        assert_eq!(view.page_number(), 11);
+    });
+    cx.update(|window, cx| window.press("shift-enter", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.current_match_index(), Some(0));
+        assert_eq!(view.page_number(), 10);
+    });
+
+    // Escape 关掉查找条并清掉高亮。
+    cx.update(|window, cx| window.press("escape", cx));
+    settle(&mut cx);
+    cx.update(|window, _| {
+        assert!(window.try_find("pdf-find-bar").is_none(), "find bar closed");
+        assert!(
+            window.try_find("pdf-match-9").is_none(),
+            "highlights cleared"
+        );
+    });
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.match_count()),
+        0,
+        "closing clears the results"
+    );
+}
+
+#[gpui_kit::test]
+fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = fixtures::reading_document();
+    let path = fixture(dir.path(), "unicode-find.pdf", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, cx| window.click("pdf-find", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| window.input("unique-page-12", cx));
+    until(&mut cx, |cx| find_count(cx) == "1 / 1");
+    view.read_with(&cx, |view, _| {
+        assert_eq!(
+            view.page_number(),
+            12,
+            "the only match lands on the last page"
+        );
+    });
+    cx.update(|window, _| assert!(window.find("pdf-match-11").visible()));
+
+    // 缩放改变页面像素，命中的归一化矩形仍锚定在同一段文字上。
+    dispatch(&app, &mut cx, PdfZoomIn);
+    settle(&mut cx);
+    cx.update(|window, _| {
+        assert!(
+            window.find("pdf-match-11").visible(),
+            "highlight after zoom"
+        );
+        assert!(window.find("pdf-page-11").visible());
+    });
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.match_count()),
+        1,
+        "zooming keeps the same matches"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
+}
+
+#[gpui_kit::test]
+fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "cjk.pdf", &fixtures::unicode_text_document());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    // 搜索两个 CJK 码点：Type3 字形经 /ToUnicode 映射为"中文"，两行各一次。
+    cx.update(|window, cx| window.click("pdf-find", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| window.input("中文", cx));
+    until(&mut cx, |cx| find_count(cx) == "1 / 3");
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.match_count(), 3, "CJK occurrences across both lines");
+    });
+    cx.update(|window, _| assert!(window.find("pdf-match-0").visible()));
+    cx.update(|window, cx| window.press("escape", cx));
+    settle(&mut cx);
+
+    // 拖拽框选两行中文文本并复制：相邻 CJK run 不插入臆造空格，
+    // 行间保留换行。
+    let page_bounds = cx.update(|window, _| window.find("pdf-page-0").bounds());
+    let from = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.05,
+            page_bounds.size.height * 0.06,
+        );
+    let to = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.55,
+            // 拖过第二行基线；页面元素原点相对滚动列还有 PAGE_PAD 的上边距，
+            // 20% 会落在两行之间而只选到第一行。
+            page_bounds.size.height * 0.30,
+        );
+    cx.update(|window, cx| window.drag(from, to, cx));
+    until(&mut cx, |cx| {
+        pdf_view(&app, cx).read_with(cx, |view, _| {
+            view.has_selection() && view.text_page(0).is_some()
+        })
+    });
+    cx.update(|window, _| assert!(window.find("pdf-selection-0").visible()));
+
+    // 复制走真实键盘 chord；剪贴板拿到的是解码后的完整 Unicode 文本。
+    cx.update(|window, cx| window.press(&secondary("c"), cx));
+    settle(&mut cx);
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(
+        copied.as_deref(),
+        Some("中文 中文\n中文"),
+        "adjacent CJK runs join without invented spaces"
+    );
+}
+
+#[gpui_kit::test]
+fn a_ligature_glyph_copies_as_its_full_unicode_text(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = fixtures::ligature_text_document();
+    let path = fixture(dir.path(), "ligature.pdf", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    // 一个 Type3 glyph 经 /ToUnicode 映射到 "ffi" 两个码点：选区与剪贴板
+    // 都必须是展开后的完整文本，而不是字形名或单字节。
+    let page_bounds = cx.update(|window, _| window.find("pdf-page-0").bounds());
+    let from = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.05,
+            page_bounds.size.height * 0.06,
+        );
+    let to = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.60,
+            page_bounds.size.height * 0.13,
+        );
+    cx.update(|window, cx| window.drag(from, to, cx));
+    until(&mut cx, |cx| {
+        pdf_view(&app, cx).read_with(cx, |view, _| {
+            view.has_selection() && view.text_page(0).is_some()
+        })
+    });
+    cx.update(|window, _| assert!(window.find("pdf-selection-0").visible()));
+
+    cx.update(|window, cx| window.press(&secondary("c"), cx));
+    settle(&mut cx);
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(
+        copied.as_deref(),
+        Some("office"),
+        "the ligature glyph expands to its mapped letters"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
+}
+
+#[gpui_kit::test]
+fn a_scan_only_pdf_says_so_instead_of_pretending_matches(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = fixtures::scan_only_document();
+    let path = fixture(dir.path(), "scan.pdf", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    cx.update(|window, cx| window.click("pdf-find", cx));
+    settle(&mut cx);
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, cx| window.input("anything", cx));
+    until(&mut cx, |cx| find_count(cx) == "No text layer");
+    assert!(
+        status(&app, &cx).contains("No text layer"),
+        "status admits no text layer: {}",
+        status(&app, &cx)
+    );
+    view.read_with(&cx, |view, _| {
+        assert_eq!(view.match_count(), 0);
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
+}
+
+#[gpui_kit::test]
+fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "stale.pdf", &fixtures::reading_document());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    settle(&mut cx);
+
+    let view = pdf_view(&app, &cx);
+    cx.update(|window, cx| window.click("pdf-find", cx));
+    settle(&mut cx);
+    let (release, entered, finished) = pause_work(Work::Search);
+    cx.update(|window, cx| window.input("unique", cx));
+    // 扫掠进入后台任务后先停住；此时文件被外部改写。
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::Acquire)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+    std::fs::write(&path, &fixtures::forms_document(true)).unwrap();
+    until(&mut cx, |cx| status(&app, cx).starts_with("Page 1 / 1"));
+    release.send_blocking(()).unwrap();
+    until(&mut cx, |_| {
+        finished.load(std::sync::atomic::Ordering::Acquire)
+    });
+    // 旧扫掠结果按 seq/revision 丢弃；新文档的文本层不包含查询词，计数
+    // 如实显示无匹配，旧字节的命中一条都不落地。
+    until(&mut cx, |cx| find_count(cx) == "No matches");
+    view.read_with(&cx, |view, _| {
+        assert_eq!(
+            view.match_count(),
+            0,
+            "no matches leaked from the old bytes"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "split-sel.pdf", &fixtures::reading_document());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| ready(&app, cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the PDF splits");
+    });
+    settle(&mut cx);
+
+    let (tab, left, right) = app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("editor group");
+        let tab = app.tabs.get(app.tabs.active_index()).unwrap().id();
+        let right = code.focused_group();
+        let left = match code.group == right {
+            true => code.split.as_ref().expect("two groups").id,
+            false => code.group,
+        };
+        (tab, left, right)
+    });
+    let (front, other) = app.read_with(&cx, |app, _| {
+        let file = app.active_buffer().expect("PDF");
+        (
+            file.presentations
+                .pdf_existing(tab, right)
+                .expect("front view"),
+            file.presentations
+                .pdf_existing(tab, left)
+                .expect("other view"),
+        )
+    });
+
+    // 在前面那个分屏里拖拽选中文本；另一边保持没有选区。
+    assert_eq!(
+        pdf_view(&app, &cx),
+        front,
+        "the focused pane is the one we act on"
+    );
+    let page_bounds = cx.update(|window, _| {
+        window
+            .within(("pdf-document", front.entity_id()))
+            .find("pdf-page-0")
+            .bounds()
+    });
+    let from = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.05,
+            page_bounds.size.height * 0.06,
+        );
+    let to = page_bounds.origin
+        + gpui_kit::point(
+            page_bounds.size.width * 0.55,
+            page_bounds.size.height * 0.08,
+        );
+    cx.update(|window, cx| window.drag(from, to, cx));
+    until(&mut cx, |cx| {
+        pdf_view(&app, cx).read_with(cx, |view, _| view.has_selection())
+    });
+    front.read_with(&cx, |view, _| assert!(view.has_selection()));
+    other.read_with(&cx, |view, _| {
+        assert!(!view.has_selection(), "the other pane keeps no selection")
+    });
 }

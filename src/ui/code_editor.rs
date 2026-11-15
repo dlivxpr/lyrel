@@ -91,7 +91,9 @@ pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
-pub(crate) use pdf_document::{PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
+pub(crate) use pdf_document::{
+    PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
+};
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
@@ -2213,8 +2215,9 @@ impl LyrelApp {
                 .separator()
                 .menu(t(L10nKey::EditorBookAddBookmark), Box::new(BookAddBookmark));
         }
-        if input.pdf().is_some() {
-            return pdf_document::menu_entries(menu);
+        if let Some(pdf) = input.pdf() {
+            let has_selection = pdf.read(cx).has_selection();
+            return pdf_document::menu_entries(menu, has_selection);
         }
         // 数据库没有撤销、查找、剪贴板和行命令可给：它只有刷新与分页。
         if input.sqlite().is_some() {
