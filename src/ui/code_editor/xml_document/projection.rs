@@ -378,7 +378,12 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
                     ));
                 }
                 let parent = *stack.last().unwrap_or(&0);
-                let qname = &text[prefix.start()..local.end()];
+                let qname_start = if prefix.is_empty() {
+                    local.start()
+                } else {
+                    prefix.start()
+                };
+                let qname = &text[qname_start..local.end()];
                 let occurrence = {
                     let counts = &mut counts[parent];
                     let count = counts.elements.entry(qname.to_owned()).or_insert(0);
@@ -401,7 +406,7 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
                         path,
                         value: String::new(),
                         range: span.start()..span.end(),
-                        key_range: Some(prefix.start()..local.end()),
+                        key_range: Some(qname_start..local.end()),
                         value_range: None,
                         kind: XmlNodeKind::Element,
                         children: Vec::new(),
@@ -431,7 +436,12 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
                         "attribute outside a start tag".to_owned(),
                     ));
                 };
-                let qname = &text[prefix.start()..local.end()];
+                let qname_start = if prefix.is_empty() {
+                    local.start()
+                } else {
+                    prefix.start()
+                };
+                let qname = &text[qname_start..local.end()];
                 let is_namespace = (prefix.as_str() == "xmlns")
                     || (prefix.is_empty() && local.as_str() == "xmlns");
                 let quote_start = value.start().checked_sub(1);
@@ -454,7 +464,7 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
                             quote.unwrap_or('"')
                         ),
                         range: span.range(),
-                        key_range: Some(prefix.start()..local.end()),
+                        key_range: Some(qname_start..local.end()),
                         value_range: Some(value.range()),
                         kind: XmlNodeKind::Attribute,
                         children: Vec::new(),
@@ -514,13 +524,17 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
                     }
                     nodes[element].range.end = span.end();
                     nodes[element].close_tag_start = Some(span.start());
-                    let qname = &text[prefix.start()..local.end()];
-                    if !nodes[element].key.ends_with(qname) {
-                        // 精确的错配由 roxmltree 在下一次校验中拒绝；这里
-                        // 不猜测修复，也不吞掉。
+                    let qname_start = if prefix.is_empty() {
+                        local.start()
+                    } else {
+                        prefix.start()
+                    };
+                    let qname = &text[qname_start..local.end()];
+                    if nodes[element].key != qname {
+                        let (line, column) = line_column(text, span.start());
                         return Ok(error_projection(
-                            span.start(),
-                            span.start(),
+                            line,
+                            column,
                             format!("unexpected close tag </{qname}>"),
                         ));
                     }
