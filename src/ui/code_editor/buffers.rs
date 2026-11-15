@@ -331,6 +331,7 @@ impl EditorBuffers {
                             if !is_markdown_path(&path)
                                 && !is_svg_path(&path)
                                 && !is_json_path(&path)
+                                && !is_csv_path(&path)
                             {
                                 return None;
                             }
@@ -374,6 +375,11 @@ impl EditorBuffers {
             EditorInput::Svg(file.presentations.svg_view(primary, target.tab, group, cx))
         } else if let (Some(primary), Some(group)) = (file.input.json(), target.group) {
             EditorInput::Json(file.presentations.json_view(primary, target.tab, group, cx))
+        } else if let (Some(primary), Some(group)) = (file.input.csv(), target.group) {
+            EditorInput::Csv(
+                file.presentations
+                    .csv_view(primary, target.tab, group, window, cx),
+            )
         } else {
             file.input.clone()
         };
@@ -671,7 +677,8 @@ impl EditorBuffers {
             && !native_svg
             && is_json_path(&path)
             && super::json_document::JsonFormat::from_path(&path).is_some();
-        let native_markdown = if native_svg || native_json {
+        let native_csv = untitled.is_none() && is_csv_path(&path);
+        let native_markdown = if native_svg || native_json || native_csv {
             false
         } else if untitled.is_some() {
             matches!(kind, BufferKind::Markdown)
@@ -718,6 +725,30 @@ impl EditorBuffers {
             });
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Json(presentation), None, sub, observe)
+        } else if native_csv {
+            let delimiter = csv_delimiter(&path);
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let table = cx.new(|cx| CsvDocument::new(document, delimiter, cx));
+            let presentation = cx.new(|cx| {
+                CsvView::new(
+                    table,
+                    CsvMode::Table,
+                    wrap,
+                    indent.size as usize,
+                    window,
+                    cx,
+                )
+            });
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Csv(presentation), None, sub, observe)
         } else if native_markdown {
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(
@@ -796,7 +827,7 @@ impl EditorBuffers {
             markdown_resources: None,
             dirty: false,
             saved,
-            format: (!native_markdown && !native_svg).then_some(format),
+            format: (!native_markdown && !native_svg && !native_csv).then_some(format),
             saved_format: format,
             saved_representation,
             config,
@@ -1661,7 +1692,7 @@ fn read_image(
 }
 
 fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
-    if is_markdown_path(path) || is_svg_path(path) || is_json_path(path) {
+    if is_markdown_path(path) || is_svg_path(path) || is_json_path(path) || is_csv_path(path) {
         lyrel_text::decode_source(bytes)
     } else {
         Ok(lyrel_text::decode(bytes))
