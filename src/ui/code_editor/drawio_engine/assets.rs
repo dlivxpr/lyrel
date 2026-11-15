@@ -151,7 +151,7 @@ const PROVENANCE: [(&str, &str, &str); 8] = [
     ),
     (
         "/drawio/engine-bridge.js",
-        "be6925777bdba9a564ae5c44343ea2bfcf6e1ed4fdf44837d4ad896c53495886",
+        "dbf8cb4724362ff56f2af84cde1e7472df66fd539f9c893e8454b691adce81cd",
         "Lyrel Apache-2.0",
     ),
     (

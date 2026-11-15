@@ -22,6 +22,13 @@
     var commitPath = null;
     var syncPath = null;
     var postFile = window.fetch.bind(window);
+    // The document budget the engine accepts, and the one wire this page may
+    // post across: every report goes to the shell through the parent window.
+    var MAX_XML = 16 * 1024 * 1024;
+    var post = window.parent.postMessage.bind(window.parent);
+    var addListener = window.addEventListener.bind(window);
+    // Same-origin gate for every message crossing the iframe boundary.
+    var ORIGIN = window.location.origin;
     // Programmatic model changes that must not count as document edits: a
     // page switch stashing the previous page, a reload, or internal teardown.
     var suppress = 0;

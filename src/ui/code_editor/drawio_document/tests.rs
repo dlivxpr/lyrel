@@ -49,6 +49,15 @@ fn fixture(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
 
 const COMPRESSED_PAGE: &str = "jZJNc4QgDIZ/DXeFdsezdj8uPXnomUoUpmCcyFbtr++4wqrd2Zne4HkTkryBicKNZ5KdfkcFlvFEjUy8Mc6zJGGcz2BawCGChoxaULqC0vxAgDHsahT0u0CPaL3p9rDCtoXK75gkwmEfVqPdV+1kAw+grKR9pB9GeR3Gek1WfgHT6Fg5jfM5GYMD6LVUOGyQODJREKJfTm4swM7eRV+WvNMT9d4YQev/k8CXhG9pr2G2Al1H0PegohFLo36K0xNeWwXzAykT+aCNh7KT1awOJDsmcu2dDXJtrC3QIt1yhZKQ1RUTee8Jv2CjHKoMPmsm8tARkIfx6VTp3Ss3ngEdeJoYT2JCtHf6cx/WbfGXwPRmU1lgMnyQ5v706iHjp2BjvK7rummbPy+Ovw==";
 
+/// One genuine draw.io inline page body: a real `mxGraphModel` element, the
+/// shape draw.io itself writes. Escaped text is the *compressed* form, so a
+/// fixture must not use it to stand for an uncompressed page.
+fn inline_model(label: &str) -> String {
+    format!(
+        "<mxGraphModel dx=\"800\" dy=\"600\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/><mxCell id=\"2\" value=\"{label}\" style=\"rounded=1;whiteSpace=wrap;html=1;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"80\" y=\"80\" width=\"200\" height=\"70\" as=\"geometry\"/></mxCell></root></mxGraphModel>"
+    )
+}
+
 fn uncompressed(xml_pages: usize) -> Vec<u8> {
     let mut out = String::from("<mxfile host=\"lyrel.test\" type=\"device\">");
     for page in 0..xml_pages {
@@ -57,7 +66,7 @@ fn uncompressed(xml_pages: usize) -> Vec<u8> {
             page + 1
         ));
         out.push_str(&format!(
-            "&lt;mxGraphModel dx=\"800\" dy=\"600\"&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;mxCell id=\"2\" value=\"Uncompressed page {page}\" style=\"rounded=1;whiteSpace=wrap;html=1;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"80\" y=\"80\" width=\"200\" height=\"70\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;"
+            "<mxGraphModel dx=\"800\" dy=\"600\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/><mxCell id=\"2\" value=\"Uncompressed page {page}\" style=\"rounded=1;whiteSpace=wrap;html=1;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"80\" y=\"80\" width=\"200\" height=\"70\" as=\"geometry\"/></mxCell></root></mxGraphModel>"
         ));
         out.push_str("</diagram>");
     }
@@ -813,7 +822,8 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
         "<diagram id=\"keep\" name=\"Keep\" custom-attr=\"kept\" background=\"#ffeeaa\">{COMPRESSED_PAGE}</diagram>"
     );
     let edited = format!(
-        "<diagram id=\"edit\" name=\"Edit\">{COMPRESSED_PAGE}</diagram>"
+        "<diagram id=\"edit\" name=\"Edit\">{}</diagram>",
+        inline_model("Edited page")
     );
     let original = format!(
         "<mxfile host=\"lyrel.test\" version=\"24.7.5\" custom=\"kept\" compressed=\"true\">{edited}{untouched}</mxfile>"
@@ -824,7 +834,7 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
 
     // One page's model changed; every other node is copied through untouched,
     // exactly the shape the engine's own writePageBack produces for an edit.
-    let rewritten = original.replacen(COMPRESSED_PAGE, "REWRITTEN_PAGE_PAYLOAD", 1);
+    let rewritten = original.replacen("Edited page", "Rewritten page", 1);
     let committed: Arc<[u8]> = Arc::from(rewritten.as_bytes());
     let diagram = view(&app, &cx);
     let _ = diagram.update_in(&mut cx, |view, _window, cx| {
@@ -852,7 +862,7 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
             "the untouched page's compressed payload is byte-identical"
         );
         assert!(
-            text.contains("REWRITTEN_PAGE_PAYLOAD"),
+            text.contains("Rewritten page"),
             "the edited page carries the engine's serialization"
         );
     });
