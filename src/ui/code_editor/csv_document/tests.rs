@@ -3,7 +3,7 @@ use super::super::test_host::{FileHost, canonical_tempdir};
 use super::super::*;
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -520,7 +520,17 @@ fn tabular_paste_uses_file_record_identity_under_sort_and_is_one_history_step(
     cx.update(|_, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string("中\t文\n行\t值".to_owned()))
     });
-    cx.update(|window, cx| window.press(&chord("v"), cx));
+    cx.update(|window, cx| window.right_click(cell_id(id, 1, 0), cx));
+    settle(&mut cx);
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let position = window
+            .find_by_label(t(L10nKey::AppMenuPaste))
+            .bounds()
+            .center();
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
     until(&mut cx, |cx| {
         source(&app, cx) == "c,b\n中,文\n行,值\n"
             && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
@@ -551,6 +561,57 @@ fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppCon
     ready(&app, &mut cx, 3);
     let csv = view(&app, &cx);
     let id = csv.entity_id();
+
+    // Exercise the production pointer menu before the keyboard paths below.
+    cx.update(|window, cx| {
+        window.click(cell_id(id, 1, 0), cx);
+        window.right_click(cell_id(id, 1, 0), cx);
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let position = window
+            .find_by_label(t(L10nKey::EditorCsvInsertRowBelow))
+            .bounds()
+            .center();
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
+    until(&mut cx, |cx| {
+        table_state(&app, cx) == Some((4, 2)) && source(&app, cx) == "a,b\nc,d\n,\ne\n"
+    });
+    cx.update(|window, cx| window.right_click(cell_id(id, 1, 0), cx));
+    settle(&mut cx);
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let position = window
+            .find_by_label(t(L10nKey::AppMenuUndo))
+            .bounds()
+            .center();
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
+    until(&mut cx, |cx| {
+        table_state(&app, cx) == Some((3, 2)) && source(&app, cx) == original
+    });
+    cx.update(|window, cx| window.right_click(cell_id(id, 1, 0), cx));
+    settle(&mut cx);
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let position = window
+            .find_by_label(t(L10nKey::AppMenuRedo))
+            .bounds()
+            .center();
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
+    until(&mut cx, |cx| {
+        table_state(&app, cx) == Some((4, 2)) && source(&app, cx) == "a,b\nc,d\n,\ne\n"
+    });
+    cx.update(|window, cx| window.press(&chord("z"), cx));
+    until(&mut cx, |cx| {
+        table_state(&app, cx) == Some((3, 2)) && source(&app, cx) == original
+    });
 
     // Insert below the selected record, then undo and redo the same operation.
     cx.update(|window, cx| window.click(cell_id(id, 1, 0), cx));

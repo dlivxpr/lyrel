@@ -2051,6 +2051,21 @@ impl Render for CsvView {
                         this.key_down(event, window, cx);
                     }),
                 )
+                .on_action(
+                    cx.listener(|this, _: &gpui_kit::component::input::Undo, _, cx| {
+                        this.undo(false, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &gpui_kit::component::input::Redo, _, cx| {
+                        this.undo(true, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &gpui_kit::component::input::Paste, _, cx| {
+                        this.paste(cx);
+                    }),
+                )
                 .on_action(cx.listener(|this, _: &EditCell, window, cx| {
                     this.begin_edit_selected(window, cx)
                 }))
@@ -2138,6 +2153,14 @@ pub(super) fn menu_entries(
         .item(reveal);
     match mode {
         CsvMode::Table => menu
+            .menu(t(L10nKey::AppMenuUndo), Box::new(edit::Undo))
+            .menu(t(L10nKey::AppMenuRedo), Box::new(edit::Redo))
+            .menu_with_disabled(
+                t(L10nKey::AppMenuPaste),
+                Box::new(edit::Paste),
+                cx.read_from_clipboard().is_none(),
+            )
+            .separator()
             .menu_with_disabled(
                 t(L10nKey::EditorCsvEditCell),
                 Box::new(EditCell),

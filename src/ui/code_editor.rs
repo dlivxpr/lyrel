@@ -2230,6 +2230,11 @@ impl LyrelApp {
             let multipage = drawio.read(cx).page_count(cx) > 1;
             return drawio_document::menu_entries(menu, multipage);
         }
+        if let Some(csv) = input.csv() {
+            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
+            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
         let selected = input
             .text()
             .is_some_and(|text| !text.read(cx).selected_range().is_empty());
@@ -2268,11 +2273,6 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = json_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(csv) = input.csv() {
-            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
-            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -3187,6 +3187,8 @@ impl LyrelApp {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.csv_view(primary, tab, group, window, cx);
+                let id = f.id();
+                let app = cx.entity().downgrade();
                 v_flex()
                     .id(("csv-presentation", view.entity_id()))
                     .min_w_0()
@@ -3196,6 +3198,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
+                    .context_menu(move |menu, _window, cx| {
+                        Self::editor_body_menu(menu, &app, id, cx)
+                    })
                     .into_any_element()
             }
             Some(f) if f.input.pdf().is_some() => {
