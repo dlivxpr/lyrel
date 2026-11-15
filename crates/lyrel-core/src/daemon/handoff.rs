@@ -284,27 +284,38 @@ fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File>
     Ok(file)
 }
 
+/// Create the nameless file the blob is written into.
+///
+/// The name exists only between `create_new` and the `unlink` that follows it.
+/// A failed unlink is not shrugged off: the caller is about to write every
+/// pane's output, and returning a descriptor that still has a path would put
+/// that on disk where anyone can open it. The attempt is abandoned while the
+/// file is still empty, so the handoff is refused instead of leaking.
 fn anonymous_file() -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let dir = std::env::temp_dir();
     for attempt in 0..8 {
         let path = dir.join(format!("lyrel-handoff-{}-{attempt}", std::process::id()));
-        match std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .create_new(true)
             .read(true)
             .write(true)
             .mode(0o600)
             .open(&path)
         {
-            Ok(file) => {
-                // Unlinked immediately: from here the bytes have no name, and
-                // the only way to them is the descriptor we are about to pass.
-                let _ = std::fs::remove_file(&path);
-                return Ok(file);
-            }
+            Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
+        };
+        // Unlinked before a byte is written: from here the bytes have no name,
+        // and the only way to them is the descriptor we are about to pass.
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(file),
+            Err(e) => {
+                drop(file);
+                return Err(e);
+            }
         }
     }
     Err(std::io::Error::other(
@@ -553,24 +564,48 @@ mod tests {
 
     #[test]
     fn the_staged_file_has_no_name_to_read_it_by() {
-        let file = anonymous_file().expect("temp file");
-        let dir = std::env::temp_dir();
-        let leaked: Vec<_> = std::fs::read_dir(&dir)
-            .expect("read the temp directory")
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("lyrel-handoff-")
-            })
-            .collect();
-        assert!(
-            leaked.is_empty(),
-            "every pane's output is in this file; it must not be sitting in {} under a name \
-             anyone can open",
-            dir.display()
+        // The production seam, holding output that would matter if it ever
+        // reached a path: this is the state a handoff is in between staging the
+        // blob and the exec that reads it back.
+        let staged = stage(
+            &[
+                carried(7, 31, b"pane output nobody may open"),
+                carried(9, 32, b"and this pane's too"),
+            ],
+            10,
+        )
+        .expect("stage the blob");
+
+        // `st_nlink` counts the directory entries that name this inode. Zero
+        // means there is no path — under any name, in any directory — through
+        // which the pane output could be opened. Asking this descriptor about
+        // itself, rather than scanning the shared temp directory, also keeps
+        // the check independent of the moment another test is between its own
+        // `create_new` and `unlink`.
+        let fd = std::os::fd::AsRawFd::as_raw_fd(&staged);
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::fstat(fd, &mut stat) },
+            0,
+            "the staged blob has to be usable through its own descriptor"
         );
-        drop(file);
+        assert_eq!(
+            stat.st_nlink, 0,
+            "every pane's output is in this file; it must not be sitting under a name anyone can \
+             open"
+        );
+
+        // The output is nonetheless all there, byte for byte, in the one
+        // descriptor the next image is handed.
+        let adopted = adopt(std::os::fd::IntoRawFd::into_raw_fd(staged)).expect("read it back");
+        assert_eq!(
+            adopted.panes[0].ring[0].bytes, b"pane output nobody may open",
+            "the unnamed file must still carry the first pane's output intact"
+        );
+        assert_eq!(
+            adopted.panes[1].ring[0].bytes, b"and this pane's too",
+            "and the second pane's, at its own offset"
+        );
     }
 
     #[test]
