@@ -52,6 +52,9 @@ lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
 lyrel-text = { path = "crates/lyrel-text" }
+lyrel-epub = { path = "crates/lyrel-epub" }
+# GUI-free PDF reading backend adapted from the pinned Zorite MIT viewer.
+lyrel-pdf = { path = "crates/lyrel-pdf" }
 base64 = "0.23.1"
 
 anyhow.workspace = true
@@ -294,6 +297,10 @@ futures-channel = "0.3"
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+# Self-made PDF fixtures for the production workbench seam; never linked into
+# the released library.
+lyrel-pdf = { path = "crates/lyrel-pdf", features = ["test-fixtures"] }
 
 [lints]
 workspace = true
@@ -307,7 +314,7 @@ native-markdown-tests = ["gpui-kit/test-support"]
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor；Linux 排除两个 desktop 包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-text", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-text", "crates/lyrel-epub", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
 
 [workspace.package]
 edition = "2024"

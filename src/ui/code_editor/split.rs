@@ -437,6 +437,10 @@ impl LyrelApp {
                 file.presentations
                     .image_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
+            } else if file.input.sqlite().is_some() {
+                file.presentations
+                    .sqlite_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if code.active_id() != Some(other) {
                 file.input
                     .read(cx)

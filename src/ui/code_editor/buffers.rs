@@ -1,8 +1,16 @@
+use super::pdf_document::{PdfDocument, PdfLoaded, PdfView};
+use super::sqlite_document::{SqliteDocument, SqliteView};
 use super::*;
 use lyrel_core::core::session::WorkspaceId;
+use lyrel_core::host::sqlite::{SqliteCancel, SqliteOpened};
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+use super::book_document::{self, BookDocument, BookOpen, LoadedBook};
+use super::book_view::BookView;
+/// PDFs share the owning Host's bounded versioned read and the same 32 MiB
+/// input ceiling; parsing never raises the text or control-frame limits.
+const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use markdown::images;
 use markdown::images::ImageFormat;
@@ -243,6 +251,7 @@ impl EditorBuffers {
         }
         self.pending.insert(key.clone(), seq);
         let requested = path.to_path_buf();
+        let guard_host = host.clone();
         HostOps::run_in(
             host.clone(),
             window,
@@ -251,13 +260,16 @@ impl EditorBuffers {
             move |view, result, window, cx| {
                 let current = access(view).pending.get(&key).copied() == Some(seq);
                 if !current {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 }
                 access(view).pending.remove(&key);
                 if !valid(view, target, cx) {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 }
                 let Some(current) = access(view).foreground.get(&target.tab).copied() else {
+                    close_unclaimed_loaded(&guard_host, &result);
                     return;
                 };
                 let front = current == seq;
@@ -295,6 +307,7 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
+        let guard_host = host.clone();
         HostOps::run_in(
             host,
             window,
@@ -307,6 +320,7 @@ impl EditorBuffers {
             },
             move |view, loaded, window, cx| {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
+                    close_unclaimed_batch(&guard_host, &loaded);
                     return;
                 }
                 let loaded = loaded
@@ -379,10 +393,25 @@ impl EditorBuffers {
         edited: Edited<E>,
     ) -> (BufferId, bool) {
         if let Some(id) = self.at(host.id(), loaded.path()) {
+            if let Loaded::Sqlite(sqlite) = loaded
+                && let Ok(opened) = sqlite.opened
+            {
+                host.sqlite_close(opened.view);
+            }
             return (id, false);
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Sqlite(sqlite) => (self.create_sqlite(host, sqlite, window, cx), true),
+            Loaded::Book(book) => (self.create_book(host, book, window, cx), true),
+            Loaded::Pdf {
+                path,
+                mtime,
+                content,
+            } => (
+                self.create_pdf(host, path, mtime, content, window, cx),
+                true,
+            ),
             Loaded::Text {
                 path,
                 text,
@@ -443,6 +472,154 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// 数据库读取视图在所属 Host 建立，文档拥有并在关闭时释放它。
+    fn create_sqlite<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        sqlite: LoadedSqlite,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let LoadedSqlite {
+            path,
+            mtime,
+            opened,
+        } = sqlite;
+        let id = BufferId::new();
+        let document_host = host.clone();
+        let document = cx.new(|cx| SqliteDocument::new(document_host, path.clone(), opened, cx));
+        let view = cx.new(|cx| SqliteView::new(document.clone(), window, cx));
+        document.update(cx, |document, cx| document.start(window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Sqlite(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A book document owns its coherent temporary copy, chapter cache,
+    /// search index and reading record; the presentation is only a view.
+    fn create_book<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        book: LoadedBook,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let path = book.path.clone();
+        let mtime = book.mtime;
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|cx| BookDocument::new(book, cx));
+        let view = cx.new(|cx| BookView::new(document, window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Book(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A read-only PDF document. Parsing and page rasterization happen off the
+    /// UI thread; this only installs the document identity and its first view.
+    fn create_pdf<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        path: PathBuf,
+        mtime: Option<MTime>,
+        content: PdfLoaded,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|_| PdfDocument::new(content));
+        let view = cx.new(|cx| PdfView::new(document, window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Pdf(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -858,6 +1035,12 @@ impl EditorBuffers {
         let source = file.input.source_document(cx);
         let source_reload = source.is_some();
         let image = file.input.image().cloned();
+        let sqlite = file.input.sqlite().cloned();
+        let book = file
+            .input
+            .book()
+            .map(|view| view.read(cx).document().clone());
+        let pdf = file.input.pdf().cloned();
         let input_lease = source.as_ref().map(|document| document.read(cx).revision());
         let pending_lease = source
             .as_ref()
@@ -877,12 +1060,27 @@ impl EditorBuffers {
             let document = view.read(cx).document().clone();
             document.update(cx, |document, cx| document.begin_reload(cx));
         }
+        if let Some(view) = &pdf {
+            let document = view.read(cx).document().clone();
+            document.update(cx, |document, cx| document.begin_reload(cx));
+        }
         let image_reload = image.is_some();
+        let sqlite_reload = sqlite.is_some();
+        let guard_host = host.clone();
+        let pdf_reload = pdf.is_some();
         HostOps::run_in(
             host,
             window,
             cx,
             move |h| {
+                if sqlite_reload {
+                    let meta = h.stat(&target)?;
+                    return Ok(Reloaded::Sqlite(load_sqlite(h, target, meta)));
+                }
+                if book.is_some() {
+                    let meta = h.stat(&target)?;
+                    return book_document::load_claimed(h, target, meta).map(Reloaded::Book);
+                }
                 if image_reload {
                     let format = image_claimed
                         .or_else(|| ImageFormat::from_extension(&target))
@@ -894,6 +1092,11 @@ impl EditorBuffers {
                         })?;
                     let meta = h.stat(&target)?;
                     return read_image(h, target, format, meta).map(Reloaded::Image);
+                }
+                if pdf_reload {
+                    let meta = h.stat(&target)?;
+                    return read_pdf(h, target, meta)
+                        .map(|(content, mtime)| Reloaded::Pdf(content, mtime));
                 }
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
                 let decoded = if source_reload {
@@ -909,9 +1112,11 @@ impl EditorBuffers {
             },
             move |view, result: std::io::Result<Reloaded>, window, cx| {
                 let Some(file) = access(view).get_mut(id) else {
+                    close_unclaimed_sqlite(&guard_host, &result);
                     return;
                 };
                 if file.reload_request != seq || !file.is_at(host_id, &expected) {
+                    close_unclaimed_sqlite(&guard_host, &result);
                     return;
                 }
                 let reloaded = match result {
@@ -930,6 +1135,37 @@ impl EditorBuffers {
                 };
                 let (decoded, mtime) = match reloaded {
                     Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // A book cannot be edited, so nothing here can conflict:
+                    // the freshest coherent copy is the document. Typography is
+                    // kept; a changed fingerprint resets position/bookmarks.
+                    Reloaded::Book(book) => {
+                        file.disk_mtime = book.mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .book()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| document.replace(book, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    // PDFs are read-only too: a clean document takes the new
+                    // bytes, including a new password or format failure.
+                    Reloaded::Pdf(content, mtime) => {
+                        file.disk_mtime = mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .pdf()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| document.replace(content, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
                     // A picture cannot be edited, so nothing here can conflict:
                     // the freshest bytes are the document.
                     Reloaded::Image(image) => {
@@ -941,6 +1177,24 @@ impl EditorBuffers {
                             .map(|view| view.read(cx).document().clone());
                         if let Some(document) = document {
                             document.update(cx, |document, cx| document.replace(image.result, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    // A database is read-only here too: the freshest view
+                    // replaces the old one, and late pages of the old view
+                    // are rejected by its identity.
+                    Reloaded::Sqlite(sqlite) => {
+                        file.disk_mtime = sqlite.mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .sqlite()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| {
+                                document.replace(sqlite.opened, window, cx)
+                            });
                         }
                         cx.notify();
                         return;
@@ -1051,6 +1305,24 @@ pub(super) enum Loaded {
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
+    /// 读取视图由所属 Host 建立；失败也保留独立文档和可见错误。
+    Sqlite(LoadedSqlite),
+    /// A coherent book copy and its package answer. A corrupt or protected
+    /// EPUB is still a document with a place and a visible reason.
+    Book(LoadedBook),
+    /// A PDF: parse/password failures are the document's own visible state, so
+    /// the file still gets a tab with an explanation and a retry path.
+    Pdf {
+        path: PathBuf,
+        mtime: Option<MTime>,
+        content: PdfLoaded,
+    },
+}
+
+pub(super) struct LoadedSqlite {
+    path: PathBuf,
+    mtime: Option<MTime>,
+    opened: std::io::Result<SqliteOpened>,
 }
 
 pub(super) struct LoadedImage {
@@ -1067,6 +1339,9 @@ impl Loaded {
         match self {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
+            Self::Sqlite(sqlite) => &sqlite.path,
+            Self::Book(book) => &book.path,
+            Self::Pdf { path, .. } => path,
         }
     }
 }
@@ -1075,6 +1350,9 @@ impl Loaded {
 enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
+    Sqlite(LoadedSqlite),
+    Book(LoadedBook),
+    Pdf(PdfLoaded, Option<MTime>),
 }
 
 /// Reads, sizes, decodes and configures a file, on the host's own thread.
@@ -1084,14 +1362,29 @@ fn load_file(
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
     let claimed = ImageFormat::from_extension(&path);
+    let claimed_pdf = is_pdf_path(&path);
     let meta = h.stat(&path).map_err(|e| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantOpen,
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    // A file that names itself an EPUB, or an archive whose container names
+    // one, is a book before it is a picture or a text decode. A generic ZIP
+    // that carries no EPUB container keeps the workbench's existing handling.
+    if let Some(loaded) = load_book_candidate(h, &path, meta)? {
+        return Ok(loaded);
+    }
+    if claimed_pdf {
+        return load_pdf(h, path, meta);
+    }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
+    }
+    // 数据库不能被当作文本读进内存：整库下载已经被数据库浏览本身排除。
+    // 名称是唯一不读文件内容的判据；真正的识别与错误由只读打开给出。
+    if is_sqlite_path(&path) {
+        return Ok(Loaded::Sqlite(load_sqlite(h, path, meta)));
     }
     if meta.len > MAX_FILE_BYTES {
         return Err(EditorOpenError::Message(t_fmt(
@@ -1114,6 +1407,13 @@ fn load_file(
     if let Some(format) = ImageFormat::probe(&bytes) {
         return load_image(h, path, format, meta);
     }
+    if is_pdf_bytes(&bytes) {
+        return Ok(Loaded::Pdf {
+            path,
+            mtime: meta.mtime,
+            content: pdf_content(bytes),
+        });
+    }
     let Some(decoded) = decode_file(&path, &bytes).map_err(|error| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantRead,
@@ -1124,6 +1424,14 @@ fn load_file(
         ))
     })?
     else {
+        // A ZIP renamed away from `.epub` is still identified by its container,
+        // not by its extension. A plain archive has no container and keeps the
+        // existing external-open behaviour.
+        if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
+            if let Ok(BookOpen::Book(book)) = book_document::load(h, path.clone(), meta) {
+                return Ok(Loaded::Book(book));
+            }
+        }
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
@@ -1134,6 +1442,97 @@ fn load_file(
         mtime: meta.mtime,
         config,
     })
+}
+
+/// A reloaded read view that never reached a live document is closed here,
+/// not left for the Host's idle reaper: a tab that closed mid-read should not
+/// keep a transaction open.
+fn close_unclaimed_sqlite(host: &SharedHost, result: &std::io::Result<Reloaded>) {
+    if let Ok(Reloaded::Sqlite(sqlite)) = result
+        && let Ok(opened) = &sqlite.opened
+    {
+        host.sqlite_close(opened.view);
+    }
+}
+
+/// The same release for a first open whose target was closed or replaced
+/// before it landed.
+fn close_unclaimed_loaded(host: &SharedHost, result: &Result<Loaded, EditorOpenError>) {
+    if let Ok(Loaded::Sqlite(sqlite)) = result
+        && let Ok(opened) = &sqlite.opened
+    {
+        host.sqlite_close(opened.view);
+    }
+}
+
+/// And for a restore batch that reached no live tab.
+fn close_unclaimed_batch(host: &SharedHost, loaded: &[(PathBuf, Result<Loaded, EditorOpenError>)]) {
+    for (_, result) in loaded {
+        close_unclaimed_loaded(host, result);
+    }
+}
+
+/// Opens a read-only view on the owning Host, still on its thread. The view
+/// is not read or copied here: only the bounded metadata and page requests
+/// that follow cross the transport. An open failure is carried into the
+/// document so the reader can see the reason and retry.
+fn load_sqlite(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> LoadedSqlite {
+    let cancel = SqliteCancel::new();
+    let opened = h.sqlite_open(&path, &cancel);
+    LoadedSqlite {
+        path,
+        mtime: meta.mtime,
+        opened,
+    }
+}
+
+/// Recognises a book before generic text and ZIP handling.
+///
+/// `.epub` is a claim even when the container is broken; a `.zip` becomes a
+/// book only when its package really opens, so ordinary archives retain their
+/// external-open behaviour.
+fn load_book_candidate(
+    h: &dyn lyrel_core::host::Host,
+    path: &Path,
+    meta: lyrel_core::host::Meta,
+) -> Result<Option<Loaded>, EditorOpenError> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let claimed = extension.as_deref() == Some("epub");
+    if !claimed && extension.as_deref() != Some("zip") {
+        return Ok(None);
+    }
+    if claimed {
+        return book_document::load_claimed(h, path.to_path_buf(), meta)
+            .map(|book| Some(Loaded::Book(book)))
+            .map_err(|error| book_read_error(path, error));
+    }
+    match book_document::load(h, path.to_path_buf(), meta) {
+        Ok(BookOpen::Book(book)) if book.is_ready() => Ok(Some(Loaded::Book(book))),
+        Ok(BookOpen::Book(_)) | Ok(BookOpen::NotEpub(_)) => Ok(None),
+        Err(error) => Err(book_read_error(path, error)),
+    }
+}
+
+fn book_read_error(path: &Path, error: std::io::Error) -> EditorOpenError {
+    let key = match error.kind() {
+        std::io::ErrorKind::FileTooLarge => L10nKey::EditorFileTooLarge,
+        _ => L10nKey::EditorCantRead,
+    };
+    EditorOpenError::Message(t_fmt(
+        key,
+        &[
+            ("path", &path.display().to_string()),
+            ("e", &error.to_string()),
+            ("size", &error.to_string()),
+        ],
+    ))
 }
 
 /// Reads an image under the image budget and decodes it, still on the Host's
@@ -1157,6 +1556,75 @@ fn load_image(
                 ],
             ))
         })
+}
+
+fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn is_pdf_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
+}
+
+/// Read a PDF under the same bounded, versioned Host session as a picture.
+/// Parse/decrypt failures are part of the document, so only the read itself
+/// can fail the open.
+fn load_pdf(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> Result<Loaded, EditorOpenError> {
+    let requested = path.clone();
+    let shown = path.clone();
+    read_pdf(h, path, meta)
+        .map(|(content, mtime)| Loaded::Pdf {
+            path: requested,
+            mtime,
+            content,
+        })
+        .map_err(|error| {
+            EditorOpenError::Message(t_fmt(
+                L10nKey::EditorCantRead,
+                &[
+                    ("path", &shown.display().to_string()),
+                    ("e", &error.to_string()),
+                ],
+            ))
+        })
+}
+
+fn read_pdf(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> std::io::Result<(PdfLoaded, Option<MTime>)> {
+    let mut mtime = meta.mtime;
+    if meta.len > PDF_MAX_BYTES {
+        return Ok((
+            PdfLoaded::Failed(t(L10nKey::EditorPdfTooLarge).to_string().into()),
+            mtime,
+        ));
+    }
+    let (bound, bytes) = images::read_bytes(
+        h,
+        &path,
+        PDF_MAX_BYTES,
+        &lyrel_core::host::transfer::CancelToken::default(),
+        |_| {},
+    )?;
+    mtime = bound.mtime;
+    Ok((pdf_content(bytes), mtime))
+}
+
+fn pdf_content(bytes: Vec<u8>) -> PdfLoaded {
+    let bytes = Arc::new(bytes);
+    match lyrel_pdf::PdfDocument::load(bytes.clone(), "") {
+        Ok(document) => PdfLoaded::Ready(Arc::new(document)),
+        Err(lyrel_pdf::LoadError::Locked) => PdfLoaded::Locked(bytes),
+        Err(lyrel_pdf::LoadError::Other(message)) => PdfLoaded::Failed(message.into()),
+    }
 }
 
 /// 图片的读取只有一种失败：Host 读不出来。字节读到了但不能解码，是文档
