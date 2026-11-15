@@ -58,7 +58,8 @@ mod test_host;
 
 pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
 pub(crate) use sqlite_document::{
-    FocusFilter as SqliteFocusFilter, InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
+    CloseValue as SqliteCloseValue, FocusFilter as SqliteFocusFilter,
+    InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
 };
 
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
