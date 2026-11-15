@@ -412,7 +412,15 @@ mod windows_host {
                 (state.rect, state.visible)
             };
             unsafe {
-                let _ = controller.SetBounds(bounds);
+                // The controller's bounds are relative to its host HWND. The
+                // host already sits at `bounds` inside the GPUI window; using
+                // the window-relative rect here would offset the WebView twice.
+                let _ = controller.SetBounds(RECT {
+                    left: 0,
+                    top: 0,
+                    right: bounds.right - bounds.left,
+                    bottom: bounds.bottom - bounds.top,
+                });
                 let _ = controller.SetIsVisible(visible);
             }
             let Some(webview) = shared.borrow().webview.clone() else {

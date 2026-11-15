@@ -44,12 +44,11 @@ gpui_kit::actions!(
 /// own page keys when focus is elsewhere.
 pub(crate) const KEY_CONTEXT: &str = "DrawioDocument";
 
-const ZOOM_STEP: f32 = 1.25;
-const VISIBILITY_POLL: Duration = Duration::from_millis(120);
+const VISIBILITY_POLL: Duration = Duration::from_millis(500);
 /// A native child window does not inherit GPUI's clip. If the presentation
 /// stops being painted (tab switch, close, overlay), hide the WebView after
 /// this long instead of leaving it over unrelated content.
-const VISIBLE_GRACE: Duration = Duration::from_millis(220);
+const VISIBLE_GRACE: Duration = Duration::from_millis(1500);
 
 #[derive(Clone)]
 enum DrawioContent {
@@ -376,8 +375,15 @@ impl DrawioView {
                 self.surface_visible = visible;
                 surface.set_visible(visible);
             }
+            // A static diagram does not otherwise repaint. Keep the live
+            // presentation in the paint set so the watchdog can distinguish
+            // "still shown" from "tab hidden": when this view leaves the tree
+            // no paint reaches `prepared`, the timestamp goes stale and the
+            // native child is hidden.
+            if visible {
+                cx.notify();
+            }
         }
-        let _ = cx;
         true
     }
 
@@ -792,6 +798,10 @@ impl Render for DrawioView {
                                 }
                             }
                         })
+                        // `on_children_prepainted` is delivered for child
+                        // bounds; the empty child gives the native surface a
+                        // real paint event to anchor to.
+                        .child(div().size_full())
                         .id("drawio-canvas")
                         .test_support();
                     let overlay = if !matches!(engine, EngineStatus::Ready) && !surface_started {
