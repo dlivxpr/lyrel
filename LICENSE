@@ -755,6 +755,7 @@ windows-version 0.1.7
 wnaf 0.14.0
 write16 1.0.0
 xml5ever 0.18.1
+yaml-edit 0.3.6
 yaml_serde 0.10.7
 zed-font-kit 0.14.1-zed
 zerocopy 0.8.56

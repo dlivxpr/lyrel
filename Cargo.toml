@@ -59,6 +59,13 @@ base64 = "0.23.1"
 # draw.io documents are read only as far as their page list and root: the
 # fixed engine still owns rendering. DTDs stay disabled.
 roxmltree = "0.21"
+# Lossless YAML CST with source byte ranges, anchors, aliases and tags. The
+# default `binary` feature only adds base64 tag helpers, which this editor
+# does not use; keep the dependency to what the parser itself needs.
+yaml-edit = { version = "=0.3.6", default-features = false }
+# `yaml-edit` exposes its rowan syntax node types for source ranges; pin the
+# same registry version so the GUI can name that node type without re-parsing.
+rowan = "0.16"
 # Session and shell tokens are 128-bit OS entropy, never a timestamp or a
 # hash of the document. `getrandom` is already in the tree.
 getrandom = "0.3.4"

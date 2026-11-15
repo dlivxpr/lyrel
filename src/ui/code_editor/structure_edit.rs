@@ -54,6 +54,7 @@ pub(crate) struct StructureEditPanel {
     value: Entity<InputState>,
     value_label: SharedString,
     error: Option<SharedString>,
+    notice: Option<SharedString>,
     _key: Option<Subscription>,
     _value: Subscription,
 }
@@ -91,6 +92,7 @@ impl StructureEditPanel {
             value,
             value_label,
             error: None,
+            notice: None,
             _key: key_sub,
             _value: value_sub,
         }
@@ -108,6 +110,16 @@ impl StructureEditPanel {
             return;
         }
         self.error = error;
+        cx.notify();
+    }
+
+    /// 提交前即可见的影响说明（例如 YAML anchor 的别名引用范围）。它不是
+    /// 错误，不阻止应用；格式自己决定文字与出现时机。
+    pub(crate) fn set_notice(&mut self, notice: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.notice == notice {
+            return;
+        }
+        self.notice = notice;
         cx.notify();
     }
 
@@ -180,6 +192,18 @@ impl Render for StructureEditPanel {
                         )
                     }),
             )
+            .when_some(self.notice.clone(), |panel, notice| {
+                panel.child(
+                    div()
+                        .id(("structure-edit-notice", owner))
+                        .test_support()
+                        .aria_value(notice.clone())
+                        .flex_none()
+                        .text_xs()
+                        .text_color(cx.theme().yellow)
+                        .child(notice),
+                )
+            })
             .when_some(self.key.clone(), |panel, key| {
                 panel.child(field(
                     owner,

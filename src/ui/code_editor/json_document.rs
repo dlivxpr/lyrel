@@ -19,18 +19,20 @@ use std::sync::{
 use gpui_kit::ScrollStrategy;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, spinner::Spinner,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Sizable as _, h_flex, spinner::Spinner, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent,
     MouseButton, Render, SharedString, Subscription, Task, TestSupportExt as _,
-    UniformListScrollHandle, Window, div, px, relative, rems, uniform_list,
+    UniformListScrollHandle, Window, div, rems, uniform_list,
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 
 use super::structure_edit::{EditField, StructureEditEvent, StructureEditPanel};
+use super::structure_rows::{
+    StructureRowData, source_body_for, structure_error, structure_loading, structure_row,
+};
 use super::structure_view::{self, SourceLocation, Treelike, VisibleRow};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
@@ -1408,20 +1410,29 @@ impl JsonView {
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
-                .child(structural_error(title, detail, cx))
+                .child(structure_error(
+                    ("json-structure-error-body", cx.entity_id()),
+                    title,
+                    detail,
+                    cx,
+                ))
                 .children(self.render_edit_panel())
                 .into_any_element();
         }
         if !self.structure_ready(cx) {
             let body = if self.is_parsing(cx) {
-                loading_structure(cx).into_any_element()
+                structure_loading(
+                    ("json-structure-loading", cx.entity_id()),
+                    t(L10nKey::EditorJsonParsing).into(),
+                    cx,
+                )
             } else {
-                structural_error(
+                structure_error(
+                    ("json-structure-error-body", cx.entity_id()),
                     t(L10nKey::EditorJsonStructureUnavailable).into(),
                     t(L10nKey::EditorJsonSourceStaysEditable).into(),
                     cx,
                 )
-                .into_any_element()
             };
             return v_flex()
                 .flex_1()
@@ -1468,35 +1479,29 @@ impl JsonView {
                         let index = row.node;
                         let row_id =
                             SharedString::from(format!("json-row-{}-{index}", entity.as_u64()));
-                        div()
-                            .id(row_id)
-                            .test_support()
-                            .role(gpui_kit::Role::TreeItem)
-                            .aria_label(path.clone())
-                            .aria_value(value.clone())
-                            .aria_selected(selected)
-                            .when(expandable, |row| row.aria_expanded(expanded))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .h(px(30.))
-                            .pl(px(10. + row.depth.min(24) as f32 * 14.))
-                            .pr_3()
-                            .text_sm()
-                            .font_family("Menlo")
-                            .when(row_index % 2 == 1, |row| {
-                                row.bg(cx.theme().foreground.opacity(0.025))
-                            })
-                            .when(selected, |row| row.bg(cx.theme().sidebar_accent))
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|view, _, window, cx| {
+                        structure_row(
+                            StructureRowData {
+                                id: row_id,
+                                depth: row.depth,
+                                expandable,
+                                expanded,
+                                selected,
+                                striped: row_index % 2 == 1,
+                                key: key.into(),
+                                value: value.into(),
+                                color,
+                                badge: None,
+                                record_line,
+                                error: error.map(SharedString::from),
+                                aria_label: path.into(),
+                            },
+                            cx.listener(
+                                |view, _: &gpui_kit::MouseDownEvent, window, cx| {
                                     view.focus.focus(window, cx);
                                     cx.stop_propagation();
-                                }),
-                            )
-                            .on_click(cx.listener(
+                                },
+                            ),
+                            cx.listener(
                                 move |view, event: &gpui_kit::ClickEvent, window, cx| {
                                     view.focus.focus(window, cx);
                                     if event.click_count() > 1 {
@@ -1508,49 +1513,9 @@ impl JsonView {
                                         view.activate_node(index, cx);
                                     }
                                 },
-                            ))
-                            .child(div().w(px(14.)).flex_shrink_0().when(expandable, |spacer| {
-                                spacer.child(Icon::new(if expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                }))
-                            }))
-                            .when_some(record_line, |row, line| {
-                                row.child(
-                                    div()
-                                        .flex_none()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("L{line}")),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .max_w(relative(0.42))
-                                    .truncate()
-                                    .text_color(cx.theme().blue)
-                                    .child(key),
-                            )
-                            .child(div().text_color(cx.theme().muted_foreground).child(":"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(color)
-                                    .child(value),
-                            )
-                            .when_some(error, |row, error| {
-                                row.child(
-                                    div()
-                                        .flex_none()
-                                        .text_xs()
-                                        .text_color(cx.theme().warning)
-                                        .child(error),
-                                )
-                            })
-                            .into_any_element()
+                            ),
+                            cx,
+                        )
                     })
                     .collect()
             }),
@@ -1661,72 +1626,6 @@ fn default_expansion(projection: &JsonProjection, expanded: &mut [bool]) {
             expanded[child] = true;
         }
     }
-}
-
-fn source_body_for(source: &Entity<SourceEditor>) -> AnyElement {
-    let source = source.clone();
-    let measure = source.clone();
-    div()
-        .on_children_prepainted(move |bounds, _, cx| {
-            if let Some(bounds) = bounds.first() {
-                measure.update(cx, |source, cx| source.set_scroll_viewport(*bounds, cx));
-            }
-        })
-        .flex_1()
-        .min_w_0()
-        .min_h_0()
-        .child(v_flex().size_full().min_h_0().child(source))
-        .into_any_element()
-}
-
-fn structural_error(
-    title: SharedString,
-    detail: SharedString,
-    cx: &mut Context<JsonView>,
-) -> impl IntoElement {
-    let (foreground, muted, warning) = {
-        let theme = cx.theme();
-        (theme.foreground, theme.muted_foreground, theme.warning)
-    };
-    v_flex()
-        .id(("json-structure-error-body", cx.entity_id()))
-        .test_support()
-        .flex_1()
-        .min_w_0()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .px_4()
-        .child(
-            Icon::new(IconName::TriangleAlert)
-                .large()
-                .text_color(warning),
-        )
-        .child(div().text_sm().text_color(foreground).child(title))
-        .child(
-            div()
-                .max_w(rems(34.))
-                .text_xs()
-                .text_color(muted)
-                .child(detail),
-        )
-}
-
-fn loading_structure(cx: &mut Context<JsonView>) -> impl IntoElement {
-    let muted = cx.theme().muted_foreground;
-    v_flex()
-        .id(("json-structure-loading", cx.entity_id()))
-        .flex_1()
-        .min_w_0()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .text_xs()
-        .text_color(muted)
-        .child(Spinner::new().small())
-        .child(t(L10nKey::EditorJsonParsing))
 }
 
 impl Focusable for JsonView {
