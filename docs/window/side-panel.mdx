@@ -307,6 +307,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 预览：`src/ui/code_editor/svg_document.rs` 持有每文件唯一的 `SvgDocument` 与按分组独立的 `SvgView`。短暂 debounce 后取得同一 Document 的共享快照，在 UI 线程外解析、栅格化；每文件最多一个在途解析，期间修改只保留最新请求。关闭后取消未开始的解析；Document 身份、revision 或请求代次不匹配的结果一律丢弃，失败不会覆盖源码。
 - 安全与预算：复用 `src/ui/code_editor/markdown/images.rs` 的 usvg/resvg 安全选项与纹理租约；两个资源 resolver 均关闭，脚本没有运行时，嵌套 file／network／data image 均被拒绝，远端文档不会读本机同名文件。预览沿用单边 8192 px、1600 万像素的预算；超限或解析失败显示具体错误，修正源码后重新请求。
 - 呈现：默认显示源码；工具栏和状态行提供 Source／Preview 切换，`ToggleDocumentPreview` 保留原 Action。分屏的新分组默认显示另一面，两个分组共享 Document、history 与预览实体，各自保留模式、源码光标和预览取景；预览提供适应窗口、1:1、缩放与方向键平移。
+- SVG 取景尺寸按文档固有 CSS 像素计算，1:1 不把小图拉伸到居中视口；缩放改变图像本身的实际宽高，适应窗口只缩小过大的图形，不放大小图。SVG 的用户单位不按光栅位图的物理像素／显示缩放因子换算。
 - 入口：`.svg` 不再命中浏览器打开判定；打开失败或源码无效时仍留在编辑器内，系统关联不再是隐式回退。
 
 **复用记录与边界**：固定复用 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `crates/glim-services/src/svg_preview.rs`（原始 14,001 字节，SHA-256 `ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7`）中的默认视口与绝对单位换算，见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。属性读取适配为 usvg 重导出的 roxmltree；无 viewBox 时明确保留 300×150 默认视口，百分比按该视口换算，避免 usvg 随后按内容包围盒收缩尺寸。只调整光栅目标尺寸，不改原始源码或已解析几何；viewBox 尺寸仍由 usvg 负责。Glim 的流式净化、data-image 重编码、`qlmanage`／`sips`、临时文件与浏览器图像文档均未导入。渲染、纹理租约、保存与关闭所有者全部复用 Lyrel 现有模块。
