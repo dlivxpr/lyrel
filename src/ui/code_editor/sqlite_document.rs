@@ -104,10 +104,7 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-gpui_kit::actions!(
-    sqlite_document,
-    [Refresh, InspectValue, FocusFilter, CloseValue]
-);
+gpui_kit::actions!(sqlite_document, [Refresh, InspectValue, FocusFilter]);
 
 /// The keyboard context of a database presentation. The document's chords
 /// are bound only while it holds the keyboard, so they stay with a text
@@ -2331,7 +2328,14 @@ impl Render for SqliteView {
                     this.inspect_selection(window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &CloseValue, _, cx| this.close_detail(cx)))
+            .capture_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                // The table's own Escape clears its cell selection first, so
+                // the transient inspector closes here, in the capture phase.
+                if event.keystroke.key == "escape" && this.detail.is_some() {
+                    this.close_detail(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

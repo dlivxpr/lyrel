@@ -199,19 +199,17 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
     // The database reader's commands. Refresh opens a new read view, the
-    // filter focuses its search field, Enter inspects the cell under the
-    // grid's selection and Escape dismisses that panel — all bound only
-    // while a database presentation holds the keyboard.
+    // filter focuses its search field, and Enter inspects the cell under the
+    // grid's selection — all bound only while a database presentation holds
+    // the keyboard. The inspector's Escape is captured by the document
+    // itself, because the table consumes Escape to clear its own selection.
     {
-        use crate::ui::code_editor::{
-            SqliteCloseValue, SqliteFocusFilter, SqliteInspectValue, SqliteRefresh,
-        };
+        use crate::ui::code_editor::{SqliteFocusFilter, SqliteInspectValue, SqliteRefresh};
         let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
         bindings.extend([
             load_binding("secondary-r", SqliteRefresh, sqlite, cx),
             load_binding("secondary-f", SqliteFocusFilter, sqlite, cx),
             load_binding("enter", SqliteInspectValue, sqlite, cx),
-            load_binding("escape", SqliteCloseValue, sqlite, cx),
         ]);
     }
     // The read-only book's commands. `BookDocument` is declared only by the
