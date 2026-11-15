@@ -1882,6 +1882,105 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSqliteNoColumns => "This object has no columns to show",
         L10nKey::EditorSqliteNoObjects => "This database has no tables or views",
         L10nKey::EditorSqliteNull => "NULL",
+        L10nKey::EditorPdfPageOf => "Page {page} / {total}",
+        L10nKey::EditorPdfPreviousPage => "Previous page",
+        L10nKey::EditorPdfNextPage => "Next page",
+        L10nKey::EditorPdfFitWidth => "Fit width",
+        L10nKey::EditorPdfFitPage => "Fit page",
+        L10nKey::EditorPdfPasswordTitle => "This PDF needs a password",
+        L10nKey::EditorPdfPasswordPlaceholder => "PDF password",
+        L10nKey::EditorPdfUnlock => "Unlock",
+        L10nKey::EditorPdfUnlocking => "Unlocking…",
+        L10nKey::EditorPdfWrongPassword => "Wrong password",
+        L10nKey::EditorPdfFailed => "Couldn’t open PDF",
+        L10nKey::EditorPdfTooLarge => "This PDF is larger than the 32 MiB viewing limit",
+        L10nKey::EditorPdfRenderFailed => "Couldn’t render this page",
+        L10nKey::EditorSvgPreview => "Preview",
+        L10nKey::EditorSvgShowPreview => "Show preview",
+        L10nKey::EditorSvgShowSource => "Show source",
+        L10nKey::EditorSvgRendering => "Rendering preview",
+        L10nKey::EditorSvgPreviewFailed => "Preview failed",
+        L10nKey::EditorSvgInvalid => "SVG source could not be parsed",
+        L10nKey::EditorSvgLimit => {
+            "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
+        }
+        L10nKey::EditorImagePageOf => "Page {page} of {pages}",
+        L10nKey::EditorImagePageLoading => "Loading page",
+        L10nKey::EditorImagePagePrevious => "Previous page",
+        L10nKey::EditorImagePageNext => "Next page",
+        L10nKey::EditorImagePageMissing => "This page does not exist",
+        L10nKey::EditorImagePageUnsupported => {
+            "This page uses a TIFF sample layout Lyrel cannot show"
+        }
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "Page size {width} × {height} exceeds the {limit}-pixel edge budget"
+        }
+        L10nKey::EditorImagePageBytesLimit => {
+            "Page decoding needs {required} MiB, over the {limit} MiB page budget"
+        }
+        L10nKey::EditorImagePagesLimit => "The file has more than the {pages}-page TIFF budget",
+        L10nKey::EditorImageAnimationLimit => {
+            "Animation frame buffers need {required} MiB, over the {limit} MiB budget"
+        }
+        L10nKey::EditorImageAnimationEmpty => "This animation has no frames to show",
+        L10nKey::EditorImageAnimationTruncated => {
+            "This animation ends before its frame data is complete"
+        }
+        L10nKey::EditorBookContents => "Contents",
+        L10nKey::EditorBookBookmarks => "Bookmarks",
+        L10nKey::EditorBookSearch => "Search book",
+        L10nKey::EditorBookSearchPlaceholder => "Search this book",
+        L10nKey::EditorBookSearchEmpty => "No matches",
+        L10nKey::EditorBookSearching => "Searching…",
+        L10nKey::EditorBookSearchPrevious => "Previous match",
+        L10nKey::EditorBookSearchNext => "Next match",
+        L10nKey::EditorBookSearchClose => "Close search",
+        L10nKey::EditorBookMatches => "{current}/{total} matches",
+        L10nKey::EditorBookMatchesTruncated => "Partial results; refine the search",
+        L10nKey::EditorBookAddBookmark => "Add bookmark",
+        L10nKey::EditorBookRemoveBookmark => "Remove bookmark",
+        L10nKey::EditorBookNoBookmarks => "No bookmarks yet",
+        L10nKey::EditorBookFontSmaller => "Smaller text",
+        L10nKey::EditorBookFontLarger => "Larger text",
+        L10nKey::EditorBookSpacing => "Spacing {value}",
+        L10nKey::EditorBookWidth => "Width {value}",
+        L10nKey::EditorBookThemeApplication => "Theme: Workbench",
+        L10nKey::EditorBookThemeLight => "Theme: Light",
+        L10nKey::EditorBookThemeDark => "Theme: Dark",
+        L10nKey::EditorBookChapterOf => "Chapter {chapter} of {chapters}",
+        L10nKey::EditorBookReadOnly => "Read-only",
+        L10nKey::EditorBookIndexing => "Indexing {done}/{total}",
+        L10nKey::EditorBookIndexTooLarge => {
+            "This book is too large to index for search ({bytes} byte limit)"
+        }
+        L10nKey::EditorBookLoadingChapter => "Loading chapter…",
+        L10nKey::EditorBookOmissions => {
+            "Omitted: {scripts} scripts, {styles} styles, {remote} remote images, {links} links, {images} unavailable images"
+        }
+        L10nKey::EditorBookRetry => "Retry",
+        L10nKey::EditorBookNextPage => "Next page",
+        L10nKey::EditorBookPreviousPage => "Previous page",
+        L10nKey::EditorBookNextChapter => "Next chapter",
+        L10nKey::EditorBookPreviousChapter => "Previous chapter",
+        L10nKey::EditorBookNotEpub => "This file is not a readable EPUB",
+        L10nKey::EditorBookUnsupportedProtected => "Protected EPUB: {detail}",
+        L10nKey::EditorBookUnsupportedFixed => {
+            "Fixed-layout (pre-paginated) EPUBs are not supported"
+        }
+        L10nKey::EditorBookUnsupportedFixedItems => {
+            "This EPUB marks {items} spine item(s) as fixed-layout; fixed-layout books are not supported"
+        }
+        L10nKey::EditorBookLimit => "This book exceeds the {resource} limit ({limit})",
+        L10nKey::EditorBookCorrupt => "This EPUB is damaged: {detail}",
+        L10nKey::EditorBookEncoding => "This EPUB uses an unsupported text encoding: {detail}",
+        L10nKey::EditorBookMissing => "This EPUB is missing {entry}",
+        L10nKey::EditorBookPathEscapes => {
+            "This EPUB references a resource outside its container: {href}"
+        }
+        L10nKey::EditorBookCancelled => "Reading this EPUB was cancelled",
+        L10nKey::EditorBookSaveFailed => {
+            "Couldn’t save reading state. Reading continues, but the position may not be restored."
+        }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",
         L10nKey::MarkdownTurnInto => "Turn into",

@@ -10,7 +10,7 @@ use lyrel_markdown_editor::{
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 type Signature = (HostId, PathBuf);
@@ -655,6 +655,8 @@ enum ImageError {
     Redirect(u16),
     /// The bytes were read as an image format but would not decode.
     Corrupt(String),
+    /// SVG source that the native parser refused.
+    Svg(String),
 }
 
 impl std::fmt::Display for ImageError {
@@ -673,6 +675,9 @@ impl std::fmt::Display for ImageError {
                     t(L10nKey::EditorImageUndecodable)
                 )
             }
+            Self::Svg(message) => {
+                write!(formatter, "{} ({message})", t(L10nKey::EditorSvgInvalid))
+            }
         }
     }
 }
@@ -683,20 +688,24 @@ fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// The five static raster formats a workbench document shows.
+/// The image formats a workbench document can open.
 ///
-/// GIF animation and multi-page TIFF are not these: their bytes reach the
-/// external opener, not a document, so no ticket claims frames it cannot draw.
+/// The five static raster formats share [`decode_static`]; GIF animation and
+/// multi-page TIFF have their own frame/page decoders in `image_document` and
+/// are never shown as a static first frame. Markdown preview still resolves
+/// only the static subset through [`decode_static`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StaticImageFormat {
+pub(crate) enum ImageFormat {
     Png,
     Jpeg,
     WebP,
     Bmp,
     Ico,
+    Gif,
+    Tiff,
 }
 
-impl StaticImageFormat {
+impl ImageFormat {
     pub(crate) fn from_extension(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match extension.as_str() {
@@ -705,6 +714,8 @@ impl StaticImageFormat {
             "webp" => Self::WebP,
             "bmp" | "dib" => Self::Bmp,
             "ico" => Self::Ico,
+            "gif" => Self::Gif,
+            "tif" | "tiff" => Self::Tiff,
             _ => return None,
         })
     }
@@ -713,7 +724,9 @@ impl StaticImageFormat {
     ///
     /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
     /// text file opening with them is not evidence enough to take it away
-    /// from the text editor.
+    /// from the text editor. GIF's `GIF87a`/`GIF89a` and TIFF's `II*\0`/`MM\0*`
+    /// (including BigTIFF) are binary structures and cannot be mistaken for
+    /// ordinary text.
     pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
         if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Some(Self::Png);
@@ -727,6 +740,16 @@ impl StaticImageFormat {
         if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
             return Some(Self::Ico);
         }
+        if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.starts_with(b"II\x2a\x00")
+            || bytes.starts_with(b"MM\x00\x2a")
+            || bytes.starts_with(b"II\x2b\x00")
+            || bytes.starts_with(b"MM\x00\x2b")
+        {
+            return Some(Self::Tiff);
+        }
         None
     }
 
@@ -737,6 +760,8 @@ impl StaticImageFormat {
             Self::WebP => "WebP",
             Self::Bmp => "BMP",
             Self::Ico => "ICO",
+            Self::Gif => "GIF",
+            Self::Tiff => "TIFF",
         }
     }
 }
@@ -786,7 +811,11 @@ pub(crate) fn read_bytes(
 /// budgets as a Markdown preview, and under the same rule that a name never
 /// decides how bytes are read: SVG is not among them, so a file called
 /// `.png` is never handed to `usvg`.
-pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, StaticImageFormat)> {
+///
+/// GIF animation and multi-page TIFF are documents with their own frame/page
+/// decoders; handing their bytes here is refused rather than showing a static
+/// first frame.
+pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, ImageFormat)> {
     let (rgba, extension) = decode(bytes).map_err(|error| {
         // Budget and unsupported-format refusals are already words; anything
         // else is the decoder saying the bytes are not the picture they claim.
@@ -799,11 +828,11 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Stati
         }
     })?;
     let format = match extension {
-        "png" => StaticImageFormat::Png,
-        "jpg" => StaticImageFormat::Jpeg,
-        "webp" => StaticImageFormat::WebP,
-        "bmp" => StaticImageFormat::Bmp,
-        "ico" => StaticImageFormat::Ico,
+        "png" => ImageFormat::Png,
+        "jpg" => ImageFormat::Jpeg,
+        "webp" => ImageFormat::WebP,
+        "bmp" => ImageFormat::Bmp,
+        "ico" => ImageFormat::Ico,
         _ => {
             return Err(invalid(ImageError::Localized(
                 L10nKey::MarkdownImageUnsupported,
@@ -811,6 +840,14 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Stati
         }
     };
     Ok((rgba, format))
+}
+
+/// Decodes one EPUB illustration with the same safe bytes/pixels policy as a
+/// Markdown image, including SVG with both external-resource resolvers
+/// disabled. Animation and multipage semantics remain image-document features;
+/// an illustration is a still picture.
+pub(crate) fn decode_book_illustration(bytes: &[u8]) -> io::Result<image::RgbaImage> {
+    decode(bytes).map(|(rgba, _)| rgba)
 }
 
 /// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
@@ -859,6 +896,98 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         };
         return Ok((rgba, extension));
     }
+    let (options, blocked) = svg_options(100., 100.);
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
+        .map_err(|error| invalid(error.to_string()))?;
+    let (rgba, ..) = rasterize_svg(&tree, &blocked, L10nKey::MarkdownImageLimit, None)?;
+    Ok((rgba, "svg"))
+}
+
+/// One SVG document preview: its pixels and the source's intrinsic size in
+/// CSS pixels. `width`/`height` are what fit/actual-size are relative to.
+pub(crate) struct SvgRaster {
+    pub(crate) rgba: image::RgbaImage,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}
+
+/// Decodes SVG source for a document preview.
+///
+/// The root's own dimensions decide the image; a document without usable
+/// dimensions gets the browser's 300×150 default viewport, and a `viewBox`
+/// supplies a percent-sized root's ratio. Both rules come from Glim's frozen
+/// `svg_preview.rs`; the sanitizer, data-image re-encoding, temporary files and
+/// browser image document there are deliberately not transplanted. Scripts
+/// have no runtime here, and both resource resolvers stay closed, so nested
+/// file, network and data images cannot be read.
+pub(crate) fn decode_svg_source(source: &str) -> io::Result<SvgRaster> {
+    let (options, blocked) = svg_options(300., 150.);
+    let xml = resvg::usvg::roxmltree::Document::parse_with_options(
+        source,
+        resvg::usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
+    let root = xml.root_element();
+    let viewport = if root.attribute("viewBox").is_none() {
+        // Glim 的独立文档默认视口：不接受 usvg 随后按内容 bbox 收缩尺寸。
+        let width = root
+            .attribute("width")
+            .and_then(|value| svg_length(value, 300.))
+            .unwrap_or(300.);
+        let height = root
+            .attribute("height")
+            .and_then(|value| svg_length(value, 150.))
+            .unwrap_or(150.);
+        Some(
+            resvg::usvg::Size::from_wh(width, height)
+                .ok_or_else(|| invalid(ImageError::Localized(L10nKey::EditorSvgLimit)))?,
+        )
+    } else {
+        None
+    };
+    let tree = resvg::usvg::Tree::from_xmltree(&xml, &options)
+        .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
+    let (rgba, width, height) = rasterize_svg(&tree, &blocked, L10nKey::EditorSvgLimit, viewport)?;
+    Ok(SvgRaster {
+        rgba,
+        width,
+        height,
+    })
+}
+
+// Glim MIT absolute_length 规则的本地适配，来源见 svg_document/UPSTREAM.toml。
+fn svg_length(value: &str, default: f32) -> Option<f32> {
+    let value = value.trim();
+    let (number, factor) = [
+        ("px", 1.),
+        ("pt", 96. / 72.),
+        ("pc", 16.),
+        ("in", 96.),
+        ("cm", 96. / 2.54),
+        ("mm", 96. / 25.4),
+        ("q", 96. / 101.6),
+        ("%", default / 100.),
+    ]
+    .into_iter()
+    .find_map(|(suffix, factor)| value.strip_suffix(suffix).map(|number| (number, factor)))
+    .unwrap_or((value, 1.));
+    let pixels = number.trim().parse::<f32>().ok()? * factor;
+    (pixels.is_finite() && pixels > 0.).then_some(pixels)
+}
+
+/// Builds parser options that cannot reach the filesystem or the network.
+/// The default viewport differs by caller only in its size; SVG user units are
+/// CSS pixels in both cases.
+fn svg_options(
+    default_width: f32,
+    default_height: f32,
+) -> (
+    resvg::usvg::Options<'static>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
     // usvg has no JavaScript runtime. Disable *both* resource resolvers: its default
     // string resolver reads local files, including for an SVG read on a remote Host.
     let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -883,26 +1012,47 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             }),
         },
         fontdb,
+        default_size: resvg::usvg::Size::from_wh(default_width, default_height)
+            .expect("non-empty SVG default viewport"),
         ..Default::default()
     };
-    let tree = resvg::usvg::Tree::from_data(bytes, &options)
-        .map_err(|error| invalid(error.to_string()))?;
+    (options, blocked)
+}
+
+/// Rasterizes a parsed tree inside the shared preview budget and returns the
+/// pixels with the tree's logical size.
+fn rasterize_svg(
+    tree: &resvg::usvg::Tree,
+    blocked: &std::sync::atomic::AtomicBool,
+    budget: L10nKey,
+    viewport: Option<resvg::usvg::Size>,
+) -> io::Result<(image::RgbaImage, f32, f32)> {
     if blocked.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(invalid(ImageError::Localized(
             L10nKey::MarkdownImageExternalReference,
         )));
     }
-    let size = tree.size().to_int_size();
-    if size.width() > 8192
+    let logical = viewport.unwrap_or_else(|| tree.size());
+    if !(logical.width().is_finite()
+        && logical.height().is_finite()
+        && logical.width() > 0.
+        && logical.height() > 0.)
+    {
+        return Err(invalid(ImageError::Localized(budget)));
+    }
+    let size = logical.to_int_size();
+    if size.width() == 0
+        || size.height() == 0
+        || size.width() > 8192
         || size.height() > 8192
         || size.width() as u64 * size.height() as u64 > MAX_PIXELS
     {
-        return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
+        return Err(invalid(ImageError::Localized(budget)));
     }
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
-        .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)))?;
+        .ok_or_else(|| invalid(ImageError::Localized(budget)))?;
     resvg::render(
-        &tree,
+        tree,
         resvg::tiny_skia::Transform::identity(),
         &mut pixmap.as_mut(),
     );
@@ -917,11 +1067,9 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             }
         }
     }
-    Ok((
-        image::RgbaImage::from_raw(size.width(), size.height(), rgba)
-            .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageUnsupported)))?,
-        "svg",
-    ))
+    let rgba = image::RgbaImage::from_raw(size.width(), size.height(), rgba)
+        .ok_or_else(|| invalid(ImageError::Localized(budget)))?;
+    Ok((rgba, logical.width(), logical.height()))
 }
 fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in rgba.pixels_mut() {

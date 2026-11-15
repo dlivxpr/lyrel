@@ -13,10 +13,10 @@ impl SaveContent {
         file: &OpenFile,
         cx: &gpui_kit::App,
     ) -> Result<Self, lyrel_text::EncodeError> {
-        if let Some(view) = file.input.markdown() {
+        if let Some(document) = file.input.source_document(cx) {
             // Source, every terminator, encoding and BOM come from this same snapshot;
             // never read a presentation's possibly stale cached text to acknowledge a save.
-            let document = view.read(cx).document().read(cx);
+            let document = document.read(cx);
             let snapshot = document.snapshot();
             Ok(Self {
                 bytes: snapshot.encode()?,

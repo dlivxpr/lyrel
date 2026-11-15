@@ -1,0 +1,16 @@
+# 记录导入前核对的原始源码摘要；本地适配后的摘要不应与上游相等。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+ticket = "#283"
+maintainer = "Lyrel"
+
+[[source]]
+upstream = "crates/glim-services/src/svg_preview.rs"
+local = "../markdown/images.rs"
+sha256 = "ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7"
+scope = "仅 intrinsic_size 的无 viewBox 默认视口和 absolute_length 绝对单位换算；viewBox 分支仍由 usvg 负责"
+adaptation = "quick_xml 属性读取改为 usvg 重导出的 roxmltree；百分比按默认视口换算；覆盖独立文档的光栅目标尺寸，不改源文或 usvg 解析后的几何；保留 Lyrel resolver 拒绝与既有预算"
+rejected = "Glim 流式净化、data-image 重编码、qlmanage/sips、临时文件和浏览器图像文档均未导入"
+notice = "根 LICENSE 中既有 Glim MIT 正文及 SVG 尺寸规则通知"
