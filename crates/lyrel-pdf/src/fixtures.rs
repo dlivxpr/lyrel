@@ -723,6 +723,57 @@ pub fn unicode_text_document() -> Vec<u8> {
     builder.serialize(catalog, None)
 }
 
+/// One page whose Type3 font maps one code point to a three-letter "ffi"
+/// string, so a single glyph carries several codepoints.
+pub fn ligature_text_document() -> Vec<u8> {
+    let mut builder = Builder::new();
+    let pages = builder.reserve();
+    let page = builder.reserve();
+    let glyph_o = builder.stream("", b"600 0 0 0 500 700 d1 50 0 400 700 re f");
+    let glyph_ffi = builder.stream("", b"900 0 0 0 800 700 d1 0 0 800 700 re f");
+    let glyph_ce = builder.stream("", b"600 0 0 0 500 700 d1 0 0 m 500 0 l 250 700 l h f");
+    let cmap = builder.stream(
+        "",
+        b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap \
+          /CIDSystemInfo << /Registry /Ordering (Owned279) /Supplement 0 >> def \
+          /CMapName /Owned279Lig def /CMapType 2 def \
+          1 begincodespacerange <40> <50> endcodespacerange \
+          3 beginbfchar <4F> <006F> <46> <006600660069> <43> <00630065> endbfchar endcmap \
+          CMapName currentdict /CMap defineresource pop end end",
+    );
+    let widths = (0..17).map(|_| "600").collect::<Vec<_>>().join(" ");
+    let font = builder.add(
+        format!(
+            "<< /Type /Font /Subtype /Type3 /Name /F279L /FontBBox [0 0 800 700] \
+             /FontMatrix [0.001 0 0 0.001 0 0] \
+             /CharProcs << /O {glyph_o} 0 R /ffi {glyph_ffi} 0 R /ce {glyph_ce} 0 R >> \
+             /Encoding << /Type /Encoding /Differences [67 /ce 70 /ffi 79 /O] >> \
+             /FirstChar 64 /LastChar 80 /Widths [{widths}] /Resources << >> \
+             /ToUnicode {cmap} 0 R >>"
+        )
+        .into_bytes(),
+    );
+    let content = builder.stream("", b"BT /F279L 24 Tf 48 700 Td (OFC) Tj ET");
+    builder.set(
+        page,
+        format!(
+            "<< /Type /Page /Parent {pages} 0 R /MediaBox [0 0 612 792] \
+             /Resources << /Font << /F279L {font} 0 R >> >> /Contents {content} 0 R >>"
+        )
+        .into_bytes(),
+    );
+    builder.set(
+        pages,
+        format!("<< /Type /Pages /Count 1 /Kids [{page} 0 R] >>").into_bytes(),
+    );
+    let catalog = builder.reserve();
+    builder.set(
+        catalog,
+        format!("<< /Type /Catalog /Pages {pages} 0 R >>").into_bytes(),
+    );
+    builder.serialize(catalog, None)
+}
+
 /// One page with one glyph run inside a clip rectangle and one outside.
 pub fn clipped_text_document() -> Vec<u8> {
     let mut base = Base::new(1);
