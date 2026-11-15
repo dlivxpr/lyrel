@@ -259,13 +259,14 @@ struct EditCaps {
     remove_record: bool,
 }
 
-/// 一次明确的树命令：目标 occurrence 在打开面板时固定，提交时按当前
-/// revision 重新解析；面板只是输入控件，不持有文档。`AddRecord` 的
-/// `target` 是可选的前一条记录，`None` 表示追加到文件末尾。
+/// 一次明确的树命令：打开面板时固定目标 occurrence 与源码 revision，
+/// 提交时两者都必须仍匹配。面板不持有文档；`AddRecord` 的 `target`
+/// 是可选的前一条记录，`None` 表示追加到文件末尾。
 struct EditSession {
     panel: Entity<StructureEditPanel>,
     kind: EditKind,
     target: Option<NodeTarget>,
+    revision: u64,
     _events: Subscription,
 }
 
@@ -943,6 +944,7 @@ impl JsonView {
             panel,
             kind,
             target,
+            revision: self.document.read(cx).document().read(cx).revision(),
             _events: events,
         });
         cx.notify();
@@ -971,6 +973,10 @@ impl JsonView {
         let Some(session) = self.editing.as_ref() else {
             return;
         };
+        if self.document.read(cx).document().read(cx).revision() != session.revision {
+            self.mark_edit_stale(cx);
+            return;
+        }
         let panel = session.panel.clone();
         let kind = session.kind;
         let target = session.target.clone();
