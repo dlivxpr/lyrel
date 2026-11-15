@@ -49,7 +49,12 @@ fn detail_text(value: &SqliteValue) -> String {
     match value {
         SqliteValue::Null => t(L10nKey::EditorSqliteNull).to_string(),
         SqliteValue::Integer { .. } | SqliteValue::Real { .. } => value_text(value),
-        SqliteValue::Text { preview, .. } => String::from_utf8_lossy(preview).into_owned(),
+        SqliteValue::Text { preview, .. } => match std::str::from_utf8(preview) {
+            Ok(text) => text.to_string(),
+            // Replacement characters would present bytes the database does
+            // not hold; the raw bytes stay readable as a hex dump instead.
+            Err(_) => hex_dump(preview),
+        },
         SqliteValue::Blob { preview, .. } => hex_dump(preview),
     }
 }
@@ -1488,16 +1493,22 @@ impl SqliteView {
         let Some(detail) = self.detail.as_ref() else {
             return v_flex().into_any_element();
         };
-        let (kind, total, chunk_len, prev_enabled, next_enabled) = match detail.value.as_ref() {
-            Some(SqliteValue::Null) => ("NULL".to_string(), None, 0, false, false),
-            Some(SqliteValue::Integer { .. }) => ("INTEGER".to_string(), None, 0, false, false),
-            Some(SqliteValue::Real { .. }) => ("REAL".to_string(), None, 0, false, false),
+        let (kind, total, chunk_len, prev_enabled, next_enabled, invalid_text) = match detail
+            .value
+            .as_ref()
+        {
+            Some(SqliteValue::Null) => ("NULL".to_string(), None, 0, false, false, false),
+            Some(SqliteValue::Integer { .. }) => {
+                ("INTEGER".to_string(), None, 0, false, false, false)
+            }
+            Some(SqliteValue::Real { .. }) => ("REAL".to_string(), None, 0, false, false, false),
             Some(SqliteValue::Text { preview, total }) => (
                 "TEXT".to_string(),
                 Some(*total),
                 preview.len() as u64,
                 detail.offset > 0,
                 detail.offset.saturating_add(preview.len() as u64) < *total,
+                std::str::from_utf8(preview).is_err(),
             ),
             Some(SqliteValue::Blob { preview, total }) => (
                 "BLOB".to_string(),
@@ -1505,8 +1516,9 @@ impl SqliteView {
                 preview.len() as u64,
                 detail.offset > 0,
                 detail.offset.saturating_add(preview.len() as u64) < *total,
+                false,
             ),
-            None => (String::new(), None, 0, false, false),
+            None => (String::new(), None, 0, false, false, false),
         };
         let mut extents = String::new();
         if let Some(total) = total {
@@ -1623,6 +1635,19 @@ impl SqliteView {
                         .text_xs()
                         .text_color(danger)
                         .child(error),
+                )
+            })
+            .when(invalid_text, |column| {
+                column.child(
+                    div()
+                        .id("sqlite-detail-hex")
+                        .test_support()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::EditorSqliteTextNotUtf8)),
                 )
             })
             .when_some(detail.notice.clone(), |column, notice| {

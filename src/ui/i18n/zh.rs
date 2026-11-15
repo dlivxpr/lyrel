@@ -1734,6 +1734,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorSqliteCopyValue => "复制值",
         L10nKey::EditorSqliteCopied => "已复制完整值",
         L10nKey::EditorSqliteCopiedHex => "已按十六进制复制（非有效 UTF-8 文本）",
+        L10nKey::EditorSqliteTextNotUtf8 => "该 TEXT 不是有效 UTF-8，按十六进制显示原始字节",
         L10nKey::EditorSqliteNullNotice => "NULL 值没有可复制的内容",
         L10nKey::EditorSqliteCopyTooLarge => "{bytes} 超过 {limit} 复制上限",
         L10nKey::EditorSqliteCloseValue => "关闭值检查器",

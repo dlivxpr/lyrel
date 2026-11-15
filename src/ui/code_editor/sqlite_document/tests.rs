@@ -45,6 +45,23 @@ fn until_named(
     settle(cx);
 }
 
+/// The inspector's identity and why a read may have failed, for assertion
+/// messages that would otherwise only say a predicate never became true.
+fn detail_diagnostic(detail: &ValueDetail) -> String {
+    let kind = match detail.value.as_ref() {
+        None => "none",
+        Some(SqliteValue::Null) => "null",
+        Some(SqliteValue::Integer { .. }) => "integer",
+        Some(SqliteValue::Real { .. }) => "real",
+        Some(SqliteValue::Text { .. }) => "text",
+        Some(SqliteValue::Blob { .. }) => "blob",
+    };
+    format!(
+        "row={} column={} offset={} busy={} value={kind} error={:?} notice={:?}",
+        detail.row, detail.column, detail.offset, detail.busy, detail.error, detail.notice
+    )
+}
+
 fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
     app.read_with(cx, |app, _| {
         app.tab_code()
@@ -622,9 +639,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     cx.update(|window, cx| window.double_click("table-cell-0:2", cx));
     until_named(&mut cx, "detail-open", |cx| {
         view.read_with(cx, |view, _| {
-            view.detail
-                .as_ref()
-                .is_some_and(|detail| detail.value.is_some() && !detail.busy)
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
         })
     });
     cx.update(|window, _| {
@@ -635,7 +650,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     let (offset, total) = view.read_with(&cx, |view, _| {
         let detail = view.detail.as_ref().expect("the inspector is open");
         let SqliteValue::Text { total, .. } = detail.value.as_ref().expect("a TEXT value") else {
-            panic!("the name column is TEXT")
+            panic!("the name column is TEXT: {}", detail_diagnostic(detail))
         };
         (detail.offset, *total)
     });
@@ -696,7 +711,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
     // 复制组装全部块，落剪贴板的是完整值，不是预览。
     cx.update(|window, cx| window.click("sqlite-value-copy", cx));
-    until_named(&mut cx, "blob-open", |cx| {
+    until_named(&mut cx, "copy-full", |cx| {
         cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
             .is_some_and(|text| text.len() == 2_100_000)
     });
@@ -707,12 +722,29 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
     // BLOB 单元格以十六进制展示与复制；复制的 hex 精确还原字节。
     cx.update(|window, cx| window.double_click("table-cell-0:3", cx));
-    until_named(&mut cx, "blob-copy", |cx| {
+    until_named(&mut cx, "blob-value", |cx| {
         view.read_with(cx, |view, _| {
-            view.detail
-                .as_ref()
-                .is_some_and(|detail| detail.column == 2 && detail.value.is_some() && !detail.busy)
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
         })
+    });
+    view.read_with(&cx, |view, cx| {
+        assert_eq!(
+            view.grid.read(cx).selection(),
+            TableSelection::Cell(0, 3),
+            "the double-click selected the payload cell before inspecting it"
+        );
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (0, 2),
+            "the payload cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert!(
+            matches!(detail.value, Some(SqliteValue::Blob { .. })),
+            "the payload stays a BLOB: {}",
+            detail_diagnostic(detail)
+        );
     });
     let shown = view.read_with(&cx, |view, cx| {
         view.detail
@@ -725,7 +757,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     });
     assert!(shown.contains("00 ff 10"), "the BLOB's real bytes: {shown}");
     cx.update(|window, cx| window.click("sqlite-value-copy", cx));
-    until_named(&mut cx, "null-open", |cx| {
+    until_named(&mut cx, "copy-blob", |cx| {
         cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
             .is_some_and(|text| text == "00ff10")
     });
@@ -739,16 +771,25 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
     // NULL 单元格显示 NULL 且复制只提示，不把空字符串当值。
     cx.update(|window, cx| window.double_click("table-cell-1:2", cx));
-    until_named(&mut cx, "null-copy", |cx| {
+    until_named(&mut cx, "null-open", |cx| {
         view.read_with(cx, |view, _| {
-            view.detail.as_ref().is_some_and(|detail| {
-                detail.row == 1 && detail.column == 1 && detail.value.is_some()
-            })
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
         })
     });
     view.read_with(&cx, |view, _| {
-        let detail = view.detail.as_ref().unwrap();
-        assert_eq!(detail.value, Some(SqliteValue::Null));
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (1, 1),
+            "the NULL name cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert_eq!(
+            detail.value,
+            Some(SqliteValue::Null),
+            "{}",
+            detail_diagnostic(detail)
+        );
     });
     cx.update(|window, cx| window.click("sqlite-value-copy", cx));
     settle(&mut cx);
@@ -856,4 +897,28 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
         "no rollback journal appeared"
     );
     drop(writer);
+}
+
+/// A TEXT value that is not valid UTF-8 must not be shown through
+/// replacement characters: the viewer keeps the bytes visible as hex, and
+/// the panel says why.
+#[test]
+fn invalid_utf8_text_is_shown_as_its_bytes() {
+    let value = SqliteValue::Text {
+        preview: b"ok\xffA".to_vec(),
+        total: 4,
+    };
+    let text = super::detail_text(&value);
+    assert!(
+        !text.contains('\u{fffd}'),
+        "no replacement characters stood in for bytes: {text}"
+    );
+    assert!(
+        text.contains("ff"),
+        "the invalid byte stays visible as hex: {text}"
+    );
+    assert!(
+        text.contains("ok"),
+        "the printable bytes keep their ASCII column: {text}"
+    );
 }

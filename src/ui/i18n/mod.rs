@@ -1437,6 +1437,7 @@ l10n_keys! {
     EditorSqliteCopyValue,
     EditorSqliteCopied,
     EditorSqliteCopiedHex,
+    EditorSqliteTextNotUtf8,
     EditorSqliteNullNotice,
     EditorSqliteCopyTooLarge,
     EditorSqliteCloseValue,

@@ -1954,7 +1954,7 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
                 "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, payload TEXT);\
                  INSERT INTO items(name, payload) VALUES\
                  ('alpha', 'x'), ('beta', 'y'), ('gamma', 'z'), ('中文', 'w');\
-                 INSERT INTO items(name, payload) VALUES ('big', replace(hex(zeroblob(1050000)), '00', 'Q'));",
+                 INSERT INTO items(name, payload) VALUES ('big', replace(hex(zeroblob(1050000)), '0', 'Q'));",
             )
             .unwrap();
     }
@@ -2027,9 +2027,31 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
         panic!("the second chunk stayed TEXT: {tail:?}");
     };
     assert_eq!(*rest_total, *total);
-    assert_eq!(rest.len() as u64, total - VALUE_CHUNK_BYTES);
+    assert_eq!(rest.len() as u64, VALUE_CHUNK_BYTES);
+    let last_offset = 2 * VALUE_CHUNK_BYTES;
+    let last = h
+        .sqlite_value(
+            opened.view,
+            &query,
+            4,
+            2,
+            last_offset,
+            VALUE_CHUNK_BYTES,
+            &cancel,
+        )
+        .unwrap();
+    let SqliteValue::Text {
+        preview: last_bytes,
+        total: last_total,
+    } = &last
+    else {
+        panic!("the last chunk stayed TEXT: {last:?}");
+    };
+    assert_eq!(*last_total, *total);
+    assert_eq!(last_bytes.len() as u64, total - last_offset);
     assert!(preview.iter().all(|byte| *byte == b'Q'));
     assert!(rest.iter().all(|byte| *byte == b'Q'));
+    assert!(last_bytes.iter().all(|byte| *byte == b'Q'));
 
     // Integers come back whole in one call, whatever the chunk bound says.
     let id = h

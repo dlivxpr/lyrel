@@ -1894,6 +1894,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSqliteCopyValue => "Copy value",
         L10nKey::EditorSqliteCopied => "Complete value copied",
         L10nKey::EditorSqliteCopiedHex => "Copied as hex (not valid UTF-8 text)",
+        L10nKey::EditorSqliteTextNotUtf8 => {
+            "This TEXT is not valid UTF-8; the raw bytes are shown as hex"
+        }
         L10nKey::EditorSqliteNullNotice => "NULL values copy nothing",
         L10nKey::EditorSqliteCopyTooLarge => "{bytes} exceeds the {limit} copy limit",
         L10nKey::EditorSqliteCloseValue => "Close value inspector",
