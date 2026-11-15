@@ -148,6 +148,12 @@ fn click_row(view: &Entity<XmlView>, cx: &mut VisualTestContext, label: &str) {
     settle(cx);
 }
 
+fn ensure_expanded(view: &Entity<XmlView>, cx: &mut VisualTestContext, label: &str) {
+    if maybe_row(view, cx, label).and_then(|row| row.expanded()) == Some(false) {
+        click_row(view, cx, label);
+    }
+}
+
 fn double_click_row(view: &Entity<XmlView>, cx: &mut VisualTestContext, label: &str) {
     let snapshot = row(view, cx, label);
     let id = snapshot.path().last().cloned().expect("a row element id");
@@ -458,6 +464,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
     assert!(text.contains("<![CDATA[raw < & text]]>"));
 
     // Edit one text occurrence, the comment and CDATA in the shared panel.
+    ensure_expanded(&view, &mut cx, "/root/p:item[2]");
     click_row(&view, &mut cx, "/root/p:item[2]/text()[1]");
     click_button(&view, &mut cx, "xml-edit-value");
     type_edit_value(&view, &mut cx, "中文 &amp; 文本");
@@ -483,7 +490,12 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
     assert!(text.contains("<![CDATA[甲 < 乙 & 丙]]>"));
     assert!(text.contains("<!--新注释-->"));
     assert!(text.find("first").unwrap() < text.find("<![CDATA[").unwrap());
-    assert!(text.find("<![CDATA[").unwrap() < text.find("second").unwrap());
+    assert!(
+        text.find("<![CDATA[").unwrap()
+            < text
+                .find("<p:item id=\"2\">中文 &amp; 文本")
+                .expect("edited second item")
+    );
 
     // Tree focus keeps the tree open; its undo/redo is the shared history.
     assert_eq!(
@@ -522,7 +534,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
         app.read_with(cx, |app, _| app.editor.buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
-    click_row(&reopened, &mut cx, "/root/p:item[2]");
+    ensure_expanded(&reopened, &mut cx, "/root/p:item[2]");
     assert_eq!(
         row_value(&reopened, &mut cx, "/root/p:item[2]/text()[1]").as_deref(),
         Some("中文 &amp; 文本")
@@ -590,6 +602,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
     // Renaming to a prefix that is not in scope would change namespace
     // meaning; the whole-result check rejects it without touching source.
     let before = source_text(&app, &cx);
+    ensure_expanded(&view, &mut cx, "/r");
     click_row(&view, &mut cx, "/r/p:a[1]");
     click_button(&view, &mut cx, "xml-rename");
     replace_panel_text(&view, &mut cx, "structure-edit-value", "q:a");
@@ -620,7 +633,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
     assert!(source_text(&app, &cx).contains("xmlns:p=\"urn:part\""));
 
     // An ordinary attribute and a non-root element can be removed locally.
-    click_row(&view, &mut cx, "/r/p:b[1]");
+    ensure_expanded(&view, &mut cx, "/r/p:b[1]");
     click_row(&view, &mut cx, "/r/p:b[1]/@p:flag");
     click_button(&view, &mut cx, "xml-remove");
     until(&mut cx, |cx| is_ready(&view, cx));
@@ -875,13 +888,13 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     let at = text.find("text</b>").expect("fixture text");
     type_source(&app, &mut cx, at..at + "text".len(), "TEXT");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
         Some(crate::ui::i18n::t(
             crate::ui::i18n::L10nKey::EditorXmlEditStale
         ))
     );
-    apply_panel(&other, &mut cx);
     assert!(source_text(&app, &cx).contains("<b>TEXT</b>"));
     assert!(!source_text(&app, &cx).contains("<b>pending</b>"));
     assert!(
@@ -905,13 +918,13 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     let at = text.find("TEXT</b>").expect("fixture text");
     type_source(&app, &mut cx, at..at + "TEXT".len(), "source-wins");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
         Some(crate::ui::i18n::t(
             crate::ui::i18n::L10nKey::EditorXmlEditStale
         ))
     );
-    apply_panel(&other, &mut cx);
     let text = source_text(&app, &cx);
     assert!(text.contains("<b>source-wins</b>"));
     assert!(!text.contains("<b>TEXT</b>"));
