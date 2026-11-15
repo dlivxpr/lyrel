@@ -304,7 +304,11 @@ impl TextInput<'_> {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
-            Self::Json(view) | Self::Csv(view) => {
+            Self::Json(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Csv(view) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
@@ -332,7 +336,10 @@ impl TextInput<'_> {
             Self::Svg(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
-            Self::Json(view) | Self::Csv(view) => {
+            Self::Json(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
+            Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
         }
@@ -350,7 +357,10 @@ impl TextInput<'_> {
             Self::Svg(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
-            Self::Json(view) | Self::Csv(view) => {
+            Self::Json(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
         }
@@ -371,7 +381,10 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
-            Self::Json(view) | Self::Csv(view) => view.update(cx, |view, cx| {
+            Self::Json(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
         }
@@ -390,7 +403,10 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
-            Self::Json(view) | Self::Csv(view) => view.update(cx, |view, cx| {
+            Self::Json(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
+            Self::Csv(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
         }
@@ -460,7 +476,16 @@ impl TextRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
-            TextInput::Json(view) | TextInput::Csv(view) => TextSnapshot::Shared(
+            TextInput::Json(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+            TextInput::Csv(view) => TextSnapshot::Shared(
                 view.read(self.cx)
                     .document()
                     .read(self.cx)
@@ -513,7 +538,12 @@ impl TextRead<'_> {
                 .source()
                 .read(self.cx)
                 .range_to_bounds(range),
-            TextInput::Json(view) | TextInput::Csv(view) => view
+            TextInput::Json(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Csv(view) => view
                 .read(self.cx)
                 .source()
                 .read(self.cx)
