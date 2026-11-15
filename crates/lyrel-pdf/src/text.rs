@@ -522,12 +522,8 @@ impl PageText {
     /// Run rect in the page's rotated display space, matching the normalized
     /// points a drag reports.
     fn display_rect(&self, rect: NormRect) -> NormRect {
-        let first = self
-            .display
-            * Point::new(f64::from(rect.x), f64::from(rect.y));
-        let last = self
-            .display
-            * Point::new(f64::from(rect.right()), f64::from(rect.bottom()));
+        let first = self.display * Point::new(f64::from(rect.x), f64::from(rect.y));
+        let last = self.display * Point::new(f64::from(rect.right()), f64::from(rect.bottom()));
         NormRect {
             x: first.x.min(last.x) as f32,
             y: first.y.min(last.y) as f32,

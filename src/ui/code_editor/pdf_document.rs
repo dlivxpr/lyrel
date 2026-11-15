@@ -939,7 +939,9 @@ impl PdfView {
             return;
         }
         let count = self.matches.len();
-        let index = self.current_match.map_or(0, |current| (current + 1) % count);
+        let index = self
+            .current_match
+            .map_or(0, |current| (current + 1) % count);
         self.current_match = Some(index);
         self.goto_match(index, cx);
     }
@@ -995,11 +997,7 @@ impl PdfView {
                 .sel_drag
                 .map(|(page, _, _)| page)
                 .or(self.text_sel.map(|(page, _, _)| page));
-            let Some(&oldest) = self
-                .page_text
-                .keys()
-                .find(|&&key| Some(key) != selected)
-            else {
+            let Some(&oldest) = self.page_text.keys().find(|&&key| Some(key) != selected) else {
                 break;
             };
             self.page_text.remove(&oldest);
@@ -1059,10 +1057,7 @@ impl PdfView {
         cx: &mut Context<Self>,
     ) {
         self.text_jobs = self.text_jobs.saturating_sub(1);
-        let current = self
-            .document
-            .entity_id()
-            .eq(&document_id)
+        let current = self.document.entity_id().eq(&document_id)
             && self.document.read(cx).revision() == revision;
         if current && matches!(self.page_text.get(&page), Some(TextSlot::Loading)) {
             match extracted {
@@ -1083,10 +1078,7 @@ impl PdfView {
 
     /// 窗口坐标点到 (页, 归一化页内坐标)。页面在滚动列里的实际几何由
     /// scroll bounds、偏移和纯布局函数推出，不依赖该页是否已光栅化。
-    fn point_to_page(
-        &self,
-        position: Point<Pixels>,
-    ) -> Option<(usize, lyrel_pdf::NormPoint)> {
+    fn point_to_page(&self, position: Point<Pixels>) -> Option<(usize, lyrel_pdf::NormPoint)> {
         if self.dims.is_empty() {
             return None;
         }
@@ -1094,8 +1086,8 @@ impl PdfView {
         let offset = self.scroll.offset();
         let page_width = self.page_width();
         let column_w = (page_width + 2. * PAGE_PAD_X).max(f32::from(bounds.size.width));
-        let column_x = f32::from(bounds.origin.x) + f32::from(offset.x) + column_w / 2.
-            - page_width / 2.;
+        let column_x =
+            f32::from(bounds.origin.x) + f32::from(offset.x) + column_w / 2. - page_width / 2.;
         let column_y = f32::from(bounds.origin.y) + f32::from(offset.y);
         let probe = f32::from(position.y) - column_y;
         for index in 0..self.dims.len() {
@@ -1419,9 +1411,7 @@ impl PdfView {
                         .label(t(L10nKey::AppMenuFind))
                         .accessibility_label(t(L10nKey::AppMenuFind))
                         .tooltip(t(L10nKey::AppMenuFind))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_find(window, cx)
-                        })),
+                        .on_click(cx.listener(|this, _, window, cx| this.open_find(window, cx))),
                 );
                 if has_outline {
                     row = row.child(
@@ -1432,9 +1422,9 @@ impl PdfView {
                             .label(t(L10nKey::EditorPdfOutline))
                             .accessibility_label(t(L10nKey::EditorPdfOutline))
                             .tooltip(t(L10nKey::EditorPdfOutline))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_toc(window, cx)
-                            })),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.toggle_toc(window, cx)),
+                            ),
                     );
                 }
                 row
@@ -1629,13 +1619,11 @@ impl PdfView {
                             .rounded(px(2.))
                             .cursor_pointer()
                             .hover(|link| link.bg(cx.theme().primary.opacity(0.12)))
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                match &target {
-                                    lyrel_pdf::LinkTarget::Page(destination) => {
-                                        this.go_to_destination(destination, cx)
-                                    }
-                                    lyrel_pdf::LinkTarget::Uri(uri) => cx.open_url(uri),
+                            .on_click(cx.listener(move |this, _, _window, cx| match &target {
+                                lyrel_pdf::LinkTarget::Page(destination) => {
+                                    this.go_to_destination(destination, cx)
                                 }
+                                lyrel_pdf::LinkTarget::Uri(uri) => cx.open_url(uri),
                             })),
                     );
                 }
@@ -1774,7 +1762,10 @@ impl PdfView {
             let mut count = t_fmt(
                 L10nKey::EditorPdfMatchOf,
                 &[
-                    ("current", &(self.current_match.map_or(0, |i| i + 1)).to_string()),
+                    (
+                        "current",
+                        &(self.current_match.map_or(0, |i| i + 1)).to_string(),
+                    ),
                     ("total", &self.matches.len().to_string()),
                 ],
             );
@@ -1804,11 +1795,11 @@ impl PdfView {
             .border_color(cx.theme().border)
             // Enter/Shift-Enter 走 InputState 的 PressEnter 事件（订阅处统一
             // 步进）；Escape 动作在单行输入里会向上传播，直接在这里关掉。
-            .on_action(cx.listener(
-                |this, _: &gpui_kit::component::input::Escape, window, cx| {
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Escape, window, cx| {
                     this.close_find(window, cx)
-                },
-            ))
+                }),
+            )
             .child(
                 div()
                     .w(rems(16.))
@@ -1855,9 +1846,7 @@ impl PdfView {
                     .label("✕")
                     .accessibility_label(t(L10nKey::Close))
                     .tooltip(t(L10nKey::Close))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close_find(window, cx)
-                    })),
+                    .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
             )
             .into_any_element()
     }
@@ -1899,15 +1888,16 @@ impl PdfView {
                 row = row.bg(cx.theme().accent);
             }
             if destination.is_some() {
-                row = row.cursor_pointer().hover(|row| row.bg(cx.theme().accent)).on_click(
-                    cx.listener(move |this, _, window, cx| {
+                row = row
+                    .cursor_pointer()
+                    .hover(|row| row.bg(cx.theme().accent))
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.toc_index = index;
                         this.focus.focus(window, cx);
                         if let Some(destination) = destination {
                             this.go_to_destination(&destination, cx);
                         }
-                    }),
-                );
+                    }));
             }
             column = column.child(row);
         }
@@ -2089,8 +2079,8 @@ impl Render for PdfView {
         // 查找条渲染在文档按键上下文之外：输入框里的数字/连字符必须成为
         // 查询文字，而不是被 PDF 的缩放快捷键吞掉；同时点击输入框不会被
         // 文档的 on_mouse_down 抢走焦点。
-        let find_bar = (self.find_open && ready_document.is_some())
-            .then(|| self.render_find_bar(cx));
+        let find_bar =
+            (self.find_open && ready_document.is_some()).then(|| self.render_find_bar(cx));
         v_flex()
             .id(("pdf-document", cx.entity_id()))
             .size_full()
@@ -2110,20 +2100,20 @@ impl Render for PdfView {
                     .on_action(cx.listener(|this, _: &PdfFitPage, _, cx| this.fit_page(cx)))
                     .on_action(cx.listener(|this, _: &PdfActualSize, _, cx| this.actual_size(cx)))
                     .on_action(cx.listener(|this, _: &PdfNextPage, _, cx| this.next_page(cx)))
-                    .on_action(cx.listener(|this, _: &PdfPreviousPage, _, cx| {
-                        this.previous_page(cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &PdfCopy, _, cx| {
-                        this.copy_selection(cx)
-                    }))
+                    .on_action(
+                        cx.listener(|this, _: &PdfPreviousPage, _, cx| this.previous_page(cx)),
+                    )
+                    .on_action(cx.listener(|this, _: &PdfCopy, _, cx| this.copy_selection(cx)))
                     .on_action(cx.listener(
                         |this, _: &gpui_kit::component::input::Search, window, cx| {
                             this.open_find(window, cx)
                         },
                     ))
-                    .on_action(cx.listener(
-                        |this, _: &crate::terminal::view::FindNext, _, cx| this.next_match(cx),
-                    ))
+                    .on_action(
+                        cx.listener(|this, _: &crate::terminal::view::FindNext, _, cx| {
+                            this.next_match(cx)
+                        }),
+                    )
                     .on_action(cx.listener(
                         |this, _: &crate::terminal::view::FindPrevious, _, cx| {
                             this.previous_match(cx)
@@ -2178,7 +2168,10 @@ pub(super) fn menu_entries(
     menu.separator()
         .menu(t(L10nKey::EditorPdfPreviousPage), Box::new(PdfPreviousPage))
         .menu(t(L10nKey::EditorPdfNextPage), Box::new(PdfNextPage))
-        .menu(t(L10nKey::AppMenuFind), Box::new(gpui_kit::component::input::Search))
+        .menu(
+            t(L10nKey::AppMenuFind),
+            Box::new(gpui_kit::component::input::Search),
+        )
         .menu_with_disabled(t(L10nKey::AppMenuCopy), Box::new(PdfCopy), !has_selection)
         .separator()
         .menu(t(L10nKey::EditorPdfFitWidth), Box::new(PdfFitWidth))

@@ -864,7 +864,10 @@ fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut Test
     settle(&mut cx);
     cx.update(|window, _| {
         assert!(window.find("pdf-toc").visible(), "the outline panel");
-        assert_eq!(window.find("pdf-toc-0").label(), Some("First explicit page"));
+        assert_eq!(
+            window.find("pdf-toc-0").label(),
+            Some("First explicit page")
+        );
         assert_eq!(
             window.find("pdf-toc-1").label(),
             Some("Middle named destination")
@@ -954,9 +957,15 @@ fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) 
         page_bounds.size
     );
     let from = page_bounds.origin
-        + gpui_kit::point(page_bounds.size.width * 0.02, page_bounds.size.height * 0.02);
+        + gpui_kit::point(
+            page_bounds.size.width * 0.02,
+            page_bounds.size.height * 0.02,
+        );
     let to = page_bounds.origin
-        + gpui_kit::point(page_bounds.size.width * 0.98, page_bounds.size.height * 0.98);
+        + gpui_kit::point(
+            page_bounds.size.width * 0.98,
+            page_bounds.size.height * 0.98,
+        );
     cx.update(|window, cx| window.drag(from, to, cx));
     until(&mut cx, |cx| {
         pdf_view(&app, cx).read_with(cx, |view, _| {
@@ -1028,7 +1037,10 @@ fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
     settle(&mut cx);
     cx.update(|window, _| {
         assert!(window.try_find("pdf-find-bar").is_none(), "find bar closed");
-        assert!(window.try_find("pdf-match-9").is_none(), "highlights cleared");
+        assert!(
+            window.try_find("pdf-match-9").is_none(),
+            "highlights cleared"
+        );
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.match_count()),
@@ -1054,7 +1066,11 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
     cx.update(|window, cx| window.input("unique-page-12", cx));
     until(&mut cx, |cx| find_count(cx) == "1 / 1");
     view.read_with(&cx, |view, _| {
-        assert_eq!(view.page_number(), 12, "the only match lands on the last page");
+        assert_eq!(
+            view.page_number(),
+            12,
+            "the only match lands on the last page"
+        );
     });
     cx.update(|window, _| assert!(window.find("pdf-match-11").visible()));
 
@@ -1062,7 +1078,10 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
     dispatch(&app, &mut cx, PdfZoomIn);
     settle(&mut cx);
     cx.update(|window, _| {
-        assert!(window.find("pdf-match-11").visible(), "highlight after zoom");
+        assert!(
+            window.find("pdf-match-11").visible(),
+            "highlight after zoom"
+        );
         assert!(window.find("pdf-page-11").visible());
     });
     assert_eq!(
@@ -1077,11 +1096,7 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
 fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
-    let path = fixture(
-        dir.path(),
-        "cjk.pdf",
-        &fixtures::unicode_text_document(),
-    );
+    let path = fixture(dir.path(), "cjk.pdf", &fixtures::unicode_text_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
     until(&mut cx, |cx| ready(&app, cx));
@@ -1236,7 +1251,11 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
     // 如实显示无匹配，旧字节的命中一条都不落地。
     until(&mut cx, |cx| find_count(cx) == "No matches");
     view.read_with(&cx, |view, _| {
-        assert_eq!(view.match_count(), 0, "no matches leaked from the old bytes");
+        assert_eq!(
+            view.match_count(),
+            0,
+            "no matches leaked from the old bytes"
+        );
     });
 }
 
@@ -1276,7 +1295,11 @@ fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
     });
 
     // 在前面那个分屏里拖拽选中文本；另一边保持没有选区。
-    assert_eq!(pdf_view(&app, &cx), front, "the focused pane is the one we act on");
+    assert_eq!(
+        pdf_view(&app, &cx),
+        front,
+        "the focused pane is the one we act on"
+    );
     let page_bounds = cx.update(|window, _| {
         window
             .within(("pdf-document", front.entity_id()))

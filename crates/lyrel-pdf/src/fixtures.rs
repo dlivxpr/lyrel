@@ -753,10 +753,7 @@ pub fn ligature_text_document() -> Vec<u8> {
         )
         .into_bytes(),
     );
-    let content = builder.stream(
-        "",
-        b"BT /F279L 24 Tf 48 700 Td (OFC) Tj ET",
-    );
+    let content = builder.stream("", b"BT /F279L 24 Tf 48 700 Td (OFC) Tj ET");
     builder.set(
         page,
         format!(
