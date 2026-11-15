@@ -21,3 +21,10 @@ html, body {
     -webkit-user-select: none;
     user-select: none;
 }
+
+/* The canvas and label editor are engine layers, not document flow. Page
+ * backgrounds may be inserted before accessibility controls, not the SVG. */
+#graph > svg,
+#graph > .mxCellEditor {
+    position: absolute;
+}

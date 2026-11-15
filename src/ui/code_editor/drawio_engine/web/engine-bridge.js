@@ -17,6 +17,8 @@
     var viewer = null;
     var fileRoot = null;
     var xmlPrefix = "";
+    // Retain exact delivered bytes until the first actual model edit.
+    var untouchedXml = null;
     var loaded = false;
     var pendingPage = 0;
     var commitPath = null;
@@ -30,7 +32,7 @@
     // Same-origin gate for every message crossing the iframe boundary.
     var ORIGIN = window.location.origin;
     // Programmatic model changes that must not count as document edits: a
-    // page switch stashing the previous page, a reload, or internal teardown.
+    // page switch loading another model, a reload, or internal teardown.
     var suppress = 0;
     // The monotonic sequence a commit carries; the workbench refuses stale ones.
     var editSeq = 0;
@@ -86,39 +88,62 @@
     }
 
     function diagramNode() {
+        if (fileRoot !== null && fileRoot.nodeName === "mxGraphModel") {
+            return fileRoot;
+        }
         if (viewer === null || viewer.diagrams === null) {
             return null;
         }
         return viewer.diagrams[currentPage()] || null;
     }
 
-    // Writes the live model back into the mxfile DOM the engine was loaded
-    // from, keeping the page's original representation: a compressed page gets
-    // fresh deflate-base64 content and an uncompressed page gets a fresh
-    // mxGraphModel child; every other diagram node and every mxfile/diagram
-    // attribute is left byte-identical.
+    function graphRoot(model) {
+        for (var node = model.firstChild; node !== null; node = node.nextSibling) {
+            if (node.nodeType === 1 && node.nodeName === "root") {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    // Only the edited page's graph cells come from the live engine. Its viewer
+    // overrides page/grid/viewport settings, so retain the source model's
+    // attributes and non-root metadata. Untouched pages are never restashed.
     function writePageBack() {
         if (fileRoot === null || viewer === null || viewer.editor === null) {
-            return;
+            throw new Error("diagram model is unavailable");
         }
         var diagram = diagramNode();
         if (diagram === null) {
+            throw new Error("diagram page is unavailable");
+        }
+        var standalone = diagram.nodeName === "mxGraphModel";
+        var original = standalone ? diagram
+            : diagram.getElementsByTagName("mxGraphModel")[0];
+        var compressed = !standalone && original === undefined;
+        if (compressed) {
+            original = parseXml(Graph.decompress(diagram.textContent)).root;
+        }
+        var sourceRoot = graphRoot(original);
+        var editedRoot = graphRoot(viewer.editor.getGraphXml());
+        if (sourceRoot === null || editedRoot === null) {
+            throw new Error("diagram model has no root");
+        }
+        var model = original.cloneNode(false);
+        for (var child = original.firstChild; child !== null; child = child.nextSibling) {
+            model.appendChild(model.ownerDocument.importNode(
+                child === sourceRoot ? editedRoot : child, true));
+        }
+        if (standalone) {
+            fileRoot = model;
             return;
         }
-        var model = viewer.editor.getGraphXml();
-        var compressed = diagram.getElementsByTagName("mxGraphModel").length === 0;
-        if (compressed) {
-            while (diagram.firstChild !== null) {
-                diagram.removeChild(diagram.firstChild);
-            }
-            diagram.appendChild(diagram.ownerDocument.createTextNode(
-                Graph.compress(mxUtils.getXml(model))));
-        } else {
-            while (diagram.firstChild !== null) {
-                diagram.removeChild(diagram.firstChild);
-            }
-            diagram.appendChild(diagram.ownerDocument.importNode(model, true));
+        var body = compressed ? diagram.ownerDocument.createTextNode(
+            Graph.compress(mxUtils.getXml(model))) : model;
+        while (diagram.firstChild !== null) {
+            diagram.removeChild(diagram.firstChild);
         }
+        diagram.appendChild(body);
     }
 
     // The canonical mxfile bytes: the diagram nodes this file's edits touched
@@ -140,8 +165,17 @@
         if (suppress > 0 || !loaded || commitPath === null) {
             return;
         }
-        writePageBack();
-        var xml = serializeFile();
+        var xml;
+        try {
+            if (sync !== true) {
+                writePageBack();
+                untouchedXml = null;
+            }
+            xml = untouchedXml !== null ? untouchedXml : serializeFile();
+        } catch (error) {
+            fail(error === null || error === undefined ? "diagram commit failed" : error.message);
+            return;
+        }
         if (typeof xml !== "string" || xml.length === 0) {
             return;
         }
@@ -402,6 +436,7 @@
             loaded = false;
             fileRoot = null;
             xmlPrefix = "";
+            untouchedXml = null;
             editSeq = 0;
             commitPath = null;
             syncPath = null;
@@ -434,15 +469,13 @@
         var pages = pageCount();
         var target = Math.max(0, Math.min(pages - 1, page));
         var g = graph();
+        // Finish a real label edit before suppressing the view-only switch;
+        // its ordinary model event has already serialized the changed page.
+        if (g !== null && g.isEditing()) {
+            g.stopEditing(false);
+        }
         suppress += 1;
         try {
-            // The page being left keeps its model in the file DOM before the
-            // engine swaps it; its own undo stack is per-page, so the switch
-            // clears it and reports the stash through the next commit.
-            if (g !== null && g.isEditing()) {
-                g.stopEditing(false);
-            }
-            writePageBack();
             if (typeof viewer.selectPage === "function" && pages > 1) {
                 viewer.selectPage(target);
             }
@@ -493,7 +526,9 @@
         try {
             var parsed = parseXml(xml);
             fileRoot = parsed.root;
-            xmlPrefix = parsed.stripped.slice(0, parsed.stripped.indexOf("<" + fileRoot.nodeName));
+            untouchedXml = xml;
+            xmlPrefix = xml.slice(0, xml.length - parsed.stripped.length
+                + parsed.stripped.indexOf("<" + fileRoot.nodeName));
             if (typeof GraphViewer !== "function") {
                 throw new Error("draw.io viewer is unavailable");
             }

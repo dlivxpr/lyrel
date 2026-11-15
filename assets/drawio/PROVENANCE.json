@@ -103,7 +103,10 @@
       "all resource bases rewritten to the reserved same-origin paths, where unknown paths are 403",
       "window.open/alert/confirm/prompt disabled in the engine page",
       "CSP response headers for shell and engine; sandbox allow-scripts allow-same-origin only",
-      "native filter AddWebResourceRequestedFilterWithRequestSourceKinds('*', ALL, ALL) with an exact manifest"
+      "native filter AddWebResourceRequestedFilterWithRequestSourceKinds('*', ALL, ALL) with an exact manifest",
+      "画布与 mxCellEditor 使用定位层，避免页面背景挡住图形或标签输入落入文档流；未导入完整上游应用样式",
+      "仅切页或缩放后的 sync 返回原始交付字节；实际编辑只替换当前模型 root，保留页面配置、其他元数据及压缩形式",
+      "独立 mxGraphModel 保留原生根；保存与离页前完成活动标签编辑，再经同一会话提交"
     ],
     "sanitizer": "DOMPurify 3.4.17 from the fixed release; stencil eval disabled by the vendor boot; CSP has no unsafe-eval."
   },
