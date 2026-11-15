@@ -211,22 +211,20 @@ fn type_source(
 }
 
 fn type_source_on(
-    app: &Entity<LyrelApp>,
+    _app: &Entity<LyrelApp>,
     view: &Entity<XmlView>,
     cx: &mut VisualTestContext,
     range: std::ops::Range<usize>,
     text: &str,
 ) {
-    app.update_in(cx, |app, window, cx| {
+    // The split's stale guard is about the shared Document revision, not the
+    // keyboard route (that is covered by the single-presentation consumers).
+    cx.update(|_, cx| {
         view.update(cx, |view, cx| {
             let source = view.source().clone();
-            source.update(cx, |source, cx| source.select_range(range, cx));
-            let focus = source.read(cx).focus_handle(cx);
-            focus.focus(window, cx);
+            source.update(cx, |source, cx| source.replace_range(range, text, cx));
         });
-        app.editor_split_follow_focus(window, cx);
     });
-    cx.update(|window, cx| window.input(text, cx));
     settle(cx);
 }
 
