@@ -279,6 +279,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - TIFF：用正式 registry `tiff` 解码器枚举 IFD 页表，像素只在该 presentation 请求某页时后台解码；页选择属于 presentation，分屏两边可以停在不同的页。单页上限 8192 边／1600 万像素，页数与单页解码缓冲另有显式预算；迟到页结果只装回自己的页，不能替换当前页。页身份显示为“第 N 页，共 M 页”，翻页可用工具栏、右键菜单与 PageUp／PageDown。
 - 复用与许可：GIF 移植的固定来源、原始 blob 摘要与本地适配见 `src/ui/code_editor/image_document/UPSTREAM.toml`；Glim MIT notice 进入根 `LICENSE` 附录。`gif`／`tiff` 是正式 registry 依赖，不是 Git 或 path 覆盖。
 - 呈现：`src/ui/code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份文档。
+- 缩放尺寸：居中滚动区域可以大于图片；图像自身按原始像素宽高乘取景比例，再除显示缩放系数换算为逻辑点。fit 不放大小图片；1:1 表示一个原像素对应一个显示物理像素。状态百分比与实际图像 bounds 使用同一比例，不把图片拉伸到整块视口。
 - 文本契约不变：保存、另存为、未保存关闭、撤销、行号跳转、符号、查找、Git gutter 与 LSP 都经 `EditorInput::is_text()` 保持原有行为；对图片执行这些命令不写盘、不弹永久无效的输入条。
 - 证据边界：本轮 `pwsh scripts/cargo-windows.ps1 test --locked -p lyrel --lib image_document` 的 lib test 编译为零 warning；对该次构建的测试二进制执行 `image_document` 过滤，34/34 通过（GIF 6、TIFF 8、工作台 20）。覆盖五种静态格式、GIF 合成与有限循环、可见性暂停与关闭、异尺寸 TIFF 页、迟到页、分屏不同页、缓存淘汰不收回仍在显示的纹理、损坏／截断／字节与像素／单边预算、外部重写、异 Host 与映射 Host 的字节归属、读取迟到时标签页已关闭，以及文本命令隔离。真实产品窗口、SSH、DPI、macOS 与性能尚未由这些测试或编译成功覆盖。
 

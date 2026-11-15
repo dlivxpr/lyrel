@@ -95,7 +95,7 @@ impl EditorInput {
         match self {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
-            Self::Code(_) | Self::Image(_) => None,
+            Self::Code(_) | Self::Image(_) | Self::Pdf(_) => None,
         }
     }
     /// 这份输入的文本能力；只读图片返回 `None`。
