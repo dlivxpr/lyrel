@@ -581,7 +581,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
 
     click_row(&view, &mut cx, "/r");
     click_button(&view, &mut cx, "xml-add-text");
-    replace_panel_text(&view, &mut cx, "structure-edit-value", "tail text");
+    type_edit_value(&view, &mut cx, "tail text");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     let text = source_text(&app, &cx);
@@ -858,6 +858,7 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     // A same-length source edit leaves the selected text node's path, range
     // and kind unchanged. The panel's opened revision is the guard: the
     // pending value must not write over the newer source.
+    click_row(&other, &mut cx, "/r");
     click_row(&other, &mut cx, "/r/b[1]");
     click_row(&other, &mut cx, "/r/b[1]/text()[1]");
     click_button(&other, &mut cx, "xml-edit-value");
@@ -1153,11 +1154,6 @@ fn long_mixed_content_displays_order_and_edits_one_occurrence(tcx: &mut TestAppC
         row_value(&view, &mut cx, "/r/record[1500]/cdata()[1]").as_deref(),
         Some("cdata1499")
     );
-    assert_eq!(
-        row_value(&view, &mut cx, "/r/marker[1]/text()[1]").as_deref(),
-        Some("last-marker-294")
-    );
-
     click_row(&view, &mut cx, "/r/record[1500]/text()[1]");
     click_button(&view, &mut cx, "xml-edit-value");
     type_edit_value(&view, &mut cx, "终段文本");
@@ -1168,6 +1164,21 @@ fn long_mixed_content_displays_order_and_edits_one_occurrence(tcx: &mut TestAppC
     assert!(text.contains("<record id=\"0\">text0<![CDATA[cdata0]]>"));
     assert!(text.contains("<!--comment1499-->"));
     assert!(text.contains("<marker>last-marker-294</marker>"));
+
+    // The tail is far beyond the virtualized viewport; navigate like a user,
+    // then inspect the last marker in the real structure tree.
+    press(&app, &mut cx, "end");
+    press(&app, &mut cx, "up");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.selected_path(cx))
+            .as_deref(),
+        Some("/r/marker[1]")
+    );
+    click_row(&view, &mut cx, "/r/marker[1]");
+    assert_eq!(
+        row_value(&view, &mut cx, "/r/marker[1]/text()[1]").as_deref(),
+        Some("last-marker-294")
+    );
     save(&app, &mut cx);
     let saved = std::fs::read(&path).unwrap();
     assert_eq!(

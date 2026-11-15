@@ -1986,7 +1986,12 @@ fn read_image(
 }
 
 fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
-    if is_markdown_path(path) || is_svg_path(path) || is_json_path(path) || is_csv_path(path) {
+    if is_markdown_path(path)
+        || is_svg_path(path)
+        || is_json_path(path)
+        || is_csv_path(path)
+        || is_xml_path(path)
+    {
         lyrel_text::decode_source(bytes)
     } else {
         Ok(lyrel_text::decode(bytes))

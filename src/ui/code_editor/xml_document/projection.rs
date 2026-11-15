@@ -866,7 +866,9 @@ mod tests {
         let projection = project(MIXED, &cancel()).unwrap();
         let element = node(&projection, "/r");
         assert_eq!(element.namespace.as_deref(), Some("urn:root"));
-        assert_eq!(&MIXED[element.range.clone()], MIXED.trim_start().trim_end());
+        let root_start = MIXED.find("<r ").expect("root start");
+        let root_end = MIXED.find("</r>").expect("root end") + "</r>".len();
+        assert_eq!(&MIXED[element.range.clone()], &MIXED[root_start..root_end]);
         let attribute = node(&projection, "/r/@p:flag");
         assert_eq!(
             &MIXED[attribute.value_range.clone().unwrap()],

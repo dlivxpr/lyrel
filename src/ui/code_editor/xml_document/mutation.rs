@@ -169,7 +169,21 @@ fn plan_rename(
     if node.key == name {
         return Ok(Vec::new());
     }
-    Ok(vec![(range, name.to_owned())])
+    let mut replacements = vec![(range, name.to_owned())];
+    if node.kind == XmlNodeKind::Element
+        && !node.self_closing
+        && let Some(close) = node.close_tag_start
+    {
+        // The end tag is a second occurrence of the same source name. It must
+        // change in the same history entry or the document is left invalid.
+        let qname_start = close + 2;
+        let qname_end = qname_start + node.key.len();
+        if text.get(qname_start..qname_end) != Some(node.key.as_str()) {
+            return Err(MutationError::Stale);
+        }
+        replacements.push((qname_start..qname_end, name.to_owned()));
+    }
+    Ok(replacements)
 }
 
 fn plan_add_attribute(
