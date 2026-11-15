@@ -289,6 +289,24 @@ fn apply_panel(view: &Entity<XmlView>, cx: &mut VisualTestContext) {
     settle(cx);
 }
 
+fn dismiss_save_error(cx: &mut VisualTestContext) {
+    // 失败通知会遮住右下角的 Apply；像用户一样先关闭通知，不等待动画碰巧移开。
+    until(cx, |cx| {
+        cx.update(|window, _| {
+            window
+                .try_find("notification")
+                .is_some_and(|notification| notification.visible())
+        })
+    });
+    cx.update(|window, cx| {
+        window.hover("notification", cx);
+        window.within("notification").click("close", cx);
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("notification").is_none())
+    });
+}
+
 fn cancel_panel(view: &Entity<XmlView>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.click(("structure-edit-cancel", view.entity_id()), cx));
     settle(cx);
@@ -980,6 +998,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         })
     });
     assert_eq!(std::fs::read(&target).unwrap(), saved);
+    dismiss_save_error(&mut cx);
     save(&app, &mut cx);
     let retried = replace_bytes(&saved, b"<b>changed</b>", b"<b>retried</b>");
     assert_eq!(std::fs::read(&target).unwrap(), retried);
@@ -1049,12 +1068,11 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     click_row(&view, &mut cx, "/r/b[1]/text()[1]");
     click_button(&view, &mut cx, "xml-edit-value");
     type_edit_value(&view, &mut cx, "still-open");
-    cx.update(|window, cx| window.press("enter", cx));
-    settle(&mut cx);
+    apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     assert!(
         panel_error(&view, &mut cx).is_none(),
-        "the production Enter command applies the tree edit"
+        "the production Apply command applies the tree edit"
     );
     assert!(source_text(&app, &cx).contains("<b>still-open</b>"));
     cx.dispatch_action(crate::core::actions::CloseActiveTab);
