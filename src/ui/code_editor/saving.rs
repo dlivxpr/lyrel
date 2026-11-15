@@ -92,6 +92,8 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
         // SVG's identity is the shared source Document, not one group's view.
         EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // JSON's identity is likewise the shared source Document and history.
+        EditorInput::Json(view) => view.read(cx).document().read(cx).document().entity_id(),
         // A picture never saves, but the identity is asked for by every
         // save-side prompt and must name something stable.
         EditorInput::Image(view) => view.entity_id(),

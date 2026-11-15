@@ -412,6 +412,10 @@ impl LyrelApp {
                 file.presentations
                     .svg_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.json().is_some() {
+                file.presentations
+                    .json_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.image().is_some() {
                 file.presentations
                     .image_existing(tab, other_group)
@@ -533,6 +537,9 @@ impl LyrelApp {
         };
         let accent = cx.theme().primary;
         let focused = pane(focused_crumbs, focused_body)
+            // The physical group's path must survive a focus swap between
+            // mouse-down and click, including clicks on toolbar controls.
+            .id(("editor-group", usize::from(!focus_left)))
             .border_t_2()
             .border_color(accent)
             .into_any_element();

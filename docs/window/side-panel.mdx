@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮已确认但尚未实现的文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。其中 PNG／JPEG／WebP／BMP／ICO 只读文档已由 #280 落地（见[静态图片文档](#static-image-documents)），SVG 源码与安全原生预览已由 #283 落地（见[SVG 文档](#svg-documents)）；该设计其余部分不改变当前的文件大小限制或打开行为。
+本轮已确认但尚未实现的文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。其中 PNG／JPEG／WebP／BMP／ICO 只读文档已由 #280 落地（见[静态图片文档](#static-image-documents)），GIF／TIFF 由 #282 落地，SVG 源码与安全原生预览已由 #283 落地（见[SVG 文档](#svg-documents)），JSON／JSONC／JSONL／NDJSON 的只读结构检查已由 #289 落地（见 [JSON 文档](#json-documents)）。该设计其余部分不改变当前的文件大小限制或打开行为；JSON 树修改仍待后续票，不把当前结构检查称为格式编辑已完成。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已落地部分：#280（切片 T01）已把 PNG／JPEG／WebP／BMP／ICO 作为只读文档接入现有工作台；#282 在同一文档上补齐 GIF 动画与多页 TIFF，见下方[图片文档](#static-image-documents)。#283 已接入 [SVG 源码与安全原生预览](#svg-documents)。下表其余格式仍待实现。
+> 已落地部分：#280（切片 T01）已把 PNG／JPEG／WebP／BMP／ICO 作为只读文档接入现有工作台；#282 在同一文档上补齐 GIF 动画与多页 TIFF，见下方[图片文档](#static-image-documents)。#283 已接入 [SVG 源码与安全原生预览](#svg-documents)。#289 已接入 [JSON／JSONC／JSONL／NDJSON 的源码链接结构检查](#json-documents)；该票只交付检查与源码编辑，树内修改仍待后续票。下表其余能力仍待实现。
 
 本节使用以下术语：
 
@@ -216,7 +216,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | PDF | 分页、缩放、大纲、搜索、选字复制和密码；正确显示已有批注与表单值 | 只读，不新增批注、不填表、不修改正文或页面结构；扫描页没有文本层时不能宣称可搜索或选字，本轮不增加 OCR |
 | EPUB | 无 DRM 的流式阅读；目录、章节、搜索、书签、阅读位置、字体和主题 | 只读，阅读状态单独保存；不纳入固定版式、DRM 解锁或书籍编辑，不承诺复现出版方的完整 CSS |
 | CSV／TSV | 虚拟化表格、源码访问、完整字段查看 | 单元格输入、复制粘贴、增删行列、Undo／Redo；保留分隔符、引号、多行字段、编码与换行；排序和筛选默认只改变视图，写回排序必须是显式操作 |
-| JSON／JSONC／JSONL／NDJSON | 结构树或逐记录视图，节点与源码相互定位 | 在树中修改值、增删或重命名键、编辑数组与记录；保留注释、重复键、键序和数字字面量；JSONL／NDJSON 保留逐行记录形式 |
+| JSON／JSONC／JSONL／NDJSON | 结构树或逐记录视图，节点与源码相互定位（#289 已交付只读检查与源码编辑） | 在树中修改值、增删或重命名键、编辑数组与记录；保留注释、重复键、键序和数字字面量；JSONL／NDJSON 保留逐行记录形式。树内修改仍待后续票 |
 | YAML | 结构树与源码相互定位 | 键、值和序列的增删改；保留注释、锚点、别名及 tag，不静默展开引用；修改锚点时说明对引用值的影响，不能无损表达的自定义构造保留源码访问 |
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
@@ -296,6 +296,21 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **复用记录与边界**：固定复用 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `crates/glim-services/src/svg_preview.rs`（原始 14,001 字节，SHA-256 `ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7`）中的默认视口与绝对单位换算，见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。属性读取适配为 usvg 重导出的 roxmltree；无 viewBox 时明确保留 300×150 默认视口，百分比按该视口换算，避免 usvg 随后按内容包围盒收缩尺寸。只调整光栅目标尺寸，不改原始源码或已解析几何；viewBox 尺寸仍由 usvg 负责。Glim 的流式净化、data-image 重编码、`qlmanage`／`sips`、临时文件与浏览器图像文档均未导入。渲染、纹理租约、保存与关闭所有者全部复用 Lyrel 现有模块。
 
 **证据边界**：工作台接缝回归覆盖源码输入、预览刷新、跨呈现 Undo、普通保存／另存为／外部重载／冲突／未保存关闭、独立重开、恶意脚本／嵌套文件／network／data image、超预算与失效迟到结果；夹具在测试内生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试、编译成功或位图存在代替。
+
+<a id="json-documents"></a>
+#### JSON／JSONC／JSONL／NDJSON 源码链接结构检查（#289 已实现）
+
+`.json`／`.jsonc`／`.jsonl`／`.ndjson` 打开为同一份可编辑源码及其结构／记录呈现，不再把 JSON 家族当成普通代码或通用 Value 文档。
+
+- 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，逐行行尾、编码／BOM、revision、history、保存、另存为、外部重载、冲突与未保存关闭都沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不写回、不复制第二份可变内容，也不经 `serde_json::Value` 序列化。
+- 解析：使用 registry 的 `jsonc-parser = 0.34.0`（MIT）带偏移 AST。JSON 与 JSONC 分开设置严格选项；JSONC 只额外接受注释和尾随逗号，JSON5 的宽松名字、单引号、十六进制、非有限数与扩展转义全部关闭。对象属性按源码顺序保留，重复键各占一个 occurrence；数字与字符串显示原源码切片，`1.2300`、大整数、`\u4e2d` 和转义序列不会被解码后重写。
+- JSONL／NDJSON：逐非空行解析为独立记录，记录保留 1-based 行号与行内范围；无效行成为带可见错误的记录行，其他记录仍可浏览。不会把文件投影成数组，也不会在保存时改变一行一记录的布局。
+- 呈现：默认显示结构树／记录列表；工具栏与状态行提供 Structure／Source 切换、节点或记录计数、选中节点行列、Reveal in source 与 Full value。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该属性或记录的精确 occurrence；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值和结构滚动，同时共享同一 Document 与 history。
+- 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 20,000 节点、JSONL 最多 20,000 条记录，完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。投影为不可变共享结果，分屏同步不复制整棵树。短暂无效源码显示解析错误并保留全部内容；修正后重新投影。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision。
+
+**复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。`src/ui/code_editor/structure_view.rs` 是格式无关的可见行与源码行列机制，YAML／TOML／XML 可各自实现 `Treelike`，不依赖 JSON mutation。本轮不交付树内修改、JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
+
+**证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

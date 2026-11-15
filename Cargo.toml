@@ -89,6 +89,10 @@ smol.workspace = true
 smallvec.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+# Lossless JSONC AST/token ranges for source-linked structure inspection.
+# MIT; the Value-backed Glim model is replaced, not wrapped (see
+# src/ui/code_editor/json_document/UPSTREAM.toml). JSON5 stays out.
+jsonc-parser = "=0.34.0"
 tempfile = "3"
 # Browser session import stays desktop-local; database recovery runs in memory.
 rusqlite = { version = "0.41.0", features = ["bundled"] }

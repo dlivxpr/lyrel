@@ -1860,6 +1860,36 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSvgLimit => {
             "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
         }
+        L10nKey::EditorJsonStructure => "Structure",
+        L10nKey::EditorJsonSource => "Source",
+        L10nKey::EditorJsonShowStructure => "Show structure",
+        L10nKey::EditorJsonShowSource => "Show source",
+        L10nKey::EditorJsonToggleStructure => "Toggle JSON structure / source",
+        L10nKey::EditorJsonParsing => "Parsing JSON",
+        L10nKey::EditorJsonInvalid => "JSON source could not be parsed",
+        L10nKey::EditorJsonInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorJsonInvalidRecords => "{count} invalid JSONL records",
+        L10nKey::EditorJsonStructureUnavailable => "JSON structure unavailable",
+        L10nKey::EditorJsonSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorJsonInputLimit => {
+            "JSON structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorJsonNodeLimit => {
+            "JSON structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorJsonRecordLimit => {
+            "JSONL has more than {count} records; the source stays editable."
+        }
+        L10nKey::EditorJsonPathLimit => {
+            "JSON structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorJsonRecords => "{count} records",
+        L10nKey::EditorJsonNodes => "{count} nodes",
+        L10nKey::EditorJsonReveal => "Reveal in source",
+        L10nKey::EditorJsonFullValue => "Full value",
+        L10nKey::EditorJsonCopyValue => "Copy value",
         L10nKey::EditorImagePageOf => "Page {page} of {pages}",
         L10nKey::EditorImagePageLoading => "Loading page",
         L10nKey::EditorImagePagePrevious => "Previous page",

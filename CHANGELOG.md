@@ -27,6 +27,8 @@
 
 ### 修复
 
+- #289：JSON 家族结构与源码使用同一保真文档；首次打开使用严格逐行解码，未编辑保存不再归一化混合行尾。重复键 occurrence、精确数字和 JSONL 行身份不经 Value 重写，分屏工具栏可换行、折叠与选择独立。分屏 group 元素身份在焦点切换中保持，工具栏与树行首击不丢失；叶节点方向键返回父节点。不可变投影共享，完整路径文本超过 8 MiB 时明确拒绝结构检查，完整源码仍可编辑与保存。
+
 - #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。
 - #270：将 Glyph glossary 投影与字体 coverage 应答凭证分开：CLI／observer 继续接收已协商的 `GlyphState`，但仅实际声明 `SubscribeGlyphRender` 的当前 controller 接收 `GlyphQuery`；没有字体应答端时保持协议规定的静默，不让查询积压到忽略该帧的 CLI。移除无调用的 attach／observe 兼容包装，公开 `RetainedGlyph` 记录标为非穷尽，不改 wire kind、协议版本或 GUI 字体权威。
 - #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。

@@ -31,9 +31,11 @@ mod buffers;
 pub(crate) mod commands;
 mod document_input;
 mod image_document;
+mod json_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
+mod structure_view;
 mod svg_document;
 mod text;
 use buffers::Loaded;
@@ -45,6 +47,7 @@ mod problems;
 pub(crate) mod saving;
 mod split;
 mod strip;
+use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
@@ -178,6 +181,8 @@ impl OpenFile {
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
         if let Some(view) = self.input.markdown() {
             view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.json() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.svg() {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
@@ -208,6 +213,9 @@ impl OpenFile {
         // the buffer is released and reopened by extension.
         if self.input.svg().is_some() {
             return "svg";
+        }
+        if self.input.json().is_some() {
+            return "json";
         }
         if self.untitled.is_some() {
             return "text";
@@ -421,6 +429,19 @@ pub(crate) fn is_svg_path(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
+/// JSON-family source has its own document route: one plain-source Document
+/// plus a lossless structure/record view. The extension decides the route, so
+/// a temporarily invalid file still opens where it can be repaired.
+pub(crate) fn is_json_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["json", "jsonc", "jsonl", "ndjson"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -443,7 +464,9 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
-        "json" | "jsonc" => "json",
+        "json" => "json",
+        "jsonc" => "jsonc",
+        "jsonl" | "ndjson" => "jsonl",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
         "html" | "htm" => "html",
@@ -487,6 +510,8 @@ fn language_label(id: &str) -> Option<&'static str> {
         "typescript" => "TypeScript",
         "tsx" => "TypeScript JSX",
         "json" => "JSON",
+        "jsonc" => "JSONC",
+        "jsonl" => "JSONL",
         "toml" => "TOML",
         "yaml" => "YAML",
         "html" => "HTML",
@@ -788,6 +813,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.svg().is_some())
     }
 
+    pub(crate) fn json_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.json().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -804,6 +834,11 @@ impl LyrelApp {
                     file.presentations
                         .svg_existing(tab, group)
                         .map(EditorInput::Svg)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .json_existing(tab, group)
+                        .map(EditorInput::Json)
                 })
                 .or_else(|| {
                     file.presentations
@@ -1444,6 +1479,9 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.svg() {
             let view = file.presentations.svg_view(primary, tab, group, cx);
             EditorInput::Svg(view).focus(window, cx);
+        } else if let Some(primary) = file.input.json() {
+            let view = file.presentations.json_view(primary, tab, group, cx);
+            EditorInput::Json(view).focus(window, cx);
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
@@ -1511,6 +1549,12 @@ impl LyrelApp {
         } else if let Some(view) = self
             .active_editor_input()
             .and_then(|input| input.svg().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
@@ -1844,6 +1888,8 @@ impl LyrelApp {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
                 } else if let Some(view) = file.presentations.svg_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.json_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -2012,6 +2058,14 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = svg_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(json) = input.json() {
+            let menu = menu.action_context(json.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = json_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2685,6 +2739,8 @@ impl LyrelApp {
                     "markdown-status-bar"
                 } else if self.svg_document_active() {
                     "svg-status-bar"
+                } else if self.json_document_active() {
+                    "json-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
                 } else {
@@ -2824,6 +2880,31 @@ impl LyrelApp {
                 let view = f.presentations.svg_view(primary, tab, group, cx);
                 v_flex()
                     .id(("svg-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.json().is_some() => {
+                let primary = f.input.json().expect("JSON document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.json_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("json-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3213,6 +3294,21 @@ impl LyrelApp {
                     view.preview_failure(cx),
                 )
             });
+        let json_state = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                    view.record_count(cx),
+                    view.invalid_records(cx),
+                )
+            });
         let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -3336,6 +3432,99 @@ impl LyrelApp {
                     )
                 })
             })
+            .when_some(
+                json_state,
+                |this, (mode, parsing, fatal, location, nodes, records, invalid)| {
+                    let (label, tip) = match mode {
+                        JsonMode::Source => (
+                            t(L10nKey::EditorJsonSource),
+                            t(L10nKey::EditorJsonShowStructure),
+                        ),
+                        JsonMode::Structure => (
+                            t(L10nKey::EditorJsonStructure),
+                            t(L10nKey::EditorJsonShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-json-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = records {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonRecords,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    } else if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-json-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-json-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorJsonParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-json-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    } else if invalid > 0 {
+                        this = this.child(
+                            div()
+                                .id("status-json-invalid")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonInvalidRecords,
+                                    &[("count", &invalid.to_string())],
+                                )),
+                        );
+                    }
+                    this
+                },
+            )
             .when_some(wrap, |this, wrap| {
                 let label = if wrap {
                     t(L10nKey::EditorWrapOn)

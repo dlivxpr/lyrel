@@ -314,7 +314,10 @@ impl EditorBuffers {
                     .map(|(path, result)| match result {
                         Ok(file) => Some(file),
                         Err(error) => {
-                            if !is_markdown_path(&path) && !is_svg_path(&path) {
+                            if !is_markdown_path(&path)
+                                && !is_svg_path(&path)
+                                && !is_json_path(&path)
+                            {
                                 return None;
                             }
                             let message = match error {
@@ -355,6 +358,8 @@ impl EditorBuffers {
             )
         } else if let (Some(primary), Some(group)) = (file.input.svg(), target.group) {
             EditorInput::Svg(file.presentations.svg_view(primary, target.tab, group, cx))
+        } else if let (Some(primary), Some(group)) = (file.input.json(), target.group) {
+            EditorInput::Json(file.presentations.json_view(primary, target.tab, group, cx))
         } else {
             file.input.clone()
         };
@@ -485,7 +490,11 @@ impl EditorBuffers {
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let native_svg = untitled.is_none() && is_svg_path(&path);
-        let native_markdown = if native_svg {
+        let native_json = untitled.is_none()
+            && !native_svg
+            && is_json_path(&path)
+            && super::json_document::JsonFormat::from_path(&path).is_some();
+        let native_markdown = if native_svg || native_json {
             false
         } else if untitled.is_some() {
             matches!(kind, BufferKind::Markdown)
@@ -508,6 +517,30 @@ impl EditorBuffers {
                 cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Svg(presentation), None, sub, observe)
+        } else if native_json {
+            let json_format = super::json_document::JsonFormat::from_path(&path)
+                .expect("native JSON path has a JSON-family format");
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let json_document = cx.new(|cx| JsonDocument::new(document, json_format, cx));
+            let presentation = cx.new(|cx| {
+                JsonView::new(
+                    json_document,
+                    JsonMode::Structure,
+                    wrap,
+                    indent.size as usize,
+                    cx,
+                )
+            });
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Json(presentation), None, sub, observe)
         } else if native_markdown {
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(
@@ -1160,7 +1193,7 @@ fn read_image(
 }
 
 fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
-    if is_markdown_path(path) || is_svg_path(path) {
+    if is_markdown_path(path) || is_svg_path(path) || is_json_path(path) {
         lyrel_text::decode_source(bytes)
     } else {
         Ok(lyrel_text::decode(bytes))
