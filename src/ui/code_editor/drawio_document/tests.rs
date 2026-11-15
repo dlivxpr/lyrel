@@ -1143,8 +1143,9 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     let original = uncompressed(2);
     let name = "remote-298.drawio";
     let remote = ssh.remote_path(name);
-    host.write_file(&remote, &original)
-        .expect("upload the remote diagram through the owning Host");
+    // The fixture installer creates the private remote directory and proves
+    // the upload through the owning Host before the editor opens it.
+    let _ = ssh.install_script(&host, name, &original, Vec::new());
     // A same-named local decoy must never be the file this buffer writes.
     let decoy_dir = super::super::test_host::canonical_tempdir();
     let decoy = self::fixture(decoy_dir.path(), name, b"decoy");
