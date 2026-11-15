@@ -145,7 +145,9 @@
                 kind: "load",
                 xml: text,
                 page: pendingPage,
-                theme: theme
+                theme: theme,
+                commit: documentPath.replace(/document$/, "commit"),
+                sync: documentPath.replace(/document$/, "sync")
             })) {
                 throw new Error("diagram engine is not ready");
             }
@@ -184,6 +186,15 @@
             send("state", { page: page, pages: pages, zoom: zoom });
             return;
         }
+        if (message.kind === "undo" || message.kind === "redo" ||
+            message.kind === "save" || message.kind === "paste") {
+            send(message.kind, {});
+            return;
+        }
+        if (message.kind === "clipboard" && typeof message.text === "string") {
+            send("clipboard", { text: message.text, cut: message.cut === true });
+            return;
+        }
         if (message.kind === "failed") {
             fail(message.message);
         }
@@ -214,8 +225,12 @@
             pendingPage = message.page;
             postToEngine({ v: 1, kind: "page", page: pendingPage });
         } else if (message.cmd === "fit" || message.cmd === "zoomIn" ||
-            message.cmd === "zoomOut" || message.cmd === "actual") {
+            message.cmd === "zoomOut" || message.cmd === "actual" ||
+            message.cmd === "sync" || message.cmd === "copy" ||
+            message.cmd === "cut" || message.cmd === "delete") {
             postToEngine({ v: 1, kind: message.cmd });
+        } else if (message.cmd === "paste" && typeof message.text === "string") {
+            postToEngine({ v: 1, kind: "paste", text: message.text });
         }
     }
 

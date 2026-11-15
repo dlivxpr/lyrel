@@ -340,10 +340,24 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // handled by its own key context because the engine owns the canvas and
     // has no text caret to move.
     {
-        use crate::ui::code_editor::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
+        use crate::ui::code_editor::{
+            DrawioActualSize, DrawioCopy, DrawioCut, DrawioDelete, DrawioFit, DrawioPaste,
+            DrawioRedo, DrawioUndo, DrawioZoomIn, DrawioZoomOut,
+        };
         let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
         bindings.extend([
             load_binding("0", DrawioFit, drawio, cx),
+            // Editing keys bound here cover the GPUI dispatch path — menus
+            // and the palette — while the focused native surface answers the
+            // same chords on its own and never leaks them to the terminal.
+            load_binding("secondary-z", DrawioUndo, drawio, cx),
+            load_binding("secondary-shift-z", DrawioRedo, drawio, cx),
+            load_binding("secondary-y", DrawioRedo, drawio, cx),
+            load_binding("secondary-c", DrawioCopy, drawio, cx),
+            load_binding("secondary-x", DrawioCut, drawio, cx),
+            load_binding("secondary-v", DrawioPaste, drawio, cx),
+            load_binding("delete", DrawioDelete, drawio, cx),
+            load_binding("backspace", DrawioDelete, drawio, cx),
             load_binding("1", DrawioActualSize, drawio, cx),
             load_binding("secondary-=", DrawioZoomIn, drawio, cx),
             load_binding("secondary-+", DrawioZoomIn, drawio, cx),

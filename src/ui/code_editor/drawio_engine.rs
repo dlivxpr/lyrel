@@ -14,9 +14,12 @@
 //!   macOS — behind the same allowlist contract;
 //! - `session`: session/token identities and the preview theme.
 //!
-//! The engine is the official draw.io viewer bundle: it renders the graph with
-//! draw.io's own shapes, stencils and layout. Lyrel does not implement a
-//! reduced renderer.
+//! The engine is the official draw.io viewer bundle: it renders the graph
+//! with draw.io's own shapes, stencils and layout, and its own Graph/Editor
+//! edits the same model. Lyrel does not implement a reduced renderer:
+//! editing, clipboard and save all ride the same genuine engine, while the
+//! workbench keeps the one document authority — commits land on its bytes
+//! and its own shared history drives undo and redo.
 
 pub(crate) mod assets;
 pub(crate) mod bridge;

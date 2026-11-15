@@ -1619,6 +1619,8 @@ l10n_keys! {
     EditorDrawioBlocked,
     EditorDrawioUnavailable,
     EditorDrawioRetry,
+    EditorDrawioDelete,
+    EditorDrawioEditable,
     EditorBookContents,
     EditorBookBookmarks,
     EditorBookSearch,
