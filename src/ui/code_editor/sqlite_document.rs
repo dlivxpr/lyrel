@@ -1,25 +1,25 @@
 //! A read-only SQLite database as a workbench document.
 //!
 //! Ported from Glim `glim-app/src/views/reader/sqlite.rs` (MIT): the schema
-//! list, table selection, bounded page navigation, column windows, the
-//! loading/error/retry states and the grid. Replaced: the backend is the
-//! owning Host's read view — not a local snapshot copy — every page names the
-//! view it came from, and refresh opens a new view instead of silently
-//! switching snapshot under the reader.
+//! list, table selection, the debounced filter, three-state column sort,
+//! bounded page navigation, column windows, the complete-value inspector and
+//! the loading/error/retry states. Replaced: the backend is the owning
+//! Host's read view — not a local snapshot copy — every page names the view
+//! it came from, and refresh opens a new view instead of silently switching
+//! snapshot under the reader.
 //!
 //! The document owns the read view and the data read from it. Each split
 //! group gets its own presentation ([`SqliteView`]) with its own focus,
-//! table scroll and selection, so two views of one database do not move each
-//! other.
-//!
-//! #295 draws schema, definitions and basic paging. Search, sorting and the
-//! complete-value inspector are #296: no control here promises them.
+//! table scroll, selection and value inspector, so two views of one
+//! database do not move each other.
 
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::table::{DataTable, TableState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::table::{DataTable, TableEvent, TableSelection, TableState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
@@ -31,20 +31,95 @@ use gpui_kit::{
 
 use lyrel_core::host::sqlite::{
     COLUMN_WINDOW, PAGE_ROWS, QUERY_SECONDS, SqliteCancel, SqliteColumns, SqliteObject,
-    SqliteObjectKind, SqliteOpened, SqlitePage, SqliteQuery, is_stale_view,
+    SqliteObjectKind, SqliteOpened, SqlitePage, SqliteQuery, SqliteValue, VALUE_CHUNK_BYTES,
+    is_stale_view,
 };
 
 use crate::ui::host_ops::{HostOps, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::remote_connect::human_bytes as byte_count;
 
-use super::sqlite_grid::SqliteGrid;
+use super::sqlite_grid::{SqliteGrid, value_text};
 
-gpui_kit::actions!(sqlite_document, [Refresh]);
+/// The text the inspector's viewer and its chunk paging work on: TEXT comes
+/// back as its (lossy for display only) UTF-8 view, a BLOB as an offset hex
+/// dump, and scalar values as their exact `value_text` — the same string
+/// the copy button puts on the clipboard.
+fn detail_text(value: &SqliteValue) -> String {
+    match value {
+        SqliteValue::Null => t(L10nKey::EditorSqliteNull).to_string(),
+        SqliteValue::Integer { .. } | SqliteValue::Real { .. } => value_text(value),
+        SqliteValue::Text { preview, .. } => match std::str::from_utf8(preview) {
+            Ok(text) => text.to_string(),
+            // Replacement characters would present bytes the database does
+            // not hold; the raw bytes stay readable as a hex dump instead.
+            Err(_) => hex_dump(preview),
+        },
+        SqliteValue::Blob { preview, .. } => hex_dump(preview),
+    }
+}
 
-/// The keyboard context of a database presentation. Refresh is bound to
-/// `secondary-r` only while this document holds the keyboard, so the chord
-/// stays with a text field, shell, or terminal otherwise.
+/// An offset/hex/ASCII dump, one 16-byte row per line, for BLOB chunks.
+fn hex_dump(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 4);
+    for (row, chunk) in bytes.chunks(16).enumerate() {
+        if row > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("{:08x}  ", row * 16));
+        for (i, byte) in chunk.iter().enumerate() {
+            if i == 8 {
+                out.push(' ');
+            }
+            out.push_str(&format!("{byte:02x} "));
+        }
+        for i in chunk.len()..16 {
+            if i == 8 {
+                out.push(' ');
+            }
+            out.push_str("   ");
+        }
+        out.push_str(" |");
+        for byte in chunk {
+            out.push(if byte.is_ascii_graphic() || *byte == b' ' {
+                *byte as char
+            } else {
+                '.'
+            });
+        }
+        out.push('|');
+    }
+    out
+}
+
+/// Lowercase hex with no separators: the exact byte content a BLOB copy
+/// writes to the clipboard, re-parseable as the same value.
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+gpui_kit::actions!(
+    sqlite_document,
+    [Refresh, InspectValue, FocusFilter, CloseValue]
+);
+
+/// The keyboard context of a database presentation. The document's chords
+/// are bound only while it holds the keyboard, so they stay with a text
+/// field, shell, or terminal otherwise.
 pub(crate) const KEY_CONTEXT: &str = "SqliteDocument";
+
+/// The filter settles this long after the last keystroke, as Glim's does.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// The largest complete value the inspector assembles for one clipboard
+/// copy; bigger values stay pageable but are never copied in part.
+const VALUE_COPY_MAX: u64 = 8 * 1024 * 1024;
 
 /// The open view's schema and the values its pages share.
 struct ViewState {
@@ -63,6 +138,8 @@ struct UiState {
     objects: Vec<SqliteObject>,
     selected: Option<String>,
     columns: Option<SqliteColumns>,
+    search: String,
+    sort: Option<(u32, bool)>,
     page_number: u64,
     start_column: u32,
     more: bool,
@@ -76,6 +153,8 @@ struct UiState {
     object_sql: Option<SharedString>,
     idle_millis: u64,
     max_age_millis: u64,
+    epoch: u64,
+    query_rev: u64,
 }
 
 impl UiState {
@@ -100,6 +179,11 @@ pub(crate) struct SqliteDocument {
     selected: Option<String>,
     columns: Option<SqliteColumns>,
     page: Option<SqlitePage>,
+    /// The filter applied to the current query, and the text still debouncing.
+    search: String,
+    pending_search: Option<String>,
+    /// `(schema column index, descending)`, echoed in the header arrow.
+    sort: Option<(u32, bool)>,
     page_number: u64,
     start_column: u32,
     more: bool,
@@ -111,6 +195,10 @@ pub(crate) struct SqliteDocument {
     stale: bool,
     /// The schema/table identity every in-flight request is checked against.
     epoch: u64,
+    /// Bumped when the filter or sort changes the rows a page names: a value
+    /// inspected before the bump is not the cell the user sees now.
+    query_rev: u64,
+    search_serial: u64,
     page_serial: u64,
     count_serial: u64,
     refresh_serial: u64,
@@ -175,6 +263,9 @@ impl SqliteDocument {
             selected: None,
             columns: None,
             page: None,
+            search: String::new(),
+            pending_search: None,
+            sort: None,
             page_number: 0,
             start_column: 0,
             more: false,
@@ -184,6 +275,8 @@ impl SqliteDocument {
             notice: None,
             stale: false,
             epoch: 0,
+            query_rev: 0,
+            search_serial: 0,
             page_serial: 0,
             count_serial: 0,
             refresh_serial: 0,
@@ -240,6 +333,8 @@ impl SqliteDocument {
                 .unwrap_or_default(),
             selected: self.selected.clone(),
             columns: self.columns.clone(),
+            search: self.search.clone(),
+            sort: self.sort,
             page_number: self.page_number,
             start_column: self.start_column,
             more: self.more,
@@ -253,6 +348,8 @@ impl SqliteDocument {
             object_sql: object.map(|object| SharedString::from(object.sql.clone())),
             idle_millis: self.idle_millis,
             max_age_millis: self.max_age_millis,
+            epoch: self.epoch,
+            query_rev: self.query_rev,
         }
     }
 
@@ -269,7 +366,6 @@ impl SqliteDocument {
                 });
                 self.columns = None;
                 self.page = None;
-                self.page_number = 0;
                 self.start_column = 0;
                 self.more = false;
                 self.total = None;
@@ -292,7 +388,7 @@ impl SqliteDocument {
 
     /// Select the first object and read its first page. Called once after the
     /// entity exists, when the first Window is available.
-    pub(super) fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn start(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.started || self.view.is_none() {
             return;
         }
@@ -300,7 +396,7 @@ impl SqliteDocument {
         if let Some(table) = self.selected.clone()
             && self.object_exists(&table)
         {
-            self.load_columns(table, window, cx);
+            self.load_columns(table, cx);
         }
     }
 
@@ -366,7 +462,7 @@ impl SqliteDocument {
         }
     }
 
-    fn select_object(&mut self, table: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_object(&mut self, table: String, cx: &mut Context<Self>) {
         if self.refresh_busy || !self.object_exists(&table) {
             return;
         }
@@ -375,10 +471,16 @@ impl SqliteDocument {
         }
         self.selected = Some(table.clone());
         self.notice = None;
-        self.load_columns(table, window, cx);
+        // A sort names a column of the previous object's schema; the filter
+        // text survives, matching the retained search input.
+        if self.sort.is_some() {
+            self.sort = None;
+            self.query_rev = self.query_rev.wrapping_add(1);
+        }
+        self.load_columns(table, cx);
     }
 
-    fn load_columns(&mut self, table: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn load_columns(&mut self, table: String, cx: &mut Context<Self>) {
         self.cancel_queries();
         self.epoch = self.epoch.wrapping_add(1);
         self.page_serial = self.page_serial.wrapping_add(1);
@@ -403,13 +505,12 @@ impl SqliteDocument {
         self.columns_cancel = Some(token.clone());
         let host = self.host.clone();
         let table_for_work = table.clone();
-        HostOps::run_in(
+        HostOps::run(
             host,
-            window,
             cx,
             move |h| h.sqlite_columns(view, &table_for_work, &token),
-            move |document, result, window, cx| {
-                document.on_columns(epoch, view, table, result, window, cx);
+            move |document, result, cx| {
+                document.on_columns(epoch, view, table, result, cx);
             },
         );
     }
@@ -420,7 +521,6 @@ impl SqliteDocument {
         view: u64,
         table: String,
         result: io::Result<SqliteColumns>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.epoch != epoch || self.view.as_ref().map(|view| view.id) != Some(view) {
@@ -434,6 +534,14 @@ impl SqliteDocument {
         self.columns_cancel = None;
         match result {
             Ok(columns) => {
+                // A sort kept across a refresh can name a column this schema
+                // no longer has.
+                if let Some((index, _)) = self.sort
+                    && index as usize >= columns.names.len()
+                {
+                    self.sort = None;
+                    self.query_rev = self.query_rev.wrapping_add(1);
+                }
                 if columns.names.is_empty() {
                     self.columns = Some(columns);
                     self.touch_grid(cx);
@@ -442,8 +550,8 @@ impl SqliteDocument {
                 self.selected = Some(table);
                 self.columns = Some(columns);
                 self.touch_grid(cx);
-                self.load_page(0, window, cx);
-                self.load_count(window, cx);
+                self.load_page(0, cx);
+                self.load_count(cx);
             }
             Err(error) => {
                 if token_cancelled || error.kind() == io::ErrorKind::Interrupted {
@@ -458,6 +566,10 @@ impl SqliteDocument {
         }
     }
 
+    /// The query page requests and counts share: the selected object, its
+    /// schema columns, the deterministic order, and the filter and sort the
+    /// user asked for. Identifiers are validated and quoted on the Host;
+    /// `search` stays a bound parameter, so this is never arbitrary SQL.
     fn query(&self, page: u64) -> Option<SqliteQuery> {
         let table = self.selected.clone()?;
         let columns = self.columns.as_ref()?;
@@ -465,15 +577,115 @@ impl SqliteDocument {
             table,
             columns: columns.names.clone(),
             order: columns.order.clone(),
-            search: String::new(),
-            sort: None,
+            search: self.search.clone(),
+            sort: self.sort,
             page,
             start_column: self.start_column,
             seconds: QUERY_SECONDS,
         })
     }
 
-    fn load_page(&mut self, page: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// The query as the value inspector issues it: the page the cell came
+    /// from and the full column list, so a row/column pair names the same
+    /// cell the page showed. This is `pub(super)` for [`SqliteView`]'s
+    /// complete-value requests, which must send the same query shape.
+    pub(super) fn value_query(&self) -> Option<SqliteQuery> {
+        self.query(self.page_number)
+    }
+
+    pub(super) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub(super) fn query_rev(&self) -> u64 {
+        self.query_rev
+    }
+
+    pub(super) fn view_id(&self) -> Option<u64> {
+        self.view.as_ref().map(|view| view.id)
+    }
+
+    pub(super) fn host(&self) -> SharedHost {
+        self.host.clone()
+    }
+
+    pub(super) fn mark_stale(&mut self, error: &io::Error, cx: &mut Context<Self>) {
+        self.cancel_queries();
+        self.stale = true;
+        self.error = Some(format!("{}: {error}", t(L10nKey::EditorSqliteExpired)).into());
+        self.columns = None;
+        self.page = None;
+        self.more = false;
+        self.total = None;
+        self.count_failed = false;
+        self.columns_busy = false;
+        self.page_busy = false;
+        self.touch_grid(cx);
+    }
+
+    /// Record the filter text a presentation's input produced; the query
+    /// itself goes out after [`SEARCH_DEBOUNCE`] of quiet, as Glim's does.
+    pub(super) fn search_changed(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.stale || self.view.is_none() {
+            return;
+        }
+        self.pending_search = Some(text);
+        self.search_serial = self.search_serial.wrapping_add(1);
+        let serial = self.search_serial;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            let _ = this.update(cx, |document, cx| {
+                if document.search_serial == serial {
+                    document.apply_pending_search(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Apply the newest filter text now (Enter or the debounce firing); older
+    /// keystrokes still waiting are folded into it.
+    pub(super) fn apply_pending_search(&mut self, cx: &mut Context<Self>) {
+        let Some(search) = self.pending_search.take() else {
+            return;
+        };
+        if search == self.search {
+            return;
+        }
+        self.search = search;
+        self.query_rev = self.query_rev.wrapping_add(1);
+        self.page_number = 0;
+        self.total = None;
+        self.count_failed = false;
+        self.notice = None;
+        self.load_page(0, cx);
+        self.load_count(cx);
+    }
+
+    /// The three-state header sort: descending, ascending, then back to the
+    /// deterministic order, naming a column of this table's schema.
+    pub(super) fn apply_sort(&mut self, sort: Option<(u32, bool)>, cx: &mut Context<Self>) {
+        if self.stale || self.columns.is_none() || sort == self.sort {
+            return;
+        }
+        if sort.is_some_and(|(index, _)| index as usize >= self.columns_count()) {
+            return;
+        }
+        self.sort = sort;
+        self.query_rev = self.query_rev.wrapping_add(1);
+        self.page_number = 0;
+        self.notice = None;
+        self.load_page(0, cx);
+    }
+
+    fn columns_count(&self) -> usize {
+        self.columns
+            .as_ref()
+            .map(|columns| columns.names.len())
+            .unwrap_or(0)
+    }
+
+    fn load_page(&mut self, page: u64, cx: &mut Context<Self>) {
         let Some(query) = self.query(page) else {
             return;
         };
@@ -493,12 +705,11 @@ impl SqliteDocument {
         self.notice = None;
         self.touch_grid(cx);
         let host = self.host.clone();
-        HostOps::run_in(
+        HostOps::run(
             host,
-            window,
             cx,
             move |h| h.sqlite_page(view, &query, &token),
-            move |document, result, _window, cx| {
+            move |document, result, cx| {
                 document.on_page(epoch, serial, view, result, cx);
             },
         );
@@ -544,7 +755,7 @@ impl SqliteDocument {
         self.touch_grid(cx);
     }
 
-    fn load_count(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn load_count(&mut self, cx: &mut Context<Self>) {
         let Some(mut query) = self.query(self.page_number) else {
             return;
         };
@@ -561,12 +772,11 @@ impl SqliteDocument {
         let token = SqliteCancel::new();
         self.count_cancel = Some(token.clone());
         let host = self.host.clone();
-        HostOps::run_in(
+        HostOps::run(
             host,
-            window,
             cx,
             move |h| h.sqlite_count(view, &query, &token),
-            move |document, result, _window, cx| {
+            move |document, result, cx| {
                 if document.epoch != epoch
                     || document.count_serial != serial
                     || document.view.as_ref().map(|view| view.id) != Some(view)
@@ -592,32 +802,17 @@ impl SqliteDocument {
             },
         );
     }
-
-    fn mark_stale(&mut self, error: &io::Error, cx: &mut Context<Self>) {
-        self.cancel_queries();
-        self.stale = true;
-        self.error = Some(format!("{}: {error}", t(L10nKey::EditorSqliteExpired)).into());
-        self.columns = None;
-        self.page = None;
-        self.more = false;
-        self.total = None;
-        self.count_failed = false;
-        self.columns_busy = false;
-        self.page_busy = false;
-        self.touch_grid(cx);
-    }
-
-    fn navigate(&mut self, page: u64, window: &mut Window, cx: &mut Context<Self>) {
+    fn navigate(&mut self, page: u64, cx: &mut Context<Self>) {
         if self.is_busy() || self.stale || self.columns.is_none() {
             return;
         }
         if page == self.page_number && self.page.is_some() {
             return;
         }
-        self.load_page(page, window, cx);
+        self.load_page(page, cx);
     }
 
-    fn shift_columns(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn shift_columns(&mut self, forward: bool, cx: &mut Context<Self>) {
         if self.is_busy() || self.stale {
             return;
         }
@@ -639,7 +834,7 @@ impl SqliteDocument {
             return;
         }
         self.start_column = next;
-        self.load_page(self.page_number, window, cx);
+        self.load_page(self.page_number, cx);
     }
 
     pub(super) fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -747,17 +942,43 @@ impl Drop for SqliteDocument {
     }
 }
 
-/// One presentation of a SQLite document: its focus, table scroll, selection
-/// and column window. The page data comes from the shared document.
+/// One presentation of a SQLite document: its focus, filter input, table
+/// scroll, selection and value inspector. The page data comes from the
+/// shared document; the inspector belongs to this presentation alone.
 pub(crate) struct SqliteView {
     document: Entity<SqliteDocument>,
     focus: FocusHandle,
     grid: Entity<TableState<SqliteGrid>>,
+    search_input: Entity<InputState>,
     state: UiState,
     synced_revision: u64,
     synced_grid_revision: Option<u64>,
     page_marker: Option<(u64, u32)>,
+    detail: Option<ValueDetail>,
+    detail_serial: u64,
+    value_cancel: Option<SqliteCancel>,
     _observe: Subscription,
+    _grid: Subscription,
+    _search: Subscription,
+}
+
+/// One complete cell being inspected in this presentation: the cell's
+/// identity in the query that produced it, the current chunk and the exact
+/// byte extent the panel navigates.
+struct ValueDetail {
+    row: u32,
+    column: u32,
+    name: SharedString,
+    query: SqliteQuery,
+    view: u64,
+    epoch: u64,
+    query_rev: u64,
+    offset: u64,
+    value: Option<SqliteValue>,
+    busy: bool,
+    error: Option<SharedString>,
+    notice: Option<SharedString>,
+    editor: Entity<TextareaState>,
 }
 
 impl SqliteView {
@@ -766,22 +987,65 @@ impl SqliteView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let grid = cx.new(|cx| TableState::new(SqliteGrid::new(), window, cx));
+        let grid = cx.new(|cx| {
+            TableState::new(SqliteGrid::new(), window, cx)
+                .cell_selectable(true)
+                .row_header(false)
+        });
+        let owner = cx.entity().downgrade();
+        grid.update(cx, |grid, _| {
+            grid.delegate_mut().set_owner(owner.clone());
+        });
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t(L10nKey::EditorSqliteFilterPlaceholder))
+        });
         let state = document.read(cx).snapshot();
         let revision = document.read(cx).revision();
         let observe = cx.observe(&document, |view, _, cx| {
             view.sync(cx);
             cx.notify();
         });
+        let _grid = cx.subscribe_in(&grid, window, |view, _, event, window, cx| match event {
+            TableEvent::DoubleClickedCell(row, col) => {
+                view.inspect_cell(*row, *col, window, cx);
+            }
+            _ => {}
+        });
+        let _search = cx.subscribe_in(
+            &search_input,
+            window,
+            |view, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let text = view.search_input.read(cx).value().to_string();
+                    view.document.update(cx, |document, cx| {
+                        document.search_changed(text, cx);
+                    });
+                }
+                InputEvent::PressEnter { .. } => {
+                    view.document.update(cx, |document, cx| {
+                        document.apply_pending_search(cx);
+                    });
+                    let handle = view.grid.read(cx).focus_handle(cx);
+                    window.focus(&handle, cx);
+                }
+                InputEvent::Focus | InputEvent::Blur => {}
+            },
+        );
         let mut view = Self {
             document,
             focus: cx.focus_handle(),
             grid,
+            search_input,
             state,
             synced_revision: revision,
             synced_grid_revision: None,
             page_marker: None,
+            detail: None,
+            detail_serial: 0,
+            value_cancel: None,
             _observe: observe,
+            _grid,
+            _search,
         };
         view.sync(cx);
         view
@@ -795,17 +1059,30 @@ impl SqliteView {
             let document = self.document.read(cx);
             (document.revision(), document.grid_revision())
         };
+
         if revision != self.synced_revision {
             self.synced_revision = revision;
             self.state = self.document.read(cx).snapshot();
+            // A detail names a cell inside one read view of one query; a
+            // table switch, filter, sort or refresh that changed the data
+            // under it closes the panel rather than show another cell's
+            // bytes as this value.
+            if let Some(detail) = self.detail.as_ref()
+                && (Some(detail.view) != self.state.view
+                    || detail.epoch != self.state.epoch
+                    || detail.query_rev != self.state.query_rev)
+            {
+                self.close_detail(cx);
+            }
         }
         if self.synced_grid_revision != Some(grid_revision) {
             self.synced_grid_revision = Some(grid_revision);
-            let (columns, page, busy) = {
+            let (columns, page, sort, busy) = {
                 let document = self.document.read(cx);
                 (
                     document.columns.clone(),
                     document.page.clone(),
+                    document.sort,
                     document.is_busy(),
                 )
             };
@@ -813,7 +1090,7 @@ impl SqliteView {
             self.grid.update(cx, |grid, cx| {
                 let delegate = grid.delegate_mut();
                 match (&columns, &page) {
-                    (Some(columns), Some(page)) => delegate.set_page(&columns.names, page),
+                    (Some(columns), Some(page)) => delegate.set_page(&columns.names, page, sort),
                     _ => delegate.clear(),
                 }
                 delegate.set_loading(busy);
@@ -826,37 +1103,587 @@ impl SqliteView {
         }
     }
 
-    fn select_object(&mut self, table: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_object(&mut self, table: String, cx: &mut Context<Self>) {
+        self.close_detail(cx);
         let document = self.document.clone();
-        document.update(cx, |document, cx| document.select_object(table, window, cx));
+        document.update(cx, |document, cx| document.select_object(table, cx));
     }
 
-    fn navigate(&mut self, page: u64, window: &mut Window, cx: &mut Context<Self>) {
+    fn navigate(&mut self, page: u64, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        document.update(cx, |document, cx| document.navigate(page, window, cx));
+        document.update(cx, |document, cx| document.navigate(page, cx));
     }
 
-    fn shift_columns(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn shift_columns(&mut self, forward: bool, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        document.update(cx, |document, cx| {
-            document.shift_columns(forward, window, cx)
-        });
+        document.update(cx, |document, cx| document.shift_columns(forward, cx));
     }
 
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_detail(cx);
         let document = self.document.clone();
         document.update(cx, |document, cx| document.refresh(window, cx));
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
+        self.close_detail(cx);
         let document = self.document.clone();
         document.update(cx, |document, cx| document.cancel(cx));
+    }
+
+    /// A header sort click: the grid already mapped its window column back
+    /// to the schema column this query names.
+    pub(super) fn apply_sort(&mut self, sort: Option<(u32, bool)>, cx: &mut Context<Self>) {
+        self.close_detail(cx);
+        let document = self.document.clone();
+        document.update(cx, |document, cx| document.apply_sort(sort, cx));
+    }
+
+    fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Open the complete value of a real data cell: `row` inside this page,
+    /// `col` inside the rendered column window. The query snapshot pins the
+    /// row's identity — a row that moves while the fetch is in flight is not
+    /// the cell the user asked for.
+    fn inspect_cell(
+        &mut self,
+        row: usize,
+        col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(schema_col) = col
+            .checked_sub(1)
+            .map(|window_col| window_col + self.state.start_column as usize)
+        else {
+            return;
+        };
+        if self.state.busy || self.state.stale || row >= self.state.rows {
+            return;
+        }
+        let (view, epoch, query_rev, query, name) = {
+            let document = self.document.read(cx);
+            let (Some(view), Some(epoch), Some(query_rev), Some(query)) = (
+                document.view_id(),
+                Some(document.epoch()),
+                Some(document.query_rev()),
+                document.value_query(),
+            ) else {
+                return;
+            };
+            let name = query
+                .columns
+                .get(schema_col)
+                .cloned()
+                .unwrap_or_default()
+                .into();
+            (view, epoch, query_rev, query, name)
+        };
+        if schema_col as u32 != schema_col as usize as u32
+            || query.columns.get(schema_col).is_none()
+        {
+            return;
+        }
+        self.close_detail(cx);
+        self.detail = Some(ValueDetail {
+            row: row as u32,
+            column: schema_col as u32,
+            name,
+            query,
+            view,
+            epoch,
+            query_rev,
+            offset: 0,
+            value: None,
+            busy: true,
+            error: None,
+            notice: None,
+            editor: cx.new(|cx| TextareaState::new(window, cx)),
+        });
+        self.fetch_detail(window, cx);
+        cx.notify();
+    }
+
+    /// The selected cell's complete value, from the keyboard. Only the grid's
+    /// own focus counts, so Enter on a toolbar button or the filter input
+    /// cannot open a cell the user was not pointing at.
+    fn inspect_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (selected, focused) = self.grid.read_with(cx, |grid, cx| {
+            (
+                grid.selection(),
+                grid.focus_handle(cx).contains_focused(window, cx),
+            )
+        });
+        if !focused {
+            cx.propagate();
+            return;
+        }
+        if let TableSelection::Cell(row, col) = selected {
+            self.inspect_cell(row, col, window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    /// Fetch the chunk the detail's `offset` points at. The request keeps the
+    /// query snapshot and the view it was opened against; a landing whose
+    /// serial or identity no longer matches is dropped, not shown.
+    fn fetch_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.as_mut() else {
+            return;
+        };
+        detail.busy = true;
+        detail.error = None;
+        detail.notice = None;
+        let (view, query, row, column, offset) = (
+            detail.view,
+            detail.query.clone(),
+            detail.row,
+            detail.column,
+            detail.offset,
+        );
+        if let Some(previous) = self.value_cancel.take() {
+            previous.cancel();
+        }
+        self.detail_serial = self.detail_serial.wrapping_add(1);
+        let serial = self.detail_serial;
+        let token = SqliteCancel::new();
+        self.value_cancel = Some(token.clone());
+        let host = self.document.read(cx).host();
+        cx.notify();
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |h| h.sqlite_value(view, &query, row, column, offset, VALUE_CHUNK_BYTES, &token),
+            move |view, result, window, cx| view.on_detail(serial, result, window, cx),
+        );
+    }
+
+    fn on_detail(
+        &mut self,
+        serial: u64,
+        result: io::Result<SqliteValue>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if serial != self.detail_serial || self.detail.is_none() {
+            return;
+        }
+        self.value_cancel = None;
+        match result {
+            Ok(value) => {
+                let Some(detail) = self.detail.as_mut() else {
+                    return;
+                };
+                detail.busy = false;
+                detail.value = Some(value.clone());
+                detail.editor.update(cx, |editor, cx| {
+                    editor.set_value(detail_text(&value), window, cx);
+                });
+            }
+            Err(error) if is_stale_view(&error) => {
+                self.detail = None;
+                let document = self.document.clone();
+                document.update(cx, |document, cx| document.mark_stale(&error, cx));
+            }
+            Err(error) => {
+                if error.kind() == io::ErrorKind::Interrupted {
+                    self.detail = None;
+                } else if let Some(detail) = self.detail.as_mut() {
+                    detail.busy = false;
+                    detail.error = Some(error.to_string().into());
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Move the inspector one chunk through the value; the offset is a byte
+    /// position inside the value, never a display row.
+    fn detail_page(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.as_mut() else {
+            return;
+        };
+        if detail.busy {
+            return;
+        }
+        let next = match detail.value.as_ref() {
+            Some(SqliteValue::Text { preview, .. } | SqliteValue::Blob { preview, .. })
+                if forward =>
+            {
+                detail.offset.saturating_add(preview.len() as u64)
+            }
+            Some(SqliteValue::Text { .. } | SqliteValue::Blob { .. }) => {
+                detail.offset.saturating_sub(VALUE_CHUNK_BYTES)
+            }
+            _ => return,
+        };
+        if next == detail.offset {
+            return;
+        }
+        detail.offset = next;
+        self.fetch_detail(window, cx);
+    }
+
+    /// Copy the complete value to the clipboard, assembling the chunks the
+    /// detail does not have yet — and never silently passing a bounded
+    /// preview off as the value. Values past [`VALUE_COPY_MAX`] stay
+    /// pageable but are not copied in part.
+    fn copy_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.as_ref() else {
+            return;
+        };
+        if detail.busy {
+            return;
+        }
+        let Some(value) = detail.value.clone() else {
+            return;
+        };
+        match value {
+            SqliteValue::Null => {
+                let detail = self.detail.as_mut().expect("detail checked above");
+                detail.notice = Some(t(L10nKey::EditorSqliteNullNotice).into());
+                cx.notify();
+            }
+            SqliteValue::Integer { .. } | SqliteValue::Real { .. } => {
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value_text(&value)));
+            }
+            SqliteValue::Text { total, .. } | SqliteValue::Blob { total, .. }
+                if total > VALUE_COPY_MAX =>
+            {
+                let detail = self.detail.as_mut().expect("detail checked above");
+                detail.notice = Some(
+                    t_fmt(
+                        L10nKey::EditorSqliteCopyTooLarge,
+                        &[
+                            ("bytes", &byte_count(total)),
+                            ("limit", &byte_count(VALUE_COPY_MAX)),
+                        ],
+                    )
+                    .into(),
+                );
+                cx.notify();
+            }
+            SqliteValue::Text { .. } | SqliteValue::Blob { .. } => {
+                let (view, query, row, column) =
+                    (detail.view, detail.query.clone(), detail.row, detail.column);
+                if let Some(previous) = self.value_cancel.take() {
+                    previous.cancel();
+                }
+                self.detail_serial = self.detail_serial.wrapping_add(1);
+                let serial = self.detail_serial;
+                let token = SqliteCancel::new();
+                self.value_cancel = Some(token.clone());
+                let work_token = token.clone();
+                if let Some(detail) = self.detail.as_mut() {
+                    detail.busy = true;
+                }
+                cx.notify();
+                let host = self.document.read(cx).host();
+                HostOps::run_in(
+                    host,
+                    window,
+                    cx,
+                    move |h| {
+                        let mut offset = 0_u64;
+                        let mut bytes = Vec::new();
+                        let mut text = true;
+                        loop {
+                            work_token.check()?;
+                            let chunk = h.sqlite_value(
+                                view,
+                                &query,
+                                row,
+                                column,
+                                offset,
+                                VALUE_CHUNK_BYTES,
+                                &work_token,
+                            )?;
+                            let (preview, total) = match chunk {
+                                SqliteValue::Text { preview, total } => {
+                                    bytes.extend_from_slice(&preview);
+                                    (preview, total)
+                                }
+                                SqliteValue::Blob { preview, total } => {
+                                    text = false;
+                                    bytes.extend_from_slice(&preview);
+                                    (preview, total)
+                                }
+                                // The cell's storage class cannot change
+                                // inside one read view.
+                                other => {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!(
+                                            "the value changed storage class mid-copy: {other:?}"
+                                        ),
+                                    ));
+                                }
+                            };
+                            if bytes.len() as u64 >= total || preview.is_empty() {
+                                break;
+                            }
+                            offset = offset.saturating_add(preview.len() as u64);
+                        }
+                        Ok::<_, io::Error>((bytes, text))
+                    },
+                    move |view, result, _window, cx| {
+                        if serial != view.detail_serial || view.detail.is_none() {
+                            return;
+                        }
+                        view.value_cancel = None;
+                        let Some(detail) = view.detail.as_mut() else {
+                            return;
+                        };
+                        detail.busy = false;
+                        match result {
+                            Ok((bytes, is_text)) => {
+                                let utf8 = is_text && std::str::from_utf8(&bytes).is_ok();
+                                let text = if utf8 {
+                                    String::from_utf8(bytes).unwrap_or_default()
+                                } else {
+                                    hex(&bytes)
+                                };
+                                detail.notice = if utf8 {
+                                    Some(t(L10nKey::EditorSqliteCopied).into())
+                                } else {
+                                    Some(t(L10nKey::EditorSqliteCopiedHex).into())
+                                };
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+                            }
+                            Err(error) => {
+                                detail.notice = Some(error.to_string().into());
+                            }
+                        }
+                        cx.notify();
+                    },
+                );
+            }
+        }
+    }
+
+    fn close_detail(&mut self, cx: &mut Context<Self>) {
+        if let Some(token) = self.value_cancel.take() {
+            token.cancel();
+        }
+        self.detail_serial = self.detail_serial.wrapping_add(1);
+        if self.detail.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn last_page(&self) -> Option<u64> {
         self.state
             .total
             .map(|total| total.saturating_sub(1) / PAGE_ROWS)
+    }
+
+    /// The complete-value panel under the table. The viewer is read-only,
+    /// the chunk buttons walk exact byte offsets and the byte extents label
+    /// every partial view — nothing here is a preview wearing a full
+    /// value's name.
+    fn detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let border = cx.theme().border;
+        let Some(detail) = self.detail.as_ref() else {
+            return v_flex().into_any_element();
+        };
+        let (kind, total, chunk_len, prev_enabled, next_enabled, invalid_text) = match detail
+            .value
+            .as_ref()
+        {
+            Some(SqliteValue::Null) => ("NULL".to_string(), None, 0, false, false, false),
+            Some(SqliteValue::Integer { .. }) => {
+                ("INTEGER".to_string(), None, 0, false, false, false)
+            }
+            Some(SqliteValue::Real { .. }) => ("REAL".to_string(), None, 0, false, false, false),
+            Some(SqliteValue::Text { preview, total }) => (
+                "TEXT".to_string(),
+                Some(*total),
+                preview.len() as u64,
+                detail.offset > 0,
+                detail.offset.saturating_add(preview.len() as u64) < *total,
+                std::str::from_utf8(preview).is_err(),
+            ),
+            Some(SqliteValue::Blob { preview, total }) => (
+                "BLOB".to_string(),
+                Some(*total),
+                preview.len() as u64,
+                detail.offset > 0,
+                detail.offset.saturating_add(preview.len() as u64) < *total,
+                false,
+            ),
+            None => (String::new(), None, 0, false, false, false),
+        };
+        let mut extents = String::new();
+        if let Some(total) = total {
+            extents = t_fmt(
+                L10nKey::EditorSqliteValueExtent,
+                &[
+                    ("from", &(detail.offset + 1).to_string()),
+                    ("to", &(detail.offset + chunk_len).to_string()),
+                    ("total", &byte_count(total)),
+                ],
+            )
+            .to_string();
+        }
+        let busy = detail.busy;
+        v_flex()
+            .id("sqlite-detail")
+            .test_support()
+            .flex_none()
+            .h(px(280.))
+            .w_full()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .flex_none()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .id("sqlite-detail-title")
+                            .test_support()
+                            .flex_none()
+                            .text_xs()
+                            .child(t_fmt(
+                                L10nKey::EditorSqliteValueTitle,
+                                &[("name", &detail.name)],
+                            )),
+                    )
+                    .when(!kind.is_empty(), |row| {
+                        row.child(div().flex_none().text_xs().text_color(muted).child(kind))
+                    })
+                    .when(!extents.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .id("sqlite-detail-extent")
+                                .test_support()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(extents),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("sqlite-value-prev")
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .disabled(busy || !prev_enabled)
+                            .icon(Icon::new(IconName::ChevronLeft))
+                            .accessibility_label(t(L10nKey::EditorSqlitePreviousChunk))
+                            .tooltip(t(L10nKey::EditorSqlitePreviousChunk))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.detail_page(false, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("sqlite-value-next")
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .disabled(busy || !next_enabled)
+                            .icon(Icon::new(IconName::ChevronRight))
+                            .accessibility_label(t(L10nKey::EditorSqliteNextChunk))
+                            .tooltip(t(L10nKey::EditorSqliteNextChunk))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.detail_page(true, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("sqlite-value-copy")
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .disabled(busy || detail.value.is_none())
+                            .label(t(L10nKey::EditorSqliteCopyValue))
+                            .tooltip(t(L10nKey::EditorSqliteCopyValue))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.copy_detail(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("sqlite-value-close")
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .icon(Icon::new(IconName::Close))
+                            .accessibility_label(t(L10nKey::EditorSqliteCloseValue))
+                            .tooltip(t(L10nKey::EditorSqliteCloseValue))
+                            .on_click(cx.listener(|this, _, _, cx| this.close_detail(cx))),
+                    ),
+            )
+            .when_some(detail.error.clone(), |column, error| {
+                column.child(
+                    div()
+                        .id("sqlite-detail-error")
+                        .test_support()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(danger)
+                        .child(error),
+                )
+            })
+            .when(invalid_text, |column| {
+                column.child(
+                    div()
+                        .id("sqlite-detail-hex")
+                        .test_support()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::EditorSqliteTextNotUtf8)),
+                )
+            })
+            .when_some(detail.notice.clone(), |column, notice| {
+                column.child(
+                    div()
+                        .id("sqlite-detail-notice")
+                        .test_support()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(notice),
+                )
+            })
+            .child(
+                div().flex_1().min_h_0().child(
+                    Textarea::new(&detail.editor)
+                        .readonly(true)
+                        .bordered(false)
+                        .w_full()
+                        .h_full(),
+                ),
+            )
+            .when(busy, |column| {
+                column.child(
+                    div()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::EditorSqliteLoading)),
+                )
+            })
+            .into_any_element()
     }
 
     pub(super) fn status_text(&self) -> SharedString {
@@ -909,6 +1736,30 @@ impl SqliteView {
                 &[("mode", &self.state.journal_mode)],
             ));
             parts.push(t(L10nKey::EditorSqliteReadOnly).to_string());
+            if !self.state.search.is_empty() {
+                parts.push(t_fmt(
+                    L10nKey::EditorSqliteFilterStatus,
+                    &[("filter", &self.state.search)],
+                ));
+            }
+            if let Some((column, descending)) = self.state.sort {
+                let direction = if descending {
+                    t(L10nKey::EditorSqliteSortDescending)
+                } else {
+                    t(L10nKey::EditorSqliteSortAscending)
+                };
+                let name = self
+                    .state
+                    .columns
+                    .as_ref()
+                    .and_then(|columns| columns.names.get(column as usize))
+                    .cloned()
+                    .unwrap_or_default();
+                parts.push(t_fmt(
+                    L10nKey::EditorSqliteSortStatus,
+                    &[("column", &name), ("direction", direction)],
+                ));
+            }
         } else if self.state.error.is_some() {
             parts.push(t(L10nKey::EditorSqliteFailed).to_string());
         }
@@ -1000,6 +1851,15 @@ impl SqliteView {
                 })
             })
             .child(div().flex_1())
+            .child(
+                div().flex_none().w(rems(14.)).child(
+                    Input::new(&self.search_input)
+                        .id("sqlite-filter")
+                        .xsmall()
+                        .appearance(true),
+                ),
+            )
+            .child(div().flex_1())
             .when(length > COLUMN_WINDOW as usize, |row| {
                 row.child(
                     nav(
@@ -1008,9 +1868,7 @@ impl SqliteView {
                         start > 0,
                         true,
                     )
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.shift_columns(false, window, cx)),
-                    ),
+                    .on_click(cx.listener(|this, _, _, cx| this.shift_columns(false, cx))),
                 )
                 .child(
                     div()
@@ -1032,9 +1890,7 @@ impl SqliteView {
                         start + (COLUMN_WINDOW as usize) < length,
                         false,
                     )
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.shift_columns(true, window, cx)),
-                    ),
+                    .on_click(cx.listener(|this, _, _, cx| this.shift_columns(true, cx))),
                 )
             })
             .child(
@@ -1044,7 +1900,7 @@ impl SqliteView {
                     page > 0,
                     true,
                 )
-                .on_click(cx.listener(|this, _, window, cx| this.navigate(0, window, cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.navigate(0, cx))),
             )
             .child(
                 nav(
@@ -1053,8 +1909,8 @@ impl SqliteView {
                     page > 0,
                     true,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.navigate(this.state.page_number.saturating_sub(1), window, cx)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.navigate(this.state.page_number.saturating_sub(1), cx)
                 })),
             )
             .child(
@@ -1076,8 +1932,8 @@ impl SqliteView {
                     self.state.more,
                     false,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.navigate(this.state.page_number.saturating_add(1), window, cx)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.navigate(this.state.page_number.saturating_add(1), cx)
                 })),
             )
             .child(
@@ -1087,9 +1943,9 @@ impl SqliteView {
                     last.is_some_and(|last| last > page),
                     false,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
+                .on_click(cx.listener(|this, _, _, cx| {
                     let last = this.last_page().unwrap_or(this.state.page_number);
-                    this.navigate(last, window, cx)
+                    this.navigate(last, cx)
                 })),
             )
             .child(div().flex_1())
@@ -1226,9 +2082,7 @@ impl SqliteView {
                             .tooltip(SharedString::from(format!("{name} · {kind}")))
                             .on_click(cx.listener({
                                 let name = name.clone();
-                                move |this, _, window, cx| {
-                                    this.select_object(name.clone(), window, cx)
-                                }
+                                move |this, _, _, cx| this.select_object(name.clone(), cx)
                             }))
                             .child(
                                 h_flex()
@@ -1344,6 +2198,7 @@ impl SqliteView {
                             .accessibility_label(label),
                     ),
             )
+            .child(self.detail_panel(cx))
     }
 
     fn failed(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1468,6 +2323,33 @@ impl Render for SqliteView {
             .track_focus(&self.focus)
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &Refresh, window, cx| this.refresh(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &FocusFilter, window, cx| this.focus_filter(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &InspectValue, window, cx| {
+                    this.inspect_selection(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CloseValue, _, cx| {
+                if this.detail.is_some() {
+                    this.close_detail(cx);
+                    return;
+                }
+                // With no inspector open, Escape keeps the table's own
+                // meaning: clear its cell selection, then let it bubble.
+                let grid = this.grid.clone();
+                let had_selection = grid.update(cx, |grid, cx| {
+                    let had = grid.selection() != TableSelection::None;
+                    if had {
+                        grid.clear_selection(cx);
+                    }
+                    had
+                });
+                if !had_selection {
+                    cx.propagate();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -1487,6 +2369,11 @@ pub(super) fn menu_entries(
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator()
         .menu(t(L10nKey::EditorSqliteRefresh), Box::new(Refresh))
+        .menu(
+            t(L10nKey::EditorSqliteFilterPlaceholder),
+            Box::new(FocusFilter),
+        )
+        .menu(t(L10nKey::EditorSqliteCopyValue), Box::new(InspectValue))
 }
 
 #[cfg(test)]

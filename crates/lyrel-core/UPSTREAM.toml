@@ -93,16 +93,18 @@ reason = """场景参照，未导入文件：727 行/300 列 WAL、跨页列窗�
 [[inspected]]
 upstream = "crates/glim-app/src/views/reader/sqlite.rs"
 sha256 = "1832087dc7b5bddb47302193062a2b34b79d5274ef54b034c1a72825ca4999a0"
-reason = """按固定 revision 适配交互语义，未逐字复制：schema 列表、表选择、250ms 搜索防抖
-（#296）、分页/列窗、四类后台任务与 Cancellation、refresh 后重发过期结果、失败保留旧页。
+reason = """按固定 revision 适配交互语义，未逐字复制：schema 列表、表选择、250ms 搜索防抖、
+分页/列窗、四类后台任务与 Cancellation、refresh 后重发过期结果、失败保留旧页。
 Lyrel 改为一个 HostOps worker + `SqliteCancel` 请求身份，后端换成本地/远端 Host 的
 read view；呈现迁移到 Kit/Fast 的 `sqlite_document.rs`，不再使用 Glim 的 gpui_kit
-组件与每查询新连接。筛选、排序与完整值详情留给 #296。"""
+组件与每查询新连接。#296 在此基础上接入筛选输入、表头排序与完整值检查器，交互
+顺序沿用 Glim：防抖后重发查询、排序降序→升序→还原、检查器绑定 cell 身份并在
+查询/视图变化时关闭。"""
 
 [[inspected]]
 upstream = "crates/glim-app/src/views/reader/sqlite/view.rs"
 sha256 = "93aebc2d503bff29439b869133935252b00f7be89e8e2c0885ddcfbaa74aafe4"
-reason = """按固定 revision 适配表格语义：固定行号列、可见列窗、双击详情入口（#296）、
-三态排序（#296）、页发布与列变化刷新、resume scroll。Lyrel 以 Kit `DataTable` /
-`TableDelegate` 重写呈现，行号来自页偏移，类型化值不做显示字符串回写；本票只交付
-基础分页与列窗，不绘制无效的排序/筛选/完整值控件。"""
+reason = """按固定 revision 适配表格语义：固定行号列、可见列窗、双击详情入口、
+三态排序（降序→升序→还原，名指向 schema 列）、页发布与列变化刷新、resume scroll。
+Lyrel 以 Kit `DataTable` / `TableDelegate` 重写呈现，行号来自页偏移，类型化值不做
+显示字符串回写。#296 交付筛选/排序/完整值交互，排序列名经列窗映射回 schema 索引。"""

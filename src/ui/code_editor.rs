@@ -64,7 +64,10 @@ use svg_document::{SvgDocument, SvgMode, SvgView};
 mod test_host;
 
 pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
-pub(crate) use sqlite_document::Refresh as SqliteRefresh;
+pub(crate) use sqlite_document::{
+    CloseValue as SqliteCloseValue, FocusFilter as SqliteFocusFilter,
+    InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
+};
 
 /// CSV／TSV 表格的键盘上下文与编辑动作；只在表格呈现持有键盘时生效。
 pub(crate) use csv_document::KEY_CONTEXT as CSV_KEY_CONTEXT;

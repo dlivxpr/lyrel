@@ -263,19 +263,31 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     });
     cx.update(|window, cx| window.press("1", cx));
     settle(&mut cx);
-    assert!(
-        (view.read_with(&cx, |view, _| view.preview_scale()) - 1.).abs() < 0.001,
-        "1:1"
-    );
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find(("svg-preview-pixels", view_id)).bounds().size,
+            size(px(40.), px(30.)),
+            "SVG 1:1 uses its CSS pixel dimensions, not the centering viewport"
+        );
+    });
     cx.update(|window, cx| window.press(&secondary("="), cx));
     settle(&mut cx);
-    assert!(
-        view.read_with(&cx, |view, _| view.preview_scale()) > 1.,
-        "zoom in"
-    );
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find(("svg-preview-pixels", view_id)).bounds().size,
+            size(px(50.), px(37.5)),
+            "zoom changes the real rendered SVG dimensions"
+        );
+    });
     cx.update(|window, cx| window.press("0", cx));
     settle(&mut cx);
-    assert!(view.read_with(&cx, |view, _| view.preview_scale()) <= 1.);
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find(("svg-preview-pixels", view_id)).bounds().size,
+            size(px(40.), px(30.)),
+            "fit does not enlarge a small SVG"
+        );
+    });
     cx.update(|window, cx| window.click("svg-mode-toggle", cx));
     settle(&mut cx);
     assert_eq!(

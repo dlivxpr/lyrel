@@ -51,6 +51,7 @@ macro_rules! for_each_host_case {
             sqlite_refuses_missing_non_database_and_directories,
             sqlite_reports_a_cancelled_page_without_retiring_the_view,
             sqlite_validates_identifiers_against_the_open_view,
+            sqlite_filters_sorts_and_reads_values_in_bounded_chunks,
             skills_browse_is_readonly_and_host_bound,
             write_file_creates_and_overwrites,
             write_file_reports_its_own_metadata,
@@ -1936,6 +1937,127 @@ pub fn sqlite_validates_identifiers_against_the_open_view(h: &dyn Host, sb: &dyn
     let error = h.sqlite_page(opened.view, &empty, &cancel).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
     h.sqlite_close(opened.view);
+    h.sqlite_close(opened.view);
+}
+
+/// The visible filter, the three-state sort and the chunked complete value
+/// the workbench's inspector drives, over the same restricted query the
+/// page path uses — so a remote Host answers them with the same bounded,
+/// validated SQL the local one does.
+pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::host::sqlite::{SqliteCancel, SqliteValue, VALUE_CHUNK_BYTES};
+    let path = h.join(sb.path(), "query.sqlite");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, payload TEXT);\
+                 INSERT INTO items(name, payload) VALUES\
+                 ('alpha', 'x'), ('beta', 'y'), ('gamma', 'z'), ('中文', 'w');\
+                 INSERT INTO items(name, payload) VALUES ('big', replace(hex(zeroblob(1050000)), '0', 'Q'));",
+            )
+            .unwrap();
+    }
+    let cancel = SqliteCancel::default();
+    let opened = h.sqlite_open(&path, &cancel).unwrap();
+    let mut query = sqlite_query(h, opened.view, "items");
+    assert_eq!(query.columns, ["id", "name", "payload"]);
+
+    // The filter is one bound parameter matched against every column: it
+    // counts and pages only rows containing the text, case-insensitively.
+    query.search = "AMM".into();
+    assert_eq!(h.sqlite_count(opened.view, &query, &cancel).unwrap(), 1);
+    let page = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(sqlite_text(&page.rows[0][1]).unwrap(), b"gamma");
+    query.search = "文".into();
+    assert_eq!(h.sqlite_count(opened.view, &query, &cancel).unwrap(), 1);
+    query.search.clear();
+
+    // A sort names a column of the projected list, descending or ascending;
+    // the deterministic key still breaks ties.
+    query.sort = Some((1, true));
+    let descending = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    let names: Vec<&[u8]> = descending
+        .rows
+        .iter()
+        .filter_map(|row| sqlite_text(&row[1]))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            b"\xe4\xb8\xad\xe6\x96\x87".as_slice(),
+            b"gamma".as_slice(),
+            b"big".as_slice(),
+            b"beta".as_slice(),
+            b"alpha".as_slice()
+        ]
+    );
+    query.sort = Some((1, false));
+    let ascending = h.sqlite_page(opened.view, &query, &cancel).unwrap();
+    assert_eq!(sqlite_text(&ascending.rows[0][1]).unwrap(), b"alpha");
+    query.sort = None;
+
+    // A value larger than one chunk is read by exact byte offset; the chunks
+    // reassemble the stored value and `total` never lies about its length.
+    let big = h
+        .sqlite_value(opened.view, &query, 4, 2, 0, VALUE_CHUNK_BYTES, &cancel)
+        .unwrap();
+    let SqliteValue::Text { preview, total } = &big else {
+        panic!("a TEXT value stayed TEXT: {big:?}");
+    };
+    assert_eq!(*total, 2_100_000);
+    assert_eq!(preview.len() as u64, VALUE_CHUNK_BYTES);
+    let tail = h
+        .sqlite_value(
+            opened.view,
+            &query,
+            4,
+            2,
+            VALUE_CHUNK_BYTES,
+            VALUE_CHUNK_BYTES,
+            &cancel,
+        )
+        .unwrap();
+    let SqliteValue::Text {
+        preview: rest,
+        total: rest_total,
+    } = &tail
+    else {
+        panic!("the second chunk stayed TEXT: {tail:?}");
+    };
+    assert_eq!(*rest_total, *total);
+    assert_eq!(rest.len() as u64, VALUE_CHUNK_BYTES);
+    let last_offset = 2 * VALUE_CHUNK_BYTES;
+    let last = h
+        .sqlite_value(
+            opened.view,
+            &query,
+            4,
+            2,
+            last_offset,
+            VALUE_CHUNK_BYTES,
+            &cancel,
+        )
+        .unwrap();
+    let SqliteValue::Text {
+        preview: last_bytes,
+        total: last_total,
+    } = &last
+    else {
+        panic!("the last chunk stayed TEXT: {last:?}");
+    };
+    assert_eq!(*last_total, *total);
+    assert_eq!(last_bytes.len() as u64, total - last_offset);
+    assert!(preview.iter().all(|byte| *byte == b'Q'));
+    assert!(rest.iter().all(|byte| *byte == b'Q'));
+    assert!(last_bytes.iter().all(|byte| *byte == b'Q'));
+
+    // Integers come back whole in one call, whatever the chunk bound says.
+    let id = h
+        .sqlite_value(opened.view, &query, 0, 0, 0, 4, &cancel)
+        .unwrap();
+    assert!(matches!(id, SqliteValue::Integer { .. }), "{id:?}");
     h.sqlite_close(opened.view);
 }
 

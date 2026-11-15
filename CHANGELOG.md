@@ -30,8 +30,11 @@
 
 - #295：只读 SQLite 浏览接入所属 Host 与工作台。`lyrel-core` 移植 Glim `browser.rs` 的标识符引用、单绑定 predicate、稳定顺序、列窗、count、page 与值分块，每个数据库打开一条 `BEGIN DEFERRED` 读取视图；view 有 30 秒 idle／180 秒绝对寿命与进程级 reaper，取消绑定到请求并调用 `sqlite3_interrupt`，连接断开时服务端释放该连接的全部视图。control v18 新增 `sqlite-browse-v1` 与 `Sqlite` 请求，缺少能力的 peer 在发送前拒绝。值保留 NULL、精确 INTEGER、REAL 位模式、原始 TEXT／BLOB，不下载整库、不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；`Snapshot` 文件复制被明确排除。工作台新增只读数据库文档、schema／SQL 定义、分页与列窗、加载／空／失败／刷新／取消状态和每分屏独立焦点／表格状态；筛选、排序与完整值检查留给 #296。真实 SSH、原生窗口、系统 IME、macOS 与性能按父验收边界另记，不以 workbench／conformance 结果代替。
 
+- #296：SQLite 只读浏览补齐筛选、排序与完整值检查。筛选输入按 Glim 250 ms 防抖把单个绑定参数送入既有受限 predicate（`instr(lower(CAST(col AS TEXT)), lower(?1))`，覆盖所有列，不引入自由 SQL）；表头可排序列循环 降序→升序→还原，排序名指向 schema 列索引并随列窗映射，切表清空排序、刷新保留筛选与排序且由 view/epoch/query_rev 三重身份拒绝迟到结果。完整值检查器经同一 `SqliteQuery` 快照与 `sqlite_value` 按精确字节偏移分块读取（每块 ≤1 MiB），INTEGER/REAL 整块精确返回；BLOB 以偏移十六进制转储显示、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 转储并标注原因（不用替换字符冒充原值），NULL 提示无内容不置剪贴板，>8 MiB 值保持可翻页但拒绝部分复制并说明限额；检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。键盘 `secondary-f` 聚焦筛选、`enter` 检查选中单元格、`escape` 关闭检查器，均只在数据库文档持有焦点时生效。新增 Host conformance `sqlite_filters_sorts_and_reads_values_in_bounded_chunks` 由本地与真实 SSH 循环共用；工作台回归覆盖真实输入/表头点击、分块翻页与剪贴板、WAL writer 下打开视图保持快照且 main 文件字节不变、原件不被修改。原生窗口、系统 IME、macOS 与性能不记为已通过。
+
 ### 修复
 
+- #283：SVG 图像自身按固有 CSS 像素与缩放比例设置宽高，不再继承居中视口的填充尺寸；修复 64×64 SVG 在 1:1／100% 时仍被放大铺满的问题。真实工作台回归检查图像 bounds 的 1:1／125%／fit，不只检查比例字段。
 - #286：同章搜索定位与普通章节导航共用阅读位置持久化，避免全书末尾匹配已显示却在主题切换／关闭重开后回到章节起点。虚拟章节按布局后的实际可见区准备富文本状态，异步内容就绪后重测对应行；滚轮、滚动条和程序化定位共用同一可见区更新路径，避免在 ListState 的滚轮回调内重借列表。
 - #286：章节净化输出正确闭合 `id` 属性引号，避免带锚点的标题／段落被富文本消费者当作未结束标签而显示为空；不修改书籍原件或放宽资源隔离。
 - #289：JSON 家族结构与源码使用同一保真文档；首次打开使用严格逐行解码，未编辑保存不再归一化混合行尾。重复键 occurrence、精确数字和 JSONL 行身份不经 Value 重写，分屏工具栏可换行、折叠与选择独立。分屏 group 元素身份在焦点切换中保持，工具栏与树行首击不丢失；叶节点方向键返回父节点。不可变投影共享，完整路径文本超过 8 MiB 时明确拒绝结构检查，完整源码仍可编辑与保存。

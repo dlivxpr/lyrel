@@ -2,17 +2,20 @@
 //!
 //! Ported from Glim `glim-app/src/views/reader/sqlite/view.rs` (MIT): a fixed
 //! row-number column, one column per visible schema column, bounded cell text
-//! and a loading state. Sorting is not offered here — #296 adds the sort and
-//! filter controls — so no column advertises a sort it cannot perform.
+//! and a loading state. Sortable headers report the document's three-state
+//! sort back through the owner, and double-clicked cells open the complete
+//! value; a header or cell that cannot act advertises nothing.
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Window, div, px, rems};
+use gpui_kit::{App, Context, WeakEntity, Window, div, px, rems};
 
 use lyrel_core::host::sqlite::{COLUMN_WINDOW, PAGE_ROWS, SqlitePage, SqliteValue};
 
 use crate::ui::i18n::{L10nKey, t};
+
+use super::sqlite_document::SqliteView;
 
 /// The display text of one value.
 ///
@@ -36,9 +39,13 @@ pub(super) fn value_text(value: &SqliteValue) -> String {
             }
         }
         SqliteValue::Text { preview, total } => {
-            let mut text = String::from_utf8_lossy(preview)
-                .replace(['\r', '\n', '\t'], " ")
-                .to_string();
+            // A bounded preview can end inside a codepoint; keep the valid
+            // prefix instead of showing a character the database lacks.
+            let valid = match std::str::from_utf8(preview) {
+                Ok(text) => text,
+                Err(error) => std::str::from_utf8(&preview[..error.valid_up_to()]).unwrap_or(""),
+            };
+            let mut text = valid.replace(['\r', '\n', '\t'], " ");
             if (preview.len() as u64) < *total {
                 text.push('…');
             }
@@ -70,7 +77,10 @@ pub(super) struct SqliteGrid {
     columns: Vec<String>,
     rows: Vec<Vec<SqliteValue>>,
     offset: u64,
+    start_column: u32,
+    sort: Option<(u32, bool)>,
     loading: bool,
+    owner: Option<WeakEntity<SqliteView>>,
 }
 
 impl SqliteGrid {
@@ -79,8 +89,17 @@ impl SqliteGrid {
             columns: Vec::new(),
             rows: Vec::new(),
             offset: 0,
+            start_column: 0,
+            sort: None,
             loading: true,
+            owner: None,
         }
+    }
+
+    /// Bind this grid to the presentation that owns it, once, so header sort
+    /// clicks reach the document the presentation reads.
+    pub(super) fn set_owner(&mut self, owner: WeakEntity<SqliteView>) {
+        self.owner = Some(owner);
     }
 
     pub(super) fn clear(&mut self) {
@@ -93,18 +112,32 @@ impl SqliteGrid {
         self.loading = loading;
     }
 
-    /// Install one page, with the exact column window it was read for.
-    pub(super) fn set_page(&mut self, columns: &[String], page: &SqlitePage) {
-        let start = page.start_column as usize;
+    /// Install one page, with the exact column window and sort it was read
+    /// for. `sort` names a column of the full schema list — the header arrow
+    /// must map back from this page's window to the same column.
+    pub(super) fn set_page(
+        &mut self,
+        columns: &[String],
+        page: &SqlitePage,
+        sort: Option<(u32, bool)>,
+    ) {
+        self.start_column = page.start_column;
+        self.sort = sort;
         self.columns = columns
             .iter()
-            .skip(start)
+            .skip(page.start_column as usize)
             .take(COLUMN_WINDOW as usize)
             .cloned()
             .collect();
         self.offset = page.page.saturating_mul(PAGE_ROWS);
         self.rows = page.rows.clone();
         self.loading = false;
+    }
+
+    /// The schema column behind a table column, or `None` for the row number.
+    fn schema_column(&self, col: usize) -> Option<usize> {
+        col.checked_sub(1)
+            .map(|window| window + self.start_column as usize)
     }
 }
 
@@ -124,10 +157,22 @@ impl TableDelegate for SqliteGrid {
                 .fixed_left()
                 .movable(false)
         } else {
-            Column::new(index.to_string(), self.columns[index - 1].clone())
+            let schema = index - 1 + self.start_column as usize;
+            let mut column = Column::new(index.to_string(), self.columns[index - 1].clone())
                 .width(px(220.))
                 .movable(false)
                 .resizable(true)
+                .sortable();
+            if let Some((sorted, descending)) = self.sort
+                && sorted as usize == schema
+            {
+                column = column.sort(if descending {
+                    ColumnSort::Descending
+                } else {
+                    ColumnSort::Ascending
+                });
+            }
+            column
         }
     }
 
@@ -170,7 +215,6 @@ impl TableDelegate for SqliteGrid {
             None => (String::new(), true),
         };
         div()
-            .id(("sqlite-cell", ((row as u64) << 32) | col as u64))
             .truncate()
             .font_family(cx.theme().mono_font_family.clone())
             .text_size(rems(0.8125))
@@ -181,12 +225,29 @@ impl TableDelegate for SqliteGrid {
 
     fn perform_sort(
         &mut self,
-        _: usize,
-        _: ColumnSort,
+        col: usize,
+        sort: ColumnSort,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) {
-        // No sort control is drawn; a stray request changes nothing.
+        let Some(schema) = self.schema_column(col) else {
+            return;
+        };
+        let sort = match sort {
+            ColumnSort::Default => None,
+            ColumnSort::Ascending => Some((schema as u32, false)),
+            ColumnSort::Descending => Some((schema as u32, true)),
+        };
+        let Some(owner) = self.owner.clone() else {
+            return;
+        };
+        // The table is mid-update; the sort itself asks the document for a
+        // new page, which rebuilds this grid.
+        cx.defer(move |cx| {
+            if let Some(owner) = owner.upgrade() {
+                owner.update(cx, |view, cx| view.apply_sort(sort, cx));
+            }
+        });
     }
 }
 
@@ -232,5 +293,28 @@ mod tests {
             }),
             "BLOB 2 B · 00 FF"
         );
+    }
+
+    #[test]
+    fn a_preview_split_inside_a_codepoint_shows_no_invented_character() {
+        let value = SqliteValue::Text {
+            preview: b"ok\xe4\xb8".to_vec(),
+            total: 5,
+        };
+        let text = value_text(&value);
+        assert!(
+            !text.contains('\u{fffd}'),
+            "no replacement character: {text}"
+        );
+        assert_eq!(text, "ok…", "only bytes that are text stay text");
+    }
+
+    #[test]
+    fn sort_requests_name_the_schema_column_not_the_window_slot() {
+        let mut grid = SqliteGrid::new();
+        grid.start_column = 3;
+        assert_eq!(grid.schema_column(0), None);
+        assert_eq!(grid.schema_column(1), Some(3));
+        assert_eq!(grid.schema_column(2), Some(4));
     }
 }

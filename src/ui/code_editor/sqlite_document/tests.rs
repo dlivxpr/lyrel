@@ -23,18 +23,43 @@ fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
+fn until(cx: &mut VisualTestContext, ready: impl FnMut(&mut VisualTestContext) -> bool) {
+    until_named(cx, "transition", ready);
+}
+
+fn until_named(
+    cx: &mut VisualTestContext,
+    name: &str,
+    mut ready: impl FnMut(&mut VisualTestContext) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready(cx) {
         assert!(
             Instant::now() < deadline,
-            "SQLite document transition did not settle"
+            "SQLite document transition '{name}' did not settle"
         );
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(5));
     }
     settle(cx);
+}
+
+/// The inspector's identity and why a read may have failed, for assertion
+/// messages that would otherwise only say a predicate never became true.
+fn detail_diagnostic(detail: &ValueDetail) -> String {
+    let kind = match detail.value.as_ref() {
+        None => "none",
+        Some(SqliteValue::Null) => "null",
+        Some(SqliteValue::Integer { .. }) => "integer",
+        Some(SqliteValue::Real { .. }) => "real",
+        Some(SqliteValue::Text { .. }) => "text",
+        Some(SqliteValue::Blob { .. }) => "blob",
+    };
+    format!(
+        "row={} column={} offset={} busy={} value={kind} error={:?} notice={:?}",
+        detail.row, detail.column, detail.offset, detail.busy, detail.error, detail.notice
+    )
 }
 
 fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
@@ -451,4 +476,494 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
         assert_eq!(code.group, first_group);
         assert_eq!(code.active_id(), Some(id));
     });
+}
+
+#[gpui_kit::test]
+fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = people_database(dir.path(), "filter.sqlite", "Ada", 5);
+    let before = std::fs::read(&path).expect("source bytes");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    let view = sqlite_view(&app, &cx);
+    until(&mut cx, |cx| !dump(&view, cx).1.is_empty());
+    let view_id = view.read_with(&cx, |view, _| view.view_id());
+
+    // 真实输入走防抖：输入 "Ada" 后同一读取视图只回一行。
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.input("Ada", cx);
+    });
+    until_named(&mut cx, "filter-ada", |cx| {
+        view.read_with(cx, |view, _| view.state.search == "Ada") && dump(&view, cx).1.len() == 1
+    });
+    let rows = dump(&view, &cx).1;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][2], "Ada");
+    let status = view.read_with(&cx, |view, _| view.status_text());
+    assert!(status.contains("filter"), "the filter is visible: {status}");
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.state.total),
+        Some(1),
+        "the count answers the filtered rows"
+    );
+
+    // 大小写不敏感、覆盖每一列：全选替换为数字，筛出同一行。
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.press("secondary-a", cx);
+        window.input("900719925474099", cx);
+    });
+    until_named(&mut cx, "filter-digits", |cx| {
+        view.read_with(cx, |view, _| view.state.search == "900719925474099")
+            && dump(&view, cx).1.len() == 1
+    });
+    assert_eq!(dump(&view, &cx).1[0][1], "9007199254740993");
+
+    // 清空筛选恢复整页；筛选期间产生的迟到页不会覆盖新结果。
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.press("secondary-a", cx);
+        window.press("backspace", cx);
+    });
+    until_named(&mut cx, "filter-cleared", |cx| {
+        view.read_with(cx, |view, _| view.state.search.is_empty()) && dump(&view, cx).1.len() == 5
+    });
+    // 迟到的旧串行落地被丢弃：伪造一个旧代的页结果，当前数据不被覆盖。
+    view.update(&mut cx, |view, cx| {
+        view.document.update(cx, |document, cx| {
+            document.on_page(
+                document.epoch.wrapping_sub(1),
+                document.page_serial,
+                view_id.expect("a live read view"),
+                Ok(lyrel_core::host::sqlite::SqlitePage {
+                    page: 0,
+                    start_column: 0,
+                    more: true,
+                    rows: Vec::new(),
+                }),
+                cx,
+            );
+        });
+    });
+    settle(&mut cx);
+    assert_eq!(
+        dump(&view, &cx).1.len(),
+        5,
+        "a late page from the old filter did not overwrite the live one"
+    );
+
+    // 表头三次点击走完降序→升序→还原。
+    cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
+    until_named(&mut cx, "sort-desc", |cx| {
+        view.read_with(cx, |view, _| view.state.sort == Some((1, true)))
+            && dump(&view, cx)
+                .1
+                .first()
+                .is_some_and(|row| row[2] == "中文")
+    });
+    let status = view.read_with(&cx, |view, _| view.status_text());
+    assert!(
+        status.contains("sorted by name"),
+        "the sort is visible: {status}"
+    );
+    cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
+    until_named(&mut cx, "sort-asc", |cx| {
+        view.read_with(cx, |view, _| view.state.sort == Some((1, false)))
+            && dump(&view, cx).1.first().is_some_and(|row| row[2] == "Ada")
+    });
+    cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
+    until_named(&mut cx, "sort-clear", |cx| {
+        view.read_with(cx, |view, _| view.state.sort.is_none())
+            && dump(&view, cx).1.first().is_some_and(|row| row[2] == "Ada")
+    });
+
+    // 筛选与排序叠加仍走同一个读取视图。
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.input("o", cx);
+    });
+    until_named(&mut cx, "filter-o", |cx| {
+        view.read_with(cx, |view, _| view.state.search == "o") && !dump(&view, cx).1.is_empty()
+    });
+    cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
+    until_named(&mut cx, "sort-with-filter", |cx| {
+        view.read_with(cx, |view, _| view.state.sort == Some((1, true)))
+    });
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.view_id()),
+        view_id,
+        "browsing kept one read view"
+    );
+
+    assert_eq!(
+        std::fs::read(&path).expect("source bytes after browsing"),
+        before,
+        "filtering and sorting did not modify the database"
+    );
+}
+
+/// A database with a >1 MiB TEXT, a small BLOB and NULLs for the inspector.
+fn big_value_database(dir: &Path) -> PathBuf {
+    let path = dir.join("values.sqlite");
+    let connection = rusqlite::Connection::open(&path).expect("fixture database opens");
+    connection
+        .execute_batch("CREATE TABLE items(id INTEGER, name TEXT, data BLOB, ratio REAL);")
+        .expect("fixture schema");
+    connection
+        .execute(
+            "INSERT INTO items VALUES (1, replace(hex(zeroblob(1050000)), '0', 'x'), x'00ff10', 9e999)",
+            [],
+        )
+        .expect("big row");
+    connection
+        .execute("INSERT INTO items VALUES (2, NULL, NULL, NULL)", [])
+        .expect("null row");
+    drop(connection);
+    path
+}
+
+#[gpui_kit::test]
+fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = big_value_database(dir.path());
+    let before = std::fs::read(&path).expect("source bytes");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    let view = sqlite_view(&app, &cx);
+    until(&mut cx, |cx| dump(&view, cx).1.len() == 2);
+
+    // 真实双击打开 name 列的完整值：第一块、类型与字节区间都可见。
+    cx.update(|window, cx| window.double_click("table-cell-0:2", cx));
+    until_named(&mut cx, "detail-open", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
+        })
+    });
+    cx.update(|window, _| {
+        assert!(window.find("sqlite-detail").visible());
+        assert!(window.find("sqlite-detail-extent").visible());
+        assert!(window.find("sqlite-value-next").visible());
+    });
+    let (offset, total) = view.read_with(&cx, |view, _| {
+        let detail = view.detail.as_ref().expect("the inspector is open");
+        let SqliteValue::Text { total, .. } = detail.value.as_ref().expect("a TEXT value") else {
+            panic!("the name column is TEXT: {}", detail_diagnostic(detail))
+        };
+        (detail.offset, *total)
+    });
+    assert_eq!(offset, 0);
+    assert_eq!(total, 2_100_000);
+    let shown = view.read_with(&cx, |view, cx| {
+        view.detail
+            .as_ref()
+            .unwrap()
+            .editor
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(shown.len(), 1_048_576, "the first bounded chunk");
+    assert!(shown.bytes().all(|byte| byte == b'x'));
+
+    // 下一块按精确字节偏移推进，块尾正好到值末。
+    cx.update(|window, cx| window.click("sqlite-value-next", cx));
+    until_named(&mut cx, "detail-next-chunk", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail
+                .as_ref()
+                .is_some_and(|detail| detail.offset == 1_048_576 && !detail.busy)
+        })
+    });
+    let shown = view.read_with(&cx, |view, cx| {
+        view.detail
+            .as_ref()
+            .unwrap()
+            .editor
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(shown.len(), 1_048_576, "the second bounded chunk");
+
+    // 第三块只返回剩余字节；块尾正好到值末。
+    cx.update(|window, cx| window.click("sqlite-value-next", cx));
+    until_named(&mut cx, "detail-last-chunk", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail
+                .as_ref()
+                .is_some_and(|detail| detail.offset == 2_097_152 && !detail.busy)
+        })
+    });
+    let shown = view.read_with(&cx, |view, cx| {
+        view.detail
+            .as_ref()
+            .unwrap()
+            .editor
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(shown.len(), 2_100_000 - 2_097_152);
+    assert!(shown.bytes().all(|byte| byte == b'x'));
+
+    // 复制组装全部块，落剪贴板的是完整值，不是预览。
+    cx.update(|window, cx| window.click("sqlite-value-copy", cx));
+    until_named(&mut cx, "copy-full", |cx| {
+        cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .is_some_and(|text| text.len() == 2_100_000)
+    });
+    let copied = cx
+        .update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        .expect("the complete value reached the clipboard");
+    assert!(copied.bytes().all(|byte| byte == b'x'));
+
+    // BLOB 单元格以十六进制展示与复制；复制的 hex 精确还原字节。
+    // payload 列在窄视口外，先用真实横向滚动把它带入视口再双击。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(3, cx));
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| window.double_click("table-cell-0:3", cx));
+    until_named(&mut cx, "blob-value", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
+        })
+    });
+    view.read_with(&cx, |view, cx| {
+        assert_eq!(
+            view.grid.read(cx).selection(),
+            TableSelection::Cell(0, 3),
+            "the double-click selected the payload cell before inspecting it"
+        );
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (0, 2),
+            "the payload cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert!(
+            matches!(detail.value, Some(SqliteValue::Blob { .. })),
+            "the payload stays a BLOB: {}",
+            detail_diagnostic(detail)
+        );
+    });
+    let shown = view.read_with(&cx, |view, cx| {
+        view.detail
+            .as_ref()
+            .unwrap()
+            .editor
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert!(shown.contains("00 ff 10"), "the BLOB's real bytes: {shown}");
+    cx.update(|window, cx| window.click("sqlite-value-copy", cx));
+    until_named(&mut cx, "copy-blob", |cx| {
+        cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .is_some_and(|text| text == "00ff10")
+    });
+    view.read_with(&cx, |view, _| {
+        let detail = view.detail.as_ref().unwrap();
+        assert!(
+            detail.notice.is_some(),
+            "the hex copy is labelled, not passed off as text"
+        );
+    });
+
+    // 非有限 REAL 保持 REAL 类型到达检查器与剪贴板，不变成 NULL 或空串。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(4, cx));
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| window.double_click("table-cell-0:4", cx));
+    until_named(&mut cx, "real-value", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
+        })
+    });
+    view.read_with(&cx, |view, cx| {
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (0, 3),
+            "the ratio cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert_eq!(
+            detail.value,
+            Some(SqliteValue::real(f64::INFINITY.to_bits())),
+            "an infinite REAL keeps its bits: {}",
+            detail_diagnostic(detail)
+        );
+        let shown = detail.editor.read(cx).value().to_string();
+        assert_eq!(shown, "Infinity", "the container shows the REAL as itself");
+    });
+    cx.update(|window, cx| window.click("sqlite-value-copy", cx));
+    settle(&mut cx);
+    assert_eq!(
+        cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("Infinity".to_string()),
+        "copying a REAL writes its exact value, not an empty string"
+    );
+
+    // NULL 单元格显示 NULL 且复制只提示，不把空字符串当值。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(2, cx));
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| window.double_click("table-cell-1:2", cx));
+    until_named(&mut cx, "null-open", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
+        })
+    });
+    view.read_with(&cx, |view, _| {
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (1, 1),
+            "the NULL name cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert_eq!(
+            detail.value,
+            Some(SqliteValue::Null),
+            "{}",
+            detail_diagnostic(detail)
+        );
+    });
+    cx.update(|window, cx| window.click("sqlite-value-copy", cx));
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| {
+        let detail = view.detail.as_ref().unwrap();
+        assert!(
+            detail
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("NULL")),
+            "the NULL copy explains itself"
+        );
+    });
+
+    // Escape 关闭检查器；筛选一启动，打开的检查器也不会冒充新查询的单元格。
+    cx.simulate_keystrokes("escape");
+    settle(&mut cx);
+    view.read_with(&cx, |view, _| assert!(view.detail.is_none()));
+    cx.update(|window, cx| window.double_click("table-cell-0:2", cx));
+    until_named(&mut cx, "detail-reopen", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|d| d.value.is_some())
+        })
+    });
+    cx.update(|window, cx| {
+        window.click("sqlite-filter", cx);
+        window.input("zzz", cx);
+    });
+    until_named(&mut cx, "detail-closed-by-filter", |cx| {
+        view.read_with(cx, |view, _| {
+            view.state.search == "zzz" && view.detail.is_none()
+        })
+    });
+    cx.update(|window, _| {
+        assert!(
+            window.try_find("sqlite-detail").is_none(),
+            "the panel left the tree, not merely hidden"
+        );
+    });
+
+    assert_eq!(
+        std::fs::read(&path).expect("source bytes after inspecting"),
+        before,
+        "inspecting values did not modify the database"
+    );
+}
+
+#[gpui_kit::test]
+fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = dir.path().join("wal.sqlite");
+    let writer = rusqlite::Connection::open(&path).expect("the writer opens");
+    writer
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;\
+             CREATE TABLE items(id INTEGER, name TEXT);\
+             INSERT INTO items VALUES (1, 'one'), (2, 'two');",
+        )
+        .expect("WAL fixture");
+    let main_before = std::fs::read(&path).expect("main file bytes");
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    let view = sqlite_view(&app, &cx);
+    until_named(&mut cx, "wal-open", |cx| {
+        view.read_with(cx, |view, _| view.state.total == Some(2)) && dump(&view, cx).1.len() == 2
+    });
+    assert!(
+        view.read_with(&cx, |view, _| view.status_text())
+            .contains("wal"),
+        "the status line reports the WAL journal"
+    );
+
+    // 并发 writer 提交后：同一读取视图保持打开时的快照。
+    writer
+        .execute("INSERT INTO items VALUES (3, 'three')", [])
+        .expect("the writer commits while the reader is open");
+    view.update(&mut cx, |view, cx| {
+        view.document.update(cx, |document, cx| {
+            document.navigate(0, cx);
+            document.load_count(cx);
+        });
+    });
+    settle(&mut cx);
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.state.total),
+        Some(2),
+        "the open read view keeps its snapshot"
+    );
+
+    // 刷新打开新视图才看到新行；浏览过程不写主库文件。
+    cx.update(|window, cx| window.click("sqlite-refresh", cx));
+    until_named(&mut cx, "wal-refresh", |cx| {
+        view.read_with(cx, |view, _| view.state.total == Some(3))
+            && cells_contain(&dump(&view, cx), "three")
+    });
+    assert_eq!(
+        std::fs::read(&path).expect("main file after browsing"),
+        main_before,
+        "the reader did not write or checkpoint the main file"
+    );
+    assert!(
+        !path.with_extension("sqlite-journal").exists(),
+        "no rollback journal appeared"
+    );
+    drop(writer);
+}
+
+/// A TEXT value that is not valid UTF-8 must not be shown through
+/// replacement characters: the viewer keeps the bytes visible as hex, and
+/// the panel says why.
+#[test]
+fn invalid_utf8_text_is_shown_as_its_bytes() {
+    let value = SqliteValue::Text {
+        preview: b"ok\xffA".to_vec(),
+        total: 4,
+    };
+    let text = super::detail_text(&value);
+    assert!(
+        !text.contains('\u{fffd}'),
+        "no replacement characters stood in for bytes: {text}"
+    );
+    assert!(
+        text.contains("ff"),
+        "the invalid byte stays visible as hex: {text}"
+    );
+    assert!(
+        text.contains("ok"),
+        "the printable bytes keep their ASCII column: {text}"
+    );
 }
