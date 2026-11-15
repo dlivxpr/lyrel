@@ -616,6 +616,7 @@ pub(crate) fn project(text: &str, cancel: &AtomicBool) -> Result<XmlProjection, 
         ParsingOptions {
             allow_dtd: false,
             nodes_limit: XML_NODES as u32,
+            entity_resolver: None,
         },
     );
     let document = match parsed {

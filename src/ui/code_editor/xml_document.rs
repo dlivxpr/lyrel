@@ -26,7 +26,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent,
     MouseButton, Render, SharedString, Subscription, Task, TestSupportExt as _,
-    UniformListScrollHandle, Window, div, px, rems, uniform_list,
+    UniformListScrollHandle, Window, div, rems, uniform_list,
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 

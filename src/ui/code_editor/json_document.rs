@@ -929,7 +929,8 @@ impl JsonView {
         self.full_value = None;
         self.mutation_error = None;
         let owner = cx.entity_id();
-        let panel = cx.new(|cx| StructureEditPanel::new(owner, window, cx, title, key, value));
+        let panel = cx
+            .new(|cx| StructureEditPanel::new(owner, window, cx, title, key, value, false));
         let events = cx.subscribe_in(
             &panel,
             window,

@@ -504,6 +504,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
         app.read_with(cx, |app, _| app.editor.buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
+    click_row(&reopened, &mut cx, "/root/p:item[2]");
     assert_eq!(
         row_value(&reopened, &mut cx, "/root/p:item[2]/text()[1]").as_deref(),
         Some("中文 &amp; 文本")
@@ -526,7 +527,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
     let host: SharedHost = FileHost::new(HostId(2941));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1600.), px(1000.)));
-    let (_, view) = open_ready(&app, &mut cx, host, &path);
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &path);
 
     // Add an attribute at the element's start-tag boundary.
     click_row(&view, &mut cx, "/r");

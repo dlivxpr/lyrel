@@ -64,7 +64,7 @@ roxmltree = "0.21"
 # roxmltree validates well-formedness and namespace bindings; neither parser
 # is given a DTD or an external resolver, so external entities are never read.
 # MIT/Apache-2.0; see src/ui/code_editor/xml_document/UPSTREAM.toml.
-xmlparser = "0.13.6"
+xmlparser = "=0.13.6"
 # Session and shell tokens are 128-bit OS entropy, never a timestamp or a
 # hash of the document. `getrandom` is already in the tree.
 getrandom = "0.3.4"
