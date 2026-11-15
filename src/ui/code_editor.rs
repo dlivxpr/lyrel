@@ -93,6 +93,7 @@ pub(crate) use pdf_document::{
     PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
 };
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+pub(crate) use yaml_document::KEY_CONTEXT as YAML_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

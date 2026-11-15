@@ -1840,15 +1840,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorYamlEditAlias => {
             "别名只是引用。请编辑它的锚点，或改用源码；这里不会展开或断开别名。"
         }
-        L10nKey::EditorYamlEditBlockScalar => {
-            "块标量请在源码中编辑，以保持头部、缩进和 chomping 完全不变。"
-        }
-        L10nKey::EditorYamlEditComplexKey => {
-            "复杂键或非标量 tag 键保留源码形式；请在源码中重命名。"
-        }
-        L10nKey::EditorYamlBlockScalarSource => {
-            "已在源码中定位该块标量的完整范围；请在此编辑其布局。仍使用同一 history 与保存。"
-        }
         L10nKey::EditorYamlComplexKeySource => {
             "已在源码中定位该复杂键的完整范围；请在此编辑其语法。仍使用同一 history 与保存。"
         }

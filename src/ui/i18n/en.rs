@@ -2028,15 +2028,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorYamlEditAlias => {
             "This alias is a reference. Edit its anchor, or use Source; the alias is never expanded or detached here."
         }
-        L10nKey::EditorYamlEditBlockScalar => {
-            "Block scalar values are edited in Source so their header, indentation and chomping stay exact."
-        }
-        L10nKey::EditorYamlEditComplexKey => {
-            "Complex or tagged non-scalar keys keep their source form; rename them in Source."
-        }
-        L10nKey::EditorYamlBlockScalarSource => {
-            "Block scalar opened in Source at its exact range; edit its layout there. The same history and save apply."
-        }
         L10nKey::EditorYamlComplexKeySource => {
             "Complex key opened in Source at its exact range; edit its syntax there. The same history and save apply."
         }

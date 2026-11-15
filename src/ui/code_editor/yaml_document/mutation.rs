@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use yaml_edit::{AsYaml, Document, YamlFile, YamlNode as AstYamlNode};
+use yaml_edit::{AsYaml, Document, Scalar, YamlFile, YamlNode as AstYamlNode};
 
 use super::projection::{ContainerKind, YamlNode, YamlNodeKind, YamlProjection};
 
@@ -59,8 +59,6 @@ pub(crate) enum Mutation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnsupportedEdit {
     Alias,
-    BlockScalar,
-    ComplexKey,
     MissingValue,
     MultiLine,
     NotContainer,
@@ -97,36 +95,60 @@ pub(crate) fn plan(
             if node.alias.is_some() {
                 return Err(MutationError::Unsupported(UnsupportedEdit::Alias));
             }
-            if node.block_scalar {
-                return Err(MutationError::Unsupported(UnsupportedEdit::BlockScalar));
-            }
             if node.container.is_some() {
                 return Err(MutationError::Unsupported(UnsupportedEdit::NotScalar));
             }
-            let range = node
-                .value_range
-                .clone()
-                .ok_or(MutationError::Unsupported(UnsupportedEdit::MissingValue))?;
-            let raw = single_line(value)?;
-            validate_value(raw)?;
-            if text.get(range.clone()) == Some(raw) {
-                Vec::new()
+            if node.block_scalar {
+                let range = node.content_range.clone();
+                let original = text.get(range.clone()).unwrap_or_default();
+                let raw = value.trim_end_matches(['\r', '\n']);
+                validate_block_value(raw)?;
+                let mut fragment = value.to_owned();
+                if original.ends_with('\n') && !fragment.ends_with('\n') {
+                    fragment.push('\n');
+                }
+                if original == fragment {
+                    Vec::new()
+                } else {
+                    vec![(range, fragment)]
+                }
             } else {
-                vec![(range, raw.to_owned())]
+                let range = node
+                    .value_range
+                    .clone()
+                    .ok_or(MutationError::Unsupported(UnsupportedEdit::MissingValue))?;
+                let raw = single_line(value)?;
+                validate_value(raw)?;
+                if text.get(range.clone()) == Some(raw) {
+                    Vec::new()
+                } else {
+                    vec![(range, raw.to_owned())]
+                }
             }
         }
         Mutation::RenameKey { target, key } => {
             let index = resolve(projection, target)?;
             let node = &projection.nodes()[index];
-            let range = match (node.entry, node.key_editable, node.key_range.clone()) {
-                (true, true, Some(range)) => range,
-                (true, false, _) => {
-                    return Err(MutationError::Unsupported(UnsupportedEdit::ComplexKey));
-                }
-                _ => return Err(MutationError::Unsupported(UnsupportedEdit::NotScalar)),
+            if !node.entry {
+                return Err(MutationError::Unsupported(UnsupportedEdit::NotScalar));
+            }
+            let (range, raw) = if node.key_editable {
+                let range = node
+                    .key_range
+                    .clone()
+                    .ok_or(MutationError::Unsupported(UnsupportedEdit::NotScalar))?;
+                let raw = single_line(key)?;
+                validate_key(raw)?;
+                (range, raw)
+            } else {
+                let range = node
+                    .key_detail_range
+                    .clone()
+                    .ok_or(MutationError::Unsupported(UnsupportedEdit::NotScalar))?;
+                let raw = single_line(key)?;
+                validate_complex_key(raw)?;
+                (range, raw)
             };
-            let raw = single_line(key)?;
-            validate_key(raw)?;
             if text.get(range.clone()) == Some(raw) {
                 Vec::new()
             } else {
@@ -240,6 +262,92 @@ fn validate_value(raw: &str) -> Result<(), MutationError> {
     if probe.get(range) != Some(raw) {
         return Err(MutationError::InvalidFragment(
             "only one scalar value is allowed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// A block scalar fragment must itself parse as exactly one block scalar in
+/// value position. The user edits the raw header and body; anchors, tags,
+/// comments and unrelated source stay outside the replaced range.
+fn validate_block_value(raw: &str) -> Result<(), MutationError> {
+    if !(raw.starts_with('|') || raw.starts_with('>')) {
+        return Err(MutationError::InvalidFragment(
+            "a block scalar fragment must start with | or >".to_owned(),
+        ));
+    }
+    let probe = format!("__lyrel_value__: {raw}\n");
+    let document = parse_probe(&probe)?;
+    let entries: Vec<_> = document
+        .as_mapping()
+        .ok_or_else(|| MutationError::InvalidFragment("not one mapping entry".to_owned()))?
+        .entries()
+        .collect();
+    if entries.len() != 1 {
+        return Err(MutationError::InvalidFragment(
+            "only one scalar value is allowed".to_owned(),
+        ));
+    }
+    let value = entries[0]
+        .value_node()
+        .ok_or_else(|| MutationError::InvalidFragment("no scalar value".to_owned()))?;
+    let scalar = match &value {
+        AstYamlNode::Scalar(scalar) if scalar.is_block() => scalar,
+        _ => {
+            return Err(MutationError::InvalidFragment(
+                "not one block scalar value".to_owned(),
+            ));
+        }
+    };
+    let range = scalar_range(scalar);
+    let parsed = probe
+        .get(range)
+        .unwrap_or_default()
+        .trim_end_matches(['\r', '\n']);
+    if parsed != raw.trim_end_matches(['\r', '\n']) {
+        return Err(MutationError::InvalidFragment(
+            "only one block scalar value is allowed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn scalar_range(scalar: &Scalar) -> Range<usize> {
+    let range = scalar.byte_range();
+    range.start as usize..range.end as usize
+}
+
+/// A flow collection key can be replaced as one complete key fragment. Scalar
+/// keys use the scalar path; multi-line or opaque keys stay in Source.
+fn validate_complex_key(raw: &str) -> Result<(), MutationError> {
+    let probe = format!("{raw}: __lyrel_probe__\n");
+    let document = parse_probe(&probe)?;
+    let entries: Vec<_> = document
+        .as_mapping()
+        .ok_or_else(|| MutationError::InvalidFragment("not one mapping entry".to_owned()))?
+        .entries()
+        .collect();
+    if entries.len() != 1 {
+        return Err(MutationError::InvalidFragment(
+            "only one mapping key is allowed".to_owned(),
+        ));
+    }
+    let key = entries[0]
+        .key_node()
+        .ok_or_else(|| MutationError::InvalidFragment("no mapping key".to_owned()))?;
+    if matches!(key, AstYamlNode::Scalar(_)) {
+        return Err(MutationError::InvalidFragment(
+            "a scalar key uses the scalar rename path".to_owned(),
+        ));
+    }
+    let range = key
+        .as_node()
+        .map(yaml_edit::advanced::syntax_node_range)
+        .map(|range| u32::from(range.start()) as usize..u32::from(range.end()) as usize)
+        .ok_or_else(|| MutationError::InvalidFragment("no mapping key".to_owned()))?;
+    if probe.get(range) != Some(raw) {
+        return Err(MutationError::InvalidFragment(
+            "only one mapping key is allowed".to_owned(),
         ));
     }
     Ok(())

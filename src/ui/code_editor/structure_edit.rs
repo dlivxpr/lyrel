@@ -7,7 +7,7 @@
 //! 错误呈现。
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -52,6 +52,7 @@ pub(crate) struct StructureEditPanel {
     key: Option<Entity<InputState>>,
     key_label: Option<SharedString>,
     value: Entity<InputState>,
+    multi_value: Option<Entity<TextareaState>>,
     value_label: SharedString,
     error: Option<SharedString>,
     notice: Option<SharedString>,
@@ -67,9 +68,18 @@ impl StructureEditPanel {
         title: SharedString,
         key: Option<EditField>,
         value: EditField,
+        multiline_value: bool,
     ) -> Self {
         let value_label = value.label.clone();
+        let initial = value.initial.clone();
         let value = new_input(window, cx, &value);
+        let multi_value = multiline_value.then(|| {
+            cx.new(|cx| {
+                let mut state = TextareaState::new(window, cx);
+                state.set_value(initial, window, cx);
+                state
+            })
+        });
         let key_label = key.as_ref().map(|field| field.label.clone());
         let key = key.map(|field| new_input(window, cx, &field));
         let value_sub = cx.subscribe_in(&value, window, |_, _, event: &InputEvent, _, cx| {
@@ -90,6 +100,7 @@ impl StructureEditPanel {
             key,
             key_label,
             value,
+            multi_value,
             value_label,
             error: None,
             notice: None,
@@ -100,8 +111,25 @@ impl StructureEditPanel {
 
     /// 焦点给第一个可编辑字段：有键字段时是键，否则是值。
     pub(crate) fn focus_first(&self, window: &mut Window, cx: &mut App) {
-        let target = self.key.as_ref().unwrap_or(&self.value);
-        let handle = target.read(cx).focus_handle(cx).clone();
+        if let Some(key) = &self.key {
+            let handle = key.read(cx).focus_handle(cx).clone();
+            window.focus(&handle, cx);
+        } else if let Some(value) = &self.multi_value {
+            let handle = value.read(cx).focus_handle(cx).clone();
+            window.focus(&handle, cx);
+        } else {
+            let handle = self.value.read(cx).focus_handle(cx).clone();
+            window.focus(&handle, cx);
+        }
+    }
+
+    /// 测试消费者把键盘放进真实值控件（多行时为 `Textarea`）。
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(crate) fn focus_value(&self, window: &mut Window, cx: &mut App) {
+        let handle = match &self.multi_value {
+            Some(value) => value.read(cx).focus_handle(cx).clone(),
+            None => self.value.read(cx).focus_handle(cx).clone(),
+        };
         window.focus(&handle, cx);
     }
 
@@ -130,7 +158,10 @@ impl StructureEditPanel {
     }
 
     pub(crate) fn value_text(&self, cx: &App) -> String {
-        self.value.read(cx).value().to_string()
+        match &self.multi_value {
+            Some(value) => value.read(cx).value().to_string(),
+            None => self.value.read(cx).value().to_string(),
+        }
     }
 }
 
@@ -215,13 +246,18 @@ impl Render for StructureEditPanel {
                     ("structure-edit-key", owner),
                 ))
             })
-            .child(field(
-                owner,
-                "structure-edit-value-label",
-                self.value_label.clone(),
-                self.value.clone(),
-                ("structure-edit-value", owner),
-            ))
+            .when_some(self.multi_value.clone(), |panel, value| {
+                panel.child(multi_field(owner, self.value_label.clone(), value))
+            })
+            .when(self.multi_value.is_none(), |panel| {
+                panel.child(field(
+                    owner,
+                    "structure-edit-value-label",
+                    self.value_label.clone(),
+                    self.value.clone(),
+                    ("structure-edit-value", owner),
+                ))
+            })
             .child(
                 h_flex()
                     .justify_end()
@@ -245,6 +281,29 @@ impl Render for StructureEditPanel {
                     ),
             )
     }
+}
+
+fn multi_field(owner: EntityId, label: SharedString, state: Entity<TextareaState>) -> AnyElement {
+    h_flex()
+        .items_start()
+        .gap_2()
+        .child(
+            div()
+                .id(("structure-edit-value-label", owner))
+                .flex_none()
+                .w(rems(5.))
+                .text_xs()
+                .child(label),
+        )
+        .child(
+            div()
+                .id(("structure-edit-value-multiline", owner))
+                .test_support()
+                .flex_1()
+                .min_w_0()
+                .child(Textarea::new(&state).small().h(rems(10.))),
+        )
+        .into_any_element()
 }
 
 fn field(

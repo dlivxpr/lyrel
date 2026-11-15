@@ -18,6 +18,7 @@ use std::sync::{
 
 use gpui_kit::ScrollStrategy;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Redo, Undo};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, h_flex, spinner::Spinner, v_flex,
 };
@@ -387,6 +388,24 @@ impl YamlView {
         self.mutation_notice.clone()
     }
 
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(crate) fn edit_texts(&self, cx: &App) -> Option<(Option<String>, String)> {
+        let session = self.editing.as_ref()?;
+        Some((
+            session.panel.read(cx).key_text(cx),
+            session.panel.read(cx).value_text(cx),
+        ))
+    }
+
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(crate) fn focus_edit_value(&self, window: &mut Window, cx: &mut App) {
+        if let Some(session) = &self.editing {
+            session
+                .panel
+                .update(cx, |panel, cx| panel.focus_value(window, cx));
+        }
+    }
+
     pub(crate) fn is_parsing(&self, cx: &App) -> bool {
         self.document.read(cx).is_parsing()
     }
@@ -682,15 +701,34 @@ impl YamlView {
         let Some(node) = self.selected_node(&projection) else {
             return;
         };
+        let Some(text) = self.current_text(cx) else {
+            return;
+        };
         if node.block_scalar {
             let range = node.content_range.clone();
-            let notice = self.handoff_notice(
-                node,
-                false,
-                &projection,
-                L10nKey::EditorYamlBlockScalarSource,
+            let Some(raw) = text.get(range) else {
+                return;
+            };
+            let target = NodeTarget::of(node);
+            let title = t_fmt(L10nKey::EditorYamlEditValueTitle, &[("path", &node.path)]).into();
+            let (notice, edited_notice) =
+                self.impact_notices(self.effective_anchor(node, false, &projection), false);
+            self.open_edit(
+                window,
+                cx,
+                EditKind::Value,
+                target,
+                title,
+                notice,
+                edited_notice,
+                true,
+                None,
+                EditField::new(
+                    t(L10nKey::EditorYamlValueName),
+                    t(L10nKey::EditorYamlValuePlaceholder),
+                    raw,
+                ),
             );
-            self.open_source_range(range, notice, window, cx);
             return;
         }
         if !node.value_editable() {
@@ -699,9 +737,6 @@ impl YamlView {
             return;
         }
         let Some(range) = node.value_range.clone() else {
-            return;
-        };
-        let Some(text) = self.current_text(cx) else {
             return;
         };
         let Some(raw) = text.get(range.clone()) else {
@@ -719,6 +754,7 @@ impl YamlView {
             title,
             notice,
             edited_notice,
+            false,
             None,
             EditField::new(
                 t(L10nKey::EditorYamlValueName),
@@ -736,7 +772,18 @@ impl YamlView {
             return;
         };
         if !node.rename_key_editable() {
-            if let Some(range) = node.key_detail_range.clone() {
+            let Some(range) = node.key_detail_range.clone() else {
+                self.mutation_error = Some(self.edit_unsupported(node));
+                cx.notify();
+                return;
+            };
+            let Some(text) = self.current_text(cx) else {
+                return;
+            };
+            let Some(raw) = text.get(range.clone()) else {
+                return;
+            };
+            if raw.contains(['\n', '\r']) {
                 let notice = self.handoff_notice(
                     node,
                     true,
@@ -744,10 +791,28 @@ impl YamlView {
                     L10nKey::EditorYamlComplexKeySource,
                 );
                 self.open_source_range(range, notice, window, cx);
-            } else {
-                self.mutation_error = Some(self.edit_unsupported(node));
-                cx.notify();
+                return;
             }
+            let target = NodeTarget::of(node);
+            let title = t_fmt(L10nKey::EditorYamlRenameKeyTitle, &[("path", &node.path)]).into();
+            let (notice, edited_notice) =
+                self.impact_notices(self.effective_anchor(node, true, &projection), true);
+            self.open_edit(
+                window,
+                cx,
+                EditKind::Key,
+                target,
+                title,
+                notice,
+                edited_notice,
+                false,
+                None,
+                EditField::new(
+                    t(L10nKey::EditorYamlKeyName),
+                    t(L10nKey::EditorYamlKeyPlaceholder),
+                    raw,
+                ),
+            );
             return;
         }
         let Some(raw) = node.key_text.clone() else {
@@ -765,6 +830,7 @@ impl YamlView {
             title,
             notice,
             edited_notice,
+            false,
             None,
             EditField::new(
                 t(L10nKey::EditorYamlKeyName),
@@ -795,6 +861,7 @@ impl YamlView {
                     title,
                     notice,
                     edited_notice,
+                    false,
                     Some(EditField::new(
                         t(L10nKey::EditorYamlKeyName),
                         t(L10nKey::EditorYamlKeyPlaceholder),
@@ -818,6 +885,7 @@ impl YamlView {
                     title,
                     notice,
                     edited_notice,
+                    false,
                     None,
                     EditField::new(
                         t(L10nKey::EditorYamlValueName),
@@ -861,6 +929,7 @@ impl YamlView {
         title: SharedString,
         notice: Option<SharedString>,
         edited_notice: Option<SharedString>,
+        multiline_value: bool,
         key: Option<EditField>,
         value: EditField,
     ) {
@@ -868,7 +937,9 @@ impl YamlView {
         self.mutation_error = None;
         self.mutation_notice = None;
         let owner = cx.entity_id();
-        let panel = cx.new(|cx| StructureEditPanel::new(owner, window, cx, title, key, value));
+        let panel = cx.new(|cx| {
+            StructureEditPanel::new(owner, window, cx, title, key, value, multiline_value)
+        });
         if let Some(notice) = notice {
             panel.update(cx, |panel, cx| panel.set_notice(Some(notice), cx));
         }
@@ -979,15 +1050,9 @@ impl YamlView {
     }
 
     fn edit_unsupported(&self, node: &projection::YamlNode) -> SharedString {
-        let key = match (
-            node.alias.is_some(),
-            node.block_scalar,
-            node.entry,
-            node.key_editable,
-        ) {
-            (true, _, _, _) => L10nKey::EditorYamlEditAlias,
-            (_, true, _, _) => L10nKey::EditorYamlEditBlockScalar,
-            (_, _, true, false) => L10nKey::EditorYamlEditComplexKey,
+        let key = match (node.alias.is_some(), node.value_range.is_none()) {
+            (true, _) => L10nKey::EditorYamlEditAlias,
+            (_, true) => L10nKey::EditorYamlEditMissingValue,
             _ => L10nKey::EditorYamlEditUnsupported,
         };
         t(key).into()
@@ -998,12 +1063,6 @@ impl YamlView {
             MutationError::Stale => t(L10nKey::EditorYamlEditStale).into(),
             MutationError::Unsupported(UnsupportedEdit::Alias) => {
                 t(L10nKey::EditorYamlEditAlias).into()
-            }
-            MutationError::Unsupported(UnsupportedEdit::BlockScalar) => {
-                t(L10nKey::EditorYamlEditBlockScalar).into()
-            }
-            MutationError::Unsupported(UnsupportedEdit::ComplexKey) => {
-                t(L10nKey::EditorYamlEditComplexKey).into()
             }
             MutationError::Unsupported(UnsupportedEdit::MissingValue) => {
                 t(L10nKey::EditorYamlEditMissingValue).into()
@@ -1153,6 +1212,18 @@ impl YamlView {
         if expandable {
             self.toggle_node(index, cx);
         }
+    }
+
+    /// 结构树持有键盘时的普通撤销：复用同一源码 presentation 的既有
+    /// `EditorState::undo_document`，不切换 Source、不另建 history。
+    fn undo_structure(&mut self, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        source.update(cx, |source, cx| source.undo_document(cx));
+    }
+
+    fn redo_structure(&mut self, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        source.update(cx, |source, cx| source.redo_document(cx));
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1752,6 +1823,8 @@ impl Render for YamlView {
             YamlMode::Structure => {
                 item.key_context(KEY_CONTEXT)
                     .track_focus(&focus)
+                    .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
+                    .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {

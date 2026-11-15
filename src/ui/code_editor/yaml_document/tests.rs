@@ -202,6 +202,15 @@ fn type_source(
     settle(cx);
 }
 
+fn type_edit_value(view: &Entity<YamlView>, cx: &mut VisualTestContext, text: &str) {
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.focus_edit_value(window, cx));
+        window.press("secondary-a", cx);
+        window.input(text, cx);
+    });
+    settle(cx);
+}
+
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(cx, |cx| {
@@ -405,25 +414,25 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
     save(&app, &mut cx);
     assert_eq!(std::fs::read(&remote_file).unwrap(), original());
 
-    // A block scalar is a real edit path: the tree opens its exact source
-    // range, where the layout and chomping can be changed without guessing.
+    // A block scalar is edited in the shared panel's real multiline field:
+    // the raw header and body are a source fragment, validated as one block
+    // scalar, then spliced locally with the same commit/history path.
     click_row(&view, &mut cx, "$#1[\"block\"]");
     click_button(&view, &mut cx, "yaml-edit-value");
-    assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
-    let range = view.read_with(&cx, |view, cx| view.source().read(cx).selected_range());
-    let text = source_text(&app, &cx);
-    let selected = &text[range];
-    assert!(
-        selected.starts_with("|-") && selected.contains("第一行"),
-        "block scalar handoff selection: {selected:?}"
+    assert!(panel_open(&view, &mut cx));
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.mode()),
+        YamlMode::Structure
     );
+    let (_, raw) = view
+        .read_with(&cx, |view, cx| view.edit_texts(cx))
+        .expect("multiline value");
     assert!(
-        view.read_with(&cx, |view, _| view.mutation_notice())
-            .is_some_and(|notice| notice.contains("Block scalar opened"))
+        raw.starts_with("|-") && raw.contains("第一行"),
+        "raw: {raw:?}"
     );
-    let at = text.find("第一行").expect("block body");
-    type_source(&app, &mut cx, at..at + "第一行".len(), "改行");
-    toggle_mode(&view, &mut cx);
+    type_edit_value(&view, &mut cx, "|-\n  改行\n  第二行");
+    apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     assert!(
         source_text(&app, &cx).contains("|-\n  改行\n  第二行"),
@@ -431,26 +440,21 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
         source_text(&app, &cx)
     );
 
-    // A complex key likewise opens its complete source syntax; no scalar
-    // replacement is generated for a key the tree cannot rewrite losslessly.
+    // A flow collection key is a complete local fragment; the same panel
+    // validates it as one mapping key instead of guessing a re-render.
     click_row(&view, &mut cx, "$#1[\"[left, right]\"]");
     click_button(&view, &mut cx, "yaml-rename-key");
-    assert_eq!(view.read_with(&cx, |view, _| view.mode()), YamlMode::Source);
-    let range = view.read_with(&cx, |view, cx| view.source().read(cx).selected_range());
-    assert_eq!(&source_text(&app, &cx)[range], "[left, right]");
-    assert!(
-        view.read_with(&cx, |view, _| view.mutation_notice())
-            .is_some_and(|notice| notice.contains("Complex key opened"))
+    assert!(panel_open(&view, &mut cx));
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.mode()),
+        YamlMode::Structure
     );
-    let text = source_text(&app, &cx);
-    let at = text.find("[left, right]").expect("complex key");
-    type_source(
-        &app,
-        &mut cx,
-        at..at + "[left, right]".len(),
-        "[left, third]",
-    );
-    toggle_mode(&view, &mut cx);
+    let (_, raw) = view
+        .read_with(&cx, |view, cx| view.edit_texts(cx))
+        .expect("complex key value");
+    assert_eq!(raw, "[left, right]");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "[left, third]");
+    apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     assert!(source_text(&app, &cx).contains("[left, third]"));
 
@@ -650,9 +654,9 @@ fn flow_block_key_value_and_sequence_edits_keep_comments_and_structure(tcx: &mut
     assert!(source_text(&app, &cx).contains("# head"));
     assert!(source_text(&app, &cx).contains("# tail"));
 
-    // Undo and redo are the same shared history. The source presentation owns
-    // the keyboard action; the tree merely reflects the resulting revision.
-    toggle_mode(&view, &mut cx);
+    // Undo and redo from the tree itself use the same shared history. The tree
+    // handler calls the source presentation's `undo_document`; it does not
+    // switch to Source or create a second history.
     press(&app, &mut cx, &secondary("z"));
     until(&mut cx, |cx| is_ready(&view, cx));
     assert!(source_text(&app, &cx).contains("b: [x, y, z]"));
