@@ -1882,6 +1882,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageAnimationTruncated => {
             "This animation ends before its frame data is complete"
         }
+        L10nKey::EditorDrawioFailed => "Couldn’t render the draw.io diagram",
+        L10nKey::EditorDrawioLoading => "Rendering diagram",
+        L10nKey::EditorDrawioPageOf => "Page {page} of {pages}",
+        L10nKey::EditorDrawioPagePrevious => "Previous page",
+        L10nKey::EditorDrawioPageNext => "Next page",
+        L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
+        L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
+        L10nKey::EditorDrawioRetry => "Try again",
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",
         L10nKey::MarkdownTurnInto => "Turn into",

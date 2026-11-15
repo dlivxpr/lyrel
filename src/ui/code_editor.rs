@@ -30,6 +30,8 @@ use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
+mod drawio_document;
+pub(crate) mod drawio_engine;
 mod image_document;
 pub(crate) mod markdown;
 mod markdown_formula;
@@ -55,6 +57,11 @@ pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+/// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
+pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
+pub(crate) use drawio_document::{
+    DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut,
+};
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -419,6 +426,17 @@ pub(crate) fn is_svg_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
+/// draw.io documents have their own read-only engine route. `.drawio` and
+/// `.dio` are unambiguous; a bare `.xml` needs the bounded content probe in
+/// `buffers::load_file`, so it is not claimed here.
+pub(crate) fn is_drawio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("drawio") || extension.eq_ignore_ascii_case("dio")
+        })
 }
 
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
@@ -788,6 +806,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.svg().is_some())
     }
 
+    pub(crate) fn drawio_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.drawio().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -809,6 +832,11 @@ impl LyrelApp {
                     file.presentations
                         .image_existing(tab, group)
                         .map(EditorInput::Image)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .drawio_existing(tab, group)
+                        .map(EditorInput::Drawio)
                 })
                 .unwrap_or_else(|| file.input.clone()),
         )
@@ -1447,6 +1475,9 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
+        } else if let Some(primary) = file.input.drawio() {
+            let view = file.presentations.drawio_view(primary, tab, group, cx);
+            EditorInput::Drawio(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1981,6 +2012,12 @@ impl LyrelApp {
         if let Some(image) = input.image() {
             let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
             return image_document::menu_entries(menu, multipage);
+        }
+        // A draw.io preview is read-only here: page and zoom controls are the
+        // only true actions, and there is no edit or save command to offer.
+        if let Some(drawio) = input.drawio() {
+            let multipage = drawio.read(cx).page_count(cx) > 1;
+            return drawio_document::menu_entries(menu, multipage);
         }
         let selected = input
             .text()
@@ -2687,6 +2724,8 @@ impl LyrelApp {
                     "svg-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
+                } else if self.drawio_document_active() {
+                    "drawio-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2802,6 +2841,28 @@ impl LyrelApp {
                 let view = f.presentations.image_view(primary, tab, group, cx);
                 v_flex()
                     .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.drawio().is_some() => {
+                let primary = f.input.drawio().expect("draw.io document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.drawio_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("drawio-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3181,6 +3242,15 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let drawio = self
+            .active_editor_input()
+            .and_then(|input| input.drawio().cloned());
+        let drawio_status: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).status_text(cx));
+        let drawio_page: Option<SharedString> =
+            drawio.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let drawio_zoom: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).zoom_label());
         let cursor: Option<SharedString> = self
             .active_editor_input()
             .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
@@ -3408,6 +3478,46 @@ impl LyrelApp {
                 this.child(
                     div()
                         .id("status-image-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
+            // A draw.io preview has no caret, wrap, encoding or save path;
+            // its status names the engine, pages and zoom instead.
+            .when_some(drawio_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-drawio-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when_some(drawio_page, |this, page| {
+                this.child(
+                    div()
+                        .id("status-drawio-page")
+                        .test_support()
+                        .aria_label(page.clone())
+                        .flex_none()
+                        .child(page),
+                )
+            })
+            .when(drawio.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-drawio-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(drawio_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-drawio-zoom")
                         .test_support()
                         .flex_none()
                         .child(zoom),

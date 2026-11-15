@@ -1,8 +1,11 @@
 use super::*;
 use lyrel_core::core::session::WorkspaceId;
+use std::sync::Arc;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+use super::drawio_document::{DrawioDocument, DrawioView};
+use super::drawio_engine;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use markdown::images;
 use markdown::images::ImageFormat;
@@ -375,6 +378,7 @@ impl EditorBuffers {
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Drawio(drawio) => (self.create_drawio(host, drawio, cx), true),
             Loaded::Text {
                 path,
                 text,
@@ -435,6 +439,58 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A read-only draw.io document. The page list and failure are already
+    /// decided off the UI thread; the native surface starts only when the
+    /// presentation paints with a real window handle.
+    fn create_drawio<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        drawio: LoadedDrawio,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let LoadedDrawio {
+            path,
+            bytes,
+            source,
+            mtime,
+        } = drawio;
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|cx| DrawioDocument::new(bytes, source, cx));
+        let view = cx.new(|cx| DrawioView::new(document, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Drawio(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -825,6 +881,12 @@ impl EditorBuffers {
         let source = file.input.source_document(cx);
         let source_reload = source.is_some();
         let image = file.input.image().cloned();
+        let drawio = file.input.drawio().cloned();
+        let drawio_reload = drawio.is_some();
+        if let Some(view) = &drawio {
+            let document = view.read(cx).document().clone();
+            document.update(cx, |document, cx| document.begin_reload(cx));
+        }
         let input_lease = source.as_ref().map(|document| document.read(cx).revision());
         let pending_lease = source
             .as_ref()
@@ -850,6 +912,26 @@ impl EditorBuffers {
             window,
             cx,
             move |h| {
+                if drawio_reload {
+                    let meta = h.stat(&target)?;
+                    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+                        return Ok(Reloaded::Drawio(LoadedDrawio {
+                            path: target,
+                            bytes: Arc::from([]),
+                            source: Err(drawio_engine::DrawioError::TooLarge),
+                            mtime: meta.mtime,
+                        }));
+                    }
+                    let bytes =
+                        h.read_file(&target, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)?;
+                    let source = drawio_engine::parse(&bytes);
+                    return Ok(Reloaded::Drawio(LoadedDrawio {
+                        path: target,
+                        bytes: Arc::from(bytes),
+                        source,
+                        mtime: meta.mtime,
+                    }));
+                }
                 if image_reload {
                     let format = image_claimed
                         .or_else(|| ImageFormat::from_extension(&target))
@@ -897,6 +979,22 @@ impl EditorBuffers {
                 };
                 let (decoded, mtime) = match reloaded {
                     Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // A diagram is read-only in this ticket, so the freshest
+                    // bytes are the document. The old engine session is retired
+                    // by the document revision change.
+                    Reloaded::Drawio(drawio) => {
+                        file.disk_mtime = drawio.mtime;
+                        file.conflict = None;
+                        if let Some(view) = file.input.drawio().cloned() {
+                            let LoadedDrawio { bytes, source, .. } = drawio;
+                            let document = view.read(cx).document().clone();
+                            document.update(cx, |document, cx| {
+                                document.replace(bytes, source, cx)
+                            });
+                        }
+                        cx.notify();
+                        return;
+                    }
                     // A picture cannot be edited, so nothing here can conflict:
                     // the freshest bytes are the document.
                     Reloaded::Image(image) => {
@@ -1018,6 +1116,16 @@ pub(super) enum Loaded {
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
+    /// A draw.io file. Parsing its page list happened on the Host thread;
+    /// failure is part of the document, not a reason to fall back to text.
+    Drawio(LoadedDrawio),
+}
+
+pub(super) struct LoadedDrawio {
+    path: PathBuf,
+    bytes: Arc<[u8]>,
+    source: Result<drawio_engine::DrawioSource, drawio_engine::DrawioError>,
+    mtime: Option<MTime>,
 }
 
 pub(super) struct LoadedImage {
@@ -1034,6 +1142,7 @@ impl Loaded {
         match self {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
+            Self::Drawio(drawio) => &drawio.path,
         }
     }
 }
@@ -1042,6 +1151,7 @@ impl Loaded {
 enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
+    Drawio(LoadedDrawio),
 }
 
 /// Reads, sizes, decodes and configures a file, on the host's own thread.
@@ -1057,6 +1167,9 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    if is_drawio_path(&path) {
+        return load_drawio(h, path, meta);
+    }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
     }
@@ -1075,6 +1188,12 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    // A draw.io document saved with a generic name still has its own root.
+    // This is a bounded probe, and it wins over the text and image fallbacks:
+    // rendering it as source would hide the diagram the file declares.
+    if drawio_engine::looks_like_drawio(&bytes) {
+        return Ok(loaded_drawio(path, meta.mtime, bytes));
+    }
     // A name that claims nothing can still hold a picture. Only magic the
     // formats actually start with counts here, and only after text decoding
     // has had its chance: a file the editor can show as text keeps that.
@@ -1100,6 +1219,47 @@ fn load_file(
         format: decoded.format,
         mtime: meta.mtime,
         config,
+    })
+}
+
+/// Reads a `.drawio`/`.dio` file under the diagram budget. An oversized or
+/// malformed file still becomes a visible document, not a silent text fallback
+/// and not an external application.
+fn load_drawio(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> Result<Loaded, EditorOpenError> {
+    let requested = path.clone();
+    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+        return Ok(Loaded::Drawio(LoadedDrawio {
+            path,
+            bytes: Arc::from([]),
+            source: Err(drawio_engine::DrawioError::TooLarge),
+            mtime: meta.mtime,
+        }));
+    }
+    let bytes = h
+        .read_file(&path, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)
+        .map_err(|error| {
+            EditorOpenError::Message(t_fmt(
+                L10nKey::EditorCantRead,
+                &[
+                    ("path", &requested.display().to_string()),
+                    ("e", &error.to_string()),
+                ],
+            ))
+        })?;
+    Ok(loaded_drawio(path, meta.mtime, bytes))
+}
+
+fn loaded_drawio(path: PathBuf, mtime: Option<MTime>, bytes: Vec<u8>) -> Loaded {
+    let source = drawio_engine::parse(&bytes);
+    Loaded::Drawio(LoadedDrawio {
+        path,
+        bytes: Arc::from(bytes),
+        source,
+        mtime,
     })
 }
 

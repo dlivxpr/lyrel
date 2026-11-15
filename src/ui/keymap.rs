@@ -218,6 +218,25 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, svg, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, svg, cx));
     }
+    // The draw.io preview keeps the same framing chords. PageUp/PageDown are
+    // handled by its own key context because the engine owns the canvas and
+    // has no text caret to move.
+    {
+        use crate::ui::code_editor::{
+            DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut,
+        };
+        let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("0", DrawioFit, drawio, cx),
+            load_binding("1", DrawioActualSize, drawio, cx),
+            load_binding("secondary-=", DrawioZoomIn, drawio, cx),
+            load_binding("secondary-+", DrawioZoomIn, drawio, cx),
+            load_binding("+", DrawioZoomIn, drawio, cx),
+            load_binding("secondary--", DrawioZoomOut, drawio, cx),
+            load_binding("secondary-_", DrawioZoomOut, drawio, cx),
+            load_binding("-", DrawioZoomOut, drawio, cx),
+        ]);
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

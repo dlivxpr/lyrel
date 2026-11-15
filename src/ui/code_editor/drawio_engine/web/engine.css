@@ -1,0 +1,23 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: light-dark(#ffffff, #1e1e1e);
+    color-scheme: light dark;
+}
+
+#viewport,
+#graph {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+#graph {
+    -webkit-user-select: none;
+    user-select: none;
+}

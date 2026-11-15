@@ -1,4 +1,5 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
+use super::drawio_document::DrawioView;
 use super::image_document::ImageView;
 use super::text::TextSnapshot;
 use super::*;
@@ -13,6 +14,8 @@ pub(crate) enum EditorInput {
     Image(Entity<ImageView>),
     /// SVG 文档：共享逐行保真 Document 的源码与安全原生预览。
     Svg(Entity<SvgView>),
+    /// draw.io 图：字节与页表属于文档，渲染只属于固定离线引擎。
+    Drawio(Entity<DrawioView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -32,6 +35,7 @@ pub(crate) enum WeakEditorInput {
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
     Svg(gpui_kit::WeakEntity<SvgView>),
+    Drawio(gpui_kit::WeakEntity<DrawioView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -40,6 +44,7 @@ impl WeakEditorInput {
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
+            Self::Drawio(input) => input.upgrade().map(EditorInput::Drawio),
         }
     }
 }
@@ -50,6 +55,7 @@ impl EditorInput {
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
+            Self::Drawio(input) => WeakEditorInput::Drawio(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -76,6 +82,12 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn drawio(&self) -> Option<&Entity<DrawioView>> {
+        match self {
+            Self::Drawio(input) => Some(input),
+            _ => None,
+        }
+    }
     /// Markdown and SVG keep the same line-preserving source authority; every
     /// save, reload and dirty comparison reads this document rather than a
     /// presentation's cached text.
@@ -83,7 +95,7 @@ impl EditorInput {
         match self {
             Self::Markdown(view) => Some(view.read(cx).document().clone()),
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
-            Self::Code(_) | Self::Image(_) => None,
+            Self::Code(_) | Self::Image(_) | Self::Drawio(_) => None,
         }
     }
     /// 这份输入的文本能力；只读图片返回 `None`。
@@ -94,10 +106,10 @@ impl EditorInput {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
             Self::Svg(input) => Some(TextInput::Svg(input)),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Drawio(_) => None,
         }
     }
-    /// 有文本可编辑、可查找、可保存的输入。图片不是。
+    /// 有文本可编辑、可查找、可保存的输入。图片和 draw.io 图不是。
     pub(crate) fn is_text(&self) -> bool {
         self.text().is_some()
     }
@@ -134,6 +146,9 @@ impl EditorInput {
                 cx.notify();
             }),
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            // The engine owns its pan/zoom view; the workbench has no second
+            // scroll axis to synchronise.
+            Self::Drawio(_) => {}
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -280,6 +295,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Drawio(view) => view.read(self.cx).handle(),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -288,6 +304,7 @@ impl InputRead<'_> {
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Drawio(_) => gpui_kit::Point::default(),
         }
     }
 }
@@ -378,6 +395,7 @@ pub(super) struct Presentations {
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
+    drawios: RefCell<Vec<(TabId, split::GroupId, Entity<DrawioView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -522,6 +540,44 @@ impl Presentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
     }
+    /// A draw.io document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own page/zoom and its
+    /// own engine session over the same bytes and page list.
+    pub(super) fn drawio_view<E: 'static>(
+        &self,
+        primary: &Entity<DrawioView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<DrawioView> {
+        let mut views = self.drawios.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let page = primary.read(cx).page();
+            cx.new(|cx| DrawioView::new_at(document, page, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn drawio_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<DrawioView>> {
+        self.drawios
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
@@ -578,6 +634,11 @@ impl Presentations {
             }
             keep
         });
+        // Dropping the last presentation drops its native surface and session;
+        // there is no engine-owned editing state to flush.
+        self.drawios
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(

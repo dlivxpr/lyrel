@@ -53,6 +53,12 @@ gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
 lyrel-text = { path = "crates/lyrel-text" }
 base64 = "0.23.1"
+# draw.io documents are read only as far as their page list and root: the
+# fixed engine still owns rendering. DTDs stay disabled.
+roxmltree = "0.21"
+# Session and shell tokens are 128-bit OS entropy, never a timestamp or a
+# hash of the document. `getrandom` is already in the tree.
+getrandom = "0.3.4"
 
 anyhow.workspace = true
 log.workspace = true
@@ -221,6 +227,10 @@ windows-sys = { version = "0.61", features = [
 # The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
 # the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
 raw-window-handle = "0.6"
+# The draw.io preview's child surface only. No general browser is exposed;
+# wry is deliberately not used because it cannot enforce the resource,
+# permission and file-panel policy this ticket requires.
+webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
 jieba-rs = "0.11.0"
 # The standalone updater extracts only Windows release ZIPs. Reuse the async

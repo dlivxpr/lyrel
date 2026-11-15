@@ -261,7 +261,7 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 | #289–#291，JSON 系列 | [Glim `glim-services/src/json.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/json.rs) 的 JSONC 词法处理、`glim-core/src/structured.rs`、`glim-app/src/views/reader/json.rs` 与 `json/view.rs` 的适用树交互 | 保留展开、导航与完整值交互，扩充 occurrence／source range；优先采用正式无损语法库，补局部 mutation 与 JSONL 记录模型 | 上游 `serde_json::Value` 树会丢重复键／原拼写，NDJSON 转数组，均不能作为生产权威模型；不移植整篇格式化来冒充局部编辑，也不扩大到 JSON5 |
 | #292–#294，YAML／TOML／XML | 复用 #289 移植的树交互与 Lyrel history；Glim `glim-services/src/graph.rs` 的 YAML／XML 分支仅作输入／展示差异参考 | 用正式、保留 token／位置的格式专用解析能力补齐语义模型与局部编辑，共享呈现而不共享 JSON 语义 | Glim YAML／XML 是有损只读投影，TOML 没有对应结构编辑实现；不移植 YAML→JSON 或扁平 XML 数据模型，不声称现有代码已支持锚点、日期、CDATA 等保真要求 |
 | #295–#296，SQLite | [Glim `glim-services/src/sqlite/browser.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/sqlite/browser.rs)、`glim-core/src/table.rs`、`glim-app/src/views/reader/sqlite.rs` 与 `sqlite/view.rs` | 移植受限 SQL 构造、列／分页／筛选／排序／完整值读取及交互；连接与查询移到 owning Host，保留值类型，补 read-view 生命周期 | 明确排除 `sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制；不沿用每次查询独立连接而未声明的跨页语义或把显示文本当无损值 |
-| #297–#298，draw.io | 固定版本官方离线引擎；Glim `glim-services/src/drawio.rs::decode_page` 仅在需要时作为压缩格式辅助代码／夹具来源 | 引擎提供真实画布与编辑，Lyrel 受控 bridge 负责内容、身份、history／保存集成；不用自制形状渲染器替代 | Glim 的基本形状 renderer 与 Zorite 白板不满足兼容和回写；引擎版本／资源许可在实施时单独固定审查 |
+| #297–#298，draw.io | 固定版本官方离线引擎；Glim `glim-services/src/drawio.rs::decode_page` 仅在需要时作为压缩格式辅助代码／夹具来源 | #297 已实现只读预览：`drawio_engine` 固定 v32.6.10 `viewer-static.min.js`（含 draw.io 图形、shapes、stencils），`DrawioDocument` 读取页表并按 owning Host 取字节，`DrawioView` 经严格 CSP／session token／seq 的本机 WebView2 child surface 渲染；页、缩放与只读状态属于 presentation。原始摘要与逐项 notice 见 `assets/drawio/{UPSTREAM.toml,PROVENANCE.json,THIRD-PARTY-NOTICES.md}` | #297 不包含编辑：没有保存／dirty／撤销桥。`extensions.min.js`（LGPL libavoid、EPL ELK）因固定发行无公开对应源码而不分发，MathJax、模板、字体、PlantUML 同样排除；macOS 宿主与原生实窗／IME 未实现或未验收，不得写成双平台通过。Glim 基本形状 renderer 与 Zorite 白板仍不是替代品 |
 | #299，集成接受 | 前述实际导入模块的 `UPSTREAM.toml`、所需 notices，以及 Lyrel 原生产消费者 | 汇总每张票保留／适配／补齐／拒绝的具体记录，检查是否偷换成整项自建 | 这是实现后的集成接受票；本轮不执行，不把固定源码阅读当兼容、实窗或远端验收 |
 
 Glim 的测试代码可从上述模块内联测试与 `glim-services/tests/reader_boundaries.rs`、`reader_session_regressions.rs` 提取适用场景；`assets/reader-contracts/table.csv`、`table.json`、`sqlite.sql`、`book.epub.json` 仅在逐项核对来源许可后使用。Zorite PDF 的合成测试位于四个 `src/*.rs` 内，不能据此宣称存在完整实文档夹具。保留场景而替换 `/usr/bin/sqlite3`、`/usr/bin/zip` 等平台生成方式；不导入无关格式测试或第三方整包资产。
@@ -277,6 +277,12 @@ draw.io 是本轮唯一计划引入 WebView／本机图形引擎的格式。例�
 离线引擎禁止默认云存储、网络图片、远程导出、插件、自动打开外链或任意本机文件访问。自托管默认端点并不天然离线，必须核对并关闭网络入口；链接与文件访问由工作台按所属 Host 和权限处理。引擎无权限读取未交付的其他文件。
 
 draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、来源、许可与分发通知，不从顶层 Apache-2.0 或 MIT 声明推导整个资源包具有相同条款。Rust 侧适用上方限定的源码导入例外，其余依赖仍使用 registry；GUI 仍只经 Kit/Fast，不引入 GPL 应用代码。
+
+#297 的实际交付边界：`assets/drawio/viewer-static.min.js` 是 v32.6.10 发行 WAR 的官方只读 viewer 成员，SHA-256 为 `dfa1cfb4ef24320b67131405da88511e7baba48621ddd5260eea8ec5f6425928`；它包含 draw.io 图形引擎、shapes 与 stencils，但没有 `extensions.min.js`。固定发行没有公开 libavoid 的对应源码／binding／构建，也没有 ELK port 的公开精确源码，因此该文件不分发；MathJax、模板、`img/`、字体与 PlantUML 同样不在分发闭包。公共 `UPSTREAM.toml` 单独记录 assets 目录（引擎、shapes、stencils），`PROVENANCE.json` 记录 WAR 与成员的 SHA-256，并明确该成员与固定公开树 blob 不同、不能声称由公共树可复现。
+
+`drawio_engine` 只提供固定 viewer 的只读渲染，不把它扩展成通用浏览器：所有资源来自固定 manifest，响应由原生 `WebResourceRequested` 精确匹配，未知路径、跨源、导航、popup、下载、权限、脚本对话框和外部 drop 均被拒绝或明确报告；shell 与 engine 页面分别有严格 CSP，engine iframe 只允许 `allow-scripts allow-same-origin`。token／session／seq 由原生在导航完成后只注入顶层 shell，engine iframe 不持有 token；关闭、重载或替换文档会丢弃旧 surface 与 session。此实现没有编辑控件、没有 engine 保存路径，原件和保存 owner 仍是工作台。
+
+#297 的边界仍是：Windows 直接 WebView2 宿主（`webview2-com 0.39.1`）尚未在原生产品窗口验收；macOS 没有宿主实现，产品会如实报告引擎不可用；真实远端、中文 IME、焦点、DPI、双平台与性能均未验收。headless 测试只证明资源哈希、请求策略、bridge 状态机与生产工作台文档语义，不能替代这些原生证据。
 
 ### 实现前提与验收证据
 
