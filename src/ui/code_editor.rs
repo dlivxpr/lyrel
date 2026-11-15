@@ -27,6 +27,9 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 
+mod book_document;
+mod book_search;
+mod book_view;
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
@@ -45,13 +48,24 @@ pub(crate) mod outline;
 mod problems;
 pub(crate) mod saving;
 mod split;
+mod sqlite_document;
+mod sqlite_grid;
 mod strip;
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
+pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
+pub(crate) use sqlite_document::Refresh as SqliteRefresh;
+
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
+pub(crate) use book_view::KEY_CONTEXT as BOOK_KEY_CONTEXT;
+pub(crate) use book_view::{
+    BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
+    BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
+    BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
+};
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
@@ -410,6 +424,18 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
             ["md", "markdown", "mdx"]
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// The conventional SQLite database extensions. The owning Host opens the
+/// database read-only; failed opens keep a visible document and explanation.
+pub(crate) fn is_sqlite_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["sqlite", "sqlite3", "db", "db3"]
                 .iter()
                 .any(|candidate| ext.eq_ignore_ascii_case(candidate))
         })
@@ -786,6 +812,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.image().is_some())
     }
 
+    pub(crate) fn sqlite_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.sqlite().is_some())
+    }
+
     pub(crate) fn pdf_document_active(&self) -> bool {
         self.active_buffer()
             .is_some_and(|file| file.input.pdf().is_some())
@@ -817,6 +848,16 @@ impl LyrelApp {
                     file.presentations
                         .image_existing(tab, group)
                         .map(EditorInput::Image)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .sqlite_existing(tab, group)
+                        .map(EditorInput::Sqlite)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .book_existing(tab, group)
+                        .map(EditorInput::Book)
                 })
                 .or_else(|| {
                     file.presentations
@@ -1460,6 +1501,16 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
+        } else if let Some(primary) = file.input.sqlite() {
+            let view = file
+                .presentations
+                .sqlite_view(primary, tab, group, window, cx);
+            EditorInput::Sqlite(view).focus(window, cx);
+        } else if let Some(primary) = file.input.book() {
+            let view = file
+                .presentations
+                .book_view(primary, tab, group, window, cx);
+            EditorInput::Book(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1995,8 +2046,35 @@ impl LyrelApp {
             let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
             return image_document::menu_entries(menu, multipage);
         }
+        if input.book().is_some() {
+            return menu
+                .separator()
+                .menu(t(L10nKey::EditorBookContents), Box::new(BookToggleContents))
+                .menu(
+                    t(L10nKey::EditorBookBookmarks),
+                    Box::new(BookToggleBookmarks),
+                )
+                .menu(t(L10nKey::EditorBookSearch), Box::new(BookSearch))
+                .separator()
+                .menu(t(L10nKey::EditorBookNextPage), Box::new(BookNextPage))
+                .menu(
+                    t(L10nKey::EditorBookPreviousPage),
+                    Box::new(BookPreviousPage),
+                )
+                .menu(t(L10nKey::EditorBookNextChapter), Box::new(BookNextChapter))
+                .menu(
+                    t(L10nKey::EditorBookPreviousChapter),
+                    Box::new(BookPreviousChapter),
+                )
+                .separator()
+                .menu(t(L10nKey::EditorBookAddBookmark), Box::new(BookAddBookmark));
+        }
         if input.pdf().is_some() {
             return pdf_document::menu_entries(menu);
+        }
+        // 数据库没有撤销、查找、剪贴板和行命令可给：它只有刷新与分页。
+        if input.sqlite().is_some() {
+            return sqlite_document::menu_entries(menu);
         }
         let selected = input
             .text()
@@ -2703,6 +2781,8 @@ impl LyrelApp {
                     "svg-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
+                } else if self.sqlite_document_active() {
+                    "sqlite-status-bar"
                 } else if self.pdf_document_active() {
                     "pdf-status-bar"
                 } else {
@@ -2804,6 +2884,28 @@ impl LyrelApp {
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
+            Some(f) if f.input.book().is_some() => {
+                let primary = f.input.book().expect("book document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.book_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("book-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
             Some(f) if f.input.image().is_some() => {
                 let primary = f.input.image().expect("image document presentation");
                 let tab = self
@@ -2867,6 +2969,28 @@ impl LyrelApp {
                 let view = f.presentations.pdf_view(primary, tab, group, window, cx);
                 v_flex()
                     .id(("pdf-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.sqlite().is_some() => {
+                let primary = f.input.sqlite().expect("sqlite document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.sqlite_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("sqlite-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3219,6 +3343,10 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
+        let sqlite_status: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.sqlite().cloned())
+            .map(|view| view.read(cx).status_text());
         let pdf = self
             .active_editor_input()
             .and_then(|input| input.pdf().cloned());
@@ -3230,6 +3358,18 @@ impl LyrelApp {
             .map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let book_status: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).status_text(cx));
+        let book_chapter: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).chapter_label(cx));
+        let book_progress: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).progress_label(cx));
         let cursor: Option<SharedString> = self
             .active_editor_input()
             .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
@@ -3462,12 +3602,51 @@ impl LyrelApp {
                         .child(zoom),
                 )
             })
+            .when_some(book_chapter, |this, chapter| {
+                this.child(
+                    div()
+                        .id("status-book-chapter")
+                        .test_support()
+                        .aria_label(chapter.clone())
+                        .flex_none()
+                        .child(chapter),
+                )
+            })
+            .when_some(book_progress, |this, progress| {
+                this.child(
+                    div()
+                        .id("status-book-progress")
+                        .test_support()
+                        .flex_none()
+                        .child(progress),
+                )
+            })
+            .when_some(book_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-book-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
             // A PDF states its page identity, zoom and read-only nature; it has
             // no caret, wrap, line ending or editable text format.
             .when_some(pdf_status, |this, status| {
                 this.child(
                     div()
                         .id("status-pdf-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            // A database states its actual read view, page and journal mode.
+            .when_some(sqlite_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-sqlite-facts")
                         .test_support()
                         .flex_none()
                         .child(status),

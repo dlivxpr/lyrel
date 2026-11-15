@@ -121,6 +121,38 @@ impl RemoteHost {
     fn call(&self, req: ControlRequest) -> io::Result<ReplyOk> {
         self.client.call(req)
     }
+
+    /// Send one SQLite request, or refuse before sending when the peer never
+    /// announced the capability.
+    fn sqlite_call(
+        &self,
+        request: crate::host::sqlite::SqliteRequest,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteReply> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SQLITE_BROWSE)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot browse SQLite databases; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        let got = self.client.call_full_with_cancel(
+            ControlRequest::Sqlite {
+                request: Box::new(request),
+            },
+            &[],
+            cancel,
+        )?;
+        match got.reply {
+            ReplyOk::Sqlite(reply) => Ok(*reply),
+            other => Err(wrong_shape("a SQLite reply", &other)),
+        }
+    }
 }
 
 fn wire_path(p: &Path) -> String {
@@ -231,6 +263,140 @@ impl Host for RemoteHost {
                 closed: false,
             })),
             other => Err(wrong_shape("an opened read session", &other)),
+        }
+    }
+
+    fn sqlite_open(
+        &self,
+        path: &Path,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteOpened> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Open {
+                path: wire_path(path),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Opened(opened) => Ok(opened),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "control peer answered with {other:?} where an opened SQLite view was required"
+                ),
+            )),
+        }
+    }
+
+    fn sqlite_columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteColumns> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Columns {
+                view,
+                table: table.to_string(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Columns(columns) => Ok(columns),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where SQLite columns were required"),
+            )),
+        }
+    }
+
+    fn sqlite_count(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Count {
+                view,
+                query: query.clone(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Count(total) => Ok(total),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "control peer answered with {other:?} where a SQLite row count was required"
+                ),
+            )),
+        }
+    }
+
+    fn sqlite_page(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqlitePage> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Page {
+                view,
+                query: query.clone(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Page(page) => Ok(page),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where a SQLite page was required"),
+            )),
+        }
+    }
+
+    fn sqlite_value(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteValue> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Value {
+                view,
+                query: query.clone(),
+                row,
+                column,
+                offset,
+                max_bytes,
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Value(value) => Ok(value),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where a SQLite value was required"),
+            )),
+        }
+    }
+
+    fn sqlite_close(&self, view: u64) {
+        // Posted, not awaited: a document can be closed on the UI thread, and
+        // the peer also closes every view when the connection ends. A peer
+        // without the capability has nothing to close.
+        if self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SQLITE_BROWSE)
+        {
+            let _ = self.client.post(ControlRequest::Sqlite {
+                request: Box::new(crate::host::sqlite::SqliteRequest::Close { view }),
+            });
         }
     }
 
@@ -1205,6 +1371,125 @@ mod tests {
         F: Fn(&ControlRequest) -> Option<(ControlReply, Vec<u8>)> + Send + 'static,
     {
         host_with_peer_announcing(separator, &[], answer)
+    }
+
+    #[test]
+    fn sqlite_is_refused_before_send_when_the_peer_lacks_the_feature() {
+        let (host, seen) = host_with_peer_announcing('/', &[], |_| None);
+        let error = host
+            .sqlite_open(
+                Path::new("/data.sqlite"),
+                &crate::host::sqlite::SqliteCancel::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("update lyrel-server"), "{error}");
+        assert!(
+            seen.try_recv().is_err(),
+            "an older peer must not receive a request it has never heard of"
+        );
+    }
+
+    #[test]
+    fn sqlite_unsupported_from_a_feature_peer_is_not_an_empty_schema() {
+        use crate::host::sqlite::SqliteCancel;
+        let (host, _) = host_with_peer_announcing(
+            '/',
+            &[crate::daemon::control::feature::SQLITE_BROWSE],
+            |req| match req {
+                ControlRequest::Sqlite { .. } => Some((
+                    ControlReply::Err(WireError::new(
+                        WireErrorKind::Unsupported,
+                        "this host serves no databases",
+                    )),
+                    Vec::new(),
+                )),
+                _ => None,
+            },
+        );
+        let error = host
+            .sqlite_open(Path::new("/data.sqlite"), &SqliteCancel::default())
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn sqlite_replies_map_to_typed_host_values() {
+        use crate::host::sqlite::{
+            SqliteCancel, SqliteColumns, SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage,
+            SqliteQuery, SqliteReply, SqliteRequest, SqliteValue,
+        };
+        let opened = SqliteOpened {
+            view: 9,
+            objects: vec![SqliteObject {
+                name: "items".into(),
+                kind: SqliteObjectKind::Table,
+                sql: "CREATE TABLE items(id INTEGER)".into(),
+            }],
+            journal_mode: "wal".into(),
+            idle_millis: 30_000,
+            max_age_millis: 180_000,
+        };
+        let page = SqlitePage {
+            page: 2,
+            start_column: 1,
+            rows: vec![vec![
+                SqliteValue::Null,
+                SqliteValue::Integer {
+                    value: -9007199254740993,
+                },
+                SqliteValue::real(f64::NEG_INFINITY.to_bits()),
+                SqliteValue::Text {
+                    preview: vec![0xff, 0xfe, b'a'],
+                    total: 3,
+                },
+                SqliteValue::Blob {
+                    preview: vec![0x00, 0xff],
+                    total: 8,
+                },
+            ]],
+            more: true,
+        };
+        let (host, _) =
+            host_with_peer_announcing('/', &[crate::daemon::control::feature::SQLITE_BROWSE], {
+                let opened = opened.clone();
+                let page = page.clone();
+                let columns = SqliteColumns {
+                    names: vec!["id".into()],
+                    order: vec!["rowid".into()],
+                };
+                move |req| match req {
+                    ControlRequest::Sqlite { request } => Some((
+                        ControlReply::Ok(ReplyOk::Sqlite(Box::new(match &**request {
+                            SqliteRequest::Open { .. } => SqliteReply::Opened(opened.clone()),
+                            SqliteRequest::Columns { .. } => SqliteReply::Columns(columns.clone()),
+                            SqliteRequest::Count { .. } => SqliteReply::Count(17),
+                            SqliteRequest::Page { .. } => SqliteReply::Page(page.clone()),
+                            _ => SqliteReply::Closed,
+                        }))),
+                        Vec::new(),
+                    )),
+                    _ => None,
+                }
+            });
+        let cancel = SqliteCancel::default();
+        let got = host
+            .sqlite_open(Path::new("/data.sqlite"), &cancel)
+            .unwrap();
+        assert_eq!(got, opened);
+        let query = SqliteQuery {
+            table: "items".into(),
+            columns: vec!["id".into()],
+            order: vec!["rowid".into()],
+            page: 2,
+            start_column: 1,
+            ..SqliteQuery::default()
+        };
+        assert_eq!(host.sqlite_count(got.view, &query, &cancel).unwrap(), 17);
+        let got_page = host.sqlite_page(got.view, &query, &cancel).unwrap();
+        assert_eq!(got_page, page);
+        let columns = host.sqlite_columns(got.view, "items", &cancel).unwrap();
+        assert_eq!(columns.names, ["id"]);
     }
 
     /// [`host_with_peer`], with a peer whose hello names `extra` features on

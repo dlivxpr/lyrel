@@ -31,6 +31,10 @@ pub(super) fn handshake<R: Read>(
         feature::HOST_RPC.to_string(),
         feature::READ_LINK.to_string(),
         feature::FILE_RANGE.to_string(),
+        // Read-only browsing is part of this server's control surface. A Host
+        // that cannot answer still refuses per request with `Unsupported`;
+        // advertising the name means an old peer is never sent the request.
+        feature::SQLITE_BROWSE.to_string(),
         feature::STDIO_BRIDGE.to_string(),
         // Every host this server fronts can search its own files; the
         // request only needs a name so an older client's peer is never sent

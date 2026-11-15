@@ -1851,6 +1851,37 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageReadOnly => "Read-only",
         L10nKey::EditorImageUndecodable => "This file could not be decoded as an image",
         L10nKey::EditorImagePixelSize => "{width} × {height}",
+        L10nKey::EditorSqliteOpenFailed => "Couldn’t open this SQLite database",
+        L10nKey::EditorSqliteRefreshed => "Read view {view}",
+        L10nKey::EditorSqliteCancelled => "Cancelled",
+        L10nKey::EditorSqliteExpired => "This read view expired",
+        L10nKey::EditorSqliteExpiredHint => "Refresh to read a new view of this database.",
+        L10nKey::EditorSqliteLoading => "Loading…",
+        L10nKey::EditorSqliteReadView => "Read view {view}",
+        L10nKey::EditorSqliteViewLimits => "expires after {idle}s idle or {age}s",
+        L10nKey::EditorSqlitePage => "Page {page}",
+        L10nKey::EditorSqliteRows => "Rows {from}–{to}",
+        L10nKey::EditorSqliteRowCount => "{n} rows",
+        L10nKey::EditorSqliteCountUnavailable => "Row count unavailable",
+        L10nKey::EditorSqliteJournal => "journal {mode}",
+        L10nKey::EditorSqliteReadOnly => "Read-only",
+        L10nKey::EditorSqliteFailed => "SQLite database unavailable",
+        L10nKey::EditorSqlitePreviousColumns => "Previous columns",
+        L10nKey::EditorSqliteNextColumns => "Next columns",
+        L10nKey::EditorSqliteFirstPage => "First page",
+        L10nKey::EditorSqlitePreviousPage => "Previous page",
+        L10nKey::EditorSqliteNextPage => "Next page",
+        L10nKey::EditorSqliteLastPage => "Last page",
+        L10nKey::EditorSqliteRefresh => "Refresh",
+        L10nKey::EditorSqliteCancel => "Cancel",
+        L10nKey::EditorSqliteSchema => "Schema",
+        L10nKey::EditorSqliteDefinition => "Definition",
+        L10nKey::EditorSqliteKindTable => "Table",
+        L10nKey::EditorSqliteKindView => "View",
+        L10nKey::EditorSqliteNoRows => "No rows in this page",
+        L10nKey::EditorSqliteNoColumns => "This object has no columns to show",
+        L10nKey::EditorSqliteNoObjects => "This database has no tables or views",
+        L10nKey::EditorSqliteNull => "NULL",
         L10nKey::EditorPdfPageOf => "Page {page} / {total}",
         L10nKey::EditorPdfPreviousPage => "Previous page",
         L10nKey::EditorPdfNextPage => "Next page",
@@ -1894,6 +1925,61 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageAnimationEmpty => "This animation has no frames to show",
         L10nKey::EditorImageAnimationTruncated => {
             "This animation ends before its frame data is complete"
+        }
+        L10nKey::EditorBookContents => "Contents",
+        L10nKey::EditorBookBookmarks => "Bookmarks",
+        L10nKey::EditorBookSearch => "Search book",
+        L10nKey::EditorBookSearchPlaceholder => "Search this book",
+        L10nKey::EditorBookSearchEmpty => "No matches",
+        L10nKey::EditorBookSearching => "Searching…",
+        L10nKey::EditorBookSearchPrevious => "Previous match",
+        L10nKey::EditorBookSearchNext => "Next match",
+        L10nKey::EditorBookSearchClose => "Close search",
+        L10nKey::EditorBookMatches => "{current}/{total} matches",
+        L10nKey::EditorBookMatchesTruncated => "Partial results; refine the search",
+        L10nKey::EditorBookAddBookmark => "Add bookmark",
+        L10nKey::EditorBookRemoveBookmark => "Remove bookmark",
+        L10nKey::EditorBookNoBookmarks => "No bookmarks yet",
+        L10nKey::EditorBookFontSmaller => "Smaller text",
+        L10nKey::EditorBookFontLarger => "Larger text",
+        L10nKey::EditorBookSpacing => "Spacing {value}",
+        L10nKey::EditorBookWidth => "Width {value}",
+        L10nKey::EditorBookThemeApplication => "Theme: Workbench",
+        L10nKey::EditorBookThemeLight => "Theme: Light",
+        L10nKey::EditorBookThemeDark => "Theme: Dark",
+        L10nKey::EditorBookChapterOf => "Chapter {chapter} of {chapters}",
+        L10nKey::EditorBookReadOnly => "Read-only",
+        L10nKey::EditorBookIndexing => "Indexing {done}/{total}",
+        L10nKey::EditorBookIndexTooLarge => {
+            "This book is too large to index for search ({bytes} byte limit)"
+        }
+        L10nKey::EditorBookLoadingChapter => "Loading chapter…",
+        L10nKey::EditorBookOmissions => {
+            "Omitted: {scripts} scripts, {styles} styles, {remote} remote images, {links} links, {images} unavailable images"
+        }
+        L10nKey::EditorBookRetry => "Retry",
+        L10nKey::EditorBookNextPage => "Next page",
+        L10nKey::EditorBookPreviousPage => "Previous page",
+        L10nKey::EditorBookNextChapter => "Next chapter",
+        L10nKey::EditorBookPreviousChapter => "Previous chapter",
+        L10nKey::EditorBookNotEpub => "This file is not a readable EPUB",
+        L10nKey::EditorBookUnsupportedProtected => "Protected EPUB: {detail}",
+        L10nKey::EditorBookUnsupportedFixed => {
+            "Fixed-layout (pre-paginated) EPUBs are not supported"
+        }
+        L10nKey::EditorBookUnsupportedFixedItems => {
+            "This EPUB marks {items} spine item(s) as fixed-layout; fixed-layout books are not supported"
+        }
+        L10nKey::EditorBookLimit => "This book exceeds the {resource} limit ({limit})",
+        L10nKey::EditorBookCorrupt => "This EPUB is damaged: {detail}",
+        L10nKey::EditorBookEncoding => "This EPUB uses an unsupported text encoding: {detail}",
+        L10nKey::EditorBookMissing => "This EPUB is missing {entry}",
+        L10nKey::EditorBookPathEscapes => {
+            "This EPUB references a resource outside its container: {href}"
+        }
+        L10nKey::EditorBookCancelled => "Reading this EPUB was cancelled",
+        L10nKey::EditorBookSaveFailed => {
+            "Couldn’t save reading state. Reading continues, but the position may not be restored."
         }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",

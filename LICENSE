@@ -13078,13 +13078,17 @@ Glim-derived GIF playback source import
 Glim 预览传输取消、准入与预算源码导入
 ====================================
 
-适用组件：`crates/lyrel-core/src/host/transfer/` 的取消令牌、传输工作内存准入与具名预算机制。
+适用组件：`crates/lyrel-core/src/host/transfer/` 的取消令牌、传输工作内存准入与具名预算机制；
+`crates/lyrel-core/src/host/sqlite/` 的只读标识符引用、受限查询、列/页/value 分块与页结构，
+以及 `crates/lyrel-core/tests/fixtures/glim-reader-sqlite.sql` 夹具。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b
 原始文件摘要与本地适配记录：`crates/lyrel-core/UPSTREAM.toml`。
 保留部分：`Cancellation`/`CancelOnDrop` 链式取消、`reserve_working` 的
 minimum/desired 先记账后分配与 `WorkingPressure`、`PreviewBudgetExceeded` 与
-`preview_budget`。未导入 Glim 的 macOS 内存余量回调、缓存/回收、作业调度器或
-本地 paged-file 实现。此例外不改变 Lyrel 原有 Apache-2.0 代码的许可。
+`preview_budget`；SQLite 侧的 `quote`/`columns`/predicate/order/count/page/value 与
+`SqlitePage` 分页语义。未导入 Glim 的 macOS 内存余量回调、缓存/回收、作业调度器、
+本地 paged-file 实现，或 SQLite `Snapshot`（main／WAL／journal 复制及副本恢复）。
+此例外不改变 Lyrel 原有 Apache-2.0 代码的许可。
 
 MIT License
 
@@ -13184,10 +13188,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+Glim-derived EPUB reader source import
+=====================================
+
+适用组件：`crates/lyrel-epub/` 的 EPUB 容器、章节净化与阅读状态，以及
+`src/ui/code_editor/book_document.rs`／`book_view.rs` 的适用阅读交互。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b。
+逐文件原始摘要、保留／适配／补齐／排除记录见 `crates/lyrel-epub/UPSTREAM.toml`
+与 `src/ui/code_editor/book_view/UPSTREAM.toml`。
+许可：MIT；本附录前述 Glim MIT 全文与 `Copyright (c) 2026 Glim contributors`
+同样适用于本节列出的导入。原始许可副本另保留在
+`crates/lyrel-epub/licenses/glim-MIT.txt`；不改变 Lyrel 原有 Apache-2.0 代码的许可。
+
 Glim-derived SVG intrinsic dimensions
 ====================================
 
 适用组件：`src/ui/code_editor/markdown/images.rs` 中独立 SVG 文档的默认视口与绝对单位换算。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b，`crates/glim-services/src/svg_preview.rs`。
 Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、本地适配与未导入部分见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。
-
