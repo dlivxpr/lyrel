@@ -94,11 +94,16 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
         // JSON's identity is likewise the shared source Document and history.
         EditorInput::Json(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // CSV/TSV has the same one-document identity as its source view.
+        EditorInput::Csv(view) => view.read(cx).document().read(cx).document().entity_id(),
         // Read-only content still has a stable identity for save-side prompts.
         EditorInput::Image(view) => view.entity_id(),
         EditorInput::Sqlite(view) => view.entity_id(),
         EditorInput::Book(view) => view.read(cx).document().entity_id(),
         EditorInput::Pdf(view) => view.read(cx).document().entity_id(),
+        // A draw.io preview also never saves in this ticket; the document is
+        // the stable identity a prompt would name.
+        EditorInput::Drawio(view) => view.read(cx).document().entity_id(),
     }
 }
 

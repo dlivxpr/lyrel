@@ -13236,3 +13236,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+Glim-derived CSV / TSV reader
+============================
+
+适用组件：`src/ui/code_editor/csv_document.rs` 与 `csv_document/table.rs`。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b 的 CSV reader、table 数据形状与 reader 交互。
+Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、保留行为与本地适配见 `src/ui/code_editor/csv_document/UPSTREAM.toml`。
+

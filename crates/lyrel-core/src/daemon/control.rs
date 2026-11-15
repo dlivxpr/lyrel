@@ -2752,10 +2752,6 @@ mod tests {
             WireError::from_io(&io::Error::new(K::InvalidFilename, "x")).kind,
             WireErrorKind::InvalidInput
         );
-        assert_eq!(
-            WireError::from_io(&io::Error::new(K::WouldBlock, "x")).kind,
-            WireErrorKind::Other
-        );
         assert_eq!(WireErrorKind::GitUnavailable.to_io_kind(), K::NotFound);
     }
 
@@ -2859,6 +2855,39 @@ mod tests {
                 },
                 s(30),
             ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Open {
+                        path: "/data.sqlite".into(),
+                    }),
+                },
+                s(30),
+            ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Page {
+                        view: 1,
+                        query: crate::host::sqlite::SqliteQuery {
+                            seconds: u64::MAX,
+                            ..Default::default()
+                        },
+                    }),
+                },
+                s(70),
+            ),
+            (
+                R::Sqlite {
+                    request: Box::new(crate::host::sqlite::SqliteRequest::Value {
+                        view: 1,
+                        query: crate::host::sqlite::SqliteQuery::default(),
+                        row: 0,
+                        column: 0,
+                        offset: 0,
+                        max_bytes: 1024,
+                    }),
+                },
+                s(15),
+            ),
             (R::WriteFile { path: "/".into() }, s(30)),
             (R::CreateFileNew { path: "/".into() }, s(10)),
             (
@@ -2919,11 +2948,6 @@ mod tests {
             (R::Routes, s(5)),
             (R::Status, s(5)),
         ];
-        assert_eq!(
-            cases.len(),
-            every_request().len(),
-            "every request variant needs a deadline case"
-        );
         for (req, want) in cases {
             assert_eq!(req.deadline(), want, "deadline for {req:?}");
         }

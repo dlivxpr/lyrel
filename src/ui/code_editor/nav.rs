@@ -1051,6 +1051,16 @@ impl LyrelApp {
                     .json_existing(tab, group)
                     .map(super::EditorInput::Json)
             })
+            .or_else(|| {
+                f.presentations
+                    .csv_existing(tab, group)
+                    .map(super::EditorInput::Csv)
+            })
+            .or_else(|| {
+                f.presentations
+                    .drawio_existing(tab, group)
+                    .map(super::EditorInput::Drawio)
+            })
             .unwrap_or_else(|| f.input.clone());
         // A picture has no caret to chain symbols from.
         let caret = input.text()?.read(cx).cursor_position();

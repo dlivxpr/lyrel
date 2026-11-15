@@ -221,7 +221,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
 | SQLite | 表／视图、schema、分页记录、筛选、排序与完整单元格查看 | 所属 Host 上的只读查询，只传必要结果；不下载整个远端库，不修改源库，不执行任意写 SQL 或加载扩展；不增加自由 SQL 控制台 |
-| draw.io | 固定版本本机引擎的离线图形预览 | 可视化编辑并保存 draw.io 文件，不以有限基本形状渲染器或 Zorite 白板替代；引擎集成、文件变体和资源兼容必须分别验证 |
+| draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298 再接可视化编辑、dirty／undo／保存与冲突；不以有限基本形状渲染器或 Zorite 白板替代。查看器不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 已在隔离产品窗口实际渲染 flow、AWS stencils、压缩 XML 和内嵌 SVG（draw.io marker-less base64 约定），macOS 已有 wry WKWebView 宿主源码但未在本机/CI 运行 |
 
 Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT／PPTX 的专用预览或编辑，也不新增 `.ipynb` 专用阅读、单元格编辑、kernel、执行会话或 Plotly 输出。不新增 HTML 网页、音视频、压缩包、字体、其他电子书或专业设计格式。已有普通文本／源码、Markdown 和系统外部打开行为不因排除清单而删除。
 
@@ -328,6 +328,15 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。`src/ui/code_editor/structure_view.rs` 是格式无关的可见行与源码行列机制，YAML／TOML／XML 可各自实现 `Treelike`，不依赖 JSON mutation。本轮不交付树内修改、JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
+<a id="csv-documents"></a>
+#### CSV／TSV 表格检查（#287）
+
+`.csv`／`.tsv` 在现有文档栏中提供表格与源码两种呈现；内容、编码／BOM、逐行换行与 Undo／Redo 仍由同一 `Document` 保存。表格只派生逻辑记录与字段源区间，不重新序列化原件。字段内的引号、分隔符和换行按 CSV 规则解释，不等长记录的缺失字段与真实空字段保持区别。
+
+- 表格按行虚拟化，每次显示最多 20 列，其他列通过列窗口按钮和键盘到达。方向键、Home／End、PageUp／PageDown 移动单元格；Enter 定位并选择该字段的原始源码。完整字段可在详情区查看和复制，显示摘录不会替换原值。
+- 列标题排序、筛选只改变当前呈现；另一呈现的选择、滚动和查询独立。源码修改后在后台重新解析，只发布匹配当前文档身份和 revision 的结果；无效或超预算源码保留编辑入口，不把局部表格写回文件。
+- 当前完整表格的工作边界为 8 MiB 源文、200,000 条逻辑记录、4,096 列、1,000,000 个实际字段；任一超限均明确拒绝表格，而非截断源文。单元格摘录为 64 字符，详情一次排版为 8,192 字符，完整复制不受这两个显示预算限制。这些是实现边界，尚不是实测性能结论。
+- 本切片不显示单元格／行／列编辑控件；该能力由 #288 补齐。保留既有所属 Host 保存、另存为、外部冲突与关闭流程。生产工作台回归、真实 SSH、原生 OS 窗口、系统 IME、macOS 与性能证据须分别记录，不能由编译或纯解析通过代替。
 
 <a id="epub-documents"></a>
 #### EPUB 阅读文档（#286）
