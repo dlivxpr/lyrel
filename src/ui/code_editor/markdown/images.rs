@@ -842,6 +842,14 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Image
     Ok((rgba, format))
 }
 
+/// Decodes one EPUB illustration with the same safe bytes/pixels policy as a
+/// Markdown image, including SVG with both external-resource resolvers
+/// disabled. Animation and multipage semantics remain image-document features;
+/// an illustration is a still picture.
+pub(crate) fn decode_book_illustration(bytes: &[u8]) -> io::Result<image::RgbaImage> {
+    decode(bytes).map(|(rgba, _)| rgba)
+}
+
 /// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
 pub(crate) fn bitmap(rgba: image::RgbaImage, cx: &mut App) -> Bitmap {
     Bitmap::new(render(rgba), cx)

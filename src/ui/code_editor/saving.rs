@@ -95,6 +95,8 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         // A picture never saves, but the identity is asked for by every
         // save-side prompt and must name something stable.
         EditorInput::Image(view) => view.entity_id(),
+        EditorInput::Book(view) => view.read(cx).document().entity_id(),
+        EditorInput::Pdf(view) => view.read(cx).document().entity_id(),
         // A draw.io preview also never saves in this ticket; the document is
         // the stable identity a prompt would name.
         EditorInput::Drawio(view) => view.read(cx).document().entity_id(),
