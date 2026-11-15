@@ -133,6 +133,7 @@ impl CsvCellId {
 pub(crate) struct CsvRecord {
     /// 记录内容（不含终止换行）在规范源文中的区间。
     span: Range<usize>,
+    #[cfg(test)]
     /// 记录起始的物理行号，从 1 开始；quoted 换行不会把记录切成多条。
     line: usize,
     /// 每个字段的原始区间（含引号，不含分隔符）。
@@ -144,6 +145,7 @@ impl CsvRecord {
         self.span.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn line(&self) -> usize {
         self.line
     }
@@ -290,6 +292,7 @@ impl CsvTable {
                 .collect();
             records.push(CsvRecord {
                 span: start..end,
+                #[cfg(test)]
                 line,
                 fields,
             });
@@ -322,6 +325,7 @@ impl CsvTable {
         self.record(record).map(CsvRecord::span)
     }
 
+    #[cfg(test)]
     pub(crate) fn record_line(&self, record: CsvRecordId) -> Option<usize> {
         self.record(record).map(CsvRecord::line)
     }

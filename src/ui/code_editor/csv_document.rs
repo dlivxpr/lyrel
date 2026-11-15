@@ -341,6 +341,7 @@ impl CsvView {
         &self.filter
     }
 
+    #[cfg(test)]
     pub(crate) fn order(&self) -> &[usize] {
         &self.order
     }
