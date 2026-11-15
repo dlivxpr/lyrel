@@ -1953,6 +1953,28 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorJsonReveal => "Reveal in source",
         L10nKey::EditorJsonFullValue => "Full value",
         L10nKey::EditorJsonCopyValue => "Copy value",
+        L10nKey::EditorJsonEditValue => "Edit value",
+        L10nKey::EditorJsonRenameKey => "Rename key",
+        L10nKey::EditorJsonAddKey => "Add key",
+        L10nKey::EditorJsonAddItem => "Add item",
+        L10nKey::EditorJsonRemove => "Remove",
+        L10nKey::EditorJsonEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorJsonRenameKeyTitle => "Rename key · {path}",
+        L10nKey::EditorJsonAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorJsonAddItemTitle => "Add item to {path}",
+        L10nKey::EditorJsonKeyName => "Key",
+        L10nKey::EditorJsonValueName => "Value",
+        L10nKey::EditorJsonKeyPlaceholder => "Key name",
+        L10nKey::EditorJsonValuePlaceholder => "JSON value",
+        L10nKey::EditorJsonEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorJsonEditInvalidValue => "Not one JSON value: {message}",
+        L10nKey::EditorJsonEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorJsonEditUnsupported => "This node cannot be changed from the tree",
+        L10nKey::StructureEditApply => "Apply",
         L10nKey::EditorCsvTable => "Table",
         L10nKey::EditorCsvShowTable => "Show table",
         L10nKey::EditorCsvShowSource => "Show source",

@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码与既有外观](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构检查](#json-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 只交付检查与源码编辑，不含树内修改；#285 的 PDF 大纲／选字／搜索及其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
+本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码与既有外观](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改；JSONL／NDJSON 的记录编辑仍归 #291。#285 的 PDF 大纲／选字／搜索及其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289 的 [JSON 家族源码链接结构检查](#json-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索归 #285，JSON 树内修改归后续工单；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
+> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索归 #285，JSONL／NDJSON 记录编辑归 #291；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
 
 本节使用以下术语：
 
@@ -216,7 +216,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | PDF | 分页、缩放、大纲、搜索、选字复制和密码；正确显示已有批注与表单值 | 只读，不新增批注、不填表、不修改正文或页面结构；扫描页没有文本层时不能宣称可搜索或选字，本轮不增加 OCR |
 | EPUB | 无 DRM 的流式阅读；目录、章节、搜索、书签、阅读位置、字体和主题 | 只读，阅读状态单独保存；不纳入固定版式、DRM 解锁或书籍编辑，不承诺复现出版方的完整 CSS |
 | CSV／TSV | 虚拟化表格、源码访问、完整字段查看 | 单元格输入、复制粘贴、增删行列、Undo／Redo；保留分隔符、引号、多行字段、编码与换行；排序和筛选默认只改变视图，写回排序必须是显式操作 |
-| JSON／JSONC／JSONL／NDJSON | 结构树或逐记录视图，节点与源码相互定位（#289 已交付只读检查与源码编辑） | 在树中修改值、增删或重命名键、编辑数组与记录；保留注释、重复键、键序和数字字面量；JSONL／NDJSON 保留逐行记录形式。树内修改仍待后续票 |
+| JSON／JSONC／JSONL／NDJSON | 结构树或逐记录视图，节点与源码相互定位（#289 已交付只读检查与源码编辑） | 在树中修改值、增删或重命名键、编辑数组（#290 已交付 JSON／JSONC）；保留注释、重复键、键序和数字字面量；JSONL／NDJSON 保留逐行记录形式，记录编辑归 #291 |
 | YAML | 结构树与源码相互定位 | 键、值和序列的增删改；保留注释、锚点、别名及 tag，不静默展开引用；修改锚点时说明对引用值的影响，不能无损表达的自定义构造保留源码访问 |
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
@@ -315,19 +315,20 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **证据边界**：工作台接缝回归覆盖源码输入、预览刷新、跨呈现 Undo、普通保存／另存为／外部重载／冲突／未保存关闭、独立重开、恶意脚本／嵌套文件／network／data image、超预算与失效迟到结果；夹具在测试内生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试、编译成功或位图存在代替。
 
 <a id="json-documents"></a>
-#### JSON／JSONC／JSONL／NDJSON 源码链接结构检查（#289 已实现）
+#### JSON／JSONC／JSONL／NDJSON 源码链接结构与局部编辑（#289、#290 已实现）
 
 `.json`／`.jsonc`／`.jsonl`／`.ndjson` 打开为同一份可编辑源码及其结构／记录呈现，不再把 JSON 家族当成普通代码或通用 Value 文档。
 
 - 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，逐行行尾、编码／BOM、revision、history、保存、另存为、外部重载、冲突与未保存关闭都沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不写回、不复制第二份可变内容，也不经 `serde_json::Value` 序列化。
 - 解析：使用 registry 的 `jsonc-parser = 0.34.0`（MIT）带偏移 AST。JSON 与 JSONC 分开设置严格选项；JSONC 只额外接受注释和尾随逗号，JSON5 的宽松名字、单引号、十六进制、非有限数与扩展转义全部关闭。对象属性按源码顺序保留，重复键各占一个 occurrence；数字与字符串显示原源码切片，`1.2300`、大整数、`\u4e2d` 和转义序列不会被解码后重写。
+- 局部编辑（#290）：选中标量可改值，选中对象属性可只重命名该 occurrence，选中 object／array 可在末尾加入成员，选中成员或数组元素可删除。命令绑定当前投影的 `(path, range, key_range)`，提交前要求已安装投影的 revision 仍等于源码权威；可见行号与裸属性路径都不是写入目标。新值片段由同一 `jsonc-parser` 校验为恰好一个 JSON 值，新键用标准 JSON 字符串转义后同样复核，写入前还会解析整个结果，任何会破坏文档的规划都被拒绝。替换清单交给共享 `Document` 的 `replace_ranges`，一次命令就是一条普通 history 记录；不整篇序列化、不做全 source 格式化、不移动未选中的注释、键序、转义或数字拼写。JSONL／NDJSON 的记录插入／删除仍归 #291，本视图不显示树内记录修改控件。
 - JSONL／NDJSON：逐非空行解析为独立记录，记录保留 1-based 行号与行内范围；无效行成为带可见错误的记录行，其他记录仍可浏览。不会把文件投影成数组，也不会在保存时改变一行一记录的布局。
-- 呈现：默认显示结构树／记录列表；工具栏与状态行提供 Structure／Source 切换、节点或记录计数、选中节点行列、Reveal in source 与 Full value。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该属性或记录的精确 occurrence；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值和结构滚动，同时共享同一 Document 与 history。
-- 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 20,000 节点、JSONL 最多 20,000 条记录，完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。投影为不可变共享结果，分屏同步不复制整棵树。短暂无效源码显示解析错误并保留全部内容；修正后重新投影。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision。
+- 呈现：默认显示结构树／记录列表；工具栏与状态行提供 Structure／Source 切换、节点或记录计数、选中节点行列、Reveal in source、Full value 与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该属性或记录的精确 occurrence；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值、编辑面板和结构滚动，同时共享同一 Document 与 history。
+- 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 20,000 节点、JSONL 最多 20,000 条记录，完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。投影为不可变共享结果，分屏同步不复制整棵树。短暂无效源码显示解析错误并保留全部内容；修正后重新投影。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision。结构变化后仍打开的编辑面板会显示“文档已变化”并拒绝写入，不偷焦点。
 
-**复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。`src/ui/code_editor/structure_view.rs` 是格式无关的可见行与源码行列机制，YAML／TOML／XML 可各自实现 `Treelike`，不依赖 JSON mutation。本轮不交付树内修改、JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
+**复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；`src/ui/code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，`src/ui/code_editor/structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
-**证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
+**证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果；#290 另覆盖选中重复 occurrence 的改值／改名、空 object／array 插入、删除成员、JSONC 注释与尾随逗号保真、保存／另存为／失败写入／外部冲突／取消关闭、分屏中的迟到命令拒绝、关闭后回调不写原件，以及真实远端路由下的保存回读。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
 <a id="csv-documents"></a>
 #### CSV／TSV 表格检查（#287）
 
