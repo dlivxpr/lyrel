@@ -1088,6 +1088,7 @@ mod macos_host {
     use crate::ui::code_editor::drawio_engine::assets::{self, EngineResponse};
     use crate::ui::code_editor::drawio_engine::bridge::{BridgeEvent, Command, LiveSession};
     use gpui_kit::{Bounds, Pixels};
+    use parking_lot::Mutex;
     use smol::channel::Sender;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1108,7 +1109,9 @@ mod macos_host {
     }
 
     pub(super) struct Host {
-        shared: Rc<RefCell<Shared>>,
+        // Wry's protocol callback is Send + Sync; native WebView access stays
+        // in the main-thread-only slot below, outside this session lock.
+        shared: Arc<Mutex<Shared>>,
         webview: Rc<RefCell<Option<WebView>>>,
     }
 
@@ -1122,7 +1125,7 @@ mod macos_host {
         ) -> Result<Self, SurfaceError> {
             let session = LiveSession::start_for(document, assets::MAC_SHELL_URL)
                 .map_err(|error| SurfaceError::Platform(error.to_string()))?;
-            let shared = Rc::new(RefCell::new(Shared {
+            let shared = Arc::new(Mutex::new(Shared {
                 session,
                 sender: events.clone(),
                 closed: false,
@@ -1135,10 +1138,7 @@ mod macos_host {
                 let uri = request.uri().to_string();
                 let body = request.body().clone();
                 let (response, commit) = {
-                    let mut state = match protocol_shared.try_borrow_mut() {
-                        Ok(state) => state,
-                        Err(_) => return HttpResponse::new(Cow::Owned(Vec::new())),
-                    };
+                    let mut state = protocol_shared.lock();
                     if state.closed {
                         return HttpResponse::new(Cow::Owned(Vec::new()));
                     }
@@ -1151,10 +1151,8 @@ mod macos_host {
                     )
                 };
                 if let Some(bytes) = commit {
-                    let _ = protocol_shared
-                        .borrow()
-                        .sender
-                        .try_send(SurfaceEvent::Commit { bytes });
+                    let sender = protocol_shared.lock().sender.clone();
+                    let _ = sender.try_send(SurfaceEvent::Commit { bytes });
                 }
                 http_response(response)
             };
@@ -1164,7 +1162,7 @@ mod macos_host {
                 let source = request.uri().to_string();
                 let body = request.body().as_bytes().to_vec();
                 let event = {
-                    let mut state = ipc_shared.borrow_mut();
+                    let mut state = ipc_shared.lock();
                     if state.closed {
                         return;
                     }
@@ -1225,7 +1223,7 @@ mod macos_host {
                     return;
                 }
                 let script = {
-                    let state = load_shared.borrow();
+                    let state = load_shared.lock();
                     state.session.bind_script(theme)
                 };
                 if let Some(webview) = load_slot.borrow().as_ref() {
@@ -1277,7 +1275,7 @@ mod macos_host {
 
         pub(super) fn command(&mut self, command: Command) -> Result<bool, SurfaceError> {
             let message = {
-                let mut state = self.shared.borrow_mut();
+                let mut state = self.shared.lock();
                 if state.closed {
                     return Err(SurfaceError::Platform(
                         "the diagram surface is closed".into(),
@@ -1304,7 +1302,7 @@ mod macos_host {
     impl Drop for Host {
         fn drop(&mut self) {
             let sender = {
-                let mut shared = self.shared.borrow_mut();
+                let mut shared = self.shared.lock();
                 shared.closed = true;
                 shared.sender.clone()
             };
@@ -1339,11 +1337,8 @@ mod macos_host {
         }
     }
 
-    fn emit_bridge(shared: &Rc<RefCell<Shared>>, event: BridgeEvent) {
-        let sender = match shared.try_borrow() {
-            Ok(state) => state.sender.clone(),
-            Err(_) => return,
-        };
+    fn emit_bridge(shared: &Arc<Mutex<Shared>>, event: BridgeEvent) {
+        let sender = shared.lock().sender.clone();
         let event = match event {
             BridgeEvent::Ready => SurfaceEvent::Ready,
             BridgeEvent::State { page, pages, zoom } => SurfaceEvent::State { page, pages, zoom },

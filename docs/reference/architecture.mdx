@@ -290,6 +290,8 @@ draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、
 
 `drawio_engine` 只提供固定 viewer 的只读渲染，不把它扩展成通用浏览器：所有资源来自固定 manifest，Windows 由原生 `WebResourceRequested`、macOS 由 WKWebView 自定义 scheme handler 精确匹配，未知路径、跨源、导航、popup、下载、权限、脚本对话框和外部 drop 均被拒绝或明确报告；shell 与 engine 页面分别有严格 CSP，engine iframe 只允许 `allow-scripts allow-same-origin`。token／session／seq 由原生在导航完成后只注入顶层 shell，engine iframe 不持有 token；关闭、重载或替换文档会丢弃旧 surface 与 session。#298 之后同一 bridge 承载编辑：`engine-bridge` 在固定引擎的 Graph/Editor 上启用真实模型编辑、mxUndoManager 监听与系统剪贴板转换；文档内容只经会话作用域的 commit POST 回到 `DrawioDocument`（parse 拒绝则保留旧字节、同字节 sync 只推进 committed 代数），保存经 sync flush 等待已确认修订再写。撤销／重做、dirty、冲突、另存为与关闭仍由工作台文档权威负责；引擎无文件所有权，也不能把任意本机路径或网络资源引入会话。
 
+macOS 自定义协议回调需要 `Send + Sync`，因此仅纯 Rust 会话／序号／关闭状态与事件发送端放在 `Arc<parking_lot::Mutex<_>>` 中串行访问；原生 `WKWebView` 仍保留在主线程的 `Rc<RefCell<_>>` 内。协议响应、IPC、命令和关闭使用同一会话，释放锁后才执行原生脚本或销毁视图，不通过不安全的线程标记跨线程操作 WebView，也不放宽 origin／token／资源清单校验。
+
 #297 的边界是：Windows 直接 WebView2 宿主（`webview2-com 0.39.1`；`assets/windows/webview2/WebView2Loader.dll` 按 Microsoft WebView2 SDK 条款随构建 staged）已在隔离的普通产品窗口验收：固定引擎实际渲染多页 flow、AWS stencils、压缩 XML 和内嵌 `data:image/svg+xml`，页与缩放控件驱动真实页面；controller 使用 host-local bounds，截图不使用临时 Win32 reposition。内嵌 SVG 使用 draw.io 自身的 marker-less base64 约定（`data:image/svg+xml,<base64>`，引擎再规范化为 `;base64`）；带字面 `;base64` 的 style 会被 draw.io style parser 在分号处截断，属于非 draw.io 保存格式，不作为支持缺口。macOS 已有基于 wry `=0.57.2` 的真实 WKWebView 宿主源码（自定义 `lyrel` scheme、non-persistent store、CSP response headers、navigation/new-window/download/permission/drag 拒绝、IPC token 校验），但本机没有 macOS，实际运行／CI 证据尚未取得；真实远端、中文 IME、焦点、DPI、双平台与性能均未验收。headless 测试只证明资源哈希、请求策略、bridge 状态机与生产工作台文档语义，不能替代这些原生证据。
 
 ### 实现前提与验收证据
