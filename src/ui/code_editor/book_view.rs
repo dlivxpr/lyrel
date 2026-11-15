@@ -248,14 +248,17 @@ impl BookView {
         self.focus.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn chapter(&self) -> usize {
         self.chapter
     }
 
+    #[cfg(test)]
     pub(crate) fn block_count(&self) -> usize {
         self.blocks
     }
 
+    #[cfg(test)]
     pub(crate) fn block_text(&self, index: usize) -> Option<&str> {
         self.data
             .as_ref()
@@ -263,6 +266,7 @@ impl BookView {
             .map(|block| block.text.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn search_results(&self) -> &[SearchHit] {
         &self.results
     }
