@@ -1259,6 +1259,7 @@ fn xml_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host, &path);
 
+    ensure_expanded(&view, &mut cx, "/r/p:item[1]");
     click_row(&view, &mut cx, "/r/p:item[1]/@p:flag");
     click_button(&view, &mut cx, "xml-edit-value");
     type_edit_value(&view, &mut cx, "remote-edited");
