@@ -335,6 +335,7 @@ impl EditorBuffers {
                                 && !is_svg_path(&path)
                                 && !is_json_path(&path)
                                 && !is_csv_path(&path)
+                                && !super::is_xml_path(&path)
                             {
                                 return None;
                             }
@@ -383,6 +384,8 @@ impl EditorBuffers {
                 file.presentations
                     .csv_view(primary, target.tab, group, window, cx),
             )
+        } else if let (Some(primary), Some(group)) = (file.input.xml(), target.group) {
+            EditorInput::Xml(file.presentations.xml_view(primary, target.tab, group, cx))
         } else {
             file.input.clone()
         };
@@ -734,7 +737,9 @@ impl EditorBuffers {
             && is_json_path(&path)
             && super::json_document::JsonFormat::from_path(&path).is_some();
         let native_csv = untitled.is_none() && is_csv_path(&path);
-        let native_markdown = if native_svg || native_json || native_csv {
+        let native_xml =
+            untitled.is_none() && !native_svg && !native_json && super::is_xml_path(&path);
+        let native_markdown = if native_svg || native_json || native_csv || native_xml {
             false
         } else if untitled.is_some() {
             matches!(kind, BufferKind::Markdown)
@@ -805,6 +810,28 @@ impl EditorBuffers {
             });
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Csv(presentation), None, sub, observe)
+        } else if native_xml {
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let xml_document = cx.new(|cx| XmlDocument::new(document, cx));
+            let presentation = cx.new(|cx| {
+                XmlView::new(
+                    xml_document,
+                    XmlMode::Structure,
+                    wrap,
+                    indent.size as usize,
+                    cx,
+                )
+            });
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Xml(presentation), None, sub, observe)
         } else if native_markdown {
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(

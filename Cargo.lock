@@ -6363,6 +6363,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "wry",
+ "xmlparser",
  "yaml_serde",
  "zeroize",
  "zip",
@@ -13801,6 +13802,12 @@ dependencies = [
  "mac",
  "markup5ever 0.12.1",
 ]
+
+[[package]]
+name = "xmlparser"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xmlwriter"

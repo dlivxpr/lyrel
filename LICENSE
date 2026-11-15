@@ -592,6 +592,7 @@ rle-decode-fast 1.0.3
 ropey 2.0.0-beta.1
 roxmltree 0.20.0
 roxmltree 0.21.1
+roxmltree 0.21.2 (also applies: MIT)
 rsa 0.10.0-rc.18
 russh 0.64.1
 russh-cryptovec 0.62.0
@@ -755,6 +756,7 @@ windows-version 0.1.7
 wnaf 0.14.0
 write16 1.0.0
 xml5ever 0.18.1
+xmlparser 0.13.6 (also applies: MIT)
 yaml_serde 0.10.7
 zed-font-kit 0.14.1-zed
 zerocopy 0.8.56
@@ -13217,6 +13219,38 @@ Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可�
 jsonc-parser / MIT License
 --------------------------
 Copyright (c) 2020 David Sherret
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+xmlparser 0.13.6 / roxmltree 0.21.2
+==================================
+
+适用组件：`src/ui/code_editor/xml_document/` 的 XML token 范围、良构／命名空间校验。
+来源：https://github.com/RazrFalcon/xmlparser（MIT OR Apache-2.0）与
+https://github.com/RazrFalcon/roxmltree（MIT OR Apache-2.0）。
+Copyright (c) 2018 Reizner Evgeniy。逐文件保留／替换记录见
+`src/ui/code_editor/xml_document/UPSTREAM.toml`。两者均未作为 Glim 源码导入；
+Lyrel 只使用 registry 发布的解析 API。
+
+MIT License
+
+Copyright (c) 2018 Reizner Evgeniy
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -5,6 +5,7 @@ use super::image_document::ImageView;
 use super::pdf_document::PdfView;
 use super::sqlite_document::SqliteView;
 use super::text::TextSnapshot;
+use super::xml_document::XmlView;
 use super::*;
 use lyrel_markdown_editor::{Document, EditorState as MarkdownEditor};
 use std::cell::RefCell;
@@ -27,6 +28,8 @@ pub(crate) enum EditorInput {
     Json(Entity<JsonView>),
     /// CSV／TSV 文档：共享逐行保真 Document 的源码与虚拟化表格。
     Csv(Entity<CsvView>),
+    /// XML 文档：共享逐行保真 Document 的源码与有序、命名空间感知的结构树。
+    Xml(Entity<XmlView>),
     /// draw.io 图：字节与页表属于文档，渲染只属于固定离线引擎。
     Drawio(Entity<DrawioView>),
 }
@@ -43,6 +46,7 @@ pub(crate) enum TextInput<'a> {
     Svg(&'a Entity<SvgView>),
     Json(&'a Entity<JsonView>),
     Csv(&'a Entity<CsvView>),
+    Xml(&'a Entity<XmlView>),
 }
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
@@ -55,6 +59,7 @@ pub(crate) enum WeakEditorInput {
     Svg(gpui_kit::WeakEntity<SvgView>),
     Json(gpui_kit::WeakEntity<JsonView>),
     Csv(gpui_kit::WeakEntity<CsvView>),
+    Xml(gpui_kit::WeakEntity<XmlView>),
     Drawio(gpui_kit::WeakEntity<DrawioView>),
 }
 impl WeakEditorInput {
@@ -69,6 +74,7 @@ impl WeakEditorInput {
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
             Self::Json(input) => input.upgrade().map(EditorInput::Json),
             Self::Csv(input) => input.upgrade().map(EditorInput::Csv),
+            Self::Xml(input) => input.upgrade().map(EditorInput::Xml),
             Self::Drawio(input) => input.upgrade().map(EditorInput::Drawio),
         }
     }
@@ -85,6 +91,7 @@ impl EditorInput {
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
             Self::Json(input) => WeakEditorInput::Json(input.downgrade()),
             Self::Csv(input) => WeakEditorInput::Csv(input.downgrade()),
+            Self::Xml(input) => WeakEditorInput::Xml(input.downgrade()),
             Self::Drawio(input) => WeakEditorInput::Drawio(input.downgrade()),
         }
     }
@@ -142,6 +149,12 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn xml(&self) -> Option<&Entity<XmlView>> {
+        match self {
+            Self::Xml(input) => Some(input),
+            _ => None,
+        }
+    }
     pub(crate) fn drawio(&self) -> Option<&Entity<DrawioView>> {
         match self {
             Self::Drawio(input) => Some(input),
@@ -157,6 +170,7 @@ impl EditorInput {
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Json(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Csv(view) => Some(view.read(cx).document().read(cx).document().clone()),
+            Self::Xml(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Code(_)
             | Self::Image(_)
             | Self::Pdf(_)
@@ -175,6 +189,7 @@ impl EditorInput {
             Self::Svg(input) => Some(TextInput::Svg(input)),
             Self::Json(input) => Some(TextInput::Json(input)),
             Self::Csv(input) => Some(TextInput::Csv(input)),
+            Self::Xml(input) => Some(TextInput::Xml(input)),
             Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) | Self::Drawio(_) => {
                 None
             }
@@ -192,6 +207,8 @@ impl EditorInput {
         } else if let Some(view) = self.json() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         } else if let Some(view) = self.csv() {
+            view.update(cx, |view, cx| view.finish_composition(cx));
+        } else if let Some(view) = self.xml() {
             view.update(cx, |view, cx| view.finish_composition(cx));
         }
     }
@@ -233,6 +250,7 @@ impl EditorInput {
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            Self::Xml(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             // The engine owns its pan/zoom view; the workbench has no second
             // scroll axis to synchronise.
             Self::Drawio(_) => {}
@@ -257,6 +275,7 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
+            Self::Xml(view) => view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx)),
         }
     }
     /// Whether this presentation keeps the shared line-preserving source and
@@ -265,7 +284,7 @@ impl TextInput<'_> {
     pub(crate) fn is_source(&self) -> bool {
         matches!(
             self,
-            Self::Markdown(_) | Self::Svg(_) | Self::Json(_) | Self::Csv(_)
+            Self::Markdown(_) | Self::Svg(_) | Self::Json(_) | Self::Csv(_) | Self::Xml(_)
         )
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
@@ -275,6 +294,7 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
+            Self::Xml(view) => view.update(cx, |view, cx| view.select_source_range(range, cx)),
         }
     }
     pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
@@ -284,6 +304,7 @@ impl TextInput<'_> {
             Self::Svg(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
+            Self::Xml(view) => view.update(cx, |view, cx| view.add_source_selection(range, cx)),
         }
     }
     pub(crate) fn set_cursor_position(
@@ -309,6 +330,10 @@ impl TextInput<'_> {
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
             Self::Csv(view) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                view.update(cx, |view, cx| view.select_source_range(at..at, cx));
+            }
+            Self::Xml(view) => {
                 let at = self.read(cx).text().position_to_offset(&position);
                 view.update(cx, |view, cx| view.select_source_range(at..at, cx));
             }
@@ -342,6 +367,9 @@ impl TextInput<'_> {
             Self::Csv(view) => {
                 view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
             }
+            Self::Xml(view) => {
+                view.update(cx, |view, cx| view.replace_source_range(range, text, cx))
+            }
         }
     }
     pub(crate) fn replace_ranges(
@@ -361,6 +389,9 @@ impl TextInput<'_> {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
             Self::Csv(view) => {
+                view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
+            }
+            Self::Xml(view) => {
                 view.update(cx, |view, cx| view.replace_source_ranges(replacements, cx))
             }
         }
@@ -387,6 +418,9 @@ impl TextInput<'_> {
             Self::Csv(view) => view.update(cx, |view, cx| {
                 view.replace_source_lines(range, lines, leading, trailing, cx)
             }),
+            Self::Xml(view) => view.update(cx, |view, cx| {
+                view.replace_source_lines(range, lines, leading, trailing, cx)
+            }),
         }
     }
     pub(crate) fn set_history_selection(
@@ -409,6 +443,9 @@ impl TextInput<'_> {
             Self::Csv(view) => view.update(cx, |view, cx| {
                 view.set_source_history_selection(before, after, cx)
             }),
+            Self::Xml(view) => view.update(cx, |view, cx| {
+                view.set_source_history_selection(before, after, cx)
+            }),
         }
     }
 }
@@ -429,6 +466,7 @@ impl InputRead<'_> {
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Json(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Csv(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Xml(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Drawio(view) => view.read(self.cx).handle(),
         }
     }
@@ -443,6 +481,7 @@ impl InputRead<'_> {
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Json(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Csv(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Xml(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Drawio(_) => gpui_kit::Point::default(),
         }
     }
@@ -494,6 +533,15 @@ impl TextRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
+            TextInput::Xml(view) => TextSnapshot::Shared(
+                view.read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
         }
     }
     pub(crate) fn cursor(&self) -> usize {
@@ -503,6 +551,7 @@ impl TextRead<'_> {
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).cursor(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).cursor(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).cursor(),
+            TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).cursor(),
         }
     }
     pub(crate) fn cursor_position(&self) -> Position {
@@ -515,6 +564,7 @@ impl TextRead<'_> {
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).selected_range(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).selected_range(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).selected_range(),
+            TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).selected_range(),
         }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
@@ -524,6 +574,7 @@ impl TextRead<'_> {
             TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
             TextInput::Json(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
             TextInput::Csv(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
+            TextInput::Xml(view) => view.read(self.cx).source().read(self.cx).occurrence_range(),
         }
     }
     pub(crate) fn range_to_bounds(
@@ -544,6 +595,11 @@ impl TextRead<'_> {
                 .read(self.cx)
                 .range_to_bounds(range),
             TextInput::Csv(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
+            TextInput::Xml(view) => view
                 .read(self.cx)
                 .source()
                 .read(self.cx)
@@ -573,6 +629,7 @@ pub(super) struct Presentations {
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
     jsons: RefCell<Vec<(TabId, split::GroupId, Entity<JsonView>, Subscription)>>,
     csvs: RefCell<Vec<(TabId, split::GroupId, Entity<CsvView>, Subscription)>>,
+    xmls: RefCell<Vec<(TabId, split::GroupId, Entity<XmlView>, Subscription)>>,
     drawios: RefCell<Vec<(TabId, split::GroupId, Entity<DrawioView>, Subscription)>>,
 }
 impl Presentations {
@@ -922,6 +979,51 @@ impl Presentations {
         view
     }
 
+    /// An XML document's presentation in one group. The first group uses the
+    /// document's own view; a split group gets its own mode, structure folds,
+    /// selection, source caret and scroll over the same Document.
+    pub(super) fn xml_view<E: 'static>(
+        &self,
+        primary: &Entity<XmlView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<XmlView> {
+        let mut views = self.xmls.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
+            let selection = primary.read(cx).source().read(cx).selected_range();
+            let source_scroll = primary.read(cx).source_scroll_offset(cx);
+            let structure_scroll = primary.read(cx).structure_scroll_offset();
+            let (expanded, selected) = primary.read(cx).expansion_state();
+            let view = cx.new(|cx| XmlView::new(document, mode, wrap, indent, cx));
+            view.update(cx, |view, cx| {
+                view.seed_presentation(
+                    selection,
+                    source_scroll,
+                    structure_scroll,
+                    expanded,
+                    selected,
+                    cx,
+                )
+            });
+            view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
     /// A draw.io document's presentation in one group. The first group uses
     /// the document's own view; a split group gets its own page/zoom and its
     /// own engine session over the same bytes and page list.
@@ -966,6 +1068,18 @@ impl Presentations {
         group: split::GroupId,
     ) -> Option<Entity<CsvView>> {
         self.csvs
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
+    pub(super) fn xml_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<XmlView>> {
+        self.xmls
             .borrow()
             .iter()
             .find(|(t, g, _, _)| *t == tab && *g == group)
@@ -1067,6 +1181,13 @@ impl Presentations {
             }
             keep
         });
+        self.xmls.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
         // Dropping the last presentation drops its native surface and session;
         // there is no engine-owned editing state to flush.
         self.drawios
@@ -1106,6 +1227,9 @@ impl Presentations {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.csvs.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
+        for (_, _, view, _) in self.xmls.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }

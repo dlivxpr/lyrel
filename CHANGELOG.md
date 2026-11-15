@@ -9,6 +9,7 @@
 
 ### 新增
 
+- #294：XML 接入有序、命名空间感知的结构树与局部编辑。`xmlparser` 保留元素／属性／文本／CDATA／注释／PI／声明的精确 byte range，`roxmltree` 以 `allow_dtd: false` 校验良构与命名空间；元素、属性与内容按源码顺序显示，属性单／双引号、周围空白、实体拼写与 mixed content 不会被无关编辑改动。选中属性值／文本／CDATA／注释可改值，选中元素／属性可重命名，选中元素可加属性／空子元素／文本，选中属性／文本／CDATA／注释／非根元素可删除；命令以 `(path, kind, range, key_range, value_range)` 绑定当前投影并要求 revision 仍匹配源码权威，写入前复核整篇良构性、命名空间绑定与预算，经共享 `Document::replace_ranges` 成为一条普通 history，树焦点下的普通 Undo／Redo 也走同一 history。DTD／外部实体声明在任何解析前可见拒绝，不读取外部文件或网络，源码仍可编辑且字节不变；无效源码、输入／节点／路径预算与迟到解析均保留源码并拒绝旧结果。保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；`src/ui/code_editor/xml_document/UPSTREAM.toml` 记录 Glim 有损模型的拒绝理由与 registry 解析器来源，根 `LICENSE` 补 `xmlparser`／`roxmltree` 通知。原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收。
 - #285：只读 PDF 补齐大纲导航、选字复制与文档内搜索。左栏大纲按层级缩进，点击或 `↑`／`↓`＋Enter 跳转显式坐标、`/Names` name tree 与旧式 `/Dests` 命名目的地（`/Fit` 整页对齐）；页内／旋转页链接热点按归一化矩形命中，外部 `http(s)` URI 交系统打开。`Ctrl`／`Cmd`+`F` 打开查找条，后台单任务逐页提取并计数（结果与文本层均有预算），Enter／Shift+Enter 步进并回绕、当前命中描边；提取失败的页计为“N 页无法读取”，扫描页如实标注“无文本层”而不把空命中当无结果。拖拽按字形几何选中（CJK 不臆造空格、行间换行、连字展开为完整 Unicode），`Ctrl`／`Cmd`+`C` 复制解码后文本；分屏各自持有页／缩放／选区／查找，文档修订变化退休旧文本层与命中，迟到结果不串文档。仍不创建批注、不填表、不修改 PDF，也不做 OCR。
 
 ### 修复

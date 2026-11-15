@@ -96,6 +96,8 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         EditorInput::Json(view) => view.read(cx).document().read(cx).document().entity_id(),
         // CSV/TSV has the same one-document identity as its source view.
         EditorInput::Csv(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // XML likewise saves the shared source Document, never a tree copy.
+        EditorInput::Xml(view) => view.read(cx).document().read(cx).document().entity_id(),
         // Read-only content still has a stable identity for save-side prompts.
         EditorInput::Image(view) => view.entity_id(),
         EditorInput::Sqlite(view) => view.entity_id(),

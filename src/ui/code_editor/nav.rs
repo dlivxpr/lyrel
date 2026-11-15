@@ -1058,6 +1058,11 @@ impl LyrelApp {
             })
             .or_else(|| {
                 f.presentations
+                    .xml_existing(tab, group)
+                    .map(super::EditorInput::Xml)
+            })
+            .or_else(|| {
+                f.presentations
                     .drawio_existing(tab, group)
                     .map(super::EditorInput::Drawio)
             })

@@ -437,6 +437,10 @@ impl LyrelApp {
                 file.presentations
                     .csv_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.xml().is_some() {
+                file.presentations
+                    .xml_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.image().is_some() {
                 file.presentations
                     .image_existing(tab, other_group)

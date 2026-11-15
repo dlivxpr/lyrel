@@ -249,6 +249,12 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("secondary-shift-z", Redo, json, cx),
             load_binding("ctrl-y", Redo, json, cx),
         ]);
+        let xml = Some(crate::ui::code_editor::XML_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, xml, cx),
+            load_binding("secondary-shift-z", Redo, xml, cx),
+            load_binding("ctrl-y", Redo, xml, cx),
+        ]);
     }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a

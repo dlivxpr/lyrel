@@ -1987,6 +1987,71 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::EditorJsonEditUnsupported => "This node cannot be changed from the tree",
         L10nKey::EditorJsonEditRecordLine => "A JSONL record must stay on one line",
+        L10nKey::EditorXmlStructure => "Structure",
+        L10nKey::EditorXmlSource => "Source",
+        L10nKey::EditorXmlShowStructure => "Show structure",
+        L10nKey::EditorXmlShowSource => "Show source",
+        L10nKey::EditorXmlToggleStructure => "Toggle XML structure / source",
+        L10nKey::EditorXmlParsing => "Parsing XML",
+        L10nKey::EditorXmlInvalid => "XML source could not be parsed",
+        L10nKey::EditorXmlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorXmlStructureUnavailable => "XML structure unavailable",
+        L10nKey::EditorXmlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorXmlInputLimit => {
+            "XML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorXmlNodeLimit => {
+            "XML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorXmlPathLimit => {
+            "XML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorXmlDtdDenied => "XML DTDs are not accessed",
+        L10nKey::EditorXmlDtdDeniedDetail => {
+            "A DTD or entity declaration at line {line}, column {column} was not resolved; external files and network resources are never read. The source stays editable and unchanged."
+        }
+        L10nKey::EditorXmlFacts => "{elements} elements · {attributes} attributes",
+        L10nKey::EditorXmlReveal => "Reveal in source",
+        L10nKey::EditorXmlFullValue => "Full value",
+        L10nKey::EditorXmlCopyValue => "Copy value",
+        L10nKey::EditorXmlEditValue => "Edit value",
+        L10nKey::EditorXmlRename => "Rename",
+        L10nKey::EditorXmlAddAttribute => "Add attribute",
+        L10nKey::EditorXmlAddChild => "Add child",
+        L10nKey::EditorXmlAddText => "Add text",
+        L10nKey::EditorXmlRemove => "Remove",
+        L10nKey::EditorXmlEditAttributeValueTitle => "Edit attribute value · {path}",
+        L10nKey::EditorXmlEditTextTitle => "Edit text · {path}",
+        L10nKey::EditorXmlEditCdataTitle => "Edit CDATA · {path}",
+        L10nKey::EditorXmlEditCommentTitle => "Edit comment · {path}",
+        L10nKey::EditorXmlRenameTitle => "Rename · {path}",
+        L10nKey::EditorXmlAddAttributeTitle => "Add attribute to {path}",
+        L10nKey::EditorXmlAddChildTitle => "Add child to {path}",
+        L10nKey::EditorXmlAddTextTitle => "Add text to {path}",
+        L10nKey::EditorXmlName => "Name",
+        L10nKey::EditorXmlAttributeValue => "Value",
+        L10nKey::EditorXmlTextValue => "Text",
+        L10nKey::EditorXmlCdataValue => "CDATA",
+        L10nKey::EditorXmlCommentValue => "Comment",
+        L10nKey::EditorXmlNamePlaceholder => "Element or attribute name",
+        L10nKey::EditorXmlValuePlaceholder => "XML value",
+        L10nKey::EditorXmlTextPlaceholder => "Text content",
+        L10nKey::EditorXmlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorXmlEditInvalidName => "Not a valid XML name: {message}",
+        L10nKey::EditorXmlEditInvalidValue => "Not valid XML content: {message}",
+        L10nKey::EditorXmlEditInvalidCdata => "CDATA cannot contain ]]>",
+        L10nKey::EditorXmlEditInvalidComment => "A comment cannot contain -- or end with -",
+        L10nKey::EditorXmlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorXmlEditUnsupported => "This node cannot be changed from the tree",
+        L10nKey::EditorXmlNamespaceNotice => {
+            "This attribute declares an XML namespace; changing it changes the meaning of names in scope."
+        }
         L10nKey::StructureEditApply => "Apply",
         L10nKey::EditorCsvTable => "Table",
         L10nKey::EditorCsvShowTable => "Show table",

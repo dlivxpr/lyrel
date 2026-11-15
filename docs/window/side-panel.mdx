@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑。其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
+本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)、[XML 有序结构与局部编辑](#xml-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑，#294 交付 XML 元素／属性／文本／CDATA／注释的局部编辑。其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索已由 #285 补齐；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
+> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#294 的 [XML 有序结构与局部编辑](#xml-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索已由 #285 补齐；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
 
 本节使用以下术语：
 
@@ -333,6 +333,22 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；#291 在同一投影上补 JSONL／NDJSON 的逐行记录层，明确不使用 Glim 的 NDJSON-to-`Value::Array` 投影作为存储或写回权威。`src/ui/code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，`src/ui/code_editor/structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果；#290 另覆盖选中重复 occurrence 的改值／改名、空 object／array 插入、删除成员、JSONC 注释与尾随逗号保真、保存／另存为／失败写入／外部冲突／取消关闭、分屏中的迟到命令拒绝、关闭后回调不写原件，树焦点下的普通撤销／重做（键盘留在树上、另一呈现源码与独立保存字节一致），以及真实远端路由下的保存回读。#291 覆盖 JSONL／NDJSON 的嵌套值／键／数组编辑、记录整行改值、插入与删除记录、无效邻居不阻塞、空白行与混合行尾／BOM 未触及字节保留、记录预算边界、迟到解析与过期记录命令拒绝、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭与独立重开，并新增映射 Host 同名诱饵和真实远端路由保存回读消费者。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
+<a id="xml-documents"></a>
+#### XML 有序结构与局部编辑（#294 已实现）
+
+`.xml`（未被 draw.io 内容探针识别为图文档时）打开为同一份可编辑源码及其有序结构树，不再把 XML 当作普通源码或 JSON 对象。
+
+- 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，逐行行尾、编码／BOM、revision、history、保存、另存为、外部重载、冲突与未保存关闭都沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不写回、不复制第二份可变内容，也不把 XML 转成通用对象或 `serde_json::Value`。
+- 有序模型：registry `xmlparser = 0.13.6` 给出元素起始／结束、属性、文本、CDATA、注释、PI 与声明的精确字节范围。元素、属性、文本、CDATA、注释与 PI 按源码顺序成为同一棵树的节点；属性排在元素内容之前，但属性内部与内容内部各自保持原顺序。相邻 Text 与 CDATA 不会合并，属性单／双引号、周围空白与实体拼写原样显示。`roxmltree = 0.21.2` 只做良构校验、前缀／默认命名空间解析与有界节点数检查；命名空间结果映射回 token 范围，结构行显示解析后的 URI，不以 local name 丢掉限定名。
+- 局部编辑：选中属性值、文本、CDATA 正文或注释正文可修改；选中元素或属性可重命名限定名；选中元素可加入属性、空子元素或文本；选中属性、文本、CDATA、注释或非根元素可删除。命令绑定当前投影的 `(path, kind, range, key_range, value_range)`，提交前要求已安装投影的 revision 仍等于源码权威；可见行号与裸元素名都不是写入目标。用户输入按源码语法校验（文本／属性值／CDATA／注释各自检查），写入前再解析整篇结果；会破坏良构性、留下未解析前缀或超出结构预算的规划被拒绝。替换清单交给共享 `Document` 的 `replace_ranges`，一次命令就是一条普通 history 记录，树焦点下的普通 Undo／Redo 也走同一 history；不整篇序列化、不做全 source 格式化。
+- DTD 与实体安全：DTD／实体声明在任何解析前被单独识别并可见拒绝；`roxmltree` 也以 `allow_dtd: false` 解析，因此不会读取外部 DTD、不会解析外部实体、不会访问文件或网络。拒绝不修改源码；无效或暂时不完整的 XML 仍显示解析错误并保持可编辑。
+- 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 40,000 节点、完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision；结构变化后仍打开的编辑面板会显示“文档已变化”并拒绝写入，不偷焦点。
+- 呈现：默认显示结构树；工具栏与状态行提供 Structure／Source 切换、元素／属性计数、选中行列、Reveal in source、Full value 与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该节点的精确范围；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值、编辑面板和结构滚动，同时共享同一 Document 与 history。
+
+**复用记录与边界**：见 `src/ui/code_editor/xml_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/graph.rs` XML 分支与 `glim-services/src/xml.rs` 仅作参考：前者用 local name、属性先序与文本合并，丢限定名／命名空间／mixed-content 顺序；后者只是 `quick-xml` 事件文本的解码，没有 span 或可写 occurrence。两者均明确拒绝、未导入。可保留的树展开、导航、源码定位与编辑面板来自 #289／#290 的共享实现；XML 语义与 mutation 层是本票在正式 registry 解析器上补齐的缺失部分。根 `LICENSE` 记录 `xmlparser 0.13.6`／`roxmltree 0.21.2` 的 MIT OR Apache-2.0 通知。
+
+**证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、声明／PI／注释／CDATA／元素／属性的源码顺序、命名空间解析与重命名拒绝、属性值／文本／CDATA／注释的局部编辑、加属性／子元素／文本、删除属性／元素、共享 Undo／Redo、普通保存与原字节、长混合内容、无效源码修复、DTD／外部实体的可见拒绝与原件不变、输入／节点／路径预算、暂停后迟到结果、分屏独立状态、另存为／失败写入／外部冲突／取消关闭与独立重开；另有忽略测试经严格 pin 的真实 Linux SSH 私有 fixture 验证远端保存。测试夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试、编译成功或解析器成功代替。
+
 <a id="csv-documents"></a>
 #### CSV／TSV 表格与保真编辑（#287、#288）
 

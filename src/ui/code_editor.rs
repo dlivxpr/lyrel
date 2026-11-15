@@ -43,9 +43,11 @@ mod markdown_formula;
 mod markdown_search;
 mod pdf_document;
 mod structure_edit;
+mod structure_rows;
 mod structure_view;
 mod svg_document;
 mod text;
+mod xml_document;
 use buffers::Loaded;
 use document_input::{EditorInput, Presentations};
 mod gutter;
@@ -61,6 +63,7 @@ use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
+use xml_document::{XmlDocument, XmlMode, XmlView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
@@ -98,6 +101,8 @@ pub(crate) use pdf_document::{
     PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
 };
 pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+/// XML 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
+pub(crate) use xml_document::KEY_CONTEXT as XML_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -227,6 +232,8 @@ impl OpenFile {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.csv() {
             view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.xml() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
         }
@@ -258,6 +265,9 @@ impl OpenFile {
         }
         if self.input.json().is_some() {
             return "json";
+        }
+        if self.input.xml().is_some() {
+            return "xml";
         }
         // CSV and TSV keep the route chosen at open; a rename is not a
         // delimiter probe.
@@ -504,6 +514,15 @@ pub(crate) fn is_json_path(path: &Path) -> bool {
         })
 }
 
+/// XML source has its own document route: one plain-source Document plus an
+/// ordered, namespace-aware structure tree. The extension decides the route,
+/// so a temporarily invalid file still opens where it can be repaired.
+pub(crate) fn is_xml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+}
+
 /// CSV/TSV records have one source authority and a derived table. The
 /// extension chooses the delimiter and the route; content never turns an
 /// ordinary text file into a table.
@@ -560,6 +579,7 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "json" => "json",
         "jsonc" => "jsonc",
         "jsonl" | "ndjson" => "jsonl",
+        "xml" => "xml",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
         "csv" => "csv",
@@ -607,6 +627,7 @@ fn language_label(id: &str) -> Option<&'static str> {
         "json" => "JSON",
         "jsonc" => "JSONC",
         "jsonl" => "JSONL",
+        "xml" => "XML",
         "toml" => "TOML",
         "yaml" => "YAML",
         "csv" => "CSV",
@@ -928,6 +949,10 @@ impl LyrelApp {
         self.active_buffer()
             .is_some_and(|file| file.input.csv().is_some())
     }
+    pub(crate) fn xml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.xml().is_some())
+    }
     pub(crate) fn drawio_document_active(&self) -> bool {
         self.active_buffer()
             .is_some_and(|file| file.input.drawio().is_some())
@@ -959,6 +984,11 @@ impl LyrelApp {
                     file.presentations
                         .csv_existing(tab, group)
                         .map(EditorInput::Csv)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .xml_existing(tab, group)
+                        .map(EditorInput::Xml)
                 })
                 .or_else(|| {
                     file.presentations
@@ -1625,6 +1655,9 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.csv() {
             let view = file.presentations.csv_view(primary, tab, group, window, cx);
             EditorInput::Csv(view).focus(window, cx);
+        } else if let Some(primary) = file.input.xml() {
+            let view = file.presentations.xml_view(primary, tab, group, cx);
+            EditorInput::Xml(view).focus(window, cx);
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
@@ -1720,6 +1753,12 @@ impl LyrelApp {
         } else if let Some(view) = self
             .active_editor_input()
             .and_then(|input| input.csv().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.xml().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
@@ -2057,6 +2096,8 @@ impl LyrelApp {
                     view.update(cx, |view, cx| view.finish_composition(cx));
                 } else if let Some(view) = file.presentations.csv_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.xml_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -2275,6 +2316,14 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = json_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(xml) = input.xml() {
+            let menu = menu.action_context(xml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = xml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2952,6 +3001,8 @@ impl LyrelApp {
                     "json-status-bar"
                 } else if self.csv_document_active() {
                     "csv-status-bar"
+                } else if self.xml_document_active() {
+                    "xml-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
                 } else if self.sqlite_document_active() {
@@ -3173,6 +3224,36 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.xml().is_some() => {
+                let primary = f.input.xml().expect("XML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.xml_view(primary, tab, group, cx);
+                let id = f.id();
+                let app = cx.entity().downgrade();
+                v_flex()
+                    .id(("xml-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .context_menu(move |menu, _window, cx| {
+                        Self::editor_body_menu(menu, &app, id, cx)
+                    })
                     .into_any_element()
             }
             Some(f) if f.input.csv().is_some() => {
@@ -3688,6 +3769,20 @@ impl LyrelApp {
                     view.invalid_records(cx),
                 )
             });
+        let xml_state = self
+            .active_editor_input()
+            .and_then(|input| input.xml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.element_count(cx),
+                    view.attribute_count(cx),
+                )
+            });
         let csv_state = csv_view.as_ref().map(|view| {
             let view = view.read(cx);
             (
@@ -3925,6 +4020,78 @@ impl LyrelApp {
                     )
                 })
             })
+            .when_some(
+                xml_state,
+                |this, (mode, parsing, fatal, location, elements, attributes)| {
+                    let (label, tip) = match mode {
+                        XmlMode::Source => (
+                            t(L10nKey::EditorXmlSource),
+                            t(L10nKey::EditorXmlShowStructure),
+                        ),
+                        XmlMode::Structure => (
+                            t(L10nKey::EditorXmlStructure),
+                            t(L10nKey::EditorXmlShowSource),
+                        ),
+                    };
+                    let mut this =
+                        this.child(item("status-xml-mode", label.into()).tooltip(tip).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            }),
+                        ));
+                    if let (Some(elements), Some(attributes)) = (elements, attributes) {
+                        this = this.child(
+                            div()
+                                .id("status-xml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorXmlFacts,
+                                    &[
+                                        ("elements", &elements.to_string()),
+                                        ("attributes", &attributes.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-xml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-xml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorXmlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-xml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    }
+                    this
+                },
+            )
             .when_some(
                 json_state,
                 |this, (mode, parsing, fatal, location, nodes, records, invalid)| {
