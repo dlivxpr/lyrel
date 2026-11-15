@@ -8,6 +8,7 @@
 //! and, through the `test-fixtures` feature, to the workbench's integration
 //! tests. It is not compiled into the released library.
 
+#[cfg(test)]
 use std::collections::HashMap;
 
 /// Public test value, not a user credential.
@@ -778,21 +779,9 @@ pub fn links_document() -> Vec<u8> {
         &format!("/Annots [{internal} 0 R {external} 0 R] /Rotate 90"),
     );
     base.set_page(1, &format!("/Annots [{trailer} 0 R]"));
-    let Base {
-        mut builder,
-        pages: pages_id,
-        ..
-    } = base;
-    let catalog = builder.reserve();
-    builder.set(
-        catalog,
-        format!(
-            "<< /Type /Catalog /Pages {pages_id} 0 R \
-             /Names << /Dests << /Names [(second-279) [{page_two} 0 R /Fit]] >> >> >>"
-        )
-        .into_bytes(),
-    );
-    builder.serialize(catalog, None)
+    base.finish(&format!(
+        "/Names << /Dests << /Names [(second-279) [{page_two} 0 R /Fit]] >> >>"
+    ))
 }
 
 /// Encrypt the reading fixture with the public Standard R2 test password.
@@ -808,23 +797,23 @@ pub fn encrypted_forms_document() -> Vec<u8> {
 
 /// Re-build a serialized document with our own encryption helper. The input is
 /// one of this module's files, so its simple xref layout is the one we wrote.
-fn encrypt_serialized(original: Vec<u8>, _user: &str) -> Vec<u8> {
+fn encrypt_serialized(original: Vec<u8>, user: &str) -> Vec<u8> {
     let mut builder = Builder::new();
-    let text = String::from_utf8_lossy(&original);
-    let xref_at = text.rfind("xref\n").expect("fixture xref");
-    let header = text[xref_at..].split('\n').nth(1).expect("xref header");
-    let count: usize = header.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let offsets: Vec<usize> = (1..count)
-        .map(|index| {
-            let line_start = text[xref_at..]
-                .match_indices('\n')
-                .nth(index)
-                .map(|(offset, _)| xref_at + offset + 1)
-                .unwrap();
-            text[line_start..line_start + 10].parse().unwrap()
-        })
+    let xref_at = find(&original, b"\nxref\n").expect("fixture xref") + 1;
+    // Only the xref/trailer is ASCII. Byte offsets refer to the original PDF,
+    // not a lossy UTF-8 rendering of its binary header and object streams.
+    let xref = std::str::from_utf8(&original[xref_at..]).expect("ASCII xref");
+    let mut lines = xref.lines();
+    assert_eq!(lines.next(), Some("xref"));
+    let mut header = lines.next().expect("xref header").split_whitespace();
+    assert_eq!(header.next(), Some("0"));
+    let count: usize = header.next().expect("xref count").parse().unwrap();
+    lines.next().expect("free object zero");
+    let offsets: Vec<usize> = lines
+        .take(count - 1)
+        .map(|line| line[..10].parse().expect("xref byte offset"))
         .collect();
-    let root: usize = text
+    let root: usize = xref
         .split("/Root ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
@@ -838,7 +827,7 @@ fn encrypt_serialized(original: Vec<u8>, _user: &str) -> Vec<u8> {
         let object_end = find(body, b"\nendobj").expect("object end");
         builder.add(body[..object_end].to_vec());
     }
-    builder.finish_encrypted(root, TEST_PASSWORD, "fixture-owner-279")
+    builder.finish_encrypted(root, user, "fixture-owner-279")
 }
 
 #[cfg(test)]

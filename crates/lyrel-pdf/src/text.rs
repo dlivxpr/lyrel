@@ -104,8 +104,6 @@ fn visible(clips: &[Rect], bbox: Rect) -> bool {
 /// Records glyph text and geometry; everything else is ignored.
 struct Collector {
     runs: Vec<RawRun>,
-    page_w: f32,
-    page_h: f32,
     /// Cumulative device-space clip intersection; the last entry is effective.
     clips: Vec<Rect>,
 }
@@ -153,7 +151,7 @@ impl Collector {
             Some(BfString::String(text)) => text,
             None => return,
         };
-        let origin = matrix.translation();
+        let origin = matrix * Point::new(0., 0.);
         let em = {
             let top = matrix * Point::new(0.0, 1000.0);
             (top - origin).hypot()
@@ -213,8 +211,11 @@ impl Collector {
 /// Extract one page's text layer. Returns `None` when the page does not exist.
 pub fn extract_page_text(doc: &Pdf, index: usize) -> Option<PageText> {
     let page = doc.pages().get(index)?;
-    let (page_w, page_h) = page.render_dimensions();
-    let initial = page.initial_transform(true).to_kurbo();
+    let (page_w, page_h) = page.base_dimensions();
+    let crop = page.intersected_crop_box();
+    // Establish text order before page rotation. The interpreter's clipping
+    // and glyphs use the same unrotated, top-left coordinate system.
+    let initial = Affine::new([1., 0., 0., -1., -crop.x0, f64::from(page_h) + crop.y0]);
     let cache = InterpreterCache::new();
     let mut ctx = Context::new(
         initial,
@@ -225,12 +226,16 @@ pub fn extract_page_text(doc: &Pdf, index: usize) -> Option<PageText> {
     );
     let mut collector = Collector {
         runs: Vec::new(),
-        page_w,
-        page_h,
         clips: Vec::new(),
     };
     interpret_page(page, &mut ctx, &mut collector);
-    Some(PageText::new(finish(collector.runs, page_w, page_h)))
+    let (display_w, display_h) = page.render_dimensions();
+    let mut text = PageText::new(finish(collector.runs, page_w, page_h));
+    text.display = Affine::scale_non_uniform(1. / f64::from(display_w), 1. / f64::from(display_h))
+        * page.initial_transform(true).to_kurbo()
+        * initial.inverse()
+        * Affine::scale_non_uniform(f64::from(page_w), f64::from(page_h));
+    Some(text)
 }
 
 /// Single-column reading order: cluster glyphs into baselines, then sort each
@@ -291,8 +296,7 @@ fn finish(mut raw: Vec<RawRun>, page_w: f32, page_h: f32) -> Vec<Run> {
         let rect = match run.bbox {
             Some(bbox) => bbox,
             None => {
-                let same_line =
-                    next.is_some_and(|next| line_of[ordered[position + 1]] == line_of[id]);
+                let same_line = next.is_some_and(|_| line_of[ordered[position + 1]] == line_of[id]);
                 let advance = match next {
                     Some(next) if same_line && next.origin.x > run.origin.x => {
                         next.origin.x - run.origin.x
@@ -331,6 +335,8 @@ pub struct PageText {
     letters: String,
     /// `owner[byte]` is the run index that produced that byte of `letters`.
     owner: Vec<usize>,
+    /// Normalized reading coordinates to the page's rotated display.
+    display: Affine,
 }
 
 impl PageText {
@@ -355,6 +361,7 @@ impl PageText {
             runs,
             letters,
             owner,
+            display: Affine::IDENTITY,
         }
     }
 
@@ -493,10 +500,27 @@ impl PageText {
             }
             lines.push(rect);
         }
+        for rect in &mut lines {
+            // Page rotation is a quarter-turn, so opposite rectangle corners
+            // still determine its exact axis-aligned display bounds.
+            let first = self.display * Point::new(f64::from(rect.x), f64::from(rect.y));
+            let last = self.display * Point::new(f64::from(rect.right()), f64::from(rect.bottom()));
+            *rect = NormRect {
+                x: first.x.min(last.x) as f32,
+                y: first.y.min(last.y) as f32,
+                w: (last.x - first.x).abs() as f32,
+                h: (last.y - first.y).abs() as f32,
+            };
+        }
         lines
     }
 
     fn nearest_run(&self, point: NormPoint) -> Option<usize> {
+        let point = self.display.inverse() * Point::new(f64::from(point.x), f64::from(point.y));
+        let point = NormPoint {
+            x: point.x as f32,
+            y: point.y as f32,
+        };
         self.runs
             .iter()
             .enumerate()

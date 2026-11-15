@@ -54,9 +54,7 @@ pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
-pub(crate) use pdf_document::{
-    PdfActualSize, PdfFitPage, PdfFitWidth, PdfNextPage, PdfPreviousPage, PdfZoomIn, PdfZoomOut,
-};
+pub(crate) use pdf_document::{PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

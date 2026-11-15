@@ -16,7 +16,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
     SharedString, Size, Subscription, TestSupportExt as _, Window, div, px, rems,
 };
 use lyrel_core::host::transfer::CancelToken;
@@ -155,15 +155,29 @@ impl PdfDocument {
         };
         self.unlock_seq = self.unlock_seq.wrapping_add(1);
         let seq = self.unlock_seq;
+        let revision = self.revision;
         self.content = PdfContent::Unlocking;
         cx.notify();
+        #[cfg(test)]
+        let gate = tests::take_work(tests::Work::Unlock);
         cx.spawn(async move |this, cx| {
             let parsed = cx
                 .background_executor()
-                .spawn(async move { lyrel_pdf::PdfDocument::load(bytes, &password) })
+                .spawn(async move {
+                    #[cfg(test)]
+                    if let Some(gate) = gate.as_ref() {
+                        gate.block().await;
+                    }
+                    let result = lyrel_pdf::PdfDocument::load(bytes, &password);
+                    #[cfg(test)]
+                    if let Some(gate) = gate {
+                        gate.finish();
+                    }
+                    result
+                })
                 .await;
             let _ = this.update(cx, |document, cx| {
-                if document.unlock_seq != seq {
+                if document.unlock_seq != seq || document.revision != revision {
                     return;
                 }
                 match parsed {
@@ -567,13 +581,28 @@ impl PdfView {
             let scale = lyrel_pdf::render_scale(page_width, scale_factor, self.dims[index].0);
             let document = document.clone();
             let cancel = self.cancel.clone();
+            #[cfg(test)]
+            let gate = if index == 0 {
+                tests::take_work(tests::Work::FirstPage)
+            } else {
+                None
+            };
             cx.spawn(async move |view, cx| {
-                let rendered =
-                    cx.background_executor()
-                        .spawn(async move {
-                            document.render_page(index, scale, &|| cancel.is_cancelled())
-                        })
-                        .await;
+                let rendered = cx
+                    .background_executor()
+                    .spawn(async move {
+                        #[cfg(test)]
+                        if let Some(gate) = gate.as_ref() {
+                            gate.block().await;
+                        }
+                        let result = document.render_page(index, scale, &|| cancel.is_cancelled());
+                        #[cfg(test)]
+                        if let Some(gate) = gate {
+                            gate.finish();
+                        }
+                        result
+                    })
+                    .await;
                 let _ = view.update(cx, |view, cx| {
                     view.land_page(
                         index,
@@ -777,20 +806,32 @@ impl PdfView {
         let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
-        let mut column = v_flex()
+        let content_height = lyrel_pdf::content_height(&self.dims, page_width);
+        let (start, end) = lyrel_pdf::keep_window(
+            &self.dims,
+            page_width,
+            f32::from(-self.scroll.offset().y),
+            f32::from(self.scroll.bounds().size.height),
+        );
+        let mut column = div()
+            .relative()
             .w_full()
-            .min_h_full()
-            .items_center()
-            .py(px(lyrel_pdf::PAGE_PAD_Y))
-            .gap(px(lyrel_pdf::PAGE_GAP));
-        for (index, dim) in self.dims.iter().enumerate() {
+            .min_w(px(page_width + PAGE_PAD_X * 2.))
+            .h(px(content_height));
+        for index in start..=end {
+            let Some(dim) = self.dims.get(index) else {
+                break;
+            };
             let height = lyrel_pdf::display_height(*dim, page_width);
             let slot = &self.slots[index];
             let image = slot.image.as_ref().map(markdown::images::Bitmap::image);
             let mut page = div()
                 .id(SharedString::from(format!("pdf-page-{index}")))
-                .relative()
-                .flex_none()
+                .test_support()
+                .absolute()
+                .top(px(lyrel_pdf::page_top_y(&self.dims, page_width, index)))
+                .left(gpui_kit::relative(0.5))
+                .ml(px(-page_width / 2.))
                 .w(px(page_width))
                 .h(px(height))
                 .overflow_hidden()
@@ -844,19 +885,19 @@ impl PdfView {
             column = column.child(page);
         }
         div()
+            .on_children_prepainted({
+                let view = cx.entity().downgrade();
+                let scroll = self.scroll.clone();
+                move |_, _, cx| {
+                    let size = scroll.bounds().size;
+                    let _ = view.update(cx, |view, cx| view.set_viewport(size, cx));
+                }
+            })
             .id("pdf-scroll")
             .size_full()
             .min_h_0()
             .overflow_scroll()
             .track_scroll(&self.scroll)
-            .on_children_prepainted({
-                let view = cx.entity();
-                move |bounds, _, cx| {
-                    if let Some(bounds) = bounds.first() {
-                        view.update(cx, |view, cx| view.set_viewport(bounds.size, cx));
-                    }
-                }
-            })
             .child(column)
             .into_any_element()
     }
@@ -943,7 +984,7 @@ fn field_overlay(
     div()
         .id(SharedString::from(format!("pdf-field-{}", field.name)))
         .test_support()
-        .accessibility_label(field.value.clone())
+        .aria_label(field.value.clone())
         .absolute()
         .left(px(rect.x * page_width))
         .top(px(rect.y * lyrel_pdf::display_height(page_dim, page_width)))

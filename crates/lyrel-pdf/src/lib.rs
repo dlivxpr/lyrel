@@ -559,8 +559,8 @@ mod tests {
             let offset = (y * 612 + x) * 4;
             &page.rgba[offset..offset + 4]
         };
-        // Checkbox /AS=Yes: green fill at PDF (60,552) → display y 240.
-        let green = pixel(60, 240);
+        // Inside the green fill, away from the white check's anti-aliased edge.
+        let green = pixel(51, 232);
         assert!(
             green[1] > 100 && green[0] < 80,
             "green check state: {green:?}"
@@ -568,6 +568,12 @@ mod tests {
         // Text field AP background 0.85,0.9,1 at PDF (50,620) → display y 172.
         let field = pixel(50, 172);
         assert!(field[0] > 180 && field[2] > 220, "field AP: {field:?}");
+        let note = pixel(336, 176);
+        assert_eq!(
+            note,
+            &[255, 128, 0, 255],
+            "existing orange annotation appearance"
+        );
     }
 
     #[test]
@@ -629,6 +635,29 @@ mod tests {
         let document = load_reading();
         let rotated = document.text(2).expect("rotated page text");
         assert!(rotated.text().contains("unique-page-03"));
+        let rects = rotated.locate("unique-page-03", 0);
+        assert_eq!(rects.len(), 1);
+        let rect = rects[0];
+        assert!(
+            (0.82..0.9).contains(&rect.x) && (0.07..0.09).contains(&rect.y),
+            "{rect:?}"
+        );
+        assert!(rect.h > rect.w);
+        assert_eq!(
+            rotated
+                .selected_text(
+                    NormPoint {
+                        x: rect.x + rect.w / 2.,
+                        y: rect.y
+                    },
+                    NormPoint {
+                        x: rect.x + rect.w / 2.,
+                        y: rect.y + rect.h
+                    },
+                )
+                .as_deref(),
+            Some("unique-page-03")
+        );
         let page = document
             .render_page(2, 1.0, &never_cancelled)
             .expect("rotated render");

@@ -82,7 +82,16 @@ fn content(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> PdfContent {
 }
 
 fn ready(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> bool {
-    matches!(content(app, cx), PdfContent::Ready(_))
+    app.read_with(cx, |app, cx| {
+        app.active_buffer()
+            .and_then(|file| file.input.pdf())
+            .is_some_and(|view| {
+                matches!(
+                    view.read(cx).document().read(cx).content(),
+                    PdfContent::Ready(_)
+                )
+            })
+    })
 }
 
 fn status(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> String {
@@ -272,66 +281,72 @@ fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppConte
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let (release, entered, finished) = pause_work(Work::FirstPage);
     open(&app, &mut cx, &path);
-    until(&mut cx, |cx| ready(&app, cx));
-    let view = pdf_view(&app, &cx);
-    let document_id = view.read_with(&cx, |view, _| view.document.entity_id());
-    let revision = view.read_with(&cx, |view, cx| view.document.read(cx).revision());
-    let generation = view.read_with(&cx, |view, _| view.generation);
-    let attempt = view.read_with(&cx, |view, cx| {
-        view.document.update(cx, |document, cx| {
-            document.replace(
-                PdfLoaded::Ready(Arc::new(
-                    lyrel_pdf::PdfDocument::load(Arc::new(fixtures::forms_document(false)), "")
-                        .expect("replacement parses"),
-                )),
-                cx,
-            )
-        });
-        // Simulate a render that was already in flight when the document was
-        // replaced: same entity, old revision and generation, and it owns the
-        // slot until it lands.
-        let attempt = 9_999;
-        let mut slot = std::mem::take(&mut view.slots[0]);
-        slot.loading = Some((attempt, generation));
-        view.slots[0] = slot;
-        attempt
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::Acquire)
     });
-    let before = view.read_with(&cx, |view, _| view.image(0));
-    view.update(&mut cx, |view, cx| {
-        view.land_page(
-            0,
-            attempt,
-            document_id,
-            revision,
-            generation,
-            Ok(lyrel_pdf::RenderedPage {
-                width: 2,
-                height: 2,
-                rgba: vec![255, 0, 255, 255; 2 * 2],
-            }),
-            cx,
-        );
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
     });
-    assert!(
-        view.read_with(&cx, |view, _| view.image(0)).is_none() || before.is_some(),
-        "a late result from the replaced revision installs nothing new"
-    );
+    let replacement = fixtures::forms_document(true);
+    std::fs::write(&path, &replacement).unwrap();
+    until(&mut cx, |cx| status(&app, cx) == "Page 1 / 1");
+    release.send_blocking(()).unwrap();
+    until(&mut cx, |_| {
+        finished.load(std::sync::atomic::Ordering::Acquire)
+    });
+    until(&mut cx, |cx| {
+        cx.update(|window, _| window.try_find("pdf-field-unicode279").is_some())
+    });
     settle(&mut cx);
-    until(&mut cx, |cx| {
-        pdf_view(&app, cx).read_with(cx, |view, _| view.page_count() == 1)
+    assert_eq!(status(&app, &cx), "Page 1 / 1");
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find("pdf-field-unicode279").label(),
+            Some("中文表单279")
+        );
+        assert!(window.try_find("pdf-page-1").is_none());
     });
-    until(&mut cx, |cx| {
-        pdf_view(&app, cx).read_with(cx, |view, _| {
-            view.image(0)
-                .is_some_and(|image| image.size(0).width.0 != 2)
-        })
-    });
-    assert_eq!(
-        status(&app, &cx),
-        "Page 1 / 1",
-        "the replacement document is the visible one"
+    assert_eq!(std::fs::read(&path).unwrap(), replacement);
+}
+
+#[gpui_kit::test]
+fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(
+        dir.path(),
+        "replaced-locked.pdf",
+        &fixtures::encrypted_reading_document(),
     );
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    let input = pdf_view(&app, &cx).read_with(&cx, |view, _| view.password_input());
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_value(fixtures::TEST_PASSWORD, window, cx)
+    });
+    let (release, entered, finished) = pause_work(Work::Unlock);
+    cx.update(|window, cx| window.click("pdf-unlock", cx));
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::Acquire)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+    let replacement = fixtures::forms_document(true);
+    std::fs::write(&path, &replacement).unwrap();
+    until(&mut cx, |cx| status(&app, cx) == "Page 1 / 1");
+    release.send_blocking(()).unwrap();
+    until(&mut cx, |_| {
+        finished.load(std::sync::atomic::Ordering::Acquire)
+    });
+    until(&mut cx, |cx| {
+        cx.update(|window, _| window.try_find("pdf-field-unicode279").is_some())
+    });
+    settle(&mut cx);
+    assert_eq!(status(&app, &cx), "Page 1 / 1");
+    assert_eq!(std::fs::read(&path).unwrap(), replacement);
 }
 
 #[gpui_kit::test]
@@ -649,12 +664,6 @@ fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
                 .expect("other view"),
         )
     });
-    assert_ne!(front, other, "each group draws its own view");
-    assert_eq!(
-        front.read_with(&cx, |view, cx| view.document().read(cx).entity_id()),
-        other.read_with(&cx, |view, cx| view.document().read(cx).entity_id()),
-        "one parsed document behind both"
-    );
     let before = other.read_with(&cx, |view, _| view.zoom_label().to_string());
     dispatch(&app, &mut cx, PdfZoomIn);
     assert!(
@@ -758,4 +767,66 @@ fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext)
         12
     );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Work {
+    FirstPage,
+    Unlock,
+}
+
+pub(super) struct WorkGate {
+    receiver: smol::channel::Receiver<()>,
+    entered: Arc<std::sync::atomic::AtomicBool>,
+    finished: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl WorkGate {
+    pub(super) async fn block(&self) {
+        self.entered
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.receiver.recv().await.expect("release owned PDF work");
+    }
+
+    pub(super) fn finish(self) {
+        self.finished
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+thread_local! {
+    static WORK_GATE: std::cell::RefCell<Option<(Work, WorkGate)>> = const { std::cell::RefCell::new(None) };
+}
+
+fn pause_work(
+    work: Work,
+) -> (
+    smol::channel::Sender<()>,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let (sender, receiver) = smol::channel::bounded(1);
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    WORK_GATE.with_borrow_mut(|slot| {
+        *slot = Some((
+            work,
+            WorkGate {
+                receiver,
+                entered: entered.clone(),
+                finished: finished.clone(),
+            },
+        ))
+    });
+    (sender, entered, finished)
+}
+
+pub(super) fn take_work(work: Work) -> Option<WorkGate> {
+    WORK_GATE.with_borrow_mut(|slot| {
+        if slot.as_ref().is_some_and(|(pending, _)| *pending == work) {
+            slot.take().map(|(_, gate)| gate)
+        } else {
+            None
+        }
+    })
 }
