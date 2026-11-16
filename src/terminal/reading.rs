@@ -705,4 +705,25 @@ mod tests {
         );
         assert_eq!(live.outline.x_max, 20);
     }
+
+    /// A pending wrap on the bottom row must not scroll when the next event is
+    /// a cursor move — ConPTY repaints full-width rows followed by CUP, and
+    /// materializing the wrap would push chrome rows into scrollback.
+    #[test]
+    fn a_pending_wrap_does_not_scroll_on_cursor_address() {
+        let size = crate::terminal::size::TermSize::new(10, 4);
+        let mut term = crate::terminal::remote::test_term(size);
+        let mut parser = Processor::default();
+        parser.advance(&mut term, b"r0........\r\nr1........\r\nr2........\r\n");
+        // Bottom row full-width write -> wrap pending.
+        parser.advance(&mut term, b"r3........");
+        assert_eq!(term.grid.history_size(), 0);
+        parser.advance(&mut term, b"\x1b[4;1H");
+        assert_eq!(term.grid.history_size(), 0, "CUP materialized the wrap");
+        parser.advance(&mut term, b"..........");
+        parser.advance(&mut term, b"\r");
+        assert_eq!(term.grid.history_size(), 0, "CR materialized the wrap");
+        parser.advance(&mut term, b"\x1b[4;1H\n");
+        assert_eq!(term.grid.history_size(), 1, "LF at bottom must scroll once");
+    }
 }

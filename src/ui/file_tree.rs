@@ -1548,7 +1548,7 @@ impl LyrelApp {
             window,
             cx,
             move |h| {
-                file_copy::download_file(
+                file_copy::download_path(
                     h,
                     &src,
                     &crate::ui::sftp::local_download_dir(),
@@ -2481,10 +2481,11 @@ impl LyrelApp {
                     }
                 }),
             );
-        } else if !is_dir {
-            // Reveal's place on a remote tree: the file is not here to show in
+        } else {
+            // Reveal's place on a remote tree: the path is not here to show in
             // Finder, so the item that makes sense is the one that brings it
-            // here. A local file is already on this machine and gets Reveal.
+            // here — a folder comes down recursively. A local path is already
+            // on this machine and gets Reveal.
             menu = menu.item(PopupMenuItem::new(t(L10nKey::Download)).on_click({
                 let app = app.clone();
                 let p = p.clone();

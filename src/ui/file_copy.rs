@@ -326,17 +326,18 @@ fn copy_file(
     Ok(())
 }
 
-/// Fetch `src` from `host` into a new file in the local directory `dir`.
+/// Fetch `src` from `host` into a new entry in the local directory `dir`.
 ///
 /// The counterpart of a drop, for the direction a drop cannot go: the tree's
-/// rows name files on the host, and this is how one comes back to this
-/// machine. Named the way the SFTP panel's Download names things — the remote
-/// name, numbered rather than written over when it is taken.
+/// rows name paths on the host, and this is how one comes back to this
+/// machine — a file as itself, a directory through the same recursive walk a
+/// drop uses. Named the way the SFTP panel's Download names things — the
+/// remote name, numbered rather than written over when it is taken.
 ///
 /// `max` is the ceiling on the file; over it, nothing is transferred. For a
 /// remote host that is [`REMOTE_FILE_MAX`], since `read_file` answers in a
 /// single control frame just as `write_file` asks in one.
-pub(crate) fn download_file(
+pub(crate) fn download_path(
     host: &dyn Host,
     src: &Path,
     dir: &Path,
@@ -357,8 +358,34 @@ pub(crate) fn download_file(
         )));
     }
     let meta = host.stat(src)?;
+    std::fs::create_dir_all(dir)?;
     if meta.is_dir {
-        return Err(io::Error::from(io::ErrorKind::IsADirectory));
+        let local = lyrel_core::host::local::LocalHost::shared();
+        // The same numbered-name dance as a file, claimed by `create_dir`
+        // instead of `create_new`, so two downloads racing still get their
+        // own tree rather than one merging into the other.
+        for _ in 0..WORKING_NAME_TRIES {
+            let Some(dest) =
+                crate::ui::sftp::free_local_path(dir, &name, &Default::default(), true)
+            else {
+                break;
+            };
+            match std::fs::create_dir(&dest) {
+                Ok(()) => {
+                    if let Err(e) = copy_tree(host, local.as_ref(), src, &dest, 0) {
+                        let _ = std::fs::remove_dir_all(&dest);
+                        return Err(e);
+                    }
+                    return Ok(dest);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        return Err(io::Error::other(t_fmt(
+            L10nKey::SftpErrorNoFreeLocalName,
+            &[("name", &name)],
+        )));
     }
     // Asked up front so the answer is the limit, not whatever the far end
     // says when `read_file` refuses — and so nothing crosses the wire first.
@@ -369,12 +396,12 @@ pub(crate) fn download_file(
         )));
     }
     let bytes = host.read_file(src, max)?;
-    std::fs::create_dir_all(dir)?;
     // The name is chosen only once the bytes are here, and taken with
     // `create_new`: two downloads of the same file racing each other each get
     // their own number instead of one landing on the other.
     for _ in 0..WORKING_NAME_TRIES {
-        let Some(dest) = crate::ui::sftp::free_local_path(dir, &name, &Default::default()) else {
+        let Some(dest) = crate::ui::sftp::free_local_path(dir, &name, &Default::default(), false)
+        else {
             break;
         };
         let mut file = match std::fs::OpenOptions::new()
@@ -727,8 +754,8 @@ mod tests {
         write(&src, "hello");
         let into = root.join("Downloads");
 
-        let first = download_file(&*LocalHost::shared(), &src, &into, 1024).unwrap();
-        let second = download_file(&*LocalHost::shared(), &src, &into, 1024).unwrap();
+        let first = download_path(&*LocalHost::shared(), &src, &into, 1024).unwrap();
+        let second = download_path(&*LocalHost::shared(), &src, &into, 1024).unwrap();
 
         assert_eq!(first, into.join("report.log"));
         assert_eq!(second, into.join("report (2).log"));
@@ -743,7 +770,7 @@ mod tests {
         write(&src, &"x".repeat(4096));
         let into = root.join("Downloads");
 
-        let err = download_file(&*LocalHost::shared(), &src, &into, 1024).unwrap_err();
+        let err = download_path(&*LocalHost::shared(), &src, &into, 1024).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -753,13 +780,26 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_is_not_downloaded_as_a_file() {
+    fn a_folder_downloads_as_a_folder_tree() {
         let root = scratch("download-dir");
         let src = root.join("far/pkg");
-        std::fs::create_dir_all(&src).unwrap();
+        write(&src.join("lib/a.rs"), "a");
+        write(&src.join("nested/deep/b.rs"), "b");
+        write(&src.join("top.txt"), "t");
         let into = root.join("Downloads");
 
-        assert!(download_file(&*LocalHost::shared(), &src, &into, 1024).is_err());
-        assert!(!into.join("pkg").exists());
+        let first = download_path(&*LocalHost::shared(), &src, &into, 1024).unwrap();
+        let second = download_path(&*LocalHost::shared(), &src, &into, 1024).unwrap();
+
+        assert_eq!(first, into.join("pkg"));
+        assert_eq!(second, into.join("pkg (2)"));
+        for dest in [&first, &second] {
+            assert_eq!(std::fs::read_to_string(dest.join("lib/a.rs")).unwrap(), "a");
+            assert_eq!(
+                std::fs::read_to_string(dest.join("nested/deep/b.rs")).unwrap(),
+                "b"
+            );
+            assert_eq!(std::fs::read_to_string(dest.join("top.txt")).unwrap(), "t");
+        }
     }
 }

@@ -9,12 +9,12 @@ impl OmpReplayFixture {
     fn prepare(case: &str, mode: &str) -> Self {
         let omp = std::env::var_os("LYREL_TEST_OMP")
             .expect("set LYREL_TEST_OMP to an installed released omp executable");
+        let script = std::env::var("LYREL_OMP_REPLAY_SCRIPT").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").to_owned()
+        });
         let root = tempfile::tempdir().unwrap();
         let status = std::process::Command::new("node")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/scripts/omp-native-replay.mjs"
-            ))
+            .arg(&script)
             .args(["prepare", "--root"])
             .arg(root.path().join("owned"))
             .arg("--omp")
@@ -25,10 +25,10 @@ impl OmpReplayFixture {
         assert!(status.success(), "preparing public synthetic omp history");
         Self {
             root,
-            streaming: case == "streaming",
+            streaming: matches!(case, "streaming" | "markdown"),
             scoped: matches!(
                 case,
-                "streaming" | "disabled" | "protocol-off" | "placeholder-off"
+                "markdown" | "streaming" | "disabled" | "protocol-off" | "placeholder-off"
             ),
         }
     }
@@ -37,7 +37,9 @@ impl OmpReplayFixture {
         let mut shell = crate::daemon::protocol::ShellSpec {
             program: "node".into(),
             args: vec![
-                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").into(),
+                std::env::var("LYREL_OMP_REPLAY_SCRIPT").unwrap_or_else(|_| {
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").to_owned()
+                }),
                 "run".into(),
                 "--wait-ready".into(),
                 "--root".into(),

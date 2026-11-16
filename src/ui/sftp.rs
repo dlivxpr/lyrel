@@ -401,18 +401,26 @@ pub(crate) fn free_local_path(
     dir: &Path,
     name: &str,
     claimed: &HashSet<PathBuf>,
+    dir_like: bool,
 ) -> Option<PathBuf> {
     let taken = |p: &PathBuf| p.exists() || claimed.contains(p);
     let first = dir.join(name);
     if !taken(&first) {
         return Some(first);
     }
-    let path = Path::new(name);
-    let ext = path.extension().map(|e| e.to_string_lossy().to_string());
-    let stem = path
-        .file_stem()
-        .map(|e| e.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.to_string());
+    // A directory keeps its whole name — a dot in `docs.v2` is not a file
+    // extension the way Windows numbers folders.
+    let (stem, ext) = if dir_like {
+        (name.to_owned(), None)
+    } else {
+        let path = Path::new(name);
+        (
+            path.file_stem()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_else(|| name.to_string()),
+            path.extension().map(|e| e.to_string_lossy().to_string()),
+        )
+    };
     (2..1000u32)
         .map(|n| match &ext {
             Some(ext) => dir.join(format!("{stem} ({n}).{ext}")),
@@ -770,6 +778,7 @@ impl LyrelApp {
             &local_download_dir(),
             &entry.name,
             &self.sftp_panel.claimed_downloads,
+            is_dir_like(&entry),
         ) else {
             self.sftp_panel.error = Some(t_fmt(
                 L10nKey::SftpErrorNoFreeLocalName,
@@ -779,7 +788,9 @@ impl LyrelApp {
             return;
         };
         self.sftp_panel.claimed_downloads.insert(local.clone());
-        let recursive = matches!(entry.kind, SftpEntryKind::Dir);
+        // A link pointing at a directory needs the recursive walk too: the
+        // daemon stats through the link and refuses a non-recursive dir.
+        let recursive = is_dir_like(&entry);
         let spec = SftpTransferSpec {
             pane_id,
             kind: SftpTransferKind::Download,
@@ -1982,17 +1993,16 @@ impl LyrelApp {
         }
 
         // Editing is the double-click now, but a copy in ~/Downloads is still
-        // a thing people come to this menu for.
-        if !dir_like {
-            menu = menu.item(PopupMenuItem::new(t(L10nKey::Download)).on_click({
-                let app = app.clone();
+        // a thing people come to this menu for. Folders recurse — the daemon
+        // walks them over the same transfer channel a file rides on.
+        menu = menu.item(PopupMenuItem::new(t(L10nKey::Download)).on_click({
+            let app = app.clone();
+            let entry = entry.clone();
+            move |_, _window, cx| {
                 let entry = entry.clone();
-                move |_, _window, cx| {
-                    let entry = entry.clone();
-                    let _ = app.update(cx, |this, cx| this.sftp_download_entry(entry, cx));
-                }
-            }));
-        }
+                let _ = app.update(cx, |this, cx| this.sftp_download_entry(entry, cx));
+            }
+        }));
 
         if is_symlink {
             menu = menu.item(
@@ -2489,29 +2499,40 @@ mod tests {
 
         // Nothing there: the plain name.
         assert_eq!(
-            free_local_path(d, "notes.txt", &free),
+            free_local_path(d, "notes.txt", &free, false),
             Some(d.join("notes.txt"))
         );
 
         std::fs::write(d.join("notes.txt"), b"first").expect("write");
         assert_eq!(
-            free_local_path(d, "notes.txt", &free),
+            free_local_path(d, "notes.txt", &free, false),
             Some(d.join("notes (2).txt"))
         );
         std::fs::write(d.join("notes (2).txt"), b"second").expect("write");
         assert_eq!(
-            free_local_path(d, "notes.txt", &free),
+            free_local_path(d, "notes.txt", &free, false),
             Some(d.join("notes (3).txt"))
         );
 
         // Extensionless and dotfiles keep their shape.
         std::fs::write(d.join("Makefile"), b"x").expect("write");
         assert_eq!(
-            free_local_path(d, "Makefile", &free),
+            free_local_path(d, "Makefile", &free, false),
             Some(d.join("Makefile (2)"))
         );
         std::fs::write(d.join(".env"), b"x").expect("write");
-        assert_eq!(free_local_path(d, ".env", &free), Some(d.join(".env (2)")));
+        assert_eq!(
+            free_local_path(d, ".env", &free, false),
+            Some(d.join(".env (2)"))
+        );
+
+        // A dotted folder name keeps its whole stem — `docs.v2` is not a file
+        // extension.
+        std::fs::create_dir(d.join("docs.v2")).expect("mkdir");
+        assert_eq!(
+            free_local_path(d, "docs.v2", &free, true),
+            Some(d.join("docs.v2 (2)"))
+        );
 
         // And the first file is still the first file.
         assert_eq!(
@@ -2529,7 +2550,7 @@ mod tests {
         // yet, so `exists()` cannot see it. A second one must not take it.
         let claimed: HashSet<PathBuf> = [d.join("notes.txt")].into_iter().collect();
         assert_eq!(
-            free_local_path(d, "notes.txt", &claimed),
+            free_local_path(d, "notes.txt", &claimed, false),
             Some(d.join("notes (2).txt"))
         );
     }
@@ -2543,7 +2564,7 @@ mod tests {
         for n in 2..1000u32 {
             claimed.insert(d.join(format!("notes ({n}).txt")));
         }
-        assert_eq!(free_local_path(d, "notes.txt", &claimed), None);
+        assert_eq!(free_local_path(d, "notes.txt", &claimed, false), None);
     }
 
     #[test]
