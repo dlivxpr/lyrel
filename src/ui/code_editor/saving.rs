@@ -90,6 +90,26 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
     match &file.input {
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
+        // SVG's identity is the shared source Document, not one group's view.
+        EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // JSON's identity is likewise the shared source Document and history.
+        EditorInput::Json(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // YAML's identity is likewise the shared source Document and history.
+        EditorInput::Yaml(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // TOML uses the same one-document identity and ordinary history.
+        EditorInput::Toml(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // CSV/TSV has the same one-document identity as its source view.
+        EditorInput::Csv(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // XML likewise saves the shared source Document, never a tree copy.
+        EditorInput::Xml(view) => view.read(cx).document().read(cx).document().entity_id(),
+        // Read-only content still has a stable identity for save-side prompts.
+        EditorInput::Image(view) => view.entity_id(),
+        EditorInput::Sqlite(view) => view.entity_id(),
+        EditorInput::Book(view) => view.read(cx).document().entity_id(),
+        EditorInput::Pdf(view) => view.read(cx).document().entity_id(),
+        // A draw.io preview also never saves in this ticket; the document is
+        // the stable identity a prompt would name.
+        EditorInput::Drawio(view) => view.read(cx).document().entity_id(),
     }
 }
 
@@ -141,7 +161,7 @@ impl EditorPanelState {
         self.save_at(id, force, None, root, window, cx, bridge);
     }
 
-    fn save_at<E: 'static>(
+    pub(super) fn save_at<E: 'static>(
         &mut self,
         id: BufferId,
         force: bool,
@@ -151,6 +171,15 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // Read-only content — a picture, database, book or PDF — has no bytes
+        // the workbench may write back, so Save and Save As do nothing here.
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_savable())
+        {
+            return;
+        }
         if let Some(file) = self.buffers.get(id) {
             file.input.finish_composition(window, cx);
         }
@@ -169,10 +198,58 @@ impl EditorPanelState {
             self.save_as(id, root, window, cx, bridge);
             return;
         }
+        // A diagram save must write the engine's live model, not the last
+        // committed bytes: defer the write through every live surface's sync
+        // flush until each request it actually sent is confirmed.
+        let flushed = std::mem::take(&mut file.drawio_flush_done);
+        if file.input.drawio().is_some() && file.drawio_flush.is_none() && !flushed {
+            let has_bytes = file
+                .input
+                .drawio_document(cx)
+                .is_some_and(|document| document.bytes().is_some());
+            if !has_bytes {
+                // A failed document has no ready bytes to write.
+                return;
+            }
+            let mut views = Vec::new();
+            if let Some(primary) = file.input.drawio() {
+                views.push(primary.clone());
+            }
+            for (_, _, view) in file.presentations.drawios().iter() {
+                if !views.iter().any(|existing| existing == view) {
+                    views.push(view.clone());
+                }
+            }
+            // Every live presentation must flush: a short-circuit would leave
+            // an engine whose model is newer than the committed bytes. Each
+            // queued request keeps its own ticket, so an earlier commit, a
+            // sibling's callback or a previous save cannot release this one.
+            let mut tickets = Vec::new();
+            let mut refused = None;
+            for view in &views {
+                if let Some(request) = view.update(cx, |view, _| view.flush()) {
+                    tickets.push((view.downgrade(), request));
+                }
+                if refused.is_none() {
+                    refused = view.read(cx).unconfirmed_reason();
+                }
+            }
+            if !tickets.is_empty() || refused.is_some() {
+                file.drawio_flush = Some(DrawioFlush {
+                    tickets,
+                    refused,
+                    deadline: std::time::Instant::now() + super::DRAWIO_FLUSH_TIMEOUT,
+                    force,
+                    target: save_as,
+                });
+                cx.notify();
+                return;
+            }
+        }
         // Markdown hard breaks and unknown syntax are source: ordinary saves do
         // not apply code cleanup. Explicit workbench cleanup remains undoable.
         if file.input.code().is_some() {
-            let text = file.input.read(cx).text().to_string();
+            let text = file.input.text().unwrap().read(cx).text().to_string();
             if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
@@ -265,10 +342,7 @@ impl EditorPanelState {
                         if editor.buffers.get(id).is_some_and(|file| {
                             file.dirty
                                 || revision.is_some_and(|saved_revision| {
-                                    file.input.markdown().is_some_and(|view| {
-                                        view.read(cx).document().read(cx).revision()
-                                            != saved_revision
-                                    })
+                                    file.input.source_edit_revision(cx) != Some(saved_revision)
                                 })
                         }) {
                             // New edits/representation changes retire this close.
@@ -366,7 +440,8 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let name = file.label();
-        let encoding = file.format(cx).encoding_label();
+        // Only documents with a text format reach the encoding prompt.
+        let encoding = file.format(cx).expect("text document").encoding_label();
         self.saves_failed(id);
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -392,7 +467,7 @@ impl EditorPanelState {
                     let file = editor.buffers.get_mut(id).unwrap();
                     file.set_format(
                         TextFormat {
-                            line_ending: file.format(cx).line_ending,
+                            line_ending: file.format(cx).expect("text document").line_ending,
                             ..TextFormat::default()
                         },
                         cx,
@@ -414,6 +489,15 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // A read-only picture must not open a path picker it can never write
+        // through: Save As is about bytes this document does not have.
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_savable())
+        {
+            return;
+        }
         let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
@@ -421,6 +505,12 @@ impl EditorPanelState {
         let suggested = if file.untitled.is_some() {
             let extension = if file.input.markdown().is_some() {
                 "md"
+            } else if file.input.svg().is_some() {
+                "svg"
+            } else if file.input.yaml().is_some() {
+                "yaml"
+            } else if file.input.toml().is_some() {
+                "toml"
             } else {
                 "txt"
             };
@@ -522,7 +612,7 @@ impl EditorPanelState {
                 let total = self
                     .buffers
                     .get(id)
-                    .map(|file| file.input.read(cx).text().lines_len())
+                    .and_then(|file| file.input.text().map(|t| t.read(cx).text().lines_len()))
                     .unwrap_or(1);
                 t_fmt(
                     L10nKey::EditorGoToLinePlaceholder,

@@ -198,6 +198,9 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plain_source {
+            return;
+        }
         self.request_writing(
             WritingIntent::Insert,
             self.selected_range.clone(),
@@ -211,6 +214,9 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plain_source {
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.request_writing(
                 WritingIntent::TextColor,
@@ -226,6 +232,9 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plain_source {
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.request_writing(
                 WritingIntent::HighlightColor,
@@ -260,6 +269,9 @@ impl EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plain_source {
+            return;
+        }
         let (row, _) = self.row_col(self.cursor_offset());
         if let Some(row) = (0..=row).rev().find(|&row| {
             markdown_syntax::heading_level(self.line_str(row)).is_some()

@@ -1842,6 +1842,489 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageLoading => "Loading image",
         L10nKey::EditorImageLoaded => "Image loaded",
         L10nKey::EditorImageFailed => "Couldn’t load image",
+        L10nKey::EditorImageFit => "Fit",
+        L10nKey::EditorImageActualSize => "1:1",
+        L10nKey::EditorImageFitAction => "Fit to window",
+        L10nKey::EditorImageActualSizeAction => "Actual size",
+        L10nKey::EditorImageZoomIn => "Zoom in",
+        L10nKey::EditorImageZoomOut => "Zoom out",
+        L10nKey::EditorImageReadOnly => "Read-only",
+        L10nKey::EditorImageUndecodable => "This file could not be decoded as an image",
+        L10nKey::EditorImagePixelSize => "{width} × {height}",
+        L10nKey::EditorSqliteOpenFailed => "Couldn’t open this SQLite database",
+        L10nKey::EditorSqliteRefreshed => "Read view {view}",
+        L10nKey::EditorSqliteCancelled => "Cancelled",
+        L10nKey::EditorSqliteExpired => "This read view expired",
+        L10nKey::EditorSqliteExpiredHint => "Refresh to read a new view of this database.",
+        L10nKey::EditorSqliteLoading => "Loading…",
+        L10nKey::EditorSqliteReadView => "Read view {view}",
+        L10nKey::EditorSqliteViewLimits => "expires after {idle}s idle or {age}s",
+        L10nKey::EditorSqlitePage => "Page {page}",
+        L10nKey::EditorSqliteRows => "Rows {from}–{to}",
+        L10nKey::EditorSqliteRowCount => "{n} rows",
+        L10nKey::EditorSqliteCountUnavailable => "Row count unavailable",
+        L10nKey::EditorSqliteJournal => "journal {mode}",
+        L10nKey::EditorSqliteReadOnly => "Read-only",
+        L10nKey::EditorSqliteFailed => "SQLite database unavailable",
+        L10nKey::EditorSqlitePreviousColumns => "Previous columns",
+        L10nKey::EditorSqliteNextColumns => "Next columns",
+        L10nKey::EditorSqliteFirstPage => "First page",
+        L10nKey::EditorSqlitePreviousPage => "Previous page",
+        L10nKey::EditorSqliteNextPage => "Next page",
+        L10nKey::EditorSqliteLastPage => "Last page",
+        L10nKey::EditorSqliteRefresh => "Refresh",
+        L10nKey::EditorSqliteCancel => "Cancel",
+        L10nKey::EditorSqliteSchema => "Schema",
+        L10nKey::EditorSqliteDefinition => "Definition",
+        L10nKey::EditorSqliteKindTable => "Table",
+        L10nKey::EditorSqliteKindView => "View",
+        L10nKey::EditorSqliteNoRows => "No rows in this page",
+        L10nKey::EditorSqliteNoColumns => "This object has no columns to show",
+        L10nKey::EditorSqliteNoObjects => "This database has no tables or views",
+        L10nKey::EditorSqliteNull => "NULL",
+        L10nKey::EditorSqliteFilterPlaceholder => "Filter rows…",
+        L10nKey::EditorSqliteFilterStatus => "filter “{filter}”",
+        L10nKey::EditorSqliteSortStatus => "sorted by {column} {direction}",
+        L10nKey::EditorSqliteSortAscending => "ascending",
+        L10nKey::EditorSqliteSortDescending => "descending",
+        L10nKey::EditorSqliteValueTitle => "Inspect {name}",
+        L10nKey::EditorSqliteValueExtent => "bytes {from}–{to} of {total}",
+        L10nKey::EditorSqlitePreviousChunk => "Previous chunk",
+        L10nKey::EditorSqliteNextChunk => "Next chunk",
+        L10nKey::EditorSqliteCopyValue => "Copy value",
+        L10nKey::EditorSqliteCopied => "Complete value copied",
+        L10nKey::EditorSqliteCopiedHex => "Copied as hex (not valid UTF-8 text)",
+        L10nKey::EditorSqliteTextNotUtf8 => {
+            "This TEXT is not valid UTF-8; the raw bytes are shown as hex"
+        }
+        L10nKey::EditorSqliteNullNotice => "NULL values copy nothing",
+        L10nKey::EditorSqliteCopyTooLarge => "{bytes} exceeds the {limit} copy limit",
+        L10nKey::EditorSqliteCloseValue => "Close value inspector",
+        L10nKey::EditorSqliteInspectHint => "Enter: inspect value",
+        L10nKey::EditorPdfPageOf => "Page {page} / {total}",
+        L10nKey::EditorPdfPreviousPage => "Previous page",
+        L10nKey::EditorPdfNextPage => "Next page",
+        L10nKey::EditorPdfFitWidth => "Fit width",
+        L10nKey::EditorPdfFitPage => "Fit page",
+        L10nKey::EditorPdfPasswordTitle => "This PDF needs a password",
+        L10nKey::EditorPdfPasswordPlaceholder => "PDF password",
+        L10nKey::EditorPdfUnlock => "Unlock",
+        L10nKey::EditorPdfUnlocking => "Unlocking…",
+        L10nKey::EditorPdfWrongPassword => "Wrong password",
+        L10nKey::EditorPdfFailed => "Couldn’t open PDF",
+        L10nKey::EditorPdfTooLarge => "This PDF is larger than the 32 MiB viewing limit",
+        L10nKey::EditorPdfRenderFailed => "Couldn’t render this page",
+        L10nKey::EditorPdfOutline => "Outline",
+        L10nKey::EditorPdfSearching => "Searching…",
+        L10nKey::EditorPdfNoMatches => "No matches",
+        L10nKey::EditorPdfNoTextLayer => "No text layer",
+        L10nKey::EditorPdfMatchOf => "{current} / {total}",
+        L10nKey::EditorPdfPagesSkipped => "{count} pages couldn’t be read",
+        L10nKey::EditorSvgPreview => "Preview",
+        L10nKey::EditorSvgShowPreview => "Show preview",
+        L10nKey::EditorSvgShowSource => "Show source",
+        L10nKey::EditorSvgRendering => "Rendering preview",
+        L10nKey::EditorSvgPreviewFailed => "Preview failed",
+        L10nKey::EditorSvgInvalid => "SVG source could not be parsed",
+        L10nKey::EditorSvgLimit => {
+            "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
+        }
+        L10nKey::EditorJsonStructure => "Structure",
+        L10nKey::EditorJsonSource => "Source",
+        L10nKey::EditorJsonShowStructure => "Show structure",
+        L10nKey::EditorJsonShowSource => "Show source",
+        L10nKey::EditorJsonToggleStructure => "Toggle JSON structure / source",
+        L10nKey::EditorJsonParsing => "Parsing JSON",
+        L10nKey::EditorJsonInvalid => "JSON source could not be parsed",
+        L10nKey::EditorJsonInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorJsonInvalidRecords => "{count} invalid JSONL records",
+        L10nKey::EditorJsonStructureUnavailable => "JSON structure unavailable",
+        L10nKey::EditorJsonSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorJsonInputLimit => {
+            "JSON structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorJsonNodeLimit => {
+            "JSON structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorJsonRecordLimit => {
+            "JSONL has more than {count} records; the source stays editable."
+        }
+        L10nKey::EditorJsonPathLimit => {
+            "JSON structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorJsonRecords => "{count} records",
+        L10nKey::EditorJsonNodes => "{count} nodes",
+        L10nKey::EditorJsonReveal => "Reveal in source",
+        L10nKey::EditorJsonFullValue => "Full value",
+        L10nKey::EditorJsonCopyValue => "Copy value",
+        L10nKey::EditorJsonEditValue => "Edit value",
+        L10nKey::EditorJsonEditRecord => "Edit record",
+        L10nKey::EditorJsonRenameKey => "Rename key",
+        L10nKey::EditorJsonAddKey => "Add key",
+        L10nKey::EditorJsonAddItem => "Add item",
+        L10nKey::EditorJsonRemove => "Remove",
+        L10nKey::EditorJsonAddRecord => "Add record",
+        L10nKey::EditorJsonRemoveRecord => "Remove record",
+        L10nKey::EditorJsonEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorJsonEditRecordTitle => "Edit record · {path}",
+        L10nKey::EditorJsonRenameKeyTitle => "Rename key · {path}",
+        L10nKey::EditorJsonAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorJsonAddItemTitle => "Add item to {path}",
+        L10nKey::EditorJsonAddRecordAfterTitle => "Add record after line {line}",
+        L10nKey::EditorJsonAddRecordEndTitle => "Add record at the end",
+        L10nKey::EditorJsonKeyName => "Key",
+        L10nKey::EditorJsonValueName => "Value",
+        L10nKey::EditorJsonKeyPlaceholder => "Key name",
+        L10nKey::EditorJsonValuePlaceholder => "JSON value",
+        L10nKey::EditorJsonEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorJsonEditInvalidValue => "Not one JSON value: {message}",
+        L10nKey::EditorJsonEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorJsonEditUnsupported => "This node cannot be changed from the tree",
+        L10nKey::EditorJsonEditRecordLine => "A JSONL record must stay on one line",
+        L10nKey::EditorXmlStructure => "Structure",
+        L10nKey::EditorXmlSource => "Source",
+        L10nKey::EditorXmlShowStructure => "Show structure",
+        L10nKey::EditorXmlShowSource => "Show source",
+        L10nKey::EditorXmlToggleStructure => "Toggle XML structure / source",
+        L10nKey::EditorXmlParsing => "Parsing XML",
+        L10nKey::EditorXmlInvalid => "XML source could not be parsed",
+        L10nKey::EditorXmlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorXmlStructureUnavailable => "XML structure unavailable",
+        L10nKey::EditorXmlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorXmlInputLimit => {
+            "XML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorXmlNodeLimit => {
+            "XML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorXmlPathLimit => {
+            "XML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorXmlDtdDenied => "XML DTDs are not accessed",
+        L10nKey::EditorXmlDtdDeniedDetail => {
+            "A DTD or entity declaration at line {line}, column {column} was not resolved; external files and network resources are never read. The source stays editable and unchanged."
+        }
+        L10nKey::EditorXmlFacts => "{elements} elements · {attributes} attributes",
+        L10nKey::EditorXmlReveal => "Reveal in source",
+        L10nKey::EditorXmlFullValue => "Full value",
+        L10nKey::EditorXmlCopyValue => "Copy value",
+        L10nKey::EditorXmlEditValue => "Edit value",
+        L10nKey::EditorXmlRename => "Rename",
+        L10nKey::EditorXmlAddAttribute => "Add attribute",
+        L10nKey::EditorXmlAddChild => "Add child",
+        L10nKey::EditorXmlAddText => "Add text",
+        L10nKey::EditorXmlRemove => "Remove",
+        L10nKey::EditorXmlEditAttributeValueTitle => "Edit attribute value · {path}",
+        L10nKey::EditorXmlEditTextTitle => "Edit text · {path}",
+        L10nKey::EditorXmlEditCdataTitle => "Edit CDATA · {path}",
+        L10nKey::EditorXmlEditCommentTitle => "Edit comment · {path}",
+        L10nKey::EditorXmlRenameTitle => "Rename · {path}",
+        L10nKey::EditorXmlAddAttributeTitle => "Add attribute to {path}",
+        L10nKey::EditorXmlAddChildTitle => "Add child to {path}",
+        L10nKey::EditorXmlAddTextTitle => "Add text to {path}",
+        L10nKey::EditorXmlName => "Name",
+        L10nKey::EditorXmlAttributeValue => "Value",
+        L10nKey::EditorXmlTextValue => "Text",
+        L10nKey::EditorXmlCdataValue => "CDATA",
+        L10nKey::EditorXmlCommentValue => "Comment",
+        L10nKey::EditorXmlNamePlaceholder => "Element or attribute name",
+        L10nKey::EditorXmlValuePlaceholder => "XML value",
+        L10nKey::EditorXmlTextPlaceholder => "Text content",
+        L10nKey::EditorXmlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorXmlEditInvalidName => "Not a valid XML name: {message}",
+        L10nKey::EditorXmlEditInvalidValue => "Not valid XML content: {message}",
+        L10nKey::EditorXmlEditInvalidCdata => "CDATA cannot contain ]]>",
+        L10nKey::EditorXmlEditInvalidComment => "A comment cannot contain -- or end with -",
+        L10nKey::EditorXmlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorXmlEditUnsupported => "This node cannot be changed from the tree",
+        L10nKey::EditorXmlNamespaceNotice => {
+            "This attribute declares an XML namespace; changing it changes the meaning of names in scope."
+        }
+        L10nKey::EditorTomlStructure => "Structure",
+        L10nKey::EditorTomlSource => "Source",
+        L10nKey::EditorTomlShowStructure => "Show structure",
+        L10nKey::EditorTomlShowSource => "Show source",
+        L10nKey::EditorTomlToggleStructure => "Toggle TOML structure / source",
+        L10nKey::EditorTomlParsing => "Parsing TOML",
+        L10nKey::EditorTomlInvalid => "TOML source could not be parsed",
+        L10nKey::EditorTomlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorTomlStructureUnavailable => "TOML structure unavailable",
+        L10nKey::EditorTomlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorTomlInputLimit => {
+            "TOML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorTomlNodeLimit => {
+            "TOML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorTomlPathLimit => {
+            "TOML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorTomlNodes => "{count} nodes",
+        L10nKey::EditorTomlReveal => "Reveal in source",
+        L10nKey::EditorTomlFullValue => "Full value",
+        L10nKey::EditorTomlCopyValue => "Copy value",
+        L10nKey::EditorTomlEditValue => "Edit value",
+        L10nKey::EditorTomlRename => "Rename",
+        L10nKey::EditorTomlAddKey => "Add key",
+        L10nKey::EditorTomlAddTable => "Add table",
+        L10nKey::EditorTomlAddArray => "Add array of tables",
+        L10nKey::EditorTomlAddEntry => "Add entry",
+        L10nKey::EditorTomlRemove => "Remove",
+        L10nKey::EditorTomlEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorTomlRenameTitle => "Rename · {path}",
+        L10nKey::EditorTomlAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorTomlAddTableTitle => "Add table to {path}",
+        L10nKey::EditorTomlAddArrayTitle => "Add array of tables to {path}",
+        L10nKey::EditorTomlKeyName => "Key",
+        L10nKey::EditorTomlValueName => "Value",
+        L10nKey::EditorTomlTableName => "Table name",
+        L10nKey::EditorTomlArrayName => "Array name",
+        L10nKey::EditorTomlKeyPlaceholder => "Key name",
+        L10nKey::EditorTomlValuePlaceholder => "TOML value",
+        L10nKey::EditorTomlTablePlaceholder => "Child table name",
+        L10nKey::EditorTomlArrayPlaceholder => "Array of tables name",
+        L10nKey::EditorTomlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorTomlEditInvalidKey => "Not one TOML key: {message}",
+        L10nKey::EditorTomlEditInvalidValue => "Not one TOML value: {message}",
+        L10nKey::EditorTomlEditDuplicate => "The target already has the key {key}",
+        L10nKey::EditorTomlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorTomlEditResultShape => {
+            "The edit did not land on the selected structure; nothing was written."
+        }
+        L10nKey::EditorTomlEditUnsupported => "This node cannot be changed from the tree",
+        L10nKey::StructureEditApply => "Apply",
+        L10nKey::EditorYamlStructure => "Structure",
+        L10nKey::EditorYamlSource => "Source",
+        L10nKey::EditorYamlShowStructure => "Show structure",
+        L10nKey::EditorYamlShowSource => "Show source",
+        L10nKey::EditorYamlToggleStructure => "Toggle YAML structure / source",
+        L10nKey::EditorYamlParsing => "Parsing YAML",
+        L10nKey::EditorYamlInvalid => "YAML source could not be parsed",
+        L10nKey::EditorYamlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorYamlStructureUnavailable => "YAML structure unavailable",
+        L10nKey::EditorYamlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorYamlInputLimit => {
+            "YAML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorYamlNodeLimit => {
+            "YAML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorYamlPathLimit => {
+            "YAML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorYamlDepthLimit => {
+            "YAML nesting exceeds {count} levels; the source stays editable."
+        }
+        L10nKey::EditorYamlDocuments => "{count} documents",
+        L10nKey::EditorYamlNodes => "{count} nodes",
+        L10nKey::EditorYamlValueName => "Value",
+        L10nKey::EditorYamlKeyName => "Key",
+        L10nKey::EditorYamlKeyPlaceholder => "Scalar key",
+        L10nKey::EditorYamlValuePlaceholder => "One scalar, e.g. 42, \"text\", 'text' or null",
+        L10nKey::EditorYamlEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorYamlRenameKeyTitle => "Rename key · {path}",
+        L10nKey::EditorYamlAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorYamlAddItemTitle => "Add item to {path}",
+        L10nKey::EditorYamlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorYamlEditAlias => {
+            "This alias is a reference. Edit its anchor, or use Source; the alias is never expanded or detached here."
+        }
+        L10nKey::EditorYamlComplexKeySource => {
+            "Complex key opened in Source at its exact range; edit its syntax there. The same history and save apply."
+        }
+        L10nKey::EditorYamlEditMissingValue => {
+            "This entry has no editable scalar value; use Source."
+        }
+        L10nKey::EditorYamlEditMultiLine => "Multi-line values are edited in Source.",
+        L10nKey::EditorYamlEditNotScalar => "This node is not a scalar value.",
+        L10nKey::EditorYamlEditEmptyDocument => {
+            "An empty document has no member to add from the tree; use Source."
+        }
+        L10nKey::EditorYamlEditUnsupported => {
+            "This node cannot be changed from the tree. Use Source for its original form."
+        }
+        L10nKey::EditorYamlEditInvalidValue => "Not one YAML scalar: {message}",
+        L10nKey::EditorYamlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorYamlEditAliasesReference => {
+            "Cannot remove: {count} aliases reference &{name}. Edit the value or remove the aliases first."
+        }
+        L10nKey::EditorYamlAnchorImpact => {
+            "&{anchor} is affected here; editing this {field} changes what {count} aliases resolve to. The aliases stay references."
+        }
+        L10nKey::EditorYamlAnchorImpactNone => {
+            "&{anchor} is affected here; no aliases currently reference it. The anchor stays on its value."
+        }
+        L10nKey::EditorYamlAnchorEdited => {
+            "Edited &{anchor}; {count} aliases now resolve to the new value."
+        }
+        L10nKey::EditorYamlAnchorEditedNone => {
+            "Edited &{anchor}; no aliases currently reference it."
+        }
+        L10nKey::EditorCsvTable => "Table",
+        L10nKey::EditorCsvShowTable => "Show table",
+        L10nKey::EditorCsvShowSource => "Show source",
+        L10nKey::EditorCsvParsing => "Parsing table",
+        L10nKey::EditorCsvQuerying => "Updating view",
+        L10nKey::EditorCsvTableUnavailable => "Table unavailable",
+        L10nKey::EditorCsvSourceIncomplete => "Source is incomplete",
+        L10nKey::EditorCsvTableLimit => "Table limit reached",
+        L10nKey::EditorCsvFixSource => "Fix the source to see the table.",
+        L10nKey::EditorCsvLimitHint => "Source still shows and edits the complete file.",
+        L10nKey::EditorCsvUnterminatedQuote => "unterminated quoted field at line {line}",
+        L10nKey::EditorCsvUnsupportedSyntax => {
+            "quoted syntax at line {line} cannot be represented exactly"
+        }
+        L10nKey::EditorCsvReaderFailed => "could not read records: {error}",
+        L10nKey::EditorCsvLimitSource => "source is larger than {mib} MiB",
+        L10nKey::EditorCsvLimitRecords => "more than {limit} records",
+        L10nKey::EditorCsvLimitColumns => "more than {limit} columns in one record",
+        L10nKey::EditorCsvLimitCells => "more than {limit} cells",
+        L10nKey::EditorCsvFacts => "{records} records × {columns} columns",
+        L10nKey::EditorCsvFilter => "Filter records",
+        L10nKey::EditorCsvFilterStatus => "Filter: {filter} · {visible} of {records}",
+        L10nKey::EditorCsvFilterClear => "Clear filter",
+        L10nKey::EditorCsvRow => "Row {row}",
+        L10nKey::EditorCsvRowShort => "Row",
+        L10nKey::EditorCsvColumn => "Column {column}",
+        L10nKey::EditorCsvCell => "R{record} C{column}",
+        L10nKey::EditorCsvSortAscending => "ascending",
+        L10nKey::EditorCsvSortDescending => "descending",
+        L10nKey::EditorCsvSortStatus => "Column {column} {direction}",
+        L10nKey::EditorCsvFullValue => "Full value",
+        L10nKey::EditorCsvEmptyField => "Empty field",
+        L10nKey::EditorCsvMissingField => "This record has no field {column}",
+        L10nKey::EditorCsvCopyValue => "Copy value",
+        L10nKey::EditorCsvRevealSource => "Show in source",
+        L10nKey::EditorCsvDetailTruncated => {
+            "Showing the first {chars} characters. Copy copies the full value."
+        }
+        L10nKey::EditorCsvNoRecords => "No records",
+        L10nKey::EditorCsvNoMatch => "No records match the filter",
+        L10nKey::EditorCsvSelectCell => "Select a cell to inspect its full value",
+        L10nKey::EditorCsvColumnPrevious => "Previous columns",
+        L10nKey::EditorCsvColumnNext => "Next columns",
+        L10nKey::EditorCsvEditCell => "Edit cell",
+        L10nKey::EditorCsvCopyCells => "Copy cells",
+        L10nKey::EditorCsvInsertRowAbove => "Insert row above",
+        L10nKey::EditorCsvInsertRowBelow => "Insert row below",
+        L10nKey::EditorCsvDeleteRow => "Delete row",
+        L10nKey::EditorCsvInsertColumnLeft => "Insert column left",
+        L10nKey::EditorCsvInsertColumnRight => "Insert column right",
+        L10nKey::EditorCsvDeleteColumn => "Delete column",
+        L10nKey::EditorImagePageOf => "Page {page} of {pages}",
+        L10nKey::EditorImagePageLoading => "Loading page",
+        L10nKey::EditorImagePagePrevious => "Previous page",
+        L10nKey::EditorImagePageNext => "Next page",
+        L10nKey::EditorImagePageMissing => "This page does not exist",
+        L10nKey::EditorImagePageUnsupported => {
+            "This page uses a TIFF sample layout Lyrel cannot show"
+        }
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "Page size {width} × {height} exceeds the {limit}-pixel edge budget"
+        }
+        L10nKey::EditorImagePageBytesLimit => {
+            "Page decoding needs {required} MiB, over the {limit} MiB page budget"
+        }
+        L10nKey::EditorImagePagesLimit => "The file has more than the {pages}-page TIFF budget",
+        L10nKey::EditorImageAnimationLimit => {
+            "Animation frame buffers need {required} MiB, over the {limit} MiB budget"
+        }
+        L10nKey::EditorImageAnimationEmpty => "This animation has no frames to show",
+        L10nKey::EditorImageAnimationTruncated => {
+            "This animation ends before its frame data is complete"
+        }
+        L10nKey::EditorDrawioFailed => "Couldn’t render the draw.io diagram",
+        L10nKey::EditorDrawioLoading => "Rendering diagram",
+        L10nKey::EditorDrawioPageOf => "Page {page} of {pages}",
+        L10nKey::EditorDrawioPagePrevious => "Previous page",
+        L10nKey::EditorDrawioPageNext => "Next page",
+        L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
+        L10nKey::EditorDrawioUnconfirmed => {
+            "Canvas changes are not saved: {reason}. Fix the diagram and save again, or close and discard."
+        }
+        L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
+        L10nKey::EditorDrawioRetry => "Try again",
+        L10nKey::EditorDrawioDelete => "Delete",
+        L10nKey::EditorDrawioEditable => "Editable",
+        L10nKey::EditorBookContents => "Contents",
+        L10nKey::EditorBookBookmarks => "Bookmarks",
+        L10nKey::EditorBookSearch => "Search book",
+        L10nKey::EditorBookSearchPlaceholder => "Search this book",
+        L10nKey::EditorBookSearchEmpty => "No matches",
+        L10nKey::EditorBookSearching => "Searching…",
+        L10nKey::EditorBookSearchPrevious => "Previous match",
+        L10nKey::EditorBookSearchNext => "Next match",
+        L10nKey::EditorBookSearchClose => "Close search",
+        L10nKey::EditorBookMatches => "{current}/{total} matches",
+        L10nKey::EditorBookMatchesTruncated => "Partial results; refine the search",
+        L10nKey::EditorBookAddBookmark => "Add bookmark",
+        L10nKey::EditorBookRemoveBookmark => "Remove bookmark",
+        L10nKey::EditorBookNoBookmarks => "No bookmarks yet",
+        L10nKey::EditorBookFontSmaller => "Smaller text",
+        L10nKey::EditorBookFontLarger => "Larger text",
+        L10nKey::EditorBookSpacing => "Spacing {value}",
+        L10nKey::EditorBookWidth => "Width {value}",
+        L10nKey::EditorBookThemeApplication => "Theme: Workbench",
+        L10nKey::EditorBookThemeLight => "Theme: Light",
+        L10nKey::EditorBookThemeDark => "Theme: Dark",
+        L10nKey::EditorBookChapterOf => "Chapter {chapter} of {chapters}",
+        L10nKey::EditorBookReadOnly => "Read-only",
+        L10nKey::EditorBookIndexing => "Indexing {done}/{total}",
+        L10nKey::EditorBookIndexTooLarge => {
+            "This book is too large to index for search ({bytes} byte limit)"
+        }
+        L10nKey::EditorBookLoadingChapter => "Loading chapter…",
+        L10nKey::EditorBookOmissions => {
+            "Omitted: {scripts} scripts, {styles} styles, {remote} remote images, {links} links, {images} unavailable images"
+        }
+        L10nKey::EditorBookRetry => "Retry",
+        L10nKey::EditorBookNextPage => "Next page",
+        L10nKey::EditorBookPreviousPage => "Previous page",
+        L10nKey::EditorBookNextChapter => "Next chapter",
+        L10nKey::EditorBookPreviousChapter => "Previous chapter",
+        L10nKey::EditorBookNotEpub => "This file is not a readable EPUB",
+        L10nKey::EditorBookUnsupportedProtected => "Protected EPUB: {detail}",
+        L10nKey::EditorBookUnsupportedFixed => {
+            "Fixed-layout (pre-paginated) EPUBs are not supported"
+        }
+        L10nKey::EditorBookUnsupportedFixedItems => {
+            "This EPUB marks {items} spine item(s) as fixed-layout; fixed-layout books are not supported"
+        }
+        L10nKey::EditorBookLimit => "This book exceeds the {resource} limit ({limit})",
+        L10nKey::EditorBookCorrupt => "This EPUB is damaged: {detail}",
+        L10nKey::EditorBookEncoding => "This EPUB uses an unsupported text encoding: {detail}",
+        L10nKey::EditorBookMissing => "This EPUB is missing {entry}",
+        L10nKey::EditorBookPathEscapes => {
+            "This EPUB references a resource outside its container: {href}"
+        }
+        L10nKey::EditorBookCancelled => "Reading this EPUB was cancelled",
+        L10nKey::EditorBookSaveFailed => {
+            "Couldn’t save reading state. Reading continues, but the position may not be restored."
+        }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",
         L10nKey::MarkdownTurnInto => "Turn into",

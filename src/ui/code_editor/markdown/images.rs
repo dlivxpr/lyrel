@@ -9,8 +9,8 @@ use lyrel_markdown_editor::{
 };
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 type Signature = (HostId, PathBuf);
@@ -18,12 +18,12 @@ type Images = Rc<RefCell<HashMap<String, Bitmap>>>;
 
 /// Cache and preview share this lease, so eviction cannot retire a live preview's tile.
 #[derive(Clone)]
-struct Bitmap {
+pub(crate) struct Bitmap {
     image: Arc<RenderImage>,
     _lease: Entity<()>,
 }
 impl Bitmap {
-    fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
+    pub(crate) fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
         let release = image.clone();
         let lease = cx.new(|cx| {
             cx.on_release(move |_, cx| cx.drop_image(release, None))
@@ -33,6 +33,10 @@ impl Bitmap {
             image,
             _lease: lease,
         }
+    }
+    /// The decoded frames, as the UI texture cache draws them.
+    pub(crate) fn image(&self) -> Arc<RenderImage> {
+        self.image.clone()
     }
 }
 #[derive(Clone)]
@@ -60,6 +64,8 @@ pub(crate) struct ImageHost {
     scanned_revision: Option<u64>,
     images: Images,
     states: HashMap<String, State>,
+    transfers: HashMap<String, (u64, lyrel_core::host::transfer::CancelToken)>,
+    progress: HashMap<String, (u64, u64)>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
     hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
     notice: Option<SharedString>,
@@ -79,8 +85,11 @@ impl ImageHost {
         let document = editor.read(cx).document().clone();
         let subscription =
             cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.refresh(cx));
-        cx.on_release(|this, _| this.images.borrow_mut().clear())
-            .detach();
+        cx.on_release(|this, _| {
+            this.cancel_transfers();
+            this.images.borrow_mut().clear();
+        })
+        .detach();
         Self {
             app,
             id,
@@ -92,6 +101,8 @@ impl ImageHost {
             scanned_revision: None,
             images: Rc::new(RefCell::new(HashMap::new())),
             states: HashMap::new(),
+            transfers: HashMap::new(),
+            progress: HashMap::new(),
             views: HashMap::new(),
             hover: None,
             refresh_scheduled: false,
@@ -159,12 +170,19 @@ impl ImageHost {
             host.id() == capture.host.id() && path.as_ref() == Some(&capture.path)
         }) && self.document.read(cx).revision() == capture.revision
     }
-    fn notify(&self, cx: &mut Context<Self>) {
+    fn notify(&mut self, cx: &mut Context<Self>) {
         for (editor, _) in self.views.values() {
             let _ = editor.update(cx, |_, cx| cx.notify());
         }
         let _ = self.app.update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+    /// Stops every in-flight picture transfer and drops its buffers.
+    fn cancel_transfers(&mut self) {
+        for (_, token) in std::mem::take(&mut self.transfers).into_values() {
+            token.cancel();
+        }
+        self.progress.clear();
     }
     fn message(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         let message = message.into();
@@ -245,6 +263,9 @@ impl ImageHost {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.views.retain(|_, (view, _)| view.upgrade().is_some());
         let Some((host, path)) = self.identity(cx) else {
+            // The document this preview belonged to is gone; a read still in
+            // flight must stop instead of finishing for nobody.
+            self.cancel_transfers();
             return;
         };
         let signature = path.as_ref().map(|path| (host.id(), path.clone()));
@@ -259,6 +280,7 @@ impl ImageHost {
         self.scanned_revision = Some(revision);
         self.hover = None;
         if changed_identity {
+            self.cancel_transfers();
             self.signature = signature;
             self.generation = self.generation.wrapping_add(1);
             self.images.borrow_mut().clear();
@@ -283,6 +305,18 @@ impl ImageHost {
         };
         let changed = sources != self.sources || changed_identity;
         self.sources = sources;
+        let stale: Vec<String> = self
+            .transfers
+            .keys()
+            .filter(|source| !self.sources.contains(*source))
+            .cloned()
+            .collect();
+        for source in stale {
+            if let Some((_, token)) = self.transfers.remove(&source) {
+                token.cancel();
+            }
+            self.progress.remove(&source);
+        }
         self.states
             .retain(|source, _| self.sources.contains(source));
         self.images
@@ -331,18 +365,67 @@ impl ImageHost {
             .clone();
         let generation = self.generation;
         let signature = self.signature.clone();
+        let cancel = lyrel_core::host::transfer::CancelToken::default();
+        if let Some((_, superseded)) = self
+            .transfers
+            .insert(source.clone(), (generation, cancel.clone()))
+        {
+            superseded.cancel();
+        }
+        self.progress.remove(&source);
         self.states.insert(source.clone(), State::Loading);
+        // A blocking Host read cannot call back into GPUI, so it reports
+        // progress through a channel drained by a UI-side task.
+        let (progress_tx, progress_rx) = smol::channel::unbounded::<(u64, u64)>();
+        let progress_source = source.clone();
+        cx.spawn(async move |this, cx| {
+            while let Ok((read, total)) = progress_rx.recv().await {
+                let live = this
+                    .update(cx, |this, cx| {
+                        if this
+                            .transfers
+                            .get(&progress_source)
+                            .is_some_and(|(current, _)| *current == generation)
+                        {
+                            this.progress.insert(progress_source.clone(), (read, total));
+                            this.notify(cx);
+                        }
+                    })
+                    .is_ok();
+                if !live {
+                    break;
+                }
+            }
+        })
+        .detach();
+        let worker_cancel = cancel.clone();
         HostOps::run(
             host,
             cx,
             move |h| -> io::Result<Arc<RenderImage>> {
                 let bytes = match target {
-                    Resource::File(path) => h.read_file(&path, MAX_BYTES)?,
+                    Resource::File(path) => {
+                        let mut report = |update: lyrel_core::host::read::ReadProgress| {
+                            let _ = progress_tx.send_blocking((update.read, update.total));
+                        };
+                        read_bytes(h, &path, MAX_BYTES, &worker_cancel, &mut report)?.1
+                    }
                     Resource::External(url) => fetch(&url, proxy.as_deref())?,
                 };
                 decode(&bytes).map(|(rgba, _)| render(rgba))
             },
             move |this, result, cx| {
+                // A completion from an older generation must not drop the
+                // live request's cancel token or progress: only the owner of
+                // the entry may retire it.
+                if this
+                    .transfers
+                    .get(&source)
+                    .is_some_and(|(current, _)| *current == generation)
+                {
+                    this.transfers.remove(&source);
+                    this.progress.remove(&source);
+                }
                 let current = this.identity(cx).and_then(|(h, p)| p.map(|p| (h.id(), p)));
                 if this.generation != generation
                     || this.signature != signature
@@ -374,6 +457,11 @@ impl ImageHost {
                                 .insert(source.clone(), Bitmap::new(image, cx));
                             this.states.insert(source, State::Ready);
                         }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        // The document, identity or source that asked for this
+                        // picture is gone; leave nothing claiming to be loading.
+                        this.states.remove(&source);
                     }
                     Err(error) => {
                         this.states.insert(source, State::Failed(error.to_string()));
@@ -565,6 +653,10 @@ enum Import {
 enum ImageError {
     Localized(L10nKey),
     Redirect(u16),
+    /// The bytes were read as an image format but would not decode.
+    Corrupt(String),
+    /// SVG source that the native parser refused.
+    Svg(String),
 }
 
 impl std::fmt::Display for ImageError {
@@ -576,6 +668,16 @@ impl std::fmt::Display for ImageError {
                 "HTTP {status} — {}",
                 t(L10nKey::MarkdownImageRedirectBlocked)
             ),
+            Self::Corrupt(message) => {
+                write!(
+                    formatter,
+                    "{} ({message})",
+                    t(L10nKey::EditorImageUndecodable)
+                )
+            }
+            Self::Svg(message) => {
+                write!(formatter, "{} ({message})", t(L10nKey::EditorSvgInvalid))
+            }
         }
     }
 }
@@ -585,6 +687,174 @@ impl std::error::Error for ImageError {}
 fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+/// The image formats a workbench document can open.
+///
+/// The five static raster formats share [`decode_static`]; GIF animation and
+/// multi-page TIFF have their own frame/page decoders in `image_document` and
+/// are never shown as a static first frame. Markdown preview still resolves
+/// only the static subset through [`decode_static`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageFormat {
+    Png,
+    Jpeg,
+    WebP,
+    Bmp,
+    Ico,
+    Gif,
+    Tiff,
+}
+
+impl ImageFormat {
+    pub(crate) fn from_extension(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        Some(match extension.as_str() {
+            "png" => Self::Png,
+            "jpg" | "jpeg" | "jpe" | "jfif" => Self::Jpeg,
+            "webp" => Self::WebP,
+            "bmp" | "dib" => Self::Bmp,
+            "ico" => Self::Ico,
+            "gif" => Self::Gif,
+            "tif" | "tiff" => Self::Tiff,
+            _ => return None,
+        })
+    }
+
+    /// What the first bytes say, for a file whose name claims nothing.
+    ///
+    /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
+    /// text file opening with them is not evidence enough to take it away
+    /// from the text editor. GIF's `GIF87a`/`GIF89a` and TIFF's `II*\0`/`MM\0*`
+    /// (including BigTIFF) are binary structures and cannot be mistaken for
+    /// ordinary text.
+    pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Some(Self::Png);
+        }
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Some(Self::Jpeg);
+        }
+        if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            return Some(Self::WebP);
+        }
+        if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+            return Some(Self::Ico);
+        }
+        if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.starts_with(b"II\x2a\x00")
+            || bytes.starts_with(b"MM\x00\x2a")
+            || bytes.starts_with(b"II\x2b\x00")
+            || bytes.starts_with(b"MM\x00\x2b")
+        {
+            return Some(Self::Tiff);
+        }
+        None
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::WebP => "WebP",
+            Self::Bmp => "BMP",
+            Self::Ico => "ICO",
+            Self::Gif => "GIF",
+            Self::Tiff => "TIFF",
+        }
+    }
+}
+
+pub(crate) fn too_large() -> io::Error {
+    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+}
+
+/// Reads one picture's bytes from its owning Host.
+///
+/// The versioned segment session is the real path for a preview: the bytes and
+/// their version stay one object while they travel. A Host that reports
+/// `Unsupported` — an SFTP pane host, or a peer without `host-file-range-v1` —
+/// keeps the previous bounded whole-file read for inputs inside the existing
+/// picture budget; a larger input still fails visibly instead of being read
+/// some other way.
+pub(crate) fn read_bytes(
+    host: &dyn Host,
+    path: &std::path::Path,
+    budget: u64,
+    cancel: &lyrel_core::host::transfer::CancelToken,
+    mut progress: impl FnMut(lyrel_core::host::read::ReadProgress),
+) -> io::Result<(lyrel_core::host::Meta, Vec<u8>)> {
+    match lyrel_core::host::read::read_file_segmented(host, path, budget, cancel, &mut progress) {
+        Ok(outcome) => Ok((outcome.meta, outcome.bytes)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+            let meta = host.stat(path)?;
+            if meta.len > budget {
+                return Err(too_large());
+            }
+            log::debug!(
+                "host cannot open a versioned read session; using its bounded whole-file read for {}",
+                path.display()
+            );
+            let bytes = host.read_file(path, budget)?;
+            progress(lyrel_core::host::read::ReadProgress {
+                read: bytes.len() as u64,
+                total: bytes.len() as u64,
+            });
+            Ok((meta, bytes))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Decodes one of the five static formats under the same byte and pixel
+/// budgets as a Markdown preview, and under the same rule that a name never
+/// decides how bytes are read: SVG is not among them, so a file called
+/// `.png` is never handed to `usvg`.
+///
+/// GIF animation and multi-page TIFF are documents with their own frame/page
+/// decoders; handing their bytes here is refused rather than showing a static
+/// first frame.
+pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, ImageFormat)> {
+    let (rgba, extension) = decode(bytes).map_err(|error| {
+        // Budget and unsupported-format refusals are already words; anything
+        // else is the decoder saying the bytes are not the picture they claim.
+        let described = error
+            .get_ref()
+            .is_some_and(|inner| inner.downcast_ref::<ImageError>().is_some());
+        match described {
+            true => error,
+            false => invalid(ImageError::Corrupt(error.to_string())),
+        }
+    })?;
+    let format = match extension {
+        "png" => ImageFormat::Png,
+        "jpg" => ImageFormat::Jpeg,
+        "webp" => ImageFormat::WebP,
+        "bmp" => ImageFormat::Bmp,
+        "ico" => ImageFormat::Ico,
+        _ => {
+            return Err(invalid(ImageError::Localized(
+                L10nKey::MarkdownImageUnsupported,
+            )));
+        }
+    };
+    Ok((rgba, format))
+}
+
+/// Decodes one EPUB illustration with the same safe bytes/pixels policy as a
+/// Markdown image, including SVG with both external-resource resolvers
+/// disabled. Animation and multipage semantics remain image-document features;
+/// an illustration is a still picture.
+pub(crate) fn decode_book_illustration(bytes: &[u8]) -> io::Result<image::RgbaImage> {
+    decode(bytes).map(|(rgba, _)| rgba)
+}
+
+/// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
+pub(crate) fn bitmap(rgba: image::RgbaImage, cx: &mut App) -> Bitmap {
+    Bitmap::new(render(rgba), cx)
+}
+
 fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
@@ -598,7 +868,14 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         reader.limits(limits);
         let rgba = reader
             .decode()
-            .map_err(|error| invalid(error.to_string()))?
+            .map_err(|error| match error {
+                // The reader refuses oversized dimensions before allocating;
+                // that is the budget speaking, not a corrupt file.
+                image::ImageError::Limits(_) => {
+                    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+                }
+                error => invalid(error.to_string()),
+            })?
             .into_rgba8();
         if rgba.width() as u64 * rgba.height() as u64 > MAX_PIXELS {
             return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
@@ -619,6 +896,98 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         };
         return Ok((rgba, extension));
     }
+    let (options, blocked) = svg_options(100., 100.);
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
+        .map_err(|error| invalid(error.to_string()))?;
+    let (rgba, ..) = rasterize_svg(&tree, &blocked, L10nKey::MarkdownImageLimit, None)?;
+    Ok((rgba, "svg"))
+}
+
+/// One SVG document preview: its pixels and the source's intrinsic size in
+/// CSS pixels. `width`/`height` are what fit/actual-size are relative to.
+pub(crate) struct SvgRaster {
+    pub(crate) rgba: image::RgbaImage,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}
+
+/// Decodes SVG source for a document preview.
+///
+/// The root's own dimensions decide the image; a document without usable
+/// dimensions gets the browser's 300×150 default viewport, and a `viewBox`
+/// supplies a percent-sized root's ratio. Both rules come from Glim's frozen
+/// `svg_preview.rs`; the sanitizer, data-image re-encoding, temporary files and
+/// browser image document there are deliberately not transplanted. Scripts
+/// have no runtime here, and both resource resolvers stay closed, so nested
+/// file, network and data images cannot be read.
+pub(crate) fn decode_svg_source(source: &str) -> io::Result<SvgRaster> {
+    let (options, blocked) = svg_options(300., 150.);
+    let xml = resvg::usvg::roxmltree::Document::parse_with_options(
+        source,
+        resvg::usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
+    let root = xml.root_element();
+    let viewport = if root.attribute("viewBox").is_none() {
+        // Glim 的独立文档默认视口：不接受 usvg 随后按内容 bbox 收缩尺寸。
+        let width = root
+            .attribute("width")
+            .and_then(|value| svg_length(value, 300.))
+            .unwrap_or(300.);
+        let height = root
+            .attribute("height")
+            .and_then(|value| svg_length(value, 150.))
+            .unwrap_or(150.);
+        Some(
+            resvg::usvg::Size::from_wh(width, height)
+                .ok_or_else(|| invalid(ImageError::Localized(L10nKey::EditorSvgLimit)))?,
+        )
+    } else {
+        None
+    };
+    let tree = resvg::usvg::Tree::from_xmltree(&xml, &options)
+        .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
+    let (rgba, width, height) = rasterize_svg(&tree, &blocked, L10nKey::EditorSvgLimit, viewport)?;
+    Ok(SvgRaster {
+        rgba,
+        width,
+        height,
+    })
+}
+
+// Glim MIT absolute_length 规则的本地适配，来源见 svg_document/UPSTREAM.toml。
+fn svg_length(value: &str, default: f32) -> Option<f32> {
+    let value = value.trim();
+    let (number, factor) = [
+        ("px", 1.),
+        ("pt", 96. / 72.),
+        ("pc", 16.),
+        ("in", 96.),
+        ("cm", 96. / 2.54),
+        ("mm", 96. / 25.4),
+        ("q", 96. / 101.6),
+        ("%", default / 100.),
+    ]
+    .into_iter()
+    .find_map(|(suffix, factor)| value.strip_suffix(suffix).map(|number| (number, factor)))
+    .unwrap_or((value, 1.));
+    let pixels = number.trim().parse::<f32>().ok()? * factor;
+    (pixels.is_finite() && pixels > 0.).then_some(pixels)
+}
+
+/// Builds parser options that cannot reach the filesystem or the network.
+/// The default viewport differs by caller only in its size; SVG user units are
+/// CSS pixels in both cases.
+fn svg_options(
+    default_width: f32,
+    default_height: f32,
+) -> (
+    resvg::usvg::Options<'static>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
     // usvg has no JavaScript runtime. Disable *both* resource resolvers: its default
     // string resolver reads local files, including for an SVG read on a remote Host.
     let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -643,26 +1012,47 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             }),
         },
         fontdb,
+        default_size: resvg::usvg::Size::from_wh(default_width, default_height)
+            .expect("non-empty SVG default viewport"),
         ..Default::default()
     };
-    let tree = resvg::usvg::Tree::from_data(bytes, &options)
-        .map_err(|error| invalid(error.to_string()))?;
+    (options, blocked)
+}
+
+/// Rasterizes a parsed tree inside the shared preview budget and returns the
+/// pixels with the tree's logical size.
+fn rasterize_svg(
+    tree: &resvg::usvg::Tree,
+    blocked: &std::sync::atomic::AtomicBool,
+    budget: L10nKey,
+    viewport: Option<resvg::usvg::Size>,
+) -> io::Result<(image::RgbaImage, f32, f32)> {
     if blocked.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(invalid(ImageError::Localized(
             L10nKey::MarkdownImageExternalReference,
         )));
     }
-    let size = tree.size().to_int_size();
-    if size.width() > 8192
+    let logical = viewport.unwrap_or_else(|| tree.size());
+    if !(logical.width().is_finite()
+        && logical.height().is_finite()
+        && logical.width() > 0.
+        && logical.height() > 0.)
+    {
+        return Err(invalid(ImageError::Localized(budget)));
+    }
+    let size = logical.to_int_size();
+    if size.width() == 0
+        || size.height() == 0
+        || size.width() > 8192
         || size.height() > 8192
         || size.width() as u64 * size.height() as u64 > MAX_PIXELS
     {
-        return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
+        return Err(invalid(ImageError::Localized(budget)));
     }
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
-        .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)))?;
+        .ok_or_else(|| invalid(ImageError::Localized(budget)))?;
     resvg::render(
-        &tree,
+        tree,
         resvg::tiny_skia::Transform::identity(),
         &mut pixmap.as_mut(),
     );
@@ -677,11 +1067,9 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             }
         }
     }
-    Ok((
-        image::RgbaImage::from_raw(size.width(), size.height(), rgba)
-            .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageUnsupported)))?,
-        "svg",
-    ))
+    let rgba = image::RgbaImage::from_raw(size.width(), size.height(), rgba)
+        .ok_or_else(|| invalid(ImageError::Localized(budget)))?;
+    Ok((rgba, logical.width(), logical.height()))
 }
 fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in rgba.pixels_mut() {
@@ -821,7 +1209,19 @@ pub(crate) fn controls(
     rows.sort_by_key(|(source, _)| *source);
     for (source, state) in rows {
         let message = match state {
-            State::Loading => t(L10nKey::EditorImageLoading).to_owned(),
+            State::Loading => {
+                let percent = host
+                    .progress
+                    .get(source)
+                    .filter(|(_, total)| *total > 0)
+                    .map(|(read, total)| read.saturating_mul(100) / total);
+                match percent {
+                    Some(percent) => {
+                        format!("{} {percent}%", t(L10nKey::EditorImageLoading))
+                    }
+                    None => t(L10nKey::EditorImageLoading).to_owned(),
+                }
+            }
             State::Failed(reason) => format!("{}: {reason}", t(L10nKey::EditorImageFailed)),
             State::Ready => unreachable!(),
         };

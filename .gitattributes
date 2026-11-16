@@ -8,3 +8,10 @@ assets/windows/conpty/LICENSE.txt -text
 # Bash scripts break with CRLF ($'\r': command not found / invalid option name);
 # CI boundary checks also rely on LF sources.
 *.sh text eol=lf
+
+# draw.io engine and our bridge pages are hash-pinned byte-for-byte.
+assets/drawio/** -text
+src/ui/code_editor/drawio_engine/web/** -text
+
+# WebView2 SDK legal notices are retained byte-for-byte.
+assets/windows/webview2/** -text

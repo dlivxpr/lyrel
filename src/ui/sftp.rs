@@ -708,22 +708,38 @@ impl LyrelApp {
         let target = entry.path.clone();
         if is_dir_like(&entry) {
             self.sftp_toggle_directory(target, cx);
-        } else if let Some(host) = self.sftp_editor_host() {
+        } else if let Some(host) = self.sftp_editor_host(cx) {
             self.editor_open_on_host(host, Path::new(&target), window, cx);
         }
     }
 
     /// The [`Host`] the editor reads and saves this pane's files through.
     ///
-    /// Handed to the editor rather than filed in `HostRegistry`: that table
-    /// means "a machine this window has a link to", and its entries are
-    /// listed as machines and swept when no workspace is left holding one.
-    /// An SFTP channel borrowed from a pane is neither, so the buffer holds
-    /// the host itself and stays saveable for as long as it is open.
+    /// A workspace pane already keeps a [`RemoteHost`] in `HostRegistry`;
+    /// preferring it gives the editor every capability the link supports —
+    /// versioned segmented reads for books, read-only SQLite browsing,
+    /// watching — none of which the bare SFTP channel can carry. The SFTP
+    /// host remains the answer only for a pane without a workspace, where it
+    /// is the only channel there is.
+    ///
+    /// The SFTP host is handed to the editor rather than filed in
+    /// `HostRegistry`: that table means "a machine this window has a link
+    /// to", and its entries are listed as machines and swept when no
+    /// workspace is left holding one. An SFTP channel borrowed from a pane is
+    /// neither, so the buffer holds the host itself and stays saveable for as
+    /// long as it is open.
     ///
     /// [`Host`]: crate::ui::host_ops::Host
-    fn sftp_editor_host(&self) -> Option<crate::ui::host_ops::SharedHost> {
+    /// [`RemoteHost`]: lyrel_core::host::remote::RemoteHost
+    fn sftp_editor_host(&self, cx: &gpui_kit::App) -> Option<crate::ui::host_ops::SharedHost> {
         self.sftp_panel.open_pane_id?;
+        if let Some(host) =
+            self.sftp_panel.open_workspace.as_ref().and_then(|ws| {
+                crate::ui::host_registry::HostRegistry::lookup(cx, ws.target.host_id())
+            })
+        {
+            return Some(host);
+        }
         Some(std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(
             self.sftp_route(),
         )))

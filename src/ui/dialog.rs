@@ -12,8 +12,8 @@
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    App, ClickEvent, Div, ElementId, Hsla, SharedString, Stateful, Window, div, prelude::*, px,
-    rems,
+    App, ClickEvent, Div, ElementId, Hsla, SharedString, Stateful, TestSupportExt as _, Window,
+    div, prelude::*, px, rems,
 };
 
 use crate::ui::presets::Surface;
@@ -272,7 +272,7 @@ pub(crate) fn button(
     rungs: Surface,
     cx: &App,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
     let theme = cx.theme();
     let surface: Hsla = gpui_kit::rgb(rungs.base).into();
     let (fill, hover, ink): (Option<Hsla>, Option<Hsla>, Hsla) = match (tone, enabled) {
@@ -303,7 +303,7 @@ pub(crate) fn button(
     };
     h_flex()
         .id(id)
-        .flex_none()
+        .test_support()
         .items_center()
         .justify_center()
         .h(px(BUTTON_H))

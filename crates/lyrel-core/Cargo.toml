@@ -69,6 +69,14 @@ gix-discover = { version = "0.57.0", features = ["sha1"] }
 # implementation.
 ignore = "0.4"
 
+# Read-only SQLite browsing (`host::sqlite`): the same registry crate and
+# bundled SQLite the GUI already links, so the headless server carries one
+# static SQLite with no system library. `hooks` is only for the progress
+# budget and the read-only authorizer; no extension, backup, serialize or
+# write features are enabled. `default-features = false` avoids the unused
+# statement cache; the GUI crate's own declaration keeps its defaults.
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "hooks"] }
+
 # The matcher behind `Host::search_content` (the right panel's Search tab):
 # a literal, whole-word or regular-expression query compiled once and run over
 # each file the `ignore` walk above hands it. Lives here for the same reason
@@ -231,6 +239,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    # `DeviceIoControl`/`OVERLAPPED` and the read-cache oplock control code:
+    # `host::read_lease` asks the volume to report writes that file timestamps
+    # cannot distinguish. See that module.
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",

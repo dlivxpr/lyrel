@@ -11,8 +11,8 @@ use crate::daemon::control::{
     KEEPALIVE_PING_INTERVAL, LinkShutdown, ReplyOk,
 };
 use crate::host::{
-    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, Meta, Output, SearchHit,
-    SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
+    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, HostRead, Meta, Output,
+    SearchHit, SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
 };
 
 pub struct RemoteHost {
@@ -121,6 +121,38 @@ impl RemoteHost {
     fn call(&self, req: ControlRequest) -> io::Result<ReplyOk> {
         self.client.call(req)
     }
+
+    /// Send one SQLite request, or refuse before sending when the peer never
+    /// announced the capability.
+    fn sqlite_call(
+        &self,
+        request: crate::host::sqlite::SqliteRequest,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteReply> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SQLITE_BROWSE)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot browse SQLite databases; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        let got = self.client.call_full_with_cancel(
+            ControlRequest::Sqlite {
+                request: Box::new(request),
+            },
+            &[],
+            cancel,
+        )?;
+        match got.reply {
+            ReplyOk::Sqlite(reply) => Ok(*reply),
+            other => Err(wrong_shape("a SQLite reply", &other)),
+        }
+    }
 }
 
 fn wire_path(p: &Path) -> String {
@@ -201,6 +233,170 @@ impl Host for RemoteHost {
         match got.reply {
             ReplyOk::FileMeta { .. } => Ok(got.blob),
             other => Err(wrong_shape("file contents", &other)),
+        }
+    }
+
+    /// A peer without [`crate::daemon::control::feature::FILE_RANGE`] is asked
+    /// for nothing: sending it a request it has never heard of would take the
+    /// whole link down, and reading the same path again per segment under a
+    /// `(len, mtime)` guess is not the same version.
+    fn open_read(&self, p: &Path) -> io::Result<Box<dyn HostRead>> {
+        guard_off_ui();
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::FILE_RANGE)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot stream one file version; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        match self.call(ControlRequest::OpenRead { path: wire_path(p) })? {
+            ReplyOk::ReadOpened { session, meta } => Ok(Box::new(RemoteRead {
+                client: Arc::clone(&self.client),
+                session,
+                meta,
+                offset: 0,
+                closed: false,
+            })),
+            other => Err(wrong_shape("an opened read session", &other)),
+        }
+    }
+
+    fn sqlite_open(
+        &self,
+        path: &Path,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteOpened> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Open {
+                path: wire_path(path),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Opened(opened) => Ok(opened),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "control peer answered with {other:?} where an opened SQLite view was required"
+                ),
+            )),
+        }
+    }
+
+    fn sqlite_columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteColumns> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Columns {
+                view,
+                table: table.to_string(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Columns(columns) => Ok(columns),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where SQLite columns were required"),
+            )),
+        }
+    }
+
+    fn sqlite_count(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Count {
+                view,
+                query: query.clone(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Count(total) => Ok(total),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "control peer answered with {other:?} where a SQLite row count was required"
+                ),
+            )),
+        }
+    }
+
+    fn sqlite_page(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqlitePage> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Page {
+                view,
+                query: query.clone(),
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Page(page) => Ok(page),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where a SQLite page was required"),
+            )),
+        }
+    }
+
+    fn sqlite_value(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteValue> {
+        guard_off_ui();
+        match self.sqlite_call(
+            crate::host::sqlite::SqliteRequest::Value {
+                view,
+                query: query.clone(),
+                row,
+                column,
+                offset,
+                max_bytes,
+            },
+            cancel,
+        )? {
+            crate::host::sqlite::SqliteReply::Value(value) => Ok(value),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control peer answered with {other:?} where a SQLite value was required"),
+            )),
+        }
+    }
+
+    fn sqlite_close(&self, view: u64) {
+        // Posted, not awaited: a document can be closed on the UI thread, and
+        // the peer also closes every view when the connection ends. A peer
+        // without the capability has nothing to close.
+        if self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SQLITE_BROWSE)
+        {
+            let _ = self.client.post(ControlRequest::Sqlite {
+                request: Box::new(crate::host::sqlite::SqliteRequest::Close { view }),
+            });
         }
     }
 
@@ -977,6 +1173,92 @@ impl WatchRegistry {
     }
 }
 
+/// A bound read session on the peer, one `ReadChunk` per segment.
+struct RemoteRead {
+    client: Arc<ControlClient>,
+    session: u64,
+    meta: Meta,
+    offset: u64,
+    closed: bool,
+}
+
+impl HostRead for RemoteRead {
+    fn meta(&self) -> Meta {
+        self.meta
+    }
+
+    fn read_segment(&mut self, max_bytes: u64) -> io::Result<Vec<u8>> {
+        guard_off_ui();
+        if max_bytes == 0 || max_bytes > crate::host::transfer::SEGMENT_BYTES_MAX {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "a read segment must be 1..={} bytes, not {max_bytes}",
+                    crate::host::transfer::SEGMENT_BYTES_MAX
+                ),
+            ));
+        }
+        let remaining = self.meta.len.saturating_sub(self.offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        let want = max_bytes.min(remaining);
+        let got = self.client.call_full(
+            ControlRequest::ReadChunk {
+                session: self.session,
+                max_bytes: want,
+            },
+            &[],
+        )?;
+        match got.reply {
+            ReplyOk::FileMeta { meta } => {
+                if meta != self.meta {
+                    self.closed = true;
+                    return Err(crate::host::read::file_changed(
+                        "the peer answered a segment with a different file version",
+                    ));
+                }
+                if got.blob.len() as u64 > want {
+                    self.closed = true;
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "the peer returned {} bytes for a {want}-byte segment",
+                            got.blob.len()
+                        ),
+                    ));
+                }
+                if got.blob.is_empty() {
+                    self.closed = true;
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the peer ended a read session before its own version length",
+                    ));
+                }
+                self.offset += got.blob.len() as u64;
+                Ok(got.blob)
+            }
+            other => {
+                self.closed = true;
+                Err(wrong_shape("the next file segment", &other))
+            }
+        }
+    }
+}
+
+impl Drop for RemoteRead {
+    fn drop(&mut self) {
+        // Posted, not called: a preview can be released on the UI thread, and
+        // the peer frees the session on its own once this arrives (or when the
+        // connection ends).
+        if !self.closed && self.client.is_connected() {
+            let _ = self.client.post(ControlRequest::CloseRead {
+                session: self.session,
+            });
+        }
+    }
+}
+
 struct RemoteWatch {
     id: u64,
     client: Arc<ControlClient>,
@@ -1091,6 +1373,125 @@ mod tests {
         host_with_peer_announcing(separator, &[], answer)
     }
 
+    #[test]
+    fn sqlite_is_refused_before_send_when_the_peer_lacks_the_feature() {
+        let (host, seen) = host_with_peer_announcing('/', &[], |_| None);
+        let error = host
+            .sqlite_open(
+                Path::new("/data.sqlite"),
+                &crate::host::sqlite::SqliteCancel::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("update lyrel-server"), "{error}");
+        assert!(
+            seen.try_recv().is_err(),
+            "an older peer must not receive a request it has never heard of"
+        );
+    }
+
+    #[test]
+    fn sqlite_unsupported_from_a_feature_peer_is_not_an_empty_schema() {
+        use crate::host::sqlite::SqliteCancel;
+        let (host, _) = host_with_peer_announcing(
+            '/',
+            &[crate::daemon::control::feature::SQLITE_BROWSE],
+            |req| match req {
+                ControlRequest::Sqlite { .. } => Some((
+                    ControlReply::Err(WireError::new(
+                        WireErrorKind::Unsupported,
+                        "this host serves no databases",
+                    )),
+                    Vec::new(),
+                )),
+                _ => None,
+            },
+        );
+        let error = host
+            .sqlite_open(Path::new("/data.sqlite"), &SqliteCancel::default())
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn sqlite_replies_map_to_typed_host_values() {
+        use crate::host::sqlite::{
+            SqliteCancel, SqliteColumns, SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage,
+            SqliteQuery, SqliteReply, SqliteRequest, SqliteValue,
+        };
+        let opened = SqliteOpened {
+            view: 9,
+            objects: vec![SqliteObject {
+                name: "items".into(),
+                kind: SqliteObjectKind::Table,
+                sql: "CREATE TABLE items(id INTEGER)".into(),
+            }],
+            journal_mode: "wal".into(),
+            idle_millis: 30_000,
+            max_age_millis: 180_000,
+        };
+        let page = SqlitePage {
+            page: 2,
+            start_column: 1,
+            rows: vec![vec![
+                SqliteValue::Null,
+                SqliteValue::Integer {
+                    value: -9007199254740993,
+                },
+                SqliteValue::real(f64::NEG_INFINITY.to_bits()),
+                SqliteValue::Text {
+                    preview: vec![0xff, 0xfe, b'a'],
+                    total: 3,
+                },
+                SqliteValue::Blob {
+                    preview: vec![0x00, 0xff],
+                    total: 8,
+                },
+            ]],
+            more: true,
+        };
+        let (host, _) =
+            host_with_peer_announcing('/', &[crate::daemon::control::feature::SQLITE_BROWSE], {
+                let opened = opened.clone();
+                let page = page.clone();
+                let columns = SqliteColumns {
+                    names: vec!["id".into()],
+                    order: vec!["rowid".into()],
+                };
+                move |req| match req {
+                    ControlRequest::Sqlite { request } => Some((
+                        ControlReply::Ok(ReplyOk::Sqlite(Box::new(match &**request {
+                            SqliteRequest::Open { .. } => SqliteReply::Opened(opened.clone()),
+                            SqliteRequest::Columns { .. } => SqliteReply::Columns(columns.clone()),
+                            SqliteRequest::Count { .. } => SqliteReply::Count(17),
+                            SqliteRequest::Page { .. } => SqliteReply::Page(page.clone()),
+                            _ => SqliteReply::Closed,
+                        }))),
+                        Vec::new(),
+                    )),
+                    _ => None,
+                }
+            });
+        let cancel = SqliteCancel::default();
+        let got = host
+            .sqlite_open(Path::new("/data.sqlite"), &cancel)
+            .unwrap();
+        assert_eq!(got, opened);
+        let query = SqliteQuery {
+            table: "items".into(),
+            columns: vec!["id".into()],
+            order: vec!["rowid".into()],
+            page: 2,
+            start_column: 1,
+            ..SqliteQuery::default()
+        };
+        assert_eq!(host.sqlite_count(got.view, &query, &cancel).unwrap(), 17);
+        let got_page = host.sqlite_page(got.view, &query, &cancel).unwrap();
+        assert_eq!(got_page, page);
+        let columns = host.sqlite_columns(got.view, "items", &cancel).unwrap();
+        assert_eq!(columns.names, ["id"]);
+    }
+
     /// [`host_with_peer`], with a peer whose hello names `extra` features on
     /// top of the two every control peer has.
     fn host_with_peer_announcing<F>(
@@ -1162,6 +1563,212 @@ mod tests {
         )
         .unwrap();
         (host, seen_rx)
+    }
+
+    fn read_meta(len: u64) -> Meta {
+        Meta {
+            is_dir: false,
+            is_symlink: false,
+            len,
+            mtime: Some(MTime {
+                secs: 1_769_000_000,
+                nanos: 11,
+            }),
+            readonly: false,
+        }
+    }
+
+    #[test]
+    fn a_peer_without_file_range_is_never_asked_for_a_session() {
+        let (host, seen) = host_with_peer_announcing('/', &[], |_| None);
+        let error = match host.open_read(Path::new("/large.png")) {
+            Ok(_) => panic!("a peer without the feature opened a segmented read"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("update lyrel-server"), "{error}");
+        assert!(
+            seen.try_recv().is_err(),
+            "a request an old peer cannot decode must never be sent"
+        );
+    }
+
+    #[test]
+    fn a_bound_session_pulls_bounded_segments_and_closes_on_drop() {
+        use crate::daemon::control::feature::FILE_RANGE;
+        use crate::host::transfer::SEGMENT_BYTES;
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
+        let body: StdArc<Vec<u8>> =
+            StdArc::new((0..(600 * 1024u32)).map(|i| (i % 251) as u8).collect());
+        let total = body.len() as u64;
+        let offset = StdArc::new(StdMutex::new(0u64));
+        let served = StdArc::clone(&body);
+        let (host, seen) = host_with_peer_announcing('/', &[FILE_RANGE], move |req| match req {
+            ControlRequest::OpenRead { path } => {
+                assert_eq!(path, "/large.bin");
+                Some((
+                    ControlReply::Ok(ReplyOk::ReadOpened {
+                        session: 11,
+                        meta: read_meta(total),
+                    }),
+                    Vec::new(),
+                ))
+            }
+            ControlRequest::ReadChunk { session, max_bytes } => {
+                assert_eq!(*session, 11);
+                assert!(*max_bytes <= SEGMENT_BYTES);
+                let mut offset = offset.lock().unwrap();
+                let start = *offset as usize;
+                let end = (start + *max_bytes as usize).min(served.len());
+                *offset = end as u64;
+                Some((
+                    ControlReply::Ok(ReplyOk::FileMeta {
+                        meta: read_meta(total),
+                    }),
+                    served[start..end].to_vec(),
+                ))
+            }
+            ControlRequest::CloseRead { session } => {
+                assert_eq!(*session, 11);
+                Some((ControlReply::Ok(ReplyOk::Unit), Vec::new()))
+            }
+            other => panic!("unexpected request {other:?}"),
+        });
+
+        let mut progress = Vec::new();
+        let outcome = crate::host::read::read_file_segmented(
+            &*host,
+            Path::new("/large.bin"),
+            8 * 1024 * 1024,
+            &crate::host::transfer::CancelToken::default(),
+            |update| progress.push(update),
+        )
+        .unwrap();
+        assert!(
+            outcome.bytes == *body,
+            "segments reassemble the bound version"
+        );
+        assert_eq!(
+            progress.last().map(|p| (p.read, p.total)),
+            Some((total, total))
+        );
+
+        let mut chunks = 0;
+        let mut closed = false;
+        while let Ok(request) = seen.recv_timeout(Duration::from_secs(2)) {
+            match request {
+                ControlRequest::OpenRead { .. } => {}
+                ControlRequest::ReadChunk { .. } => chunks += 1,
+                ControlRequest::CloseRead { .. } => {
+                    closed = true;
+                    break;
+                }
+                other => panic!("unexpected request {other:?}"),
+            }
+        }
+        assert!(chunks >= 2, "a 600 KiB file cannot be one segment");
+        assert!(closed, "dropping the reader closes the far-side session");
+    }
+
+    #[test]
+    fn a_changed_version_is_reported_not_retried() {
+        use crate::daemon::control::feature::FILE_RANGE;
+
+        let (host, _seen) = host_with_peer_announcing('/', &[FILE_RANGE], |req| match req {
+            ControlRequest::OpenRead { .. } => Some((
+                ControlReply::Ok(ReplyOk::ReadOpened {
+                    session: 3,
+                    meta: read_meta(4),
+                }),
+                Vec::new(),
+            )),
+            ControlRequest::ReadChunk { .. } => Some((
+                ControlReply::Err(WireError::new(
+                    WireErrorKind::FileChanged,
+                    "changed under the read",
+                )),
+                Vec::new(),
+            )),
+            ControlRequest::CloseRead { .. } => Some((ControlReply::Ok(ReplyOk::Unit), Vec::new())),
+            other => panic!("unexpected request {other:?}"),
+        });
+
+        let mut reader = host.open_read(Path::new("/x.png")).unwrap();
+        let error = reader.read_segment(4).unwrap_err();
+        assert!(crate::host::read::is_file_changed(&error), "{error}");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_read_session_fails_when_its_link_goes_down() {
+        use crate::daemon::control::feature::FILE_RANGE;
+
+        let (host, _seen) = host_with_peer_announcing('/', &[FILE_RANGE], |req| match req {
+            ControlRequest::OpenRead { .. } => Some((
+                ControlReply::Ok(ReplyOk::ReadOpened {
+                    session: 6,
+                    meta: read_meta(1024),
+                }),
+                Vec::new(),
+            )),
+            // Returning None drops the peer's socket.
+            ControlRequest::ReadChunk { .. } => None,
+            other => panic!("unexpected request {other:?}"),
+        });
+        let mut reader = host.open_read(Path::new("/lost.png")).unwrap();
+        let error = reader.read_segment(16).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset, "{error}");
+    }
+
+    #[test]
+    fn an_empty_segment_before_the_version_end_is_not_eof() {
+        use crate::daemon::control::feature::FILE_RANGE;
+
+        let (host, _seen) = host_with_peer_announcing('/', &[FILE_RANGE], |req| match req {
+            ControlRequest::OpenRead { .. } => Some((
+                ControlReply::Ok(ReplyOk::ReadOpened {
+                    session: 4,
+                    meta: read_meta(64),
+                }),
+                Vec::new(),
+            )),
+            ControlRequest::ReadChunk { .. } => Some((
+                ControlReply::Ok(ReplyOk::FileMeta {
+                    meta: read_meta(64),
+                }),
+                Vec::new(),
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        let mut reader = host.open_read(Path::new("/short.png")).unwrap();
+        let error = reader.read_segment(64).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof, "{error}");
+    }
+
+    #[test]
+    fn a_segment_from_another_version_is_refused() {
+        use crate::daemon::control::feature::FILE_RANGE;
+
+        let (host, _seen) = host_with_peer_announcing('/', &[FILE_RANGE], |req| match req {
+            ControlRequest::OpenRead { .. } => Some((
+                ControlReply::Ok(ReplyOk::ReadOpened {
+                    session: 5,
+                    meta: read_meta(64),
+                }),
+                Vec::new(),
+            )),
+            ControlRequest::ReadChunk { .. } => Some((
+                ControlReply::Ok(ReplyOk::FileMeta {
+                    meta: read_meta(65),
+                }),
+                vec![7; 64],
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        let mut reader = host.open_read(Path::new("/moved.png")).unwrap();
+        let error = reader.read_segment(64).unwrap_err();
+        assert!(crate::host::read::is_file_changed(&error), "{error}");
     }
 
     #[test]

@@ -1,0 +1,72 @@
+# Glim EPUB 源码复用记录。
+#
+# 上游固定为 MIT 仓库 glimapp/glim 的
+# fc2183f2c5f27ddfcdc4badbab6d83d50616831b。`sha256` 是协调目录
+# glim-reader-source-provenance.json 逐文件核对的原始字节摘要，不是本地修改后
+# 文件的摘要；本地文件带适配，所以不必与这些摘要相等。许可正文见
+# licenses/glim-MIT.txt，并进入根 LICENSE 的第三方 notice。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+maintainer = "Lyrel"
+import_owner = "#286"
+# 未导入: glim-app 应用壳、Glim SQLite 存储/遥测/Scheduler、macOS
+# thumbnail/sips/qlmanage 图片路径、paged 文本布局、FB2/CBZ/FB2.ZIP 分支、
+# Glim 的固定资产夹具 book.epub.json。未复制 GPL 应用代码。
+
+# 保留: container/OPF/manifest/spine/nav/NCX 流程、manifest 重复 id 拒绝、
+# spine media-type 检查、nav epub:type=toc、NCX 仅作 EPUB3 nav 缺失兜底、
+# 章节标题回填、允许标签集合、活动标签丢弃、img/id 收集、归档内 resolve 的
+# 全部拒绝规则、BOM/UTF-16/XML 声明严格解码、DTD 拒绝、节点/输出上限。
+# 适配: 无 GPUI 的 zip/roxmltree/encoding_rs 解析；输入改为 owning Host 交付
+# 的一致字节；预算全部有限并返回 typed error；章节拆为 BlockFragment 与
+# text/HTML 映射；普通 XHTML 命名实体转为数字引用；图片只收集字节，解码交给
+# Lyrel 图片管线；阅读状态改为 HostId+canonical path，本地原子 JSON，不写书。
+# 补齐: 固定版式检测（全局 + spine itemref + EPUB2/Apple 启发式）、
+# rights.xml/license.lcpl/ZIP 加密/字体目标校验、整书搜索的文本与命中上限、
+# 可见的省略计数、单块/章节/条目/总未压缩预算、可取消 token。
+# 修复: 净化的 id 属性完整闭合引号，避免富文本消费者吞掉锚点所在块的正文；
+# 锚点与原章节的身份仍保留，不修改归档输入。
+# 替换: Glim 的 archive(path)/File 打开改为调用方 Reader；整书 SHA-256 改由
+# Host 传输阶段计算并只作版本守卫；1×1 透明缺图改为 UI 可见占位与计数。
+
+[[source]]
+upstream = "crates/glim-services/src/books/mod.rs"
+local = "src/archive.rs"
+sha256 = "b872524d015a082fc28bdca58490d471bb093f6050f828e71f515d06e48ff8f8"
+
+[[source]]
+upstream = "crates/glim-services/src/books/mod.rs"
+local = "src/decode.rs"
+sha256 = "b872524d015a082fc28bdca58490d471bb093f6050f828e71f515d06e48ff8f8"
+
+[[source]]
+upstream = "crates/glim-services/src/books/mod.rs"
+local = "src/opf.rs"
+sha256 = "b872524d015a082fc28bdca58490d471bb093f6050f828e71f515d06e48ff8f8"
+
+[[source]]
+upstream = "crates/glim-services/src/books/mod.rs"
+local = "src/sanitize.rs"
+sha256 = "b872524d015a082fc28bdca58490d471bb093f6050f828e71f515d06e48ff8f8"
+
+[[source]]
+upstream = "crates/glim-services/src/books/mod.rs"
+local = "src/book.rs"
+sha256 = "b872524d015a082fc28bdca58490d471bb093f6050f828e71f515d06e48ff8f8"
+
+[[source]]
+upstream = "crates/glim-services/src/books/preferences.rs"
+local = "src/state.rs"
+sha256 = "79fff8596a29dc1349b9023e9e8c0b730755b4131a4e9a12750daa295c702f74"
+
+[[source]]
+upstream = "crates/glim-core/src/books.rs"
+local = "src/state.rs"
+sha256 = "ee6d46b2bc1fed0b3bf1de02ee4ee51a911557f29e344f56c3a556c0e9a94d02"
+
+[[source]]
+upstream = "LICENSE"
+local = "licenses/glim-MIT.txt"
+sha256 = "05039510c1eae62392c06b83bbae60ca306fdebd3fdcc05121519630e39ee0d5"

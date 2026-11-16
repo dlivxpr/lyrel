@@ -122,8 +122,9 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
     });
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
-                .is_some_and(|file| file.input.read(cx).text().to_string() == inserted)
+            app.active_buffer().is_some_and(|file| {
+                file.input.text().unwrap().read(cx).text().to_string() == inserted
+            })
         })
     });
     app.read_with(&vcx, |app, cx| {
@@ -503,7 +504,7 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.host.id(), HostId(2381));
             assert_eq!(
-                file.input.read(cx).text().to_string(),
+                file.input.text().unwrap().read(cx).text().to_string(),
                 "# Owning remote target\n"
             );
         });
@@ -703,7 +704,7 @@ fn unsaved_image_paste_explains_save_location_without_source_or_assets(cx: &mut 
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(file.untitled.is_some());
-        assert_eq!(file.input.read(cx).text().len(), 0);
+        assert_eq!(file.input.text().unwrap().read(cx).text().len(), 0);
         assert!(!file.dirty);
     });
 }
@@ -751,6 +752,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             !app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -760,6 +763,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -774,6 +779,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         app.active_buffer()
             .unwrap()
             .input
+            .text()
+            .unwrap()
             .read(cx)
             .text()
             .to_string()
@@ -796,6 +803,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -898,6 +907,8 @@ fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut Test
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -1012,5 +1023,79 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
     assert_eq!(
         std::fs::read(directory.path().join("sample.svg")).unwrap(),
         svg
+    );
+}
+
+/// 大图经所属 Host 的版本化分段进入预览，不抬高整文件读取上限。
+#[cfg(test)]
+#[gpui_kit::test]
+fn a_large_preview_image_streams_on_its_owning_host(cx: &mut TestAppContext) {
+    use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
+    use std::sync::atomic::Ordering;
+
+    crate::ui::i18n::set_locale("en");
+    let directory = canonical_tempdir();
+    std::fs::write(directory.path().join("picture.md"), "![large](large.png)\n").unwrap();
+    let bytes = noise_png(1400, 1000);
+    assert!(
+        bytes.len() > 4 * 1024 * 1024,
+        "the fixture is {} bytes, under the old text opening limit",
+        bytes.len()
+    );
+    std::fs::write(directory.path().join("large.png"), &bytes).unwrap();
+    let host = FileHost::mapped(HostId(2811), directory.path());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/picture.md"), window, cx)
+    });
+    until(&mut vcx, |cx| {
+        app.read_with(cx, |app, cx| {
+            app.active_buffer()
+                .and_then(|file| file.markdown_resources.as_ref())
+                .is_some_and(|resources| resources.read(cx).is_loaded("large.png"))
+        })
+    });
+    assert_eq!(
+        host.open_reads.load(Ordering::SeqCst),
+        1,
+        "the preview opened one versioned session"
+    );
+}
+
+/// 关闭文档会取消仍在进行的图片传输：后续分段不再排队。
+#[cfg(test)]
+#[gpui_kit::test]
+fn closing_a_document_cancels_its_picture_transfer(cx: &mut TestAppContext) {
+    use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
+    use std::sync::atomic::Ordering;
+
+    crate::ui::i18n::set_locale("en");
+    let directory = canonical_tempdir();
+    std::fs::write(directory.path().join("gated.md"), "![gated](gated.png)\n").unwrap();
+    let bytes = noise_png(1000, 800);
+    assert!(bytes.len() > 1024 * 1024, "a multi-segment fixture");
+    std::fs::write(directory.path().join("gated.png"), &bytes).unwrap();
+    let host = FileHost::mapped(HostId(2813), directory.path());
+    let gate = host.pause_next_segment();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/gated.md"), window, cx)
+    });
+    until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut vcx);
+    settle(&mut vcx);
+    let _ = gate.send(());
+    for _ in 0..20 {
+        settle(&mut vcx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(host.open_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        host.segments.load(Ordering::SeqCst),
+        1,
+        "the cancelled transfer started no further segment"
     );
 }

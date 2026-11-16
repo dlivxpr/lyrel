@@ -175,6 +175,204 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding("shift-alt-f5", EditorPrevChange, input, cx));
         bindings.push(load_binding("alt-f3", EditorPeekChange, input, cx));
     }
+    // The read-only picture's framing. `ImageDocument` is declared only by the
+    // document that draws a picture, so these chords never take a key from a
+    // text field, a shell, or the terminal's arrows.
+    {
+        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+        let image = Some(crate::ui::code_editor::IMAGE_KEY_CONTEXT);
+        let back = per_platform("ctrl--", "alt-left");
+        let forward = per_platform("ctrl-shift--", "alt-right");
+        bindings.extend([
+            load_binding("0", ImageFit, image, cx),
+            load_binding("1", ImageActualSize, image, cx),
+            load_binding("secondary-=", ImageZoomIn, image, cx),
+            load_binding("secondary-+", ImageZoomIn, image, cx),
+            load_binding("+", ImageZoomIn, image, cx),
+            load_binding("secondary--", ImageZoomOut, image, cx),
+            load_binding("secondary-_", ImageZoomOut, image, cx),
+            load_binding("-", ImageZoomOut, image, cx),
+        ]);
+        // Back and Forward keep their editor chords: a picture is a place the
+        // caret came from, and leaving it must work from where it is shown.
+        bindings.push(load_binding(back, EditorNavigateBack, image, cx));
+        bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
+    }
+    // The database reader's commands. Refresh opens a new read view, the
+    // filter focuses its search field, and Enter inspects the cell under the
+    // grid's selection — all bound only while a database presentation holds
+    // the keyboard. Escape is bound again in the table's own context, later
+    // than the table's Cancel so it wins there: it closes the inspector
+    // first, then keeps the table's selection-clearing meaning.
+    {
+        use crate::ui::code_editor::{
+            SqliteCloseValue, SqliteFocusFilter, SqliteInspectValue, SqliteRefresh,
+        };
+        let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-r", SqliteRefresh, sqlite, cx),
+            load_binding("secondary-f", SqliteFocusFilter, sqlite, cx),
+            load_binding("enter", SqliteInspectValue, sqlite, cx),
+            load_binding("escape", SqliteCloseValue, sqlite, cx),
+            load_binding("escape", SqliteCloseValue, Some("DataTable"), cx),
+        ]);
+    }
+    // CSV/TSV table editing. `CsvDocument` is declared only by the table
+    // presentation, so these chords never take a key from a text field, a
+    // shell, the terminal or the source side of the same document.
+    {
+        use crate::ui::code_editor::{
+            CSV_KEY_CONTEXT, CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
+            CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow,
+        };
+        let csv = Some(CSV_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("f2", CsvEditCell, csv, cx),
+            load_binding("secondary-shift-up", CsvInsertRowAbove, csv, cx),
+            load_binding("secondary-shift-down", CsvInsertRowBelow, csv, cx),
+            load_binding("secondary-shift-backspace", CsvDeleteRow, csv, cx),
+            load_binding("secondary-shift-left", CsvInsertColumnLeft, csv, cx),
+            load_binding("secondary-shift-right", CsvInsertColumnRight, csv, cx),
+            load_binding("secondary-shift-delete", CsvDeleteColumn, csv, cx),
+        ]);
+    }
+    // The JSON structure tree's history keys. A tree presentation edits the
+    // shared source Document through its ordinary `replace_ranges`, so undo
+    // and redo there are the same document history the source view uses, not
+    // a second one. Bound on the tree's own context so a source view, a text
+    // field, a shell or the terminal keeps its own chords.
+    {
+        use gpui_kit::component::input::{Redo, Undo};
+        let json = Some(crate::ui::code_editor::JSON_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, json, cx),
+            load_binding("secondary-shift-z", Redo, json, cx),
+            load_binding("ctrl-y", Redo, json, cx),
+        ]);
+        let xml = Some(crate::ui::code_editor::XML_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, xml, cx),
+            load_binding("secondary-shift-z", Redo, xml, cx),
+            load_binding("ctrl-y", Redo, xml, cx),
+        ]);
+    }
+    // YAML's tree uses the same shared Document history as its source view.
+    {
+        use gpui_kit::component::input::{Redo, Undo};
+        let yaml = Some(crate::ui::code_editor::YAML_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("secondary-z", Undo, yaml, cx),
+            load_binding("secondary-shift-z", Redo, yaml, cx),
+            load_binding("ctrl-y", Redo, yaml, cx),
+        ]);
+    }
+    // The read-only book's commands. `BookDocument` is declared only by the
+    // book presentation, so none of these take a key from a text field, a
+    // shell or the terminal.
+    {
+        use crate::ui::code_editor::{
+            BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
+            BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
+            BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
+        };
+        let book = Some(crate::ui::code_editor::BOOK_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("pageup", BookPreviousPage, book, cx),
+            load_binding("pagedown", BookNextPage, book, cx),
+            load_binding("space", BookNextPage, book, cx),
+            load_binding("shift-space", BookPreviousPage, book, cx),
+            load_binding("alt-left", BookPreviousChapter, book, cx),
+            load_binding("alt-right", BookNextChapter, book, cx),
+            load_binding("secondary-shift-c", BookToggleContents, book, cx),
+            load_binding("secondary-shift-b", BookToggleBookmarks, book, cx),
+            load_binding("secondary-f", BookSearch, book, cx),
+            load_binding("secondary-d", BookAddBookmark, book, cx),
+            load_binding("f3", BookNextResult, book, cx),
+            load_binding("shift-f3", BookPreviousResult, book, cx),
+            load_binding("secondary-=", BookFontLarger, book, cx),
+            load_binding("secondary-+", BookFontLarger, book, cx),
+            load_binding("secondary--", BookFontSmaller, book, cx),
+            load_binding("secondary-shift-s", BookCycleSpacing, book, cx),
+            load_binding("secondary-shift-w", BookCycleWidth, book, cx),
+        ]);
+    }
+    // The read-only PDF's framing and page stepping. `PdfDocument` is declared
+    // only by the PDF presentation, so these never take keys from text or a
+    // shell. PageUp/PageDown/Left/Right are handled inside the viewer so the
+    // page window follows the action.
+    {
+        use crate::ui::code_editor::{
+            PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
+        };
+        let pdf = Some(crate::ui::code_editor::PDF_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("0", PdfFitWidth, pdf, cx),
+            load_binding("9", PdfFitPage, pdf, cx),
+            load_binding("1", PdfActualSize, pdf, cx),
+            load_binding("secondary-=", PdfZoomIn, pdf, cx),
+            load_binding("secondary-+", PdfZoomIn, pdf, cx),
+            load_binding("+", PdfZoomIn, pdf, cx),
+            load_binding("secondary--", PdfZoomOut, pdf, cx),
+            load_binding("secondary-_", PdfZoomOut, pdf, cx),
+            load_binding("-", PdfZoomOut, pdf, cx),
+            // 查找与复制跟随全局习惯；enter/shift-enter 不绑 FindNext/
+            // FindPrevious——TOC 打开时 Enter 属于大纲键盘导航，查找条内
+            // 的 Enter 则由输入框的 PressEnter 事件驱动。
+            load_binding("secondary-f", gpui_kit::component::input::Search, pdf, cx),
+            load_binding("secondary-c", PdfCopy, pdf, cx),
+        ]);
+    }
+    // The SVG preview is the same kind of framed canvas; its context exists
+    // only while that side is shown, so source editing keeps its keys.
+    {
+        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+        let svg = Some(crate::ui::code_editor::SVG_KEY_CONTEXT);
+        let back = per_platform("ctrl--", "alt-left");
+        let forward = per_platform("ctrl-shift--", "alt-right");
+        bindings.extend([
+            load_binding("0", ImageFit, svg, cx),
+            load_binding("1", ImageActualSize, svg, cx),
+            load_binding("secondary-=", ImageZoomIn, svg, cx),
+            load_binding("secondary-+", ImageZoomIn, svg, cx),
+            load_binding("+", ImageZoomIn, svg, cx),
+            load_binding("secondary--", ImageZoomOut, svg, cx),
+            load_binding("secondary-_", ImageZoomOut, svg, cx),
+            load_binding("-", ImageZoomOut, svg, cx),
+        ]);
+        bindings.push(load_binding(back, EditorNavigateBack, svg, cx));
+        bindings.push(load_binding(forward, EditorNavigateForward, svg, cx));
+    }
+    // The draw.io preview keeps the same framing chords. PageUp/PageDown are
+    // handled by its own key context because the engine owns the canvas and
+    // has no text caret to move.
+    {
+        use crate::ui::code_editor::{
+            DrawioActualSize, DrawioCopy, DrawioCut, DrawioDelete, DrawioFit, DrawioPaste,
+            DrawioRedo, DrawioUndo, DrawioZoomIn, DrawioZoomOut,
+        };
+        let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("0", DrawioFit, drawio, cx),
+            // Editing keys bound here cover the GPUI dispatch path — menus
+            // and the palette — while the focused native surface answers the
+            // same chords on its own and never leaks them to the terminal.
+            load_binding("secondary-z", DrawioUndo, drawio, cx),
+            load_binding("secondary-shift-z", DrawioRedo, drawio, cx),
+            load_binding("secondary-y", DrawioRedo, drawio, cx),
+            load_binding("secondary-c", DrawioCopy, drawio, cx),
+            load_binding("secondary-x", DrawioCut, drawio, cx),
+            load_binding("secondary-v", DrawioPaste, drawio, cx),
+            load_binding("delete", DrawioDelete, drawio, cx),
+            load_binding("backspace", DrawioDelete, drawio, cx),
+            load_binding("1", DrawioActualSize, drawio, cx),
+            load_binding("secondary-=", DrawioZoomIn, drawio, cx),
+            load_binding("secondary-+", DrawioZoomIn, drawio, cx),
+            load_binding("+", DrawioZoomIn, drawio, cx),
+            load_binding("secondary--", DrawioZoomOut, drawio, cx),
+            load_binding("secondary-_", DrawioZoomOut, drawio, cx),
+            load_binding("-", DrawioZoomOut, drawio, cx),
+        ]);
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

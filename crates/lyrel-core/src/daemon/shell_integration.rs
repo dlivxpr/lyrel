@@ -2229,15 +2229,29 @@ fi
             assert_eq!(ps_quote(r"C:\x $y"), r"'C:\x $y'");
         }
 
-        /// A throwaway home for a pwsh run, so no real profile is read.
+        /// A throwaway home and cache for one pwsh run, so no real profile is
+        /// read.
+        ///
+        /// Each run gets its own cache directory: `pwsh -c` saves a
+        /// MultiCoreJit profile under `$XDG_CACHE_HOME/powershell` on the way
+        /// out, and a later start reads it back. Upstream reports that a
+        /// profile a start cannot play aborts pwsh with SIGSEGV and no output
+        /// before the script runs (PowerShell#26528, dotnet/runtime#121977);
+        /// the macOS CI run that shared one cache died with that signal and no
+        /// output, though profile playback there is inferred, not observed. No
+        /// run may find another run's profile, and a one-shot session gains
+        /// nothing from the cache anyway.
         #[cfg(unix)]
         fn pwsh(home: &std::path::Path) -> std::process::Command {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static RUN: AtomicU64 = AtomicU64::new(0);
+            let run = RUN.fetch_add(1, Ordering::Relaxed);
             let mut cmd = std::process::Command::new("pwsh");
             cmd.current_dir(home)
                 .env("HOME", home)
                 .env("XDG_CONFIG_HOME", home.join(".config"))
                 .env("XDG_DATA_HOME", home.join(".local/share"))
-                .env("XDG_CACHE_HOME", home.join(".cache"))
+                .env("XDG_CACHE_HOME", home.join(".cache").join(run.to_string()))
                 .env_remove("LYREL_SHELL_INTEGRATION");
             cmd
         }

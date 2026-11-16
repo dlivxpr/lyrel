@@ -5,6 +5,20 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [未发布]
+
+### 新增
+
+- #294：XML 接入有序、命名空间感知的结构树与局部编辑。`xmlparser` 保留元素／属性／文本／CDATA／注释／PI／声明的精确 byte range，`roxmltree` 以 `allow_dtd: false` 校验良构与命名空间；元素、属性与内容按源码顺序显示，属性单／双引号、周围空白、实体拼写与 mixed content 不会被无关编辑改动。选中属性值／文本／CDATA／注释可改值，选中元素／属性可重命名，选中元素可加属性／空子元素／文本，选中属性／文本／CDATA／注释／非根元素可删除；命令以 `(path, kind, range, key_range, value_range)` 绑定当前投影并要求 revision 仍匹配源码权威，写入前复核整篇良构性、命名空间绑定与预算，经共享 `Document::replace_ranges` 成为一条普通 history，树焦点下的普通 Undo／Redo 也走同一 history。DTD／外部实体声明在任何解析前可见拒绝，不读取外部文件或网络，源码仍可编辑且字节不变；无效源码、输入／节点／路径预算与迟到解析均保留源码并拒绝旧结果。保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；`src/ui/code_editor/xml_document/UPSTREAM.toml` 记录 Glim 有损模型的拒绝理由与 registry 解析器来源，根 `LICENSE` 补 `xmlparser`／`roxmltree` 通知。原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收。
+- #293：TOML 接入共享逐行保真源码与无损结构树。使用正式 registry `toml_edit 0.25.19` 的只读 `Document::parse` 保留 ordinary/inline table、array of tables、dotted/quoted key 与 string/integer/float/boolean/datetime/array 的原字面拼写；不把 TOML 转成 JSON，也不用会被 `despan()` 的 `DocumentMut` 定位原区间。结构树支持真实指针／键盘导航、源码定位与完整值复制，以及改值、重命名键／表／表数组、加键／子表／表数组／entry 和删除；inline table 成员增删保留 inline 形态。删除按每个 header 自己的行、该表直接 key/value 行和显式后代行收集，交错无关表与 AoT entry 不被容器 span 误删；所有命令先校验新片段，写入前再解析结果并按 revision／目标 occurrence 拒绝过期或无效修改，替换清单经共享 `Document::replace_ranges` 成为一条普通 history。保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；1 MiB／20,000 节点／8 MiB 路径预算超限时源码仍可编辑保存。工作台回归入口覆盖映射 Host 与同名诱饵、BOM／混合行尾、表格形式、交错字节、分屏；真实 SSH 保存回读与原生窗口、系统 IME、macOS、性能按显式私有 fixture／最终候选分别执行并记录，不把未执行项当通过。
+- #285：只读 PDF 补齐大纲导航、选字复制与文档内搜索。左栏大纲按层级缩进，点击或 `↑`／`↓`＋Enter 跳转显式坐标、`/Names` name tree 与旧式 `/Dests` 命名目的地（`/Fit` 整页对齐）；页内／旋转页链接热点按归一化矩形命中，外部 `http(s)` URI 交系统打开。`Ctrl`／`Cmd`+`F` 打开查找条，后台单任务逐页提取并计数（结果与文本层均有预算），Enter／Shift+Enter 步进并回绕、当前命中描边；提取失败的页计为“N 页无法读取”，扫描页如实标注“无文本层”而不把空命中当无结果。拖拽按字形几何选中（CJK 不臆造空格、行间换行、连字展开为完整 Unicode），`Ctrl`／`Cmd`+`C` 复制解码后文本；分屏各自持有页／缩放／选区／查找，文档修订变化退休旧文本层与命中，迟到结果不串文档。仍不创建批注、不填表、不修改 PDF，也不做 OCR。
+
+### 修复
+
+- #279：结构文档与 SVG 的单元测试查询／暂停 helper 仅在 `cfg(test)` 下编译，不再随 `native-markdown-tests` 泄入独立 native 消费者；保留真实工作台回归门闩，消除该 feature 组合的未使用警告，不改变产品行为或放宽 lint。
+- #285：PDF 缩放与适应模式切换按当前页内的归一化阅读位置重投影滚动偏移，关闭查找后选字阅读仍保持同一页；不再出现正文退回第 10 页、页码却停留第 12 页的取景错位。
+- #285：PDF 拖选先确定阅读行，再按横向位置确定末端字形；在一行右下方释放时，不再因 `g` 等字形的下伸部较低而漏掉该行后缀。旋转页仍通过同一页内坐标转换选择与复制。
+
 ## [0.3.4] - 2026-11-13
 
 ### 依赖升级
@@ -13,6 +27,12 @@
 
 ### 新增
 
+- #287：CSV／TSV 接入共享保真源码和虚拟化只读表格，保留 quoted／多行／不等长逻辑记录、完整字段查看与复制、键盘源码定位，以及每个呈现独立的视图筛选／排序。后台解析和查询按文档修订拒绝迟到结果；源码编辑、编码／BOM、逐行换行、历史与保存沿用现有 Host 文档。表格内修改仍归 #288；原生、真实远端与双平台验收另行记录。
+- #292：YAML 接入共享保真源码与无损结构树，支持键、标量与 sequence 成员的增删改，block 集合删空写成等价的 `{}`／`[]`。解析使用 registry `yaml-edit =0.3.6`（`default-features = false`）的多文档 rowan CST，后台投影只保留原拼写与 byte range；锚点、别名、tag、注释、flow／block 形式、block scalar 与 complex key 不被转成 JSON 或展开成副本。树内命令以 `(path, range)` 绑定当前投影并要求 revision 仍匹配源码权威，新标量片段由同一 parser 校验，写入前解析整篇结果；替换经共享 `Document` 的 `replace_ranges` 成为一条普通 history，保存／另存为／外部冲突／取消关闭与独立重开沿用所属 Host。编辑带锚点的值或键时可见说明别名引用数量与提交后的解析结果，删除会悬空外部别名的节点在写入前拒绝；block scalar 在共享面板的真实多行字段中编辑原始 YAML 片段并局部 splice，flow collection 复杂键以完整键片段替换；多行／不可无损表达的复杂键仍打开精确源码。共享 `structure_rows` 行呈现由 JSON 与本格式共同消费。来源与适配见 `src/ui/code_editor/yaml_document/UPSTREAM.toml`；原生／真实 SSH／macOS／IME／性能证据按交付记录分别说明。
+- #288：CSV／TSV 表格加入真实单元格输入、矩形复制与表格粘贴、行列插入／删除。每个逻辑操作是对共享 `Document` 的一次 revision 校验局部源替换，参与源码与表格共同的 Undo／Redo、dirty、保存、另存为、在途／失败写入、外部冲突与未保存关闭；完成较早的保存不会把更新的编辑标记为已保存。未触及字段的拼写、引号、分隔符、BOM／编码与逐行行尾保持原样，不等长记录不被补齐；排序／筛选仍只改视图，粘贴与行列操作按逻辑记录身份工作，过期解析不写回。生产工作台与 GUI-free 字节回归见 `src/ui/code_editor/csv_document`；原生、真实 SSH、macOS 与系统 IME 仍未验收。
+- #291：JSONL／NDJSON 记录视图加入逐行保真编辑：记录内标量值、重复键 occurrence、object／array 成员可局部修改；整条记录可作为一个单行 JSON 值替换，也可在选中记录后插入新记录或删除该物理行。命令复用 `(path, range, key_range)` 身份和共享 `Document` history，提交前要求已安装投影仍匹配源码 revision；嵌套命令只解析目标记录自己的 token，修改后只复核目标行，邻近无效记录不阻止合法记录编辑。新值必须单行且恰好一个严格 JSON 值；未触及行的 BOM／编码、逐行行尾、空行、exact number 与 escape 原拼写保留，不把文件转成 JSON 数组、不整篇序列化或格式化。记录预算与节点预算对齐为 19,999 条，超限仍保留完整源码编辑与保存。生产工作台回归覆盖映射 Host 同名诱饵、混合有效／无效记录、Unicode、插删后导航、过期命令与迟到解析、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭、独立重开及真实远端路由保存回读；真实原生窗口、系统 IME、macOS 与性能仍按最终验收记录。
+- #290：JSON／JSONC 结构树加入局部编辑：改标量值、只重命名选中的重复键 occurrence、向 object／array 末尾插入成员、删除成员。命令以 `(path, range, key_range)` 绑定当前投影并要求 revision 仍匹配源码权威，可见行号不是写入身份；新值片段与生成的键先由 `jsonc-parser` 校验，写入前再解析整篇结果。替换清单经共享 `Document` 的 `replace_ranges` 成为一条普通 history，保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；注释、键序、未选中转义和 `1e2`／`-0`／超浮点精度大整数保持原拼写。新增共享 `structure_edit` 单／双字段面板供后续结构格式复用；结构树持有键盘时 `Ctrl`／`Cmd`+`Z` 与 `Ctrl`／`Cmd`+`Shift`+`Z`（Windows／Linux 另含 `Ctrl`+`Y`）经同一源码 presentation 的 `EditorState::undo_document`／`redo_document` 撤销／重做，仍停在树上、不切换源码模式，也不另建 history。JSONL／NDJSON 的记录编辑见 #291。真实原生窗口、真实 SSH 产品路径、macOS、IME 与性能仍按最终验收记录。
+- #279：JSON 家族的编辑面板绑定打开时的源码 revision；另一呈现即使只做同长度修改、节点路径与范围都不变，旧面板也会拒绝覆盖新内容。既有跨呈现工作台回归已覆盖该边界。
 - #270：完整单色 Glyph Protocol 正常启用，GUI 对实际支持 `glyph-support` 的 pane endpoint 声明完整绘制能力；daemon 仅为当前 rendering controller 的 `s` 广告 `fmt=glyf`，state-only、observer、脱离及替代 controller 不继承能力声明。保留有界 `q/r/c`、注册／布局／保留态和单一实时回复所有者，不启用颜色格式、全局字体注入、磁盘 glyph cache 或默认关闭实验开关。正式 `omp/18.20.0` 已在隔离真实 PTY／生产消费者中完成 bundle 注册与绘制；该后台证据不替代 Windows 原生像素、WSL／真实 SSH 或最终组合验收。Windows fixture 显式完成 ConPTY 首次 DA1 初始化，真实客户端 harness 分开 shell source 引用与 argv，并禁止向 omp 注入 fixture 命令。
 - #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
 - #267：GUI Glyph 消费路径实现 pinned v1.12 §8.5 布局：pad → size → align，声明 extent（`aw`／`lh`／`ymin`）或未声明时的解码点 bbox 与 `contain` em 上限、五种 size、水平／垂直 align（含 baseline 与 descender）、分数 padding 与退化归零、未扣 padding 的 render span 裁剪；`width=2` 仅扩像素 span，末列、非空或已有邻格自行绘制时回退一列，保持 logical width、光标推进、换行、选择与复制。前景、单元格几何、主字体 baseline、span、注册 revision 与 display scale 每帧参与派生，字体／显示缩放不要求应用重注册。保留普通字体、Powerline／boxdraw、Kitty 与 native 路径；本切片仍不回复 `s`。真实 PTY→daemon→production consumer 与确定性边界结果见本票交付证据；Windows 原生像素／显示缩放、WSL、真实 SSH 与 macOS 未在本票宣称通过。
@@ -24,9 +44,39 @@
 - #272：标签页进度汇总其全部终端叶子，包括未聚焦、隐藏和停放的窗格；错误优先，仅单个有效任务提供百分比时显示数值，多任务只显示诚实状态而不做平均。保留智能体等待／完成／未读语义，不增加重复 busy 或完成通知；关闭、移动、停放／恢复、焦点、重连及休眠／唤醒重建按当前成员更新，瞬时进度不写入 durable 布局或 agent payload。新增真实多 PTY→daemon→生产 tab 消费者、确定性成员边界测试和原生多窗格场景；Windows 实窗、WSL 与真实 SSH 仍按父验收边界分别记录，不宣称 macOS 通过。
 - #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
 - #261：终端新增 pane 会话内 `OSC 4/10/11/12` 索引色与默认前景／背景／光标 set/query/reset 覆盖层，绘制、查询与 prompt 背景共用当前主题 + 覆盖后的有效调色板；命令退出保留、主题切换只更新未覆盖默认、复位露出当前主题，其他 pane／界面／配置不受影响。daemon 在回放环之外保留固定 259 槽的有界解码状态，经有序流投影给已协商消费者；ring 裁剪、窗口重附着与同会话 handoff 可恢复，daemon 死亡后的新 shell 从空状态开始。新增 `pane-colors` feature 与客户端 opt-in，新 daemon 绝不向旧客户端发送新帧；缺少该能力的后端在图形窗格附着前收到明确的更新错误，不静默丢弃颜色、不停止旧 daemon、不自动重启。同步输出与阅读态沿用现有 retained-frame 规则；新增真实 PTY／daemon／生产终端消费者、handoff 与恢复路径回归及原生颜色场景入口。Windows 原生、WSL 与真实 SSH 组合验收由集成阶段补齐，不以 headless 结果替代。
+- #286：工作台新增只读 EPUB 阅读文档，沿用所属 Host 的一致读取与文档身份，移植 Glim 的容器／spine／目录、章节净化和阅读状态；补齐后台全书搜索、书签／位置持久化、独立字号／行距／宽度／明暗主题及固定版式／DRM 明确拒绝。插图后台解码并复用既有纹理租约，不执行书内脚本或获取远程资源。工作台已覆盖完整 3000 段末尾搜索、阅读偏好和重开、损坏／不支持状态与原件不变；原生窗口、真实 SSH、macOS、IME 与性能仍按最终候选分别验收。
+
+- #295：只读 SQLite 浏览接入所属 Host 与工作台。`lyrel-core` 移植 Glim `browser.rs` 的标识符引用、单绑定 predicate、稳定顺序、列窗、count、page 与值分块，每个数据库打开一条 `BEGIN DEFERRED` 读取视图；view 有 30 秒 idle／180 秒绝对寿命与进程级 reaper，取消绑定到请求并调用 `sqlite3_interrupt`，连接断开时服务端释放该连接的全部视图。control v18 新增 `sqlite-browse-v1` 与 `Sqlite` 请求，缺少能力的 peer 在发送前拒绝。值保留 NULL、精确 INTEGER、REAL 位模式、原始 TEXT／BLOB，不下载整库、不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；`Snapshot` 文件复制被明确排除。工作台新增只读数据库文档、schema／SQL 定义、分页与列窗、加载／空／失败／刷新／取消状态和每分屏独立焦点／表格状态；筛选、排序与完整值检查留给 #296。真实 SSH、原生窗口、系统 IME、macOS 与性能按父验收边界另记，不以 workbench／conformance 结果代替。
+
+- #296：SQLite 只读浏览补齐筛选、排序与完整值检查。筛选输入按 Glim 250 ms 防抖把单个绑定参数送入既有受限 predicate（`instr(lower(CAST(col AS TEXT)), lower(?1))`，覆盖所有列，不引入自由 SQL）；表头可排序列循环 降序→升序→还原，排序名指向 schema 列索引并随列窗映射，切表清空排序、刷新保留筛选与排序且由 view/epoch/query_rev 三重身份拒绝迟到结果。完整值检查器经同一 `SqliteQuery` 快照与 `sqlite_value` 按精确字节偏移分块读取（每块 ≤1 MiB），INTEGER/REAL 整块精确返回；BLOB 以偏移十六进制转储显示、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 转储并标注原因（不用替换字符冒充原值），NULL 提示无内容不置剪贴板，>8 MiB 值保持可翻页但拒绝部分复制并说明限额；检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。键盘 `secondary-f` 聚焦筛选、`enter` 检查选中单元格、`escape` 关闭检查器，均只在数据库文档持有焦点时生效。新增 Host conformance `sqlite_filters_sorts_and_reads_values_in_bounded_chunks` 由本地与真实 SSH 循环共用；工作台回归覆盖真实输入/表头点击、分块翻页与剪贴板、WAL writer 下打开视图保持快照且 main 文件字节不变、原件不被修改。原生窗口、系统 IME、macOS 与性能不记为已通过。
+
+- #298：draw.io 图在同一固定离线引擎上获得真实可视化编辑。引擎侧的模型修改、删除、剪贴板与页面切换经会话内的 commit POST（按会话 id 与单调序列校验、体积预算拒绝、sync 允许同序列重放）回到 owning 文档，解析失败的提交被拒绝并保留上一份正常字节；同字节 sync 只推进已确认修订。工作台 undo/redo 是文档级共享历史——任一 presentation 的编辑可在另一 presentation 撤销，不存在引擎本地第二历史；保存先经 sync flush 等待引擎提交当前模型再走同一 Host 写路径，外部重写下 dirty 图如实冲突。引擎自身 Ctrl+S、剪贴板复制／剪切／删除与粘贴经同一桥接；页面、缩放、多页切换与原 session/token/资源白名单不变。本机原生 WebView 验收、真实 SSH 远端编辑与双平台边界按实际执行另行记录，不预先声明。
 
 ### 修复
 
+- #279：draw.io 画布与标签输入使用定位层，修复切换页面后背景遮挡图形、双击无法编辑，以及输入框落到画布下方的问题；真实固定引擎的压缩页中文编辑、保存确认与独立重开已验证，原生宿主及系统 IME 另行验收。
+- #279：draw.io 仅切页或缩放后的保存保留原始字节；实际编辑不再把 viewer 的 grid／fold／page／viewport 覆盖写入原页配置，未编辑页面不重编码，离页前的活动标签正常提交。
+- #279：独立 `mxGraphModel` 的可视修改写回同一原生根，修复画布已有新标签而保存确认仍含旧内容的问题；保留模型配置、XML 声明与 BOM。
+
+- #279：macOS draw.io 宿主的协议会话改用 `Arc<Mutex<_>>`，满足 wry 自定义协议回调的 `Send + Sync` 约束；`WKWebView` 仍只由主线程持有，执行脚本和关闭视图前释放会话锁，不扩大资源或网络权限。
+- #279：桌面 CI 先编译 library 单元测试，再以完整目标集合复用产物，避免大型 library 与 libtest 在同一步争用编译资源；将已列为 `default-members` 的 `lyrel-epub` 纳入显式测试集合，不缩减测试范围，不改变编译 profile 或单步时限。draw.io 的 Windows URL、HTTP reason 与默认会话入口使用平台／测试门控，macOS 的下载拒绝回调移除无用 `mut`，不压制编译诊断。
+- daemon handoff 在匿名暂存文件 unlink 失败时立即拒绝，不把 pane 输出写入仍有路径的文件；回归直接验证本次暂存描述符没有目录链接并逐字节恢复内容，不再扫描共享临时目录而受并发空文件影响。
+- #292：YAML 节点属性只扫描自身与实际属性包装节点，不为每个 sequence item 重扫祖先 collection 的全部兄弟；保留锚点／tag 语义和原有节点预算，避免大序列在返回预算错误前耗尽消费者期限。
+
+- #279：draw.io 保存 flush 先确认仍打开的标签编辑器，再序列化并确认模型修订，避免编辑框已有新文字但保存仍写入旧标签。真实固定引擎的活动中文标签输入经 `sync` POST 验证了修复前遗漏、修复后完整提交；原生窗口与系统 IME 另行验收。
+
+- #288：CSV／TSV 表格呈现挂接已有文档右键菜单，修复行列操作只有键盘路径、鼠标无法打开菜单的问题；生产工作台回归实际通过菜单插入行并核对局部源码及单步撤销。
+
+- #279：根分发许可证补齐固定 draw.io 引擎、图形资源和 Windows WebView2 SDK 的完整原始许可与声明；沿现有 ZIP／Inno／app／DMG 链分发。Windows MSVC 实际静态链接 SDK loader，移除误加到 CLI／server／所有测试的动态 DLL 暂存依赖；draw.io 预览仍需系统 WebView2 Runtime，缺失时不自动下载安装。
+- #283：SVG 图像自身按固有 CSS 像素与缩放比例设置宽高，不再继承居中视口的填充尺寸；修复 64×64 SVG 在 1:1／100% 时仍被放大铺满的问题。真实工作台回归检查图像 bounds 的 1:1／125%／fit，不只检查比例字段。
+- #286：同章搜索定位与普通章节导航共用阅读位置持久化，避免全书末尾匹配已显示却在主题切换／关闭重开后回到章节起点。虚拟章节按布局后的实际可见区准备富文本状态，异步内容就绪后重测对应行；滚轮、滚动条和程序化定位共用同一可见区更新路径，避免在 ListState 的滚轮回调内重借列表。
+- #286：章节净化输出正确闭合 `id` 属性引号，避免带锚点的标题／段落被富文本消费者当作未结束标签而显示为空；不修改书籍原件或放宽资源隔离。
+- #289：JSON 家族结构与源码使用同一保真文档；首次打开使用严格逐行解码，未编辑保存不再归一化混合行尾。重复键 occurrence、精确数字和 JSONL 行身份不经 Value 重写，分屏工具栏可换行、折叠与选择独立。分屏 group 元素身份在焦点切换中保持，工具栏与树行首击不丢失；叶节点方向键返回父节点。不可变投影共享，完整路径文本超过 8 MiB 时明确拒绝结构检查，完整源码仍可编辑与保存。
+
+- #279：图片的实际绘制宽高按原始尺寸与取景比例计算，不再跟随用于居中的最小视口拉伸；修复小图片显示为 100%／实际大小却被放大的问题。新增生产工作台的实际图像 bounds 回归，覆盖 1:1、125% 与 fit，不只检查比例标签。
+- #295：列元数据改为受限只读 `table_xinfo`；空 TEXT／BLOB 的预览和完整值分块保留原类型，可能触发恢复的 schema 读取保留 WAL 拒绝原因。Linux 真实回环 SSH 共享读取契约已通过；不将该场景扩展为 Windows 远端、独立物理主机或原生 UI 验收。
+
+- #295：SQLite 分屏首次建立时立即装入文档当前分页，不把尚未填充的 grid 误标为已同步；点击／键盘焦点同步到工作台当前分组，关闭等命令只操作实际聚焦的一侧。工作台回归按真实分组身份验证两侧数据、焦点切换与关闭后另一呈现仍保留，不把原输入句柄误认成新建分组。
 - #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。
 - #270：将 Glyph glossary 投影与字体 coverage 应答凭证分开：CLI／observer 继续接收已协商的 `GlyphState`，但仅实际声明 `SubscribeGlyphRender` 的当前 controller 接收 `GlyphQuery`；没有字体应答端时保持协议规定的静默，不让查询积压到忽略该帧的 CLI。移除无调用的 attach／observe 兼容包装，公开 `RetainedGlyph` 记录标为非穷尽，不改 wire kind、协议版本或 GUI 字体权威。
 - #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。

@@ -811,6 +811,9 @@ pub struct EditorState {
     anchor_affinity: WrapAffinity,
     live_style: Option<SyntaxStyle>,
     source_only: bool,
+    /// Raw source that is not Markdown: no Markdown styling or editing assists.
+    /// The shared [`Document`], caret, selection, IME and undo remain.
+    plain_source: bool,
     host_links: bool,
     pending_link: Option<(SharedString, Point<Pixels>, u64)>,
     host_custom_colors: bool,
@@ -1175,6 +1178,7 @@ impl EditorState {
             anchor_affinity: WrapAffinity::Downstream,
             live_style: None,
             source_only: false,
+            plain_source: false,
             host_links: false,
             pending_link: None,
             host_custom_colors: false,
@@ -1353,6 +1357,36 @@ impl EditorState {
         cx.notify();
     }
 
+    /// Undo the shared document's last history entry without requiring this
+    /// presentation to hold the keyboard. A format view (for example the CSV
+    /// table) edits the same [`Document`] through this presentation, so its
+    /// undo must be the document's ordinary history rather than a second one.
+    /// Returns whether an entry existed.
+    pub fn undo_document(&mut self, cx: &mut Context<Self>) -> bool {
+        self.finish_composition(cx);
+        let document = self.document.clone();
+        let origin = cx.entity_id();
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.undo(origin, cx))
+        else {
+            return false;
+        };
+        self.restore_snapshot(snapshot, caret, cx);
+        true
+    }
+
+    /// Redo the shared document's last undone entry; see [`Self::undo_document`].
+    pub fn redo_document(&mut self, cx: &mut Context<Self>) -> bool {
+        self.finish_composition(cx);
+        let document = self.document.clone();
+        let origin = cx.entity_id();
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.redo(origin, cx))
+        else {
+            return false;
+        };
+        self.restore_snapshot(snapshot, caret, cx);
+        true
+    }
+
     /// Replace the set of diagnostics (underlined spans). The host computes these
     /// (e.g. spell-check) and refreshes them as the text changes.
     pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>, cx: &mut Context<Self>) {
@@ -1384,6 +1418,11 @@ impl EditorState {
     }
 
     pub fn set_markdown_style(&mut self, style: SyntaxStyle, cx: &mut Context<Self>) {
+        // A plain-source presentation is not Markdown; styling would re-enable
+        // marker hiding and its editing affordances over arbitrary text.
+        if self.plain_source {
+            return;
+        }
         self.markdown_style = Some(style);
         cx.notify();
     }
@@ -2579,6 +2618,12 @@ impl EditorState {
     }
 
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        // Plain source is not Markdown: Enter inserts a line break, never a
+        // list marker, quote prefix or table cell move.
+        if self.plain_source {
+            self.replace_text_in_range(None, "\n", window, cx);
+            return;
+        }
         // Inside a table, a raw newline would split the row's `| … |` markup.
         // Enter instead moves to the cell directly below (next row, same column,
         // spreadsheet-style); from the last row it exits onto a fresh line below
@@ -2840,6 +2885,9 @@ impl EditorState {
     /// ⌘⇧H: toggle the plain `==…==` highlight on the selection. A colored
     /// highlight already on it gives way to the plain one.
     fn highlight(&mut self, _: &Highlight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         self.strip_color(ColorKind::Highlight, cx);
         self.toggle_wrap("==", cx);
     }
@@ -2962,22 +3010,37 @@ impl EditorState {
     }
 
     fn bold(&mut self, _: &Bold, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         self.toggle_wrap("**", cx);
     }
 
     fn italic(&mut self, _: &Italic, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         self.toggle_wrap("*", cx);
     }
 
     fn code(&mut self, _: &Code, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         self.toggle_wrap("`", cx);
     }
 
     fn strike(&mut self, _: &Strike, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         self.toggle_wrap("~~", cx);
     }
 
     fn underline(&mut self, _: &Underline, _: &mut Window, cx: &mut Context<Self>) {
+        if self.plain_source {
+            return;
+        }
         // Markdown has no underline — the `<u>` tag, which both views honor.
         self.toggle_wrap_pair("<u>", "</u>", cx);
     }
@@ -3220,25 +3283,11 @@ impl EditorState {
     // --- Undo / redo ---------------------------------------------------------
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
-        let document = self.document.clone();
-        let origin = cx.entity_id();
-        if let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.undo(origin, cx))
-        {
-            self.restore_snapshot(snapshot, caret, cx);
-        }
+        self.undo_document(cx);
     }
 
     fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
-        let document = self.document.clone();
-        let origin = cx.entity_id();
-        if let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.redo(origin, cx))
-        {
-            self.restore_snapshot(snapshot, caret, cx);
-        }
+        self.redo_document(cx);
     }
 
     fn restore_snapshot(
@@ -5508,6 +5557,11 @@ impl EntityInputHandler for EditorState {
         self.last_replaced =
             (range.start < range.end).then(|| self.content[range.clone()].to_string());
         self.record_edit(&range, new_text);
+        // A typed selection replacement starts a fresh transaction, but the
+        // following adjacent graphemes belong to that same typing run.
+        if !range.is_empty() && !new_text.is_empty() && self.last_edit_keystroke {
+            self.last_edit = EditKind::Insert(range.start + new_text.len());
+        }
         self.replace_source(range.clone(), new_text, cx);
         self.retired_composition = completing_composition;
         let caret = range.start + new_text.len() - new_text.matches("\r\n").count();

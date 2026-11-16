@@ -27,27 +27,91 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 
+mod book_document;
+mod book_search;
+mod book_view;
 mod buffers;
 pub(crate) mod commands;
+mod csv_document;
 mod document_input;
+mod drawio_document;
+pub(crate) mod drawio_engine;
+mod image_document;
+mod json_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
+mod pdf_document;
+mod structure_edit;
+mod structure_rows;
+mod structure_view;
+mod svg_document;
 mod text;
+mod toml_document;
+mod xml_document;
+mod yaml_document;
 use buffers::Loaded;
-use document_input::{EditorInput, MarkdownPresentations};
+use document_input::{EditorInput, Presentations};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
 mod problems;
 pub(crate) mod saving;
 mod split;
+mod sqlite_document;
+mod sqlite_grid;
 mod strip;
+use csv_document::{CsvDocument, CsvMode, CsvView};
+use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
+use svg_document::{SvgDocument, SvgMode, SvgView};
+use toml_document::TomlMode;
+use xml_document::XmlMode;
+use yaml_document::YamlMode;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
+pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
+pub(crate) use sqlite_document::{
+    CloseValue as SqliteCloseValue, FocusFilter as SqliteFocusFilter,
+    InspectValue as SqliteInspectValue, Refresh as SqliteRefresh,
+};
+
+/// CSV／TSV 表格的键盘上下文与编辑动作；只在表格呈现持有键盘时生效。
+pub(crate) use csv_document::KEY_CONTEXT as CSV_KEY_CONTEXT;
+pub(crate) use csv_document::{
+    DeleteColumn as CsvDeleteColumn, DeleteRow as CsvDeleteRow, EditCell as CsvEditCell,
+    InsertColumnLeft as CsvInsertColumnLeft, InsertColumnRight as CsvInsertColumnRight,
+    InsertRowAbove as CsvInsertRowAbove, InsertRowBelow as CsvInsertRowBelow,
+};
+
+/// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
+pub(crate) use book_view::KEY_CONTEXT as BOOK_KEY_CONTEXT;
+pub(crate) use book_view::{
+    BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
+    BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
+    BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
+};
+/// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
+pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
+pub(crate) use drawio_document::{
+    DrawioActualSize, DrawioCopy, DrawioCut, DrawioDelete, DrawioFit, DrawioPaste, DrawioRedo,
+    DrawioUndo, DrawioZoomIn, DrawioZoomOut,
+};
+pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
+pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+/// JSON 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
+pub(crate) use json_document::KEY_CONTEXT as JSON_KEY_CONTEXT;
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
+pub(crate) use pdf_document::{
+    PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
+};
+pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+/// XML 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
+pub(crate) use xml_document::KEY_CONTEXT as XML_KEY_CONTEXT;
+/// YAML 结构树的键盘上下文。
+pub(crate) use yaml_document::KEY_CONTEXT as YAML_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,6 +143,16 @@ impl Fingerprint {
         Self::of_chunks(text.len(), std::iter::once(text))
     }
 
+    fn of_bytes(bytes: &[u8]) -> Self {
+        use std::hash::Hasher as _;
+        let mut hasher = std::hash::DefaultHasher::new();
+        hasher.write(bytes);
+        Self {
+            len: bytes.len(),
+            hash: hasher.finish(),
+        }
+    }
+
     fn of_chunks<'a>(len: usize, chunks: impl Iterator<Item = &'a str>) -> Self {
         use std::hash::Hasher as _;
         // SipHash buffers its input, so the same bytes hash the same however
@@ -105,6 +179,27 @@ pub(crate) enum DiskConflict {
     Deleted,
 }
 
+/// How long a deferred diagram save waits for the engine to confirm its
+/// current model. A test deadline stays short so a stalled flush is proven
+/// without sleeping the production three seconds.
+const DRAWIO_FLUSH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(if cfg!(test) { 60 } else { 3_000 });
+
+/// A save that must not capture bytes older than the engines' live models.
+/// It records one ticket per presentation that accepted its own sync command
+/// and waits for each of those exact confirmations, with a deadline so a dead
+/// surface cannot wedge the whole save path.
+#[derive(Clone)]
+struct DrawioFlush {
+    tickets: Vec<(gpui_kit::WeakEntity<drawio_document::DrawioView>, u64)>,
+    /// A canvas already known to hold a refused model when the save started;
+    /// no ticket can repair it, so the save fails without writing.
+    refused: Option<gpui_kit::SharedString>,
+    deadline: std::time::Instant,
+    force: bool,
+    target: Option<PathBuf>,
+}
+
 /// One open file, shared by every tab that shows it.
 ///
 /// Buffers used to belong to a tab, which meant the same file open in two tabs
@@ -123,7 +218,7 @@ pub(crate) struct OpenFile {
     /// saveable however the window's own machine has changed underneath it.
     pub(crate) host: SharedHost,
     pub(crate) input: EditorInput,
-    presentations: MarkdownPresentations,
+    presentations: Presentations,
     markdown_resources: Option<Entity<markdown::images::ImageHost>>,
     pub(crate) dirty: bool,
     saved: Fingerprint,
@@ -139,6 +234,12 @@ pub(crate) struct OpenFile {
     save_as_pending: Option<PathBuf>,
     reload_seq: u64,
     reload_request: u64,
+    /// A save deferred until the engine confirms its latest serialization
+    /// committed through the document. Absent for every other input.
+    drawio_flush: Option<DrawioFlush>,
+    /// Set when the deferred save's flush was confirmed and the write is
+    /// being re-entered: the engine must not be asked to sync a second time.
+    drawio_flush_done: bool,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) wrap: bool,
     /// Git change markers — see `gutter`.
@@ -153,24 +254,35 @@ impl OpenFile {
         self.id
     }
 
-    fn format(&self, cx: &gpui_kit::App) -> TextFormat {
+    /// The format the next save writes back, for documents that have one.
+    /// A read-only picture has no text format and nothing to write.
+    fn format(&self, cx: &gpui_kit::App) -> Option<TextFormat> {
         self.input
-            .markdown()
-            .map(|view| view.read(cx).document().read(cx).format())
-            .unwrap_or_else(|| self.format.expect("code document representation"))
+            .source_document(cx)
+            .map(|document| document.read(cx).format())
+            .or(self.format)
     }
 
     fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
-        self.input.markdown().map(|view| {
-            view.read(cx)
-                .document()
-                .read(cx)
-                .representation_fingerprint()
-        })
+        self.input
+            .source_document(cx)
+            .map(|document| document.read(cx).representation_fingerprint())
     }
 
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
         if let Some(view) = self.input.markdown() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.json() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.yaml() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.toml() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.svg() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.csv() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.xml() {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
@@ -195,6 +307,32 @@ impl OpenFile {
     fn language(&self) -> &'static str {
         if self.input.markdown().is_some() {
             return "markdown";
+        }
+        // Save-as or rename does not rebuild this document; it stays SVG until
+        // the buffer is released and reopened by extension.
+        if self.input.svg().is_some() {
+            return "svg";
+        }
+        if self.input.json().is_some() {
+            return "json";
+        }
+        // YAML/TOML survive a rename or Save As as the document they already are.
+        if self.input.yaml().is_some() {
+            return "yaml";
+        }
+        if self.input.toml().is_some() {
+            return "toml";
+        }
+        if self.input.xml().is_some() {
+            return "xml";
+        }
+        // CSV and TSV keep the route chosen at open; a rename is not a
+        // delimiter probe.
+        if self.input.csv().is_some() {
+            return match csv_delimiter(&self.path) {
+                b'\t' => "tsv",
+                _ => "csv",
+            };
         }
         if self.untitled.is_some() {
             return "text";
@@ -399,6 +537,99 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         })
 }
 
+/// The conventional SQLite database extensions. The owning Host opens the
+/// database read-only; failed opens keep a visible document and explanation.
+pub(crate) fn is_sqlite_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["sqlite", "sqlite3", "db", "db3"]
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// SVG source has its own document route: the editor with a native preview,
+/// never a browser document. The extension is the only routing key here, so a
+/// corrupt file still opens where its source can be corrected.
+pub(crate) fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
+/// JSON-family source has its own document route: one plain-source Document
+/// plus a lossless structure/record view. The extension decides the route, so
+/// a temporarily invalid file still opens where it can be repaired.
+pub(crate) fn is_json_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["json", "jsonc", "jsonl", "ndjson"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// YAML source has its own document route: one plain-source Document plus a
+/// lossless structure tree that keeps anchors, aliases, tags and documents.
+pub(crate) fn is_yaml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+        })
+}
+
+/// TOML documents have one plain-source Document and a lossless structure
+/// view. The extension decides the route, so a temporarily invalid file still
+/// opens where it can be repaired.
+pub(crate) fn is_toml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"))
+}
+
+/// XML source has its own document route: one plain-source Document plus an
+/// ordered, namespace-aware structure tree. The extension decides the route,
+/// so a temporarily invalid file still opens where it can be repaired.
+pub(crate) fn is_xml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+}
+
+/// CSV/TSV records have one source authority and a derived table. The
+/// extension chooses the delimiter and the route; content never turns an
+/// ordinary text file into a table.
+pub(crate) fn is_csv_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "csv" | "tsv"))
+}
+
+pub(crate) fn csv_delimiter(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsv"))
+    {
+        true => b'\t',
+        false => b',',
+    }
+}
+
+/// draw.io documents have their own read-only engine route. `.drawio` and
+/// `.dio` are unambiguous; a bare `.xml` needs the bounded content probe in
+/// `buffers::load_file`, so it is not claimed here.
+pub(crate) fn is_drawio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("drawio") || extension.eq_ignore_ascii_case("dio")
+        })
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -421,10 +652,16 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
-        "json" | "jsonc" => "json",
+        "json" => "json",
+        "jsonc" => "jsonc",
+        "jsonl" | "ndjson" => "jsonl",
+        "xml" => "xml",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
+        "csv" => "csv",
+        "tsv" => "tsv",
         "html" | "htm" => "html",
+        "svg" => "svg",
         "css" => "css",
         "md" | "markdown" | "mdx" => "markdown",
         "sh" | "bash" | "zsh" => "bash",
@@ -464,9 +701,15 @@ fn language_label(id: &str) -> Option<&'static str> {
         "typescript" => "TypeScript",
         "tsx" => "TypeScript JSX",
         "json" => "JSON",
+        "jsonc" => "JSONC",
+        "jsonl" => "JSONL",
+        "xml" => "XML",
         "toml" => "TOML",
         "yaml" => "YAML",
+        "csv" => "CSV",
+        "tsv" => "TSV",
         "html" => "HTML",
+        "svg" => "SVG",
         "css" => "CSS",
         "markdown" => "Markdown",
         "bash" => "Shell",
@@ -518,10 +761,15 @@ fn place_cursor(
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) {
-    input.set_cursor_position(position, window, cx);
-    // Native Markdown retains a view-local reveal request until layout paints.
-    // Replaying its selection on later frames would overwrite newer navigation.
-    if input.markdown().is_some() {
+    let Some(text) = input.text() else {
+        // A picture has no caret to put down: the request is about text.
+        return;
+    };
+    text.set_cursor_position(position, window, cx);
+    // Native source presentations retain a view-local reveal request until
+    // layout paints. Replaying their selection on later frames would overwrite
+    // newer navigation.
+    if input.text().is_some_and(|text| text.is_source()) {
         return;
     }
     // A target near the top of the file scrolls nowhere and is already done;
@@ -550,13 +798,18 @@ fn replace_buffer_text(
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) {
-    let old = input.read(cx).text().to_string();
+    let Some(text) = input.text() else {
+        // Nothing to write into: a picture holds bytes, not editable text.
+        return;
+    };
+    let state = text.read(cx);
+    let old = state.text().to_string();
     let Some((start, old_end, new_end)) = differing_span(&old, new) else {
         return;
     };
-    let cursor = input.read(cx).cursor_position();
-    input.replace(start..old_end, &new[start..new_end], window, cx);
-    input.set_cursor_position(cursor, window, cx);
+    let cursor = state.cursor_position();
+    text.replace(start..old_end, &new[start..new_end], window, cx);
+    text.set_cursor_position(cursor, window, cx);
 }
 
 /// The byte span where `old` and `new` differ: `(start, end in old, end in
@@ -656,14 +909,13 @@ fn is_program(path: &Path) -> bool {
     }
 }
 
-/// A file a browser renders rather than showing its source.
+/// A file a browser renders rather than showing its source. SVG is not one:
+/// it opens as a source document with its own native preview, so a corrupt or
+/// remote SVG never falls through to the system browser or its network access.
 fn opens_in_browser(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "html" | "htm" | "xhtml" | "svg"
-        )
-    })
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
 }
 
 /// Opens a local file in the default web browser. On macOS that is asked
@@ -745,6 +997,51 @@ impl LyrelApp {
             .is_some_and(|file| file.input.markdown().is_some())
     }
 
+    pub(crate) fn image_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.image().is_some())
+    }
+
+    pub(crate) fn sqlite_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.sqlite().is_some())
+    }
+
+    pub(crate) fn pdf_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.pdf().is_some())
+    }
+
+    pub(crate) fn svg_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.svg().is_some())
+    }
+
+    pub(crate) fn json_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.json().is_some())
+    }
+    pub(crate) fn yaml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.yaml().is_some())
+    }
+    pub(crate) fn toml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.toml().is_some())
+    }
+    pub(crate) fn csv_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.csv().is_some())
+    }
+    pub(crate) fn xml_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.xml().is_some())
+    }
+    pub(crate) fn drawio_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.drawio().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -755,8 +1052,63 @@ impl LyrelApp {
         let group = self.tab_code()?.group;
         Some(
             file.presentations
-                .existing(tab, group)
+                .markdown_existing(tab, group)
                 .map(EditorInput::Markdown)
+                .or_else(|| {
+                    file.presentations
+                        .svg_existing(tab, group)
+                        .map(EditorInput::Svg)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .json_existing(tab, group)
+                        .map(EditorInput::Json)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .yaml_existing(tab, group)
+                        .map(EditorInput::Yaml)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .toml_existing(tab, group)
+                        .map(EditorInput::Toml)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .csv_existing(tab, group)
+                        .map(EditorInput::Csv)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .xml_existing(tab, group)
+                        .map(EditorInput::Xml)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .image_existing(tab, group)
+                        .map(EditorInput::Image)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .sqlite_existing(tab, group)
+                        .map(EditorInput::Sqlite)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .book_existing(tab, group)
+                        .map(EditorInput::Book)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .pdf_existing(tab, group)
+                        .map(EditorInput::Pdf)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .drawio_existing(tab, group)
+                        .map(EditorInput::Drawio)
+                })
                 .unwrap_or_else(|| file.input.clone()),
         )
     }
@@ -1206,9 +1558,12 @@ impl LyrelApp {
         };
         let input = file.input.clone();
         self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
-        self.editor
-            .nav
-            .track_buffer(id, input.read(cx).text().clone());
+        // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
+        if let Some(text) = input.text() {
+            self.editor
+                .nav
+                .track_buffer(id, text.read(cx).text().clone());
+        }
         if let Some(source) = input.markdown() {
             let app = cx.entity().downgrade();
             let resources =
@@ -1376,15 +1731,52 @@ impl LyrelApp {
         let Some(file) = self.active_buffer() else {
             return;
         };
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
+            return;
+        };
+        let group = self.tab_code().expect("active editor group").group;
         if let Some(input) = file.input.markdown() {
-            let tab = self
-                .tabs
-                .get(self.tabs.active_index())
-                .expect("active editor tab")
-                .id();
-            let group = self.tab_code().expect("active editor group").group;
-            let view = file.presentations.view(input, tab, group, window, cx);
+            let view = file
+                .presentations
+                .markdown_view(input, tab, group, window, cx);
             EditorInput::Markdown(view).focus(window, cx);
+        } else if let Some(primary) = file.input.svg() {
+            let view = file.presentations.svg_view(primary, tab, group, cx);
+            EditorInput::Svg(view).focus(window, cx);
+        } else if let Some(primary) = file.input.json() {
+            let view = file.presentations.json_view(primary, tab, group, cx);
+            EditorInput::Json(view).focus(window, cx);
+        } else if let Some(primary) = file.input.yaml() {
+            let view = file.presentations.yaml_view(primary, tab, group, cx);
+            EditorInput::Yaml(view).focus(window, cx);
+        } else if let Some(primary) = file.input.toml() {
+            let view = file.presentations.toml_view(primary, tab, group, cx);
+            EditorInput::Toml(view).focus(window, cx);
+        } else if let Some(primary) = file.input.csv() {
+            let view = file.presentations.csv_view(primary, tab, group, window, cx);
+            EditorInput::Csv(view).focus(window, cx);
+        } else if let Some(primary) = file.input.xml() {
+            let view = file.presentations.xml_view(primary, tab, group, cx);
+            EditorInput::Xml(view).focus(window, cx);
+        } else if let Some(primary) = file.input.image() {
+            let view = file.presentations.image_view(primary, tab, group, cx);
+            EditorInput::Image(view).focus(window, cx);
+        } else if let Some(primary) = file.input.sqlite() {
+            let view = file
+                .presentations
+                .sqlite_view(primary, tab, group, window, cx);
+            EditorInput::Sqlite(view).focus(window, cx);
+        } else if let Some(primary) = file.input.book() {
+            let view = file
+                .presentations
+                .book_view(primary, tab, group, window, cx);
+            EditorInput::Book(view).focus(window, cx);
+        } else if let Some(primary) = file.input.pdf() {
+            let view = file.presentations.pdf_view(primary, tab, group, window, cx);
+            EditorInput::Pdf(view).focus(window, cx);
+        } else if let Some(primary) = file.input.drawio() {
+            let view = file.presentations.drawio_view(primary, tab, group, cx);
+            EditorInput::Drawio(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1436,7 +1828,7 @@ impl LyrelApp {
 
     /// Switch the active native Markdown presentation between live editing and source.
     /// `ToggleDocumentPreview` remains the action ID for existing custom keybindings.
-    pub(crate) fn toggle_document_preview(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() {
             return;
         }
@@ -1445,6 +1837,42 @@ impl LyrelApp {
             .and_then(|input| input.markdown().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.svg().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.yaml().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.toml().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.csv().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.xml().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         }
     }
@@ -1462,9 +1890,14 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
+        // 只读图片没有要折行的文本：命令对它不生效，也不改下一个文本
+        // 文件的开箱设置。
+        let Some(text) = f.input.text() else {
+            return;
+        };
         f.wrap = !f.wrap;
         let wrap = f.wrap;
-        f.input.set_soft_wrap(wrap, window, cx);
+        text.set_soft_wrap(wrap, window, cx);
         f.presentations.set_soft_wrap(wrap, &f.input, cx);
         self.update_config(cx, |cfg| cfg.editor_soft_wrap = wrap);
         cx.notify();
@@ -1480,7 +1913,10 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
-        let mut format = f.format(cx);
+        // 只读图片没有保存格式可以改：这个按钮对它不该出现，也不该生效。
+        let Some(mut format) = f.format(cx) else {
+            return;
+        };
         format.line_ending = match format.line_ending {
             LineEnding::Lf => LineEnding::CrLf,
             LineEnding::CrLf => LineEnding::Lf,
@@ -1693,8 +2129,9 @@ impl LyrelApp {
             EditorEvent::Focus => self.focus_editor(window, cx),
             EditorEvent::GoToLine { id, line, column } => {
                 self.focus_editor(window, cx);
-                if let Some(input) = self.editor_input_for(id) {
-                    let lines = input.read(cx).text().lines_len().max(1) as u32;
+                if let Some(input) = self.editor_input_for(id).filter(|i| i.is_text()) {
+                    let text = input.text().expect("checked text input");
+                    let lines = text.read(cx).text().lines_len().max(1) as u32;
                     place_cursor(
                         input,
                         Position {
@@ -1727,7 +2164,13 @@ impl LyrelApp {
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.code_panel_visible() || self.active_buffer().is_none() {
+        // 行号是文本的位置。图片文档没有行可去，快捷键在这里就是空操作，
+        // 而不是弹出一个永远落不到任何地方的行号框。
+        if !self.code_panel_visible()
+            || !self
+                .active_buffer()
+                .is_some_and(|file| file.input.is_text())
+        {
             return;
         }
         let id = self.tab_code().and_then(TabCode::active_id).unwrap();
@@ -1757,8 +2200,16 @@ impl LyrelApp {
             if shared {
                 let tab = self.tabs.get(tab_ix).unwrap().id();
                 let group = self.tab_code().unwrap().focused_group();
-                if let Some(view) = file.presentations.existing(tab, group) {
+                if let Some(view) = file.presentations.markdown_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
+                } else if let Some(view) = file.presentations.svg_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.json_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.csv_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.xml_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -1841,10 +2292,17 @@ impl LyrelApp {
             return;
         };
         let input = self.editor_input_for(id).expect("retained document");
-        let state = input.read(cx);
-        let suffix = match selected_lines(&state.text(), state.selected_range()) {
-            Some((a, b)) if a == b => format!("#L{a}"),
-            Some((a, b)) => format!("#L{a}-{b}"),
+        let suffix = match input.text() {
+            Some(text) => {
+                let state = text.read(cx);
+                match selected_lines(&state.text(), state.selected_range()) {
+                    Some((a, b)) if a == b => format!("#L{a}"),
+                    Some((a, b)) => format!("#L{a}-{b}"),
+                    None => String::new(),
+                }
+            }
+            // A picture has no lines to point at; the path itself still
+            // names it for the agent.
             None => String::new(),
         };
         let path = f.path.clone();
@@ -1871,7 +2329,6 @@ impl LyrelApp {
             return menu;
         };
         let state = input.read(cx);
-        let selected = !state.selected_range().is_empty();
         let mut menu = menu.min_w(px(220.)).action_context(state.focus_handle(cx));
         if f.untitled.is_none() {
             menu = menu
@@ -1885,6 +2342,58 @@ impl LyrelApp {
                 )
                 .separator();
         }
+        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景与翻页。给它
+        // 保留这些行，等于向读者承诺文档里有能编辑的文本。
+        if let Some(image) = input.image() {
+            let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
+            return image_document::menu_entries(menu, multipage);
+        }
+        if input.book().is_some() {
+            return menu
+                .separator()
+                .menu(t(L10nKey::EditorBookContents), Box::new(BookToggleContents))
+                .menu(
+                    t(L10nKey::EditorBookBookmarks),
+                    Box::new(BookToggleBookmarks),
+                )
+                .menu(t(L10nKey::EditorBookSearch), Box::new(BookSearch))
+                .separator()
+                .menu(t(L10nKey::EditorBookNextPage), Box::new(BookNextPage))
+                .menu(
+                    t(L10nKey::EditorBookPreviousPage),
+                    Box::new(BookPreviousPage),
+                )
+                .menu(t(L10nKey::EditorBookNextChapter), Box::new(BookNextChapter))
+                .menu(
+                    t(L10nKey::EditorBookPreviousChapter),
+                    Box::new(BookPreviousChapter),
+                )
+                .separator()
+                .menu(t(L10nKey::EditorBookAddBookmark), Box::new(BookAddBookmark));
+        }
+        if let Some(pdf) = input.pdf() {
+            let has_selection = pdf.read(cx).has_selection();
+            return pdf_document::menu_entries(menu, has_selection);
+        }
+        // 数据库没有撤销、查找、剪贴板和行命令可给：它只有刷新与分页。
+        if input.sqlite().is_some() {
+            return sqlite_document::menu_entries(menu);
+        }
+        // The diagram keeps its own undo, clipboard and page commands: every
+        // entry lands on the shared document or the live engine, never on a
+        // text input it does not have.
+        if let Some(drawio) = input.drawio() {
+            let multipage = drawio.read(cx).page_count(cx) > 1;
+            return drawio_document::menu_entries(menu, multipage);
+        }
+        if let Some(csv) = input.csv() {
+            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
+            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        let selected = input
+            .text()
+            .is_some_and(|text| !text.read(cx).selected_range().is_empty());
         let menu = menu
             .menu(t(L10nKey::AppMenuUndo), Box::new(edit::Undo))
             .menu(t(L10nKey::AppMenuRedo), Box::new(edit::Redo))
@@ -1904,6 +2413,46 @@ impl LyrelApp {
                     t(L10nKey::EditorGoToLineAction),
                     Box::new(crate::core::actions::EditorGoToLine),
                 );
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(svg) = input.svg() {
+            let menu = menu.action_context(svg.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = svg_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(json) = input.json() {
+            let menu = menu.action_context(json.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = json_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(yaml) = input.yaml() {
+            let menu = menu.action_context(yaml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = yaml_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(toml) = input.toml() {
+            let menu = menu.action_context(toml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = toml_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(xml) = input.xml() {
+            let menu = menu.action_context(xml.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = xml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2257,6 +2806,52 @@ impl LyrelApp {
         }
         self.editor_adopt_orphans(window, cx);
         self.editor_restore_active(window, cx);
+        for (id, readiness) in self.editor.buffers.take_drawio_flush_resolutions(cx) {
+            match readiness {
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Confirmed {
+                    force,
+                    target,
+                } => {
+                    // A confirmed flush takes the same Host write path as a
+                    // synchronous save: conflicts, prompts and identity
+                    // checks still apply to the bytes that are current now.
+                    let root = self.editor_save_root();
+                    self.editor.save_at(
+                        id,
+                        force,
+                        target,
+                        &root,
+                        window,
+                        cx,
+                        Self::editor_bridge(),
+                    );
+                }
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Rejected { reason } => {
+                    // A page or HTTP refusal is request-scoped: the canvas
+                    // keeps its model, the document keeps the last accepted
+                    // bytes, and the save fails where the user can see it.
+                    self.drawio_flush_failed(id, Some(reason), window, cx);
+                }
+                crate::ui::code_editor::buffers::DrawioFlushReadiness::Expired => {
+                    // The engine never confirmed: writing the bytes we have
+                    // would silently drop the model on its canvas. Fail the
+                    // save the way any other failed write does — the dirty
+                    // document stays, and a pending close is cancelled.
+                    self.drawio_flush_failed(id, None, window, cx);
+                }
+            }
+        }
+        for (id, views) in self.editor.buffers.drawio_pending(cx) {
+            for view in views {
+                let requested = view.update(cx, |view, _| view.take_save_request());
+                if requested {
+                    // The engine's own Ctrl+S rides the same Host save path
+                    // as the toolbar action: conflicts, prompts and write
+                    // identity stay exactly one authority.
+                    self.editor_save_file(id, false, window, cx);
+                }
+            }
+        }
         for file in self.editor.buffers.iter() {
             let id = file.id();
             file.presentations.retain(
@@ -2277,6 +2872,44 @@ impl LyrelApp {
             );
         }
         self.editor_record_sessions(cx);
+    }
+
+    /// A deferred diagram save whose engine refused or never confirmed its
+    /// model is a failed save, not a licence to write older bytes: the same
+    /// toast a failed write raises, the document stays dirty, and any close
+    /// that was waiting on this save is cancelled instead of dropping the
+    /// work. A refused request keeps its own reason visible.
+    fn drawio_flush_failed(
+        &mut self,
+        id: BufferId,
+        reason: Option<gpui_kit::SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(label) = self
+            .editor
+            .buffers
+            .get(id)
+            .map(|file| file.label().to_string())
+        else {
+            return;
+        };
+        let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);
+        let (kind, message) = match reason {
+            Some(reason) => (std::io::ErrorKind::Other, reason.to_string()),
+            None => (
+                std::io::ErrorKind::TimedOut,
+                "the diagram engine did not confirm its current model".to_string(),
+            ),
+        };
+        crate::ui::host_ops::HostOps::notify_err(
+            window,
+            cx,
+            &context,
+            &std::io::Error::new(kind, message),
+        );
+        self.editor.saves_failed(id);
+        cx.notify();
     }
 
     fn editor_adopt_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2562,8 +3195,8 @@ impl LyrelApp {
         );
         let conflict_banner = self
             .active_buffer()
-            .and_then(|f| f.conflict.map(|c| (f.id(), c)))
-            .map(|(id, c)| self.render_editor_conflict_banner(id, c, cx));
+            .and_then(|f| f.conflict.map(|c| (f.id(), c, f.input.is_savable())))
+            .map(|(id, c, text)| self.render_editor_conflict_banner(id, c, text, cx));
         let bar = self.render_editor_bar(cx);
 
         let header = self.render_editor_header(chrome, window, cx);
@@ -2575,6 +3208,26 @@ impl LyrelApp {
             h_flex()
                 .id(if self.markdown_document_active() {
                     "markdown-status-bar"
+                } else if self.svg_document_active() {
+                    "svg-status-bar"
+                } else if self.json_document_active() {
+                    "json-status-bar"
+                } else if self.yaml_document_active() {
+                    "yaml-status-bar"
+                } else if self.toml_document_active() {
+                    "toml-status-bar"
+                } else if self.csv_document_active() {
+                    "csv-status-bar"
+                } else if self.xml_document_active() {
+                    "xml-status-bar"
+                } else if self.image_document_active() {
+                    "image-status-bar"
+                } else if self.sqlite_document_active() {
+                    "sqlite-status-bar"
+                } else if self.pdf_document_active() {
+                    "pdf-status-bar"
+                } else if self.drawio_document_active() {
+                    "drawio-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2674,6 +3327,276 @@ impl LyrelApp {
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
+            Some(f) if f.input.book().is_some() => {
+                let primary = f.input.book().expect("book document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.book_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("book-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.image().is_some() => {
+                let primary = f.input.image().expect("image document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.image_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.drawio().is_some() => {
+                let primary = f.input.drawio().expect("draw.io document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.drawio_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("drawio-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.svg().is_some() => {
+                let primary = f.input.svg().expect("SVG document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.svg_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("svg-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.json().is_some() => {
+                let primary = f.input.json().expect("JSON document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.json_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("json-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.yaml().is_some() => {
+                let primary = f.input.yaml().expect("YAML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.yaml_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("yaml-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.toml().is_some() => {
+                let primary = f.input.toml().expect("TOML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.toml_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("toml-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.xml().is_some() => {
+                let primary = f.input.xml().expect("XML document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.xml_view(primary, tab, group, cx);
+                let id = f.id();
+                let app = cx.entity().downgrade();
+                v_flex()
+                    .id(("xml-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .context_menu(move |menu, _window, cx| {
+                        Self::editor_body_menu(menu, &app, id, cx)
+                    })
+                    .into_any_element()
+            }
+            Some(f) if f.input.csv().is_some() => {
+                let primary = f.input.csv().expect("CSV document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.csv_view(primary, tab, group, window, cx);
+                let id = f.id();
+                let app = cx.entity().downgrade();
+                v_flex()
+                    .id(("csv-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .context_menu(move |menu, _window, cx| {
+                        Self::editor_body_menu(menu, &app, id, cx)
+                    })
+                    .into_any_element()
+            }
+            Some(f) if f.input.pdf().is_some() => {
+                let primary = f.input.pdf().expect("pdf document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.pdf_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("pdf-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.sqlite().is_some() => {
+                let primary = f.input.sqlite().expect("sqlite document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.sqlite_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("sqlite-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
             Some(f) if f.input.markdown().is_some() => {
                 let input = f.input.markdown().unwrap();
                 let tab = self
@@ -2687,7 +3610,7 @@ impl LyrelApp {
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
-                let view = f.presentations.view(input, tab, group, window, cx);
+                let view = f.presentations.markdown_view(input, tab, group, window, cx);
                 let scrollbar_id = SharedString::from(format!(
                     "markdown-document-scrollbar-{}",
                     view.entity_id().as_u64()
@@ -3012,25 +3935,162 @@ impl LyrelApp {
 
     pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.active_buffer();
-        let cursor: Option<SharedString> = self.active_editor_input().map(|input| {
-            let input = input.read(cx);
-            let pos = input.cursor_position();
-            let ln_col = t_fmt(
-                L10nKey::EditorLnCol,
-                &[
-                    ("line", &(pos.line + 1).to_string()),
-                    ("column", &(pos.character + 1).to_string()),
-                ],
-            );
-            ln_col.into()
-        });
-        let wrap: Option<bool> = active.map(|f| f.wrap);
+        let text = active.is_some_and(|file| file.input.is_text());
+        let image = self
+            .active_editor_input()
+            .and_then(|input| input.image().cloned());
+        let image_status: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).status_text(cx));
+        let image_zoom: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).zoom_label());
+        let sqlite_status: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.sqlite().cloned())
+            .map(|view| view.read(cx).status_text());
+        let pdf = self
+            .active_editor_input()
+            .and_then(|input| input.pdf().cloned());
+        let pdf_status: Option<SharedString> =
+            pdf.as_ref().map(|view| view.read(cx).status_text(cx));
+        let pdf_zoom: Option<SharedString> = pdf
+            .as_ref()
+            .filter(|view| view.read(cx).has_pages())
+            .map(|view| view.read(cx).zoom_label());
+        let image_page: Option<SharedString> =
+            image.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let drawio = self
+            .active_editor_input()
+            .and_then(|input| input.drawio().cloned());
+        let drawio_status: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).status_text(cx));
+        let drawio_page: Option<SharedString> = drawio
+            .as_ref()
+            .and_then(|view| view.read(cx).page_label(cx));
+        let drawio_zoom: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).zoom_label());
+        let book_status: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).status_text(cx));
+        let book_chapter: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).chapter_label(cx));
+        let book_progress: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.book().cloned())
+            .map(|view| view.read(cx).progress_label(cx));
+        let csv_view = self
+            .active_editor_input()
+            .and_then(|input| input.csv().cloned());
+        let csv_table_mode = csv_view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).mode() == CsvMode::Table);
+        let cursor: Option<SharedString> = (!csv_table_mode)
+            .then(|| {
+                self.active_editor_input()
+                    .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            })
+            .flatten()
+            .map(|pos| {
+                t_fmt(
+                    L10nKey::EditorLnCol,
+                    &[
+                        ("line", &(pos.line + 1).to_string()),
+                        ("column", &(pos.character + 1).to_string()),
+                    ],
+                )
+                .into()
+            });
+        let wrap: Option<bool> = active.filter(|_| text).map(|f| f.wrap);
         let native_live = self.active_editor_input().and_then(|input| {
             input
                 .markdown()
                 .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
         });
-        let indent: Option<SharedString> = active.map(|f| {
+        let svg_state = self
+            .active_editor_input()
+            .and_then(|input| input.svg().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.preview_size(cx),
+                    view.zoom_label(),
+                    view.is_rendering(cx),
+                    view.preview_failure(cx),
+                )
+            });
+        let json_state = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                    view.record_count(cx),
+                    view.invalid_records(cx),
+                )
+            });
+        let xml_state = self
+            .active_editor_input()
+            .and_then(|input| input.xml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.element_count(cx),
+                    view.attribute_count(cx),
+                )
+            });
+        let yaml_state = self
+            .active_editor_input()
+            .and_then(|input| input.yaml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                    view.document_count(cx),
+                )
+            });
+        let toml_state = self
+            .active_editor_input()
+            .and_then(|input| input.toml().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                )
+            });
+        let csv_state = csv_view.as_ref().map(|view| {
+            let view = view.read(cx);
+            (
+                view.mode(),
+                view.facts(cx),
+                view.selection(),
+                view.visible_count(),
+                view.is_parsing(cx),
+                view.parse_error(cx),
+                view.filter().to_owned(),
+                view.sort(),
+            )
+        });
+        let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
             } else {
@@ -3038,8 +4098,14 @@ impl LyrelApp {
             };
             t_fmt(key, &[("n", &f.indent.size.to_string())]).into()
         });
-        let line_ending: Option<&'static str> = active.map(|f| f.format(cx).line_ending.label());
-        let encoding: Option<SharedString> = active.map(|f| f.format(cx).encoding_label().into());
+        let line_ending: Option<&'static str> = active
+            .filter(|_| text)
+            .and_then(|f| f.format(cx))
+            .map(|format| format.line_ending.label());
+        let encoding: Option<SharedString> = active
+            .filter(|_| text)
+            .and_then(|f| f.format(cx))
+            .map(|format| format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
         let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
 
@@ -3086,6 +4152,485 @@ impl LyrelApp {
                         })),
                 )
             })
+            .when_some(
+                csv_state,
+                |this, (mode, facts, selection, visible, parsing, error, filter, sort)| {
+                    let (label, tip) = match mode {
+                        CsvMode::Table => {
+                            (t(L10nKey::EditorCsvTable), t(L10nKey::EditorCsvShowSource))
+                        }
+                        CsvMode::Source => (
+                            t(L10nKey::EditorMarkdownSource),
+                            t(L10nKey::EditorCsvShowTable),
+                        ),
+                    };
+                    let mut this =
+                        this.child(item("status-csv-mode", label.into()).tooltip(tip).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            }),
+                        ));
+                    if mode == CsvMode::Table {
+                        if let Some((records, columns)) = facts {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-facts")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t_fmt(
+                                        L10nKey::EditorCsvFacts,
+                                        &[
+                                            ("records", &records.to_string()),
+                                            ("columns", &columns.to_string()),
+                                        ],
+                                    )),
+                            );
+                            if let Some(cell) = selection {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-cell")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvCell,
+                                            &[
+                                                (
+                                                    "record",
+                                                    &(cell.record().index() + 1).to_string(),
+                                                ),
+                                                ("column", &(cell.column() + 1).to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if !filter.is_empty() {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-filter")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvFilterStatus,
+                                            &[
+                                                ("filter", &filter),
+                                                ("visible", &visible.to_string()),
+                                                ("records", &records.to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if let Some(sort) = sort {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-sort")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(csv_document::sort_label(sort)),
+                                );
+                            }
+                        }
+                        if parsing {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-parsing")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t(L10nKey::EditorCsvParsing)),
+                            );
+                        }
+                        if error.is_some() {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-error")
+                                    .test_support()
+                                    .flex_none()
+                                    .text_color(cx.theme().warning)
+                                    .child(t(L10nKey::EditorCsvTableUnavailable)),
+                            );
+                        }
+                    }
+                    this
+                },
+            )
+            .when_some(svg_state, |this, (mode, size, zoom, rendering, failure)| {
+                let (label, tip) = match mode {
+                    SvgMode::Source => (
+                        t(L10nKey::EditorMarkdownSource),
+                        t(L10nKey::EditorSvgShowPreview),
+                    ),
+                    SvgMode::Preview => (
+                        t(L10nKey::EditorSvgPreview),
+                        t(L10nKey::EditorSvgShowSource),
+                    ),
+                };
+                this.child(item("status-svg-mode", label.into()).tooltip(tip).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_document_preview(window, cx);
+                        this.focus_editor(window, cx);
+                    }),
+                ))
+                .when_some(size, |this, (width, height)| {
+                    this.child(
+                        div()
+                            .id("status-svg-size")
+                            .test_support()
+                            .flex_none()
+                            .child(t_fmt(
+                                L10nKey::EditorImagePixelSize,
+                                &[
+                                    ("width", &format!("{width:.0}")),
+                                    ("height", &format!("{height:.0}")),
+                                ],
+                            )),
+                    )
+                })
+                .when(rendering, |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-rendering")
+                            .test_support()
+                            .flex_none()
+                            .child(t(L10nKey::EditorSvgRendering)),
+                    )
+                })
+                .when(failure.is_some(), |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-preview-failed")
+                            .test_support()
+                            .flex_none()
+                            .text_color(cx.theme().warning)
+                            .child(t(L10nKey::EditorSvgPreviewFailed)),
+                    )
+                })
+                .when(mode == SvgMode::Preview, |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-zoom")
+                            .test_support()
+                            .flex_none()
+                            .child(zoom),
+                    )
+                })
+            })
+            .when_some(
+                xml_state,
+                |this, (mode, parsing, fatal, location, elements, attributes)| {
+                    let (label, tip) = match mode {
+                        XmlMode::Source => (
+                            t(L10nKey::EditorXmlSource),
+                            t(L10nKey::EditorXmlShowStructure),
+                        ),
+                        XmlMode::Structure => (
+                            t(L10nKey::EditorXmlStructure),
+                            t(L10nKey::EditorXmlShowSource),
+                        ),
+                    };
+                    let mut this =
+                        this.child(item("status-xml-mode", label.into()).tooltip(tip).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            }),
+                        ));
+                    if let (Some(elements), Some(attributes)) = (elements, attributes) {
+                        this = this.child(
+                            div()
+                                .id("status-xml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorXmlFacts,
+                                    &[
+                                        ("elements", &elements.to_string()),
+                                        ("attributes", &attributes.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-xml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-xml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorXmlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-xml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    }
+                    this
+                },
+            )
+            .when_some(
+                json_state,
+                |this, (mode, parsing, fatal, location, nodes, records, invalid)| {
+                    let (label, tip) = match mode {
+                        JsonMode::Source => (
+                            t(L10nKey::EditorJsonSource),
+                            t(L10nKey::EditorJsonShowStructure),
+                        ),
+                        JsonMode::Structure => (
+                            t(L10nKey::EditorJsonStructure),
+                            t(L10nKey::EditorJsonShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-json-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = records {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonRecords,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    } else if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-json-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-json-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorJsonParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-json-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    } else if invalid > 0 {
+                        this = this.child(
+                            div()
+                                .id("status-json-invalid")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonInvalidRecords,
+                                    &[("count", &invalid.to_string())],
+                                )),
+                        );
+                    }
+                    this
+                },
+            )
+            .when_some(
+                toml_state,
+                |this, (mode, parsing, fatal, location, nodes)| {
+                    let (label, tip) = match mode {
+                        TomlMode::Source => (
+                            t(L10nKey::EditorTomlSource),
+                            t(L10nKey::EditorTomlShowStructure),
+                        ),
+                        TomlMode::Structure => (
+                            t(L10nKey::EditorTomlStructure),
+                            t(L10nKey::EditorTomlShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-toml-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-toml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorTomlNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-toml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-toml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorTomlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-toml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    }
+                    this
+                },
+            )
+            .when_some(
+                yaml_state,
+                |this, (mode, parsing, fatal, location, nodes, documents)| {
+                    let (label, tip) = match mode {
+                        YamlMode::Source => (
+                            t(L10nKey::EditorYamlSource),
+                            t(L10nKey::EditorYamlShowStructure),
+                        ),
+                        YamlMode::Structure => (
+                            t(L10nKey::EditorYamlStructure),
+                            t(L10nKey::EditorYamlShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-yaml-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = documents {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-documents")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorYamlDocuments,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorYamlNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorYamlParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-yaml-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    }
+                    this
+                },
+            )
             .when_some(wrap, |this, wrap| {
                 let label = if wrap {
                     t(L10nKey::EditorWrapOn)
@@ -3123,6 +4668,154 @@ impl LyrelApp {
                         })),
                 )
             })
+            // A picture states what it is and what it cannot be: no caret,
+            // no wrap, no line ending, and nothing to save.
+            .when_some(image_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-image-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when_some(image_page, |this, page| {
+                this.child(
+                    div()
+                        .id("status-image-page")
+                        .test_support()
+                        .aria_label(page.clone())
+                        .flex_none()
+                        .child(page),
+                )
+            })
+            .when(image_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-image-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(image_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-image-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
+            .when_some(book_chapter, |this, chapter| {
+                this.child(
+                    div()
+                        .id("status-book-chapter")
+                        .test_support()
+                        .aria_label(chapter.clone())
+                        .flex_none()
+                        .child(chapter),
+                )
+            })
+            .when_some(book_progress, |this, progress| {
+                this.child(
+                    div()
+                        .id("status-book-progress")
+                        .test_support()
+                        .flex_none()
+                        .child(progress),
+                )
+            })
+            .when_some(book_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-book-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            // A draw.io document has no caret, wrap or encoding; its status
+            // names the engine, pages and zoom instead.
+            .when_some(drawio_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-drawio-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when_some(drawio_page, |this, page| {
+                this.child(
+                    div()
+                        .id("status-drawio-page")
+                        .test_support()
+                        .aria_label(page.clone())
+                        .flex_none()
+                        .child(page),
+                )
+            })
+            .when(drawio.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-drawio-editable")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorDrawioEditable)),
+                )
+            })
+            .when_some(drawio_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-drawio-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
+            // A PDF states its page identity, zoom and read-only nature; it has
+            // no caret, wrap, line ending or editable text format.
+            .when_some(pdf_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-pdf-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            // A database states its actual read view, page and journal mode.
+            .when_some(sqlite_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-sqlite-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when(pdf_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-pdf-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(pdf_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-pdf-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))
             .into_any_element()
     }
@@ -3152,10 +4845,14 @@ impl LyrelApp {
             )
     }
 
+    /// `text` is the document's save capability: a read-only picture can be
+    /// reloaded or closed, but offering "Save" or "Keep mine" would promise a
+    /// write that has no bytes to write. A diagram does have them.
     fn render_editor_conflict_banner(
         &self,
         id: BufferId,
         conflict: DiskConflict,
+        text: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::ui::dialog::{self, Tone};
@@ -3203,23 +4900,25 @@ impl LyrelApp {
                         this.editor_reload_from_disk(id, window, cx);
                     }),
                 ))
-                .child(dialog::button(
-                    "editor-conflict-keep",
-                    t(L10nKey::KeepMine),
-                    Tone::Primary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, _w, cx| {
-                        if let Some(f) = this.editor.buffers.get_mut(id) {
-                            // The version seen on disk is now the one a
-                            // save is allowed to replace.
-                            f.disk_mtime = observed;
-                            f.conflict = None;
-                            cx.notify();
-                        }
-                    }),
-                ))
+                .when(text, |row| {
+                    row.child(dialog::button(
+                        "editor-conflict-keep",
+                        t(L10nKey::KeepMine),
+                        Tone::Primary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(move |this, _, _w, cx| {
+                            if let Some(f) = this.editor.buffers.get_mut(id) {
+                                // The version seen on disk is now the one a
+                                // save is allowed to replace.
+                                f.disk_mtime = observed;
+                                f.conflict = None;
+                                cx.notify();
+                            }
+                        }),
+                    ))
+                })
                 .into_any_element(),
             DiskConflict::Deleted => row
                 .child(message(L10nKey::EditorFileDeletedOnDisk))
@@ -3234,17 +4933,19 @@ impl LyrelApp {
                         this.editor_drop_buffer(id, cx);
                     }),
                 ))
-                .child(dialog::button(
-                    "editor-deleted-save",
-                    t(L10nKey::Save),
-                    Tone::Primary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, window, cx| {
-                        this.editor_save_file(id, true, window, cx);
-                    }),
-                ))
+                .when(text, |row| {
+                    row.child(dialog::button(
+                        "editor-deleted-save",
+                        t(L10nKey::Save),
+                        Tone::Primary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(move |this, _, window, cx| {
+                            this.editor_save_file(id, true, window, cx);
+                        }),
+                    ))
+                })
                 .into_any_element(),
         }
     }
@@ -3726,6 +5427,8 @@ mod close_gpui_tests {
                 .active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()),
@@ -3773,7 +5476,7 @@ mod pane_scrollback_tests {
             let file = app
                 .active_buffer()
                 .expect("scrollback opens a real editor buffer");
-            let text = file.input.read(cx).text().to_string();
+            let text = file.input.text().unwrap().read(cx).text().to_string();
             assert!(
                 text.starts_with("历史 e\u{301} 🎉\nsecond line"),
                 "{text:?}"

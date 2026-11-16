@@ -1,10 +1,15 @@
 pub mod conformance;
 pub mod content_search;
+mod file_version;
 pub mod local;
 pub mod metrics;
+pub mod read;
+mod read_lease;
 pub mod remote;
 pub mod server;
 pub mod session_operations;
+pub mod sqlite;
+pub mod transfer;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -293,6 +298,20 @@ pub trait WatchHandle: Send + Sync {
     fn set_dirs(&self, dirs: &[PathBuf]) -> io::Result<()>;
 }
 
+/// One file opened on its Host, bound to the version the Host observed.
+///
+/// A read session is the unit of coherence for segmented reads: every segment
+/// comes from the version opened here, or the Host invalidates the session.
+/// Implementations release any file handle or server-side resource on drop.
+pub trait HostRead: Send {
+    /// The metadata of the version this session is bound to.
+    fn meta(&self) -> Meta;
+
+    /// Up to `max_bytes` bytes from the current offset; empty at the end of
+    /// the opened version. A change under the session is [`read::file_changed`].
+    fn read_segment(&mut self, max_bytes: u64) -> io::Result<Vec<u8>>;
+}
+
 pub trait Host: Send + Sync + 'static {
     fn id(&self) -> HostId;
 
@@ -333,6 +352,105 @@ pub trait Host: Send + Sync + 'static {
     }
 
     fn read_file(&self, p: &Path, max_bytes: u64) -> io::Result<Vec<u8>>;
+
+    /// Open `p` as a versioned read session, or report that this transport
+    /// cannot. Never falls back to [`Host::read_file`]: a caller that needs a
+    /// coherent large read must see the missing capability, not a whole-file
+    /// read dressed as one.
+    ///
+    /// The returned session owns its file handle (or server-side equivalent)
+    /// until dropped; `LocalHost` refuses when the volume cannot report change
+    /// metadata, because `(len, mtime)` alone cannot prove one version.
+    fn open_read(&self, _p: &Path) -> io::Result<Box<dyn HostRead>> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "host does not support versioned segmented reads",
+        ))
+    }
+
+    /// Open `path` as one read-only SQLite read view, or report that this
+    /// transport cannot browse databases. Nothing here writes, recovers or
+    /// changes the journal mode: a database that would need that is refused.
+    ///
+    /// The view is owned by this Host and closed by [`Host::sqlite_close`],
+    /// by idleness/age on the far side, or by the connection that opened it.
+    /// A caller must not silently reopen a path per page; that would present
+    /// pages from different database versions as one view.
+    fn sqlite_open(
+        &self,
+        _path: &Path,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteOpened> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// The columns of one table or view in an open read view's version.
+    fn sqlite_columns(
+        &self,
+        _view: u64,
+        _table: &str,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteColumns> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    fn sqlite_count(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    fn sqlite_page(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqlitePage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// One complete cell value, in a bounded chunk. TEXT and BLOB return raw
+    /// bytes from `offset`; INTEGER and REAL come back whole and exact.
+    fn sqlite_value(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _row: u32,
+        _column: u32,
+        _offset: u64,
+        _max_bytes: u64,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteValue> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// Close a read view early. Unknown ids are already closed; this must not
+    /// block the caller on the far side and must never be a write.
+    fn sqlite_close(&self, _view: u64) {}
 
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf>;
 

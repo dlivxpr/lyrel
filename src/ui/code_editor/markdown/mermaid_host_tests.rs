@@ -422,6 +422,8 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         assert_eq!(
             app.active_editor_input()
                 .unwrap()
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),

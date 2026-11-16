@@ -314,7 +314,75 @@ impl LyrelApp {
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .view(origin, tab.id(), code.group, window, cx);
+                .markdown_view(origin, tab.id(), code.group, window, cx);
+        }
+        // An SVG's second group opens the other side by default: source on the
+        // left and its synchronized preview on the right, over one Document.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.svg().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .svg_view(&primary, tab, code.group, cx);
+        }
+        // A picture's second group gets its own framing, around the same
+        // decoded document.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.image().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .image_view(&primary, tab, code.group, cx);
+        }
+        // YAML's second group opens the other side by default: tree and source
+        // over the same Document and the same parsed projection.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.yaml().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .yaml_view(&primary, tab, code.group, cx);
+        }
+        // CSV/TSV's second group opens the other side by default: table and
+        // source over the same Document and the same parsed records.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.csv().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .csv_view(&primary, tab, code.group, window, cx);
         }
         self.editor.dismiss_bar();
         self.focus_editor(window, cx);
@@ -366,7 +434,7 @@ impl LyrelApp {
         let focused = self.editor.buffers.get(other).is_some_and(|file| {
             if file.input.markdown().is_some() {
                 file.presentations
-                    .existing(tab, other_group)
+                    .markdown_existing(tab, other_group)
                     .is_some_and(|view| {
                         view.read(cx).focus_handle(cx).contains_focused(window, cx)
                             || file
@@ -374,6 +442,38 @@ impl LyrelApp {
                                 .search(&view)
                                 .is_some_and(|search| search.read(cx).has_focus(window, cx))
                     })
+            } else if file.input.svg().is_some() {
+                file.presentations
+                    .svg_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.json().is_some() {
+                file.presentations
+                    .json_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.yaml().is_some() {
+                file.presentations
+                    .yaml_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.toml().is_some() {
+                file.presentations
+                    .toml_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.csv().is_some() {
+                file.presentations
+                    .csv_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.xml().is_some() {
+                file.presentations
+                    .xml_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.image().is_some() {
+                file.presentations
+                    .image_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
+            } else if file.input.sqlite().is_some() {
+                file.presentations
+                    .sqlite_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if code.active_id() != Some(other) {
                 file.input
                     .read(cx)
@@ -491,6 +591,9 @@ impl LyrelApp {
         };
         let accent = cx.theme().primary;
         let focused = pane(focused_crumbs, focused_body)
+            // The physical group's path must survive a focus swap between
+            // mouse-down and click, including clicks on toolbar controls.
+            .id(("editor-group", usize::from(!focus_left)))
             .border_t_2()
             .border_color(accent)
             .into_any_element();

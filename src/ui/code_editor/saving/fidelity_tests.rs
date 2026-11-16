@@ -249,6 +249,8 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),

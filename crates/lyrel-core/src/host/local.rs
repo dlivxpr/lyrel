@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -9,9 +9,12 @@ use notify::{RecursiveMode, Watcher};
 
 use crate::core::git;
 use crate::core::gitignore::GitignoreChain;
+use crate::host::file_version::FileVersion;
+use crate::host::read_lease::ReadLease;
+use crate::host::transfer::SEGMENT_BYTES_MAX;
 use crate::host::{
-    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, MTime, Meta, Output,
-    SearchHit, SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
+    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, HostRead, MTime, Meta,
+    Output, SearchHit, SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
 };
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(100);
@@ -65,6 +68,9 @@ fn no_prompt_env() -> Vec<(&'static str, Option<&'static str>)> {
 
 pub struct LocalHost {
     gitignore: Arc<Mutex<GitignoreChain>>,
+    /// Read-only SQLite views opened on this machine. One per Host so a
+    /// remote control connection can track and close only its own ids.
+    sqlite: crate::host::sqlite::SqliteService,
 }
 
 impl LocalHost {
@@ -72,6 +78,7 @@ impl LocalHost {
     pub fn new() -> SharedHost {
         Arc::new(LocalHost {
             gitignore: Arc::new(Mutex::new(GitignoreChain::default())),
+            sqlite: crate::host::sqlite::SqliteService::new(),
         })
     }
 
@@ -206,6 +213,91 @@ impl Host for LocalHost {
         fs::read(p)
     }
 
+    fn open_read(&self, p: &Path) -> io::Result<Box<dyn HostRead>> {
+        guard_off_ui();
+        // Windows refuses to open a directory without backup semantics, so the
+        // kind check comes before the open, exactly as in `read_file`.
+        let lmd = fs::metadata(p)?;
+        if lmd.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("{} is a directory", p.display()),
+            ));
+        }
+        if !lmd.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", p.display()),
+            ));
+        }
+        // Take the write-notification lease before the data handle is opened,
+        // so no write can land between the version being recorded and the
+        // guarantee starting. A volume that cannot grant one gets an honest
+        // "unavailable", never a timestamp that only looks unchanged.
+        let Some(lease) = ReadLease::acquire(p)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{} cannot be held stable for a versioned read: this volume or path grants no read lease",
+                    p.display()
+                ),
+            ));
+        };
+        let file = fs::File::open(p)?;
+        let md = file.metadata()?;
+        if md.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("{} is a directory", p.display()),
+            ));
+        }
+        if !md.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", p.display()),
+            ));
+        }
+        let Some(version) = FileVersion::of_open_file(&file)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{} is on a volume that reports no change time, so one read version cannot be proven",
+                    p.display()
+                ),
+            ));
+        };
+        if lease.broke() {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being opened",
+                p.display()
+            )));
+        }
+        if !version.matches_path(p)? {
+            return Err(super::read::file_changed(format!(
+                "{} was replaced while it was being opened",
+                p.display()
+            )));
+        }
+        let lmd = fs::symlink_metadata(p)?;
+        let is_symlink = lmd.file_type().is_symlink();
+        #[cfg(windows)]
+        let is_symlink = is_symlink || is_reparse_point(&lmd);
+        Ok(Box::new(LocalRead {
+            path: p.to_path_buf(),
+            file,
+            lease,
+            version,
+            meta: Meta {
+                is_dir: false,
+                is_symlink,
+                len: md.len(),
+                mtime: md.modified().ok().map(MTime::from_system_time),
+                readonly: md.permissions().readonly(),
+            },
+            offset: 0,
+        }))
+    }
+
     /// The real path behind `p`, in the spelling the rest of lyrel keys by.
     ///
     /// `fs::canonicalize` answers with the extended-length form on Windows —
@@ -217,6 +309,64 @@ impl Host for LocalHost {
     /// produces it. What the call is actually *for* — resolving a junction, a
     /// `subst` drive, an 8.3 short name or a symlink — is untouched. See
     /// [`crate::core::path_spelling`].
+    fn sqlite_open(
+        &self,
+        path: &Path,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteOpened> {
+        guard_off_ui();
+        self.sqlite.open(path, cancel)
+    }
+
+    fn sqlite_columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteColumns> {
+        guard_off_ui();
+        self.sqlite.columns(view, table, cancel)
+    }
+
+    fn sqlite_count(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        self.sqlite.count(view, query, cancel)
+    }
+
+    fn sqlite_page(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqlitePage> {
+        guard_off_ui();
+        self.sqlite.page(view, query, cancel)
+    }
+
+    fn sqlite_value(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteValue> {
+        guard_off_ui();
+        self.sqlite
+            .value(view, query, row, column, offset, max_bytes, cancel)
+    }
+
+    fn sqlite_close(&self, view: u64) {
+        self.sqlite.close(view);
+    }
+
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         guard_off_ui();
         Ok(crate::core::path_spelling::local_spelling_buf(
@@ -737,6 +887,101 @@ fn coalesce(
         if batch_tx.send_blocking(batch).is_err() {
             return;
         }
+    }
+}
+
+/// One opened local file, bound to the version observed at open.
+struct LocalRead {
+    path: PathBuf,
+    file: fs::File,
+    /// The platform's write notification for this file; `FileVersion` alone
+    /// cannot see two writes inside one timestamp tick, nor a restored mtime.
+    lease: ReadLease,
+    version: FileVersion,
+    meta: Meta,
+    offset: u64,
+}
+
+impl HostRead for LocalRead {
+    fn meta(&self) -> Meta {
+        self.meta
+    }
+
+    fn read_segment(&mut self, max_bytes: u64) -> io::Result<Vec<u8>> {
+        guard_off_ui();
+        if max_bytes == 0 || max_bytes > SEGMENT_BYTES_MAX {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a read segment must be 1..={SEGMENT_BYTES_MAX} bytes, not {max_bytes}"),
+            ));
+        }
+        let remaining = self.meta.len.saturating_sub(self.offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        self.verify()?;
+        let want = usize::try_from(max_bytes.min(remaining)).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a read segment does not fit this platform's address space",
+            )
+        })?;
+        let mut bytes = vec![0u8; want];
+        let mut read = 0usize;
+        while read < want {
+            match self.file.read(&mut bytes[read..]) {
+                Ok(0) => break,
+                Ok(count) => read += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        if read != want {
+            return Err(super::read::file_changed(format!(
+                "{} ended {} bytes into a segment it reported as {}",
+                self.path.display(),
+                read,
+                want
+            )));
+        }
+        // The bytes and the version must still agree after the read, not only
+        // before it: a write that lands inside this segment is a mixed version.
+        self.verify()?;
+        bytes.truncate(read);
+        self.offset += read as u64;
+        Ok(bytes)
+    }
+}
+
+impl LocalRead {
+    fn verify(&self) -> io::Result<()> {
+        // The lease is the version proof: a break cannot be hidden by two
+        // writes sharing a clock tick, and restoring mtime does not undo it.
+        if self.lease.broke() {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being read",
+                self.path.display()
+            )));
+        }
+        let version = FileVersion::of_open_file(&self.file)?.ok_or_else(|| {
+            super::read::file_changed(format!(
+                "{} stopped reporting a change time while it was being read",
+                self.path.display()
+            ))
+        })?;
+        if version != self.version {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being read",
+                self.path.display()
+            )));
+        }
+        if !self.version.matches_path(&self.path)? {
+            return Err(super::read::file_changed(format!(
+                "{} was replaced while it was being read",
+                self.path.display()
+            )));
+        }
+        Ok(())
     }
 }
 
