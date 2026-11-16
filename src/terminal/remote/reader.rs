@@ -1114,7 +1114,7 @@ fn title_cuts(
 ) {
     let before = cuts.len();
     tok.feed_at(bytes, |off, payload| {
-        if lifetime.saw(payload) == TitleEffect::Retire {
+        if matches!(lifetime.saw(payload), TitleEffect::Retire) {
             cuts.push((off, ReaderCut::RetireTitle));
         }
     });

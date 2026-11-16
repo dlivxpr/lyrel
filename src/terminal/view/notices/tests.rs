@@ -10,12 +10,20 @@ fn a_pane_states_a_title_whenever_it_is_not_the_placeholder() {
 
     // Nothing has spoken — this is the pane a directory stands in for.
     assert_eq!(stated_title("lyrel"), None);
-    assert_eq!(stated_title("  lyrel  "), None);
-    assert_eq!(stated_title("   "), None);
+    assert_eq!(
+        stated_title("  lyrel  "),
+        Some("  lyrel  "),
+        "a program that set exactly this introduced itself; its spaces are payload"
+    );
+    assert_eq!(
+        stated_title("   "),
+        Some("   "),
+        "whitespace is not the empty reset"
+    );
 
     // A title from the program running in it.
     assert_eq!(stated_title("vim — main.rs"), Some("vim — main.rs"));
-    assert_eq!(stated_title(" user@host:~/repo "), Some("user@host:~/repo"));
+    assert_eq!(stated_title(" user@host:~/repo "), Some(" user@host:~/repo "));
     // A default lyrel chose for the pane itself is a name, not the absence
     // of one: an SSH pane answers to its host (#438) and a workspace pane
     // to its workspace, and neither gives way to a directory.

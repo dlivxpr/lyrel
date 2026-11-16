@@ -816,16 +816,12 @@ impl Handler for GraphicsState {
         self.term.set_title(title);
     }
 
-    fn set_current_directory(&mut self, path: std::path::PathBuf) {
+    fn set_current_directory(&mut self, path: Option<std::path::PathBuf>) {
         self.term.set_current_directory(path);
     }
 
     fn set_semantic_prompt(&mut self, prompt: SemanticPrompt) {
         self.term.set_semantic_prompt(prompt);
-    }
-
-    fn set_user_var(&mut self, name: String, value: String) {
-        self.term.set_user_var(name, value);
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorShape>, blinking: bool) {

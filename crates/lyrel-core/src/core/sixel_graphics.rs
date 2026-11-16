@@ -6,7 +6,7 @@ use rio_vt::ansi::sixel;
 use rio_vt::performer::handler::{Handler, Processor};
 use rio_vt::performer::parser::Params;
 
-pub(crate) const SIDE: usize = 4096; // rio-graphics 0.5.30 MAX_GRAPHIC_DIMENSIONS
+pub(crate) const SIDE: usize = 4096; // rio-graphics 0.5.32 MAX_GRAPHIC_DIMENSIONS
 const PALETTE_SCRATCH: usize = 16 << 10;
 
 /// Where the sixel cursor stands when the data ends, in image pixels. The DEC

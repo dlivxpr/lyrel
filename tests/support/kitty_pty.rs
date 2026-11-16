@@ -152,6 +152,18 @@ pub fn pty_sender() {
                     output.flush().unwrap();
                 }
             }
+            "TITLE" => {
+                // Title scenarios end on the title itself: the shared
+                // completion marker would overwrite it with `KITTY_DONE`.
+                // The plain-text barrier after the bytes only certifies the
+                // fixture consumed the request; the kitty query below still
+                // proves the daemon parsed the output.
+                stats.record(&bytes);
+                output.write_all(&bytes).unwrap();
+                output.flush().unwrap();
+                write!(output, "\r\nTITLE_DONE_{serial}\r\n").unwrap();
+                output.flush().unwrap();
+            }
             "FILE_SEND" => {
                 // The file contains real APC bytes, not a synthetic daemon
                 // event. Keep large regressions off the child's input line.
@@ -245,12 +257,16 @@ pub fn pty_sender() {
         // to its right. Never clear the row: that could delete a placement.
         // GPUI consumers observe the title after the cursor restore, not just
         // visible text that may arrive in an earlier PTY output packet.
-        write!(
-            output,
-            "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8\x1b]2;KITTY_DONE_{serial};\x1b\\"
-        )
-        .unwrap();
-        output.flush().unwrap();
+        // A TITLE request is the exception: its whole point is the title the
+        // test wrote, and this marker's own OSC 2 would replace it.
+        if operation != "TITLE" {
+            write!(
+                output,
+                "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8\x1b]2;KITTY_DONE_{serial};\x1b\\"
+            )
+            .unwrap();
+            output.flush().unwrap();
+        }
         if let Some(gate) = gate {
             std::fs::write(gate.with_extension("done"), []).unwrap();
         }

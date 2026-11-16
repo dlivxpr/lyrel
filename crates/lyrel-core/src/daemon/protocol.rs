@@ -217,6 +217,15 @@ pub const FEATURE_GLYPH_SUPPORT: &str = "glyph-support";
 /// ring-only copy that a trim would silently lose.
 pub const FEATURE_PANE_COLORS: &str = "pane-colors";
 
+/// The daemon keeps pane title facts under the validated-title contract the
+/// pinned Rio VT parser gives the window: OSC 0/2 at most 255 UTF-8 bytes,
+/// strict UTF-8, no trimming, empty payload reset, and a rejected report that
+/// leaves the standing title and its lifetime untouched. A client that does
+/// not see this name must not claim daemon/window title parity: the older
+/// endpoint's facts were produced under its own rules, and the client keeps
+/// using the session while telling the user that endpoint needs updating.
+pub const FEATURE_VALIDATED_TITLES: &str = "validated-titles";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonVersion {
     pub protocol: u32,
@@ -245,6 +254,7 @@ impl DaemonVersion {
             FEATURE_PANE_COLORS.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
+            FEATURE_VALIDATED_TITLES.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -3490,6 +3500,21 @@ mod tests {
             !v.has_feature(crate::daemon::control::feature::CONTROL),
             "the session daemon must not advertise a dialect it cannot serve"
         );
+    }
+
+    /// The title contract rides the additive feature list, never a protocol
+    /// bump: a peer that predates it answers and stays usable without the
+    /// name, and a peer that has it can be trusted for daemon/window parity.
+    #[test]
+    fn validated_titles_are_an_additive_endpoint_capability() {
+        assert!(
+            DaemonVersion::current().has_feature(FEATURE_VALIDATED_TITLES),
+            "this build applies the validated title rule to daemon facts"
+        );
+        let legacy: DaemonVersion =
+            serde_json::from_slice(br#"{"protocol":19,"build":"0.3.4","features":[]}"#).unwrap();
+        assert!(!legacy.has_feature(FEATURE_VALIDATED_TITLES));
+        assert_eq!(legacy.protocol, PROTOCOL_VERSION, "no protocol bump");
     }
 
     /// `enabled` crosses the same peers as `rejected` above and gets the same

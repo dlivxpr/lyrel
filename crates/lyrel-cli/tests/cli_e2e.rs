@@ -23,6 +23,8 @@ mod server;
 mod tab;
 #[path = "cli_e2e/theme.rs"]
 mod theme;
+#[path = "cli_e2e/titles.rs"]
+mod titles;
 #[path = "cli_e2e/workspace.rs"]
 mod workspace;
 #[path = "cli_e2e/worktree.rs"]
@@ -209,6 +211,10 @@ fn main() {
         (
             "worktree_new_sets_up_the_checkout_and_rm_takes_it_down",
             worktree::worktree_new_sets_up_the_checkout_and_rm_takes_it_down,
+        ),
+        (
+            "validated_titles_reach_daemon_facts_from_a_real_pty",
+            titles::validated_titles_reach_daemon_facts_from_a_real_pty,
         ),
     ];
 

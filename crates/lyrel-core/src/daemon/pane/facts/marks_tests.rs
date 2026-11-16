@@ -1,8 +1,7 @@
 use super::super::test_support::{drain, test_state};
 use super::super::*;
-use super::output_marks::{
-    MAX_OSC_TITLE, OscSniffer, hex_val, parse_osc7, percent_decode, strip_uri_drive_slash,
-};
+use super::output_marks::{OscSniffer, hex_val, parse_osc7, percent_decode, strip_uri_drive_slash};
+use crate::core::osc::MAX_TITLE_BYTES;
 use super::*;
 
 #[test]
@@ -94,11 +93,22 @@ fn sniff_osc_title() {
     // OSC 1 names the icon, which the window ignores; so do we.
     assert_eq!(s.feed(b"\x1b]1;icon\x07").title, None);
 
-    let long = format!("\x1b]0;{}\x07", "t".repeat(MAX_OSC_TITLE + 10));
+    // The daemon applies the same validated-title rule as the pinned Rio
+    // parser: byte budget, strict UTF-8, no trim, semicolons kept. Oversized
+    // and invalid reports are rejected whole, so no signal is produced and
+    // the previously stored title stands.
     assert_eq!(
-        s.feed(long.as_bytes()).title.map(|t| t.chars().count()),
-        Some(MAX_OSC_TITLE)
+        s.feed(b"\x1b]0;  padded ; title  \x07").title.as_deref(),
+        Some("  padded ; title  ")
     );
+    let at_limit = format!("\x1b]0;{}\x07", "t".repeat(MAX_TITLE_BYTES));
+    assert_eq!(
+        s.feed(at_limit.as_bytes()).title.map(|t| t.len()),
+        Some(MAX_TITLE_BYTES)
+    );
+    let over = format!("\x1b]0;{}\x07", "t".repeat(MAX_TITLE_BYTES + 1));
+    assert_eq!(s.feed(over.as_bytes()).title, None);
+    assert_eq!(s.feed(b"\x1b]2;bad \xff utf8\x07").title, None);
 }
 
 /// Titles arrive interleaved with everything else in the same read, and the
@@ -238,6 +248,45 @@ fn a_pane_without_shell_integration_keeps_its_title() {
     });
     (&mut st).with_facts(|facts, emit| apply_signals(facts, s.feed(b"lots of output\r\n"), emit));
     assert_eq!(st.facts.osc_title.as_deref(), Some("user@host:~/dev"));
+}
+
+/// The daemon must validate before touching the stored title or its lifetime:
+/// a command that emits only rejected titles cannot make a retained prompt
+/// title look command-owned, and cannot erase it at its `D`.
+#[test]
+fn a_rejected_title_preserves_the_stored_title_and_its_lifetime() {
+    let mut st = test_state(true);
+    let mut s = OscSniffer::new();
+    let mut read = |st: &mut PaneState, bytes: &[u8]| {
+        (st).with_facts(|facts, emit| apply_signals(facts, s.feed(bytes), emit))
+    };
+
+    read(&mut st, b"\x1b]133;A\x07\x1b]0;  prompt ; title  \x07\x1b]133;B\x07");
+    assert_eq!(
+        st.facts.osc_title.as_deref(),
+        Some("  prompt ; title  "),
+        "valid spaces and semicolons are kept as the program wrote them"
+    );
+
+    read(&mut st, b"\x1b]133;C;claude\x07");
+    let over = format!("\x1b]2;{}\x07", "x".repeat(MAX_TITLE_BYTES + 1));
+    read(&mut st, over.as_bytes());
+    assert_eq!(st.facts.osc_title.as_deref(), Some("  prompt ; title  "));
+    read(&mut st, b"\x1b]2;bad \xff utf8\x07");
+    assert_eq!(st.facts.osc_title.as_deref(), Some("  prompt ; title  "));
+
+    read(&mut st, b"\x1b]133;D;0\x07");
+    assert_eq!(
+        st.facts.osc_title.as_deref(),
+        Some("  prompt ; title  "),
+        "a failed command did not own the prompt title it tried to replace"
+    );
+
+    // The accepted command-title path still retires at its own `D`.
+    read(&mut st, b"\x1b]133;C;ls\x07\x1b]2;ls -la\x07");
+    assert_eq!(st.facts.osc_title.as_deref(), Some("ls -la"));
+    read(&mut st, b"\x1b]133;D;0\x07");
+    assert_eq!(st.facts.osc_title, None);
 }
 
 #[test]

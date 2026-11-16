@@ -293,14 +293,39 @@ impl NoteBudget {
     }
 }
 
+/// Longest OSC 0/2 title accepted, in bytes. Rio VT 0.5.32 drops a longer
+/// title in the parser every terminal consumer shares; the daemon applies the
+/// same rule to the raw payloads its own OSC scanner sees, so both sides keep
+/// the same last valid title.
+pub const MAX_TITLE_BYTES: usize = 255;
+
+/// The title an OSC 0/2 payload carries, under the validated title contract.
+///
+/// The rules are the ones the pinned Rio VT parser applies: `0;`/`2;`, at most
+/// [`MAX_TITLE_BYTES`] UTF-8 bytes, strict UTF-8, no trimming, and an empty
+/// payload accepted as the reset. `None` means the sequence is not a title or
+/// the title was rejected whole; a caller must then leave both the title and
+/// its [`TitleLifetime`] untouched.
+pub fn parse_validated_title(payload: &[u8]) -> Option<String> {
+    let rest = payload
+        .strip_prefix(b"0;")
+        .or_else(|| payload.strip_prefix(b"2;"))?;
+    if rest.len() > MAX_TITLE_BYTES {
+        return None;
+    }
+    std::str::from_utf8(rest).ok().map(str::to_owned)
+}
+
 /// What a sequence did to the title a pane is showing — see
 /// [`TitleLifetime`].
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TitleEffect {
     /// Nothing to do with the title.
     None,
-    /// An OSC 0/2: the pane just named itself.
-    Set,
+    /// An accepted OSC 0/2: the pane just named itself. The payload is
+    /// carried whole so callers do not parse it a second time and cannot
+    /// apply a different rule to the content than to the lifetime.
+    Set(String),
     /// The command that set the title showing has finished, so the title
     /// describes something that is no longer running and has to go.
     Retire,
@@ -342,10 +367,16 @@ pub struct TitleLifetime {
 impl TitleLifetime {
     /// Reads one OSC payload — identifier included, as
     /// [`OscTokenizer`] reports it — and says what it did to the title.
+    ///
+    /// A title is validated before either the title or this lifetime is
+    /// touched: a rejected report is exactly as inert as a sequence that was
+    /// never about the title. Otherwise a command that emitted only rejected
+    /// titles could still turn a retained prompt title into one it owns, and
+    /// the prompt title would disappear at its `D`.
     pub fn saw(&mut self, payload: &[u8]) -> TitleEffect {
-        if payload.starts_with(b"0;") || payload.starts_with(b"2;") {
+        if let Some(title) = parse_validated_title(payload) {
             self.from_command = self.running;
-            return TitleEffect::Set;
+            return TitleEffect::Set(title);
         }
         let Some(rest) = payload.strip_prefix(b"133;") else {
             return TitleEffect::None;
@@ -550,10 +581,7 @@ mod tests {
         let mut life = TitleLifetime::default();
         let mut title = None;
         tok.feed(stream, |payload| match life.saw(payload) {
-            TitleEffect::Set => {
-                let body = payload.split(|&b| b == b';').nth(1).unwrap_or(b"");
-                title = (!body.is_empty()).then(|| String::from_utf8_lossy(body).into_owned());
-            }
+            TitleEffect::Set(set) => title = (!set.is_empty()).then_some(set),
             TitleEffect::Retire => title = None,
             TitleEffect::None => {}
         });
@@ -621,12 +649,91 @@ mod tests {
         assert_eq!(life.saw(b"133;V;1"), TitleEffect::None);
     }
 
+    /// One validated-title rule for both consumers: the exact UTF-8 byte
+    /// budget, strict UTF-8, no trim, semicolons kept, empty reset.
+    #[test]
+    fn title_validation_is_whole_payload_utf8_bytes_without_trimming() {
+        let at_limit = "a".repeat(MAX_TITLE_BYTES);
+        assert_eq!(
+            parse_validated_title(format!("0;{at_limit}").as_bytes()).as_deref(),
+            Some(at_limit.as_str()),
+            "255 bytes is accepted"
+        );
+        let over = "a".repeat(MAX_TITLE_BYTES + 1);
+        assert_eq!(
+            parse_validated_title(format!("2;{over}").as_bytes()),
+            None,
+            "256 bytes is rejected whole, not truncated"
+        );
+
+        // 85 CJK characters are exactly 255 bytes; one more crosses the limit.
+        let cjk = "中".repeat(MAX_TITLE_BYTES / 3);
+        assert_eq!(cjk.len(), MAX_TITLE_BYTES);
+        assert_eq!(
+            parse_validated_title(format!("0;{cjk}").as_bytes()).as_deref(),
+            Some(cjk.as_str())
+        );
+        let cjk_over = "中".repeat(MAX_TITLE_BYTES / 3 + 1);
+        assert_eq!(
+            parse_validated_title(format!("0;{cjk_over}").as_bytes()),
+            None
+        );
+
+        assert_eq!(
+            parse_validated_title(b"0; \t padded title ; \t ").as_deref(),
+            Some(" \t padded title ; \t "),
+            "valid spaces and semicolons are payload, not formatting"
+        );
+        assert_eq!(
+            parse_validated_title(b"2;a;b;c;d;e").as_deref(),
+            Some("a;b;c;d;e")
+        );
+        assert_eq!(parse_validated_title(b"0;").as_deref(), Some(""));
+        assert_eq!(parse_validated_title(b"0"), None, "no payload at all");
+        assert_eq!(parse_validated_title(b"1;icon"), None, "OSC 1 is not ours");
+        assert_eq!(
+            parse_validated_title(b"0;bad \xff utf8"),
+            None,
+            "invalid UTF-8 rejects the report whole"
+        );
+    }
+
+    /// A rejected title is inert, including for the lifetime: a prompt title
+    /// must not become command-owned just because the command tried to name
+    /// the tab and failed validation.
+    #[test]
+    fn a_rejected_title_changes_neither_the_title_nor_its_lifetime() {
+        let mut life = TitleLifetime::default();
+        assert_eq!(life.saw(b"133;A"), TitleEffect::None);
+        assert_eq!(
+            life.saw(b"0;prompt title"),
+            TitleEffect::Set("prompt title".into())
+        );
+        assert_eq!(life.saw(b"133;C;claude"), TitleEffect::None);
+        assert_eq!(life.saw(&[b'2', b';', 0xff, b'x']), TitleEffect::None);
+        assert_eq!(
+            life.saw(format!("0;{}", "x".repeat(MAX_TITLE_BYTES + 1)).as_bytes()),
+            TitleEffect::None
+        );
+        assert_eq!(
+            life.saw(b"133;D;0"),
+            TitleEffect::None,
+            "the retained prompt title is not the failed command's to retire"
+        );
+
+        // The accepted command-title path still retires as before.
+        let mut life = TitleLifetime::default();
+        assert_eq!(life.saw(b"133;C;ls"), TitleEffect::None);
+        assert_eq!(life.saw(b"2;ls"), TitleEffect::Set("ls".into()));
+        assert_eq!(life.saw(b"133;D;0"), TitleEffect::Retire);
+    }
+
     /// A `D` with no command before it reports the shell's own startup, not a
     /// command that ended; there is nothing of anyone's to retire.
     #[test]
     fn a_d_mark_with_no_command_before_it_retires_nothing() {
         let mut life = TitleLifetime::default();
-        assert_eq!(life.saw(b"0;pinned"), TitleEffect::Set);
+        assert_eq!(life.saw(b"0;pinned"), TitleEffect::Set("pinned".into()));
         assert_eq!(life.saw(b"133;D;0"), TitleEffect::None);
     }
 
@@ -637,7 +744,7 @@ mod tests {
         let mut life = TitleLifetime::default();
         assert_eq!(
             life.saw(b"2;\xe2\x9c\xb3 fixing the switcher"),
-            TitleEffect::Set
+            TitleEffect::Set("✳ fixing the switcher".into())
         );
         life.joined_mid_command();
         assert_eq!(life.saw(b"133;D;0"), TitleEffect::Retire);
@@ -646,7 +753,7 @@ mod tests {
         // title pinned at a prompt stays pinned through the next command.
         let mut life = TitleLifetime::default();
         assert_eq!(life.saw(b"133;B"), TitleEffect::None);
-        assert_eq!(life.saw(b"0;my tab"), TitleEffect::Set);
+        assert_eq!(life.saw(b"0;my tab"), TitleEffect::Set("my tab".into()));
         life.joined_mid_command();
         assert_eq!(life.saw(b"133;C;ls"), TitleEffect::None);
         assert_eq!(life.saw(b"133;D;0"), TitleEffect::None);

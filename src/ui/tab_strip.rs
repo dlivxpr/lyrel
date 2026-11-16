@@ -83,12 +83,13 @@ fn join_segments(segments: &[&str], sep: char) -> String {
 }
 
 pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
-    let raw = raw.trim();
     if raw.is_empty() {
         return String::new();
     }
+    // `strip_host_prefix` cuts the shell's `user@host:` head, which is what
+    // labels here have always shortened away. It is not a title validator:
+    // every other byte of an accepted payload, spaces included, is shown.
     let after_host = strip_host_prefix(raw);
-    let after_host = after_host.trim();
     if after_host.is_empty() {
         return String::new();
     }
@@ -180,7 +181,7 @@ pub(crate) fn label_of(
     // here is the one thing #740 exists to stop. Nothing to say falls to the
     // number, which is what the strip showed before it shared this renderer.
     let shortened = |raw: &str| match short_title(raw, home) {
-        shortened if !shortened.trim().is_empty() => shortened,
+        shortened if !shortened.is_empty() => shortened,
         _ => match crate::terminal::view::stated_title(&view.title) {
             Some(title) => title.to_string(),
             None => unnamed(),
@@ -246,8 +247,10 @@ pub(crate) fn elide_path_keep_tail(
     path: &str,
     max_width: f32,
 ) -> SharedString {
-    let path = path.trim();
-    if path.is_empty() || measure_text(text_system, font, size, path) <= max_width {
+    if path.is_empty() {
+        return SharedString::from(path);
+    }
+    if measure_text(text_system, font, size, path) <= max_width {
         return SharedString::from(path);
     }
     let sep = path_separator(path);
@@ -363,8 +366,10 @@ pub(crate) fn elide_keep_edges(
     text: &str,
     max_width: f32,
 ) -> SharedString {
-    let text = text.trim();
-    if text.is_empty() || measure_text(text_system, font, size, text) <= max_width {
+    if text.is_empty() {
+        return SharedString::from(text);
+    }
+    if measure_text(text_system, font, size, text) <= max_width {
         return SharedString::from(text);
     }
     let cells = clusters(text);
@@ -1534,14 +1539,14 @@ impl LyrelApp {
         let (view, home) = tab.label_view(window, cx);
         let raw = match view.label() {
             TabLabel::Osc(title) | TabLabel::Cwd(title) => {
-                abbreviate_home(strip_host_prefix(title.trim()), home.as_deref()).into_owned()
+                abbreviate_home(strip_host_prefix(title), home.as_deref()).into_owned()
             }
             TabLabel::Agent(agent) => agent.slug().to_string(),
             TabLabel::Named(name) => name.to_string(),
             TabLabel::Process(title) => title.to_string(),
             TabLabel::Unknown => String::new(),
         };
-        (!raw.trim().is_empty()).then_some(raw)
+        (!raw.is_empty()).then_some(raw)
     }
 
     /// The New Tab control: one `+` that drops the list of everything it could
@@ -2433,8 +2438,13 @@ mod tests {
     }
 
     #[test]
-    fn short_title_blank_input_is_empty_and_long_names_are_clamped() {
-        assert_eq!(short_title("   "), "");
+    fn short_title_only_empty_is_absent_and_long_names_are_clamped() {
+        assert_eq!(short_title(""), "");
+        assert_eq!(
+            short_title("   "),
+            "   ",
+            "a validated payload's whitespace is content"
+        );
         let long = "a".repeat(50);
         let out = short_title(&long);
         assert_eq!(out.chars().count(), 41);

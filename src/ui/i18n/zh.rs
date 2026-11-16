@@ -6,6 +6,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::TerminalGlyphNeedsDaemonUpdate => {
             "Glyph 协议需要更新 lyrel 守护进程；当前窗格未改变"
         }
+        L10nKey::TerminalTitleNeedsDaemonUpdate => {
+            "此机器尚未支持校验后的终端标题；更新 lyrel-server 前，其窗格标题可能被裁剪"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} 行 · 回到实时输出",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",

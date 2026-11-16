@@ -6,6 +6,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::TerminalGlyphNeedsDaemonUpdate => {
             "Glyph Protocol needs an updated lyrel daemon; this pane was not changed"
         }
+        L10nKey::TerminalTitleNeedsDaemonUpdate => {
+            "This machine predates validated terminal titles; its pane titles may be trimmed until lyrel-server is updated"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} lines · Return to live",
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",

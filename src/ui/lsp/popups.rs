@@ -741,12 +741,6 @@ struct PopupAtCaret {
     content: Option<AnyElement>,
     laid_out: Option<AnyElement>,
 }
-impl IntoElement for PopupAtCaret {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
 impl Element for PopupAtCaret {
     type RequestLayoutState = ();
     type PrepaintState = ();

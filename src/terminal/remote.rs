@@ -661,6 +661,19 @@ impl RemoteTerminal {
         }
     }
 
+    /// The negotiated endpoint's answer to the validated-title contract.
+    ///
+    /// `Some(true)` means its daemon-derived title facts use the same rule as
+    /// this window's Rio parse, so the two can be claimed to agree.
+    /// `Some(false)` means an older endpoint whose sessions stay usable but
+    /// whose facts were produced under its own title rules. `None` is a
+    /// stream that never negotiated (test or embedded): no claim either way.
+    pub(crate) fn endpoint_validated_titles(&self) -> Option<bool> {
+        self.pane_version.as_ref().map(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_VALIDATED_TITLES)
+        })
+    }
+
     #[cfg(test)]
     pub fn adopt_relink(
         &mut self,

@@ -360,7 +360,7 @@ version = "0.3.5"
 
 [workspace.dependencies]
 # The public facade selects Fast consistently for component, base, assets and platform.
-gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
@@ -369,14 +369,14 @@ gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
 # mode stacks the daemon folds for replay stay in `lyrel-core`'s own
 # `term_modes`.
-rio-vt = { version = "=0.5.30", default-features = false }
+rio-vt = { version = "=0.5.32", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
-rio-unicode = "=0.5.30"
+rio-unicode = "=0.5.32"
 # Types plus the released `glyf` outline decoder and registry. `glyph` adds
 # skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
 # validates and retains registrations with it; the GUI decodes accepted bodies
 # for its derived picture.
-rio-graphics = { version = "=0.5.30", features = ["glyph"] }
+rio-graphics = { version = "=0.5.32", features = ["glyph"] }
 
 anyhow = "1"
 log = "0.4"

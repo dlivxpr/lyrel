@@ -90,6 +90,7 @@ macro_rules! l10n_keys {
 l10n_keys! {
     TerminalImageEvicted,
     TerminalGlyphNeedsDaemonUpdate,
+    TerminalTitleNeedsDaemonUpdate,
     TerminalReturnLive,
     NotificationInbox,
     NotificationClearHistory,

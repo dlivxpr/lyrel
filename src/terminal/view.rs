@@ -105,6 +105,14 @@ pub struct GlyphUnsupported;
 
 impl gpui_kit::EventEmitter<GlyphUnsupported> for TerminalView {}
 
+/// A pane attached to an endpoint that predates the validated-title contract.
+/// The session stays exactly as it is; the app tells the user that the
+/// machine's title facts may not agree with this window's parse until that
+/// endpoint is explicitly updated.
+pub struct TitleContractUnsupported;
+
+impl gpui_kit::EventEmitter<TitleContractUnsupported> for TerminalView {}
+
 /// A file link the user clicked, on its way to whoever can show it. The
 /// terminal resolves the path — it is the only thing that knows the pane's
 /// directory and host — and the app opens it, because the editor and the file
@@ -158,7 +166,7 @@ pub(crate) const DEFAULT_TITLE: &str = "lyrel";
 /// `lyrel` is the only title that says nothing, because it is the app's own
 /// name standing in for a pane that has never introduced itself.
 pub(crate) fn stated_title(title: &str) -> Option<&str> {
-    match title.trim() {
+    match title {
         "" => None,
         t if t == DEFAULT_TITLE => None,
         t => Some(t),
@@ -262,6 +270,9 @@ pub struct TerminalView {
     /// `set_title_when_settled`. `None` means the tab is showing the newest
     /// title there is.
     pending_title: Option<String>,
+    /// The compatibility warning for an older endpoint's title facts is said
+    /// once per pane, on the first title that could disagree.
+    title_contract_reported: bool,
     /// What the pane is called before anything running in it says otherwise —
     /// and what it goes back to when the program resets the title or the
     /// session ends. "lyrel" for a local shell; for an SSH pane it is the host
@@ -755,6 +766,7 @@ impl TerminalView {
             color_scheme_bg: super::palette::hsla_to_rgb(cx.theme().background),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
+            title_contract_reported: false,
             default_title: DEFAULT_TITLE.to_string(),
             relink_abandoned: false,
             relink_inflight: false,
@@ -3360,6 +3372,7 @@ mod gpui_tests {
     include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");
+    include!("title_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
@@ -5133,6 +5146,171 @@ mod gpui_tests {
                 });
             })
             .unwrap();
+    }
+
+    /// The agent composer is the product's framework-backed Textarea. The
+    /// 0.10 input engine covers grapheme deletion, long-paste caret reveal,
+    /// composition commit and secondary Enter. The draft and the bytes the
+    /// pane receives are what the user sees; a component-internal flag is not
+    /// enough.
+    #[gpui_kit::test]
+    fn composer_textarea_handles_grapheme_paste_composition_and_secondary_enter(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::core::cli_agent::CLIAgent;
+        use gpui_kit::EntityInputHandler as _;
+        use gpui_kit::component::input;
+
+        let (window, view, mut daemon) = rooted_harness(cx);
+        let draw = |cx: &mut TestAppContext| {
+            window.update(cx, |_, window, _| window.refresh()).unwrap();
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(400));
+            cx.run_until_parked();
+        };
+
+        // Hermes is a real agent, but it does not paint an input for the box
+        // to cover: the composer docks under the grid. That exercises the same
+        // Textarea without depending on another program's screen geometry.
+        DaemonMsg::Agent(Some(CLIAgent::Hermes))
+            .encode(&mut daemon)
+            .unwrap();
+        let mut reported = false;
+        for _ in 0..200 {
+            draw(cx);
+            if cx.update(|cx| view.read(cx).agent() == Some(CLIAgent::Hermes)) {
+                reported = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(reported, "the pane never reported its agent");
+
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| v.toggle_composer(window, cx));
+            })
+            .unwrap();
+        draw(cx);
+        let composer_input = cx.update(|cx| {
+            let v = view.read(cx);
+            assert!(v.composer_shown(), "an agent gets a composer");
+            assert!(v.composer_focused);
+            v.composer.as_ref().unwrap().input.clone()
+        });
+
+        // Backspace must remove the whole grapheme cluster, not split the
+        // family sequence into a dangling joiner.
+        window
+            .update(cx, |_, window, cx| {
+                assert!(
+                    composer_input.read(cx).focus_handle(cx).is_focused(window),
+                    "the composer owns the keyboard"
+                );
+                composer_input.update(cx, |state, cx| {
+                    state.set_value("a👨‍👩‍👧", window, cx);
+                    let end = state.value().len();
+                    state.set_selected_range(end..end, cx);
+                });
+                window.dispatch_action(Box::new(input::Backspace), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            "a",
+            "Backspace deletes the family grapheme as one unit"
+        );
+
+        // A composition is committed as the same draft the user will send.
+        window
+            .update(cx, |_, window, cx| {
+                composer_input.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                    state.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
+                    state.replace_text_in_range(None, "中文", window, cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            "中文",
+            "committing a composition replaces its preedit in the draft"
+        );
+
+        // A long single-line paste must leave the caret inside the visible
+        // input box, not off its trailing edge.
+        let long = "paste ".repeat(400);
+        cx.update(|cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(long.clone()));
+        });
+        window
+            .update(cx, |_, window, cx| {
+                composer_input.update(cx, |state, cx| state.set_value("", window, cx));
+                window.dispatch_action(Box::new(input::Paste), cx);
+            })
+            .unwrap();
+        for _ in 0..2 {
+            window
+                .update(cx, |_, window, cx| {
+                    window.simulate_next_frame(cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
+        let (value, cursor, caret, bounds, scroll_y) = cx.update(|cx| {
+            let state = composer_input.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor(),
+                state.cursor_layout().map(|(bounds, _)| bounds),
+                state.input_bounds(),
+                state.scroll_offset().y,
+            )
+        });
+        assert_eq!(value, long);
+        assert_eq!(cursor, long.len(), "the caret follows the pasted text");
+        let caret = caret.expect("the paste leaves a laid-out caret");
+        let top = caret.top() - bounds.top() + scroll_y;
+        assert!(
+            top >= px(0.)
+                && top + caret.size.height <= bounds.size.height
+                && caret.left() >= bounds.left()
+                && caret.right() <= bounds.right(),
+            "the pasted caret at {caret:?} (scroll {scroll_y:?}) must stay inside {bounds:?}"
+        );
+
+        // Secondary Enter submits the draft; it must not insert a newline
+        // first, or the agent would receive the line break as part of the
+        // message.
+        window
+            .update(cx, |_, window, cx| {
+                composer_input.update(cx, |state, cx| state.set_value("hello", window, cx));
+                window.dispatch_action(
+                    Box::new(input::Enter {
+                        secondary: true,
+                        shift: false,
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+        draw(cx);
+        assert_eq!(
+            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            "",
+            "secondary Enter submits the draft rather than typing into it"
+        );
+        assert_eq!(
+            next_input_until_timeout(&mut daemon).as_deref(),
+            Some(&b"hello"[..])
+        );
+        assert_eq!(
+            next_input_until_timeout(&mut daemon).as_deref(),
+            Some(&b"\r"[..]),
+            "the agent receives the submitted line, not a trailing newline"
+        );
     }
 
     /// The selection that seeds the search query is the thing being searched
