@@ -18,7 +18,6 @@ pub(crate) struct Archive<R: Read + Seek> {
     zip: ZipArchive<R>,
 }
 
-#[allow(dead_code)]
 impl<R: Read + Seek> Archive<R> {
     /// Opens the container and validates its global shape before any entry is
     /// read. Encryption is refused here: a protected book must never expose a

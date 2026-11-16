@@ -75,16 +75,6 @@ impl ReadingPosition {
             fraction,
         }
     }
-
-    /// Clamps coordinates against a book's actual shape.
-    pub fn clamp(&mut self, chapters: usize, blocks: usize) {
-        self.chapter = self.chapter.min(chapters.saturating_sub(1));
-        self.block = self.block.min(blocks.saturating_sub(1));
-        if !self.fraction.is_finite() {
-            self.fraction = 0.;
-        }
-        self.fraction = self.fraction.clamp(0., 1.);
-    }
 }
 
 /// One bookmark: a stable chapter/block anchor plus a readable label.

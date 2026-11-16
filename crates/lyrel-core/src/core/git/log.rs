@@ -119,10 +119,6 @@ impl Commit {
         let n = self.oid.len().min(7);
         &self.oid[..n]
     }
-
-    pub fn is_merge(&self) -> bool {
-        self.parents.len() > 1
-    }
 }
 
 /// One line inside a single row's band: from the row's top edge to its bottom.
@@ -1521,7 +1517,6 @@ mod tests {
         assert_eq!(commits[0].committer.email, "grace@example.com");
         assert_eq!(commits[1].body, "");
         assert_eq!(commits[1].parents.len(), 0);
-        assert!(!commits[0].is_merge());
     }
 
     #[test]
@@ -1530,7 +1525,6 @@ mod tests {
         let commits = parse_log(stream.as_bytes()).commits;
 
         assert_eq!(commits[0].parents.as_slice(), [SHA_B, SHA_C]);
-        assert!(commits[0].is_merge());
         assert_eq!(commits[0].short(), "aaaaaaa");
     }
 

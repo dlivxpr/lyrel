@@ -8,7 +8,6 @@ use gpui_kit::{App, Context, Window};
 use crate::ui::i18n::L10nKey;
 use crate::ui::notification_history::Notification;
 
-#[allow(unused_imports)]
 pub use lyrel_core::host::{
     Entry, Host, HostId, MTime, Meta, Output, SearchHit, SharedHost, WatchSub,
 };

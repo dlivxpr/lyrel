@@ -60,20 +60,6 @@ impl RemoteLink {
             RemoteLink::LocalStdio(_) => "local-stdio",
         }
     }
-
-    pub fn is_stdio_bridge(&self) -> bool {
-        matches!(
-            self,
-            RemoteLink::SessionExec(_) | RemoteLink::Wsl(_) | RemoteLink::LocalStdio(_)
-        )
-    }
-
-    pub fn is_ssh(&self) -> bool {
-        matches!(
-            self,
-            RemoteLink::StreamLocal(_) | RemoteLink::SessionExec(_)
-        )
-    }
 }
 
 fn wsl_link_argv<'a>(server: &'a str, channel: RouteChannel) -> Vec<&'a str> {
@@ -359,8 +345,6 @@ mod tests {
     async fn a_local_stdio_child_round_trips_bytes() {
         let mut link = test_stdio_echo_link();
         assert_eq!(link.kind_label(), "local-stdio");
-        assert!(link.is_stdio_bridge());
-        assert!(!link.is_ssh());
 
         let payload = b"hello remote\n\0\xff\r\n";
         link.write_all(payload).await.unwrap();

@@ -895,7 +895,6 @@ impl DaemonPane {
         }
     }
 
-    #[allow(dead_code)]
     pub fn ssh_connection(&self) -> Option<Arc<crate::daemon::ssh::SshConnection>> {
         self.backend.ssh_connection()
     }

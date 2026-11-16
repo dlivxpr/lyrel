@@ -44,9 +44,6 @@ fn clamp(s: &str, max: usize) -> String {
     }
 }
 
-/// The last segment of a path, for columns that have room for a word and not
-/// for a path. Both separators: the same server answers a Windows client, and
-/// `C:\proj` has to lose its head too.
 /// What the sidebar's header for a pinned group reads: the name the user gave
 /// it, or the last segment of its folder — the full path would be the widest
 /// column in the table for no gain.
@@ -58,6 +55,9 @@ pub fn pinned_group_label(group: &lyrel_core::core::group_key::PinnedGroup) -> S
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// The last segment of a path, for columns that have room for a word and not
+/// for a path. Both separators: the same server answers a Windows client, and
+/// `C:\proj` has to lose its head too.
 pub fn path_leaf(path: &str) -> &str {
     let trimmed = path.trim_end_matches(['/', '\\']);
     match trimmed.rsplit(['/', '\\']).next() {

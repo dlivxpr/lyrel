@@ -256,7 +256,6 @@ pub struct SshConnection {
     /// the one before it: a workspace of twenty tabs on a 300ms link took ten
     /// seconds to come back, one tab at a time.
     handle: russh::client::Handle<super::handler::ClientHandler>,
-    #[allow(dead_code)]
     key: ConnectionKey,
     remote_forwards: RemoteForwardTable,
     alive: AtomicBool,
@@ -286,7 +285,6 @@ impl SshConnection {
         })
     }
 
-    #[allow(dead_code)]
     pub fn key(&self) -> &ConnectionKey {
         &self.key
     }

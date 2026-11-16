@@ -330,7 +330,6 @@ impl CLIAgent {
         Some(out)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn detect_from_argv(argv: &[String]) -> Option<CLIAgent> {
         Self::detect_from_argv_with(argv, &HashMap::new())
     }

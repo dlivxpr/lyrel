@@ -28,7 +28,6 @@ impl CmdEditor {
         self.chars.len()
     }
 
-    #[allow(dead_code)]
     pub fn cursor(&self) -> usize {
         self.cursor
     }

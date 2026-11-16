@@ -50,14 +50,6 @@ impl EpubError {
     pub(crate) fn limit(resource: &'static str, limit: u64) -> Self {
         Self::Limit { resource, limit }
     }
-
-    /// Whether this answer describes a book at all.
-    ///
-    /// `NotEpub` is the only error an unclaimed ZIP may use to fall back to
-    /// the workbench's ordinary archive behaviour.
-    pub fn is_book_answer(&self) -> bool {
-        !matches!(self, Self::NotEpub)
-    }
 }
 
 impl fmt::Display for EpubError {

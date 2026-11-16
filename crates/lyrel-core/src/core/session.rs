@@ -182,15 +182,6 @@ impl RemoteTarget {
         }
     }
 
-    pub fn is_ssh(&self) -> bool {
-        match self {
-            RemoteTarget::Profile { .. }
-            | RemoteTarget::Alias { .. }
-            | RemoteTarget::Direct { .. } => true,
-            RemoteTarget::Wsl { .. } | RemoteTarget::LocalStdio { .. } => false,
-        }
-    }
-
     /// Whether the far end is served by a lyrel daemon this computer installed
     /// and can therefore restart. SSH machines and WSL distros both are; a
     /// `--stdio` program is whatever the user named, and stopping it is its
@@ -876,38 +867,6 @@ mod tests {
             }
             .connection_key(),
             "wsl:Ubuntu"
-        );
-    }
-
-    #[test]
-    fn only_ssh_machines_are_reached_over_ssh() {
-        assert!(
-            RemoteTarget::Profile {
-                id: uuid::Uuid::nil()
-            }
-            .is_ssh()
-        );
-        assert!(
-            RemoteTarget::Alias {
-                alias: "devbox".into()
-            }
-            .is_ssh()
-        );
-        assert!(RemoteTarget::direct("me", "box.local", 22).is_ssh());
-        assert!(
-            !RemoteTarget::Wsl {
-                distro: "Ubuntu".into()
-            }
-            .is_ssh(),
-            "a distribution is reached through wsl.exe, not a connection"
-        );
-        assert!(
-            !RemoteTarget::LocalStdio {
-                program: "lyrel-server".into(),
-                args: vec!["--stdio".into()],
-            }
-            .is_ssh(),
-            "a stdio machine is a child process per connection"
         );
     }
 

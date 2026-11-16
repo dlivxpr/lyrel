@@ -1109,13 +1109,6 @@ impl RemoteTerminal {
         self.reattached
     }
 
-    /// The backend this pane's stream actually negotiated with. `None` only
-    /// for in-process test streams that never performed the handshake.
-    #[allow(dead_code)]
-    pub fn pane_version(&self) -> Option<&DaemonVersion> {
-        self.pane_version.as_ref()
-    }
-
     pub fn at_prompt(&self) -> bool {
         self.shell_state
             .lock()
