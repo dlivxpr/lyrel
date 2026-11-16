@@ -167,13 +167,13 @@ impl XmlDocument {
                 let Some((snapshot, revision, generation, cancel)) = job else {
                     break;
                 };
-                #[cfg(any(test, feature = "native-markdown-tests"))]
+                #[cfg(test)]
                 let gate = test_support::take_next_parse();
                 let result = crate::ui::host_ops::off_thread(move || {
                     if cancel.load(Ordering::Acquire) {
                         return None;
                     }
-                    #[cfg(any(test, feature = "native-markdown-tests"))]
+                    #[cfg(test)]
                     if let Some(gate) = gate {
                         gate.block();
                     }
@@ -385,7 +385,7 @@ impl XmlView {
         Some(SourceLocation::of(snapshot.text(), range))
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(crate) fn selected_path(&self, cx: &App) -> Option<SharedString> {
         let projection = self.document.read(cx).projection()?;
         projection
@@ -394,7 +394,7 @@ impl XmlView {
             .map(|node| SharedString::from(node.path.clone()))
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(crate) fn edit_texts(&self, cx: &App) -> Option<(Option<String>, String)> {
         let session = self.editing.as_ref()?;
         Some((
@@ -404,7 +404,7 @@ impl XmlView {
     }
 
     /// 测试消费者把键盘放进真实值控件（单行 `Input` 或多行 `Textarea`）。
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(crate) fn focus_edit_value(&self, window: &mut Window, cx: &mut App) {
         if let Some(session) = &self.editing {
             session
@@ -1807,8 +1807,8 @@ pub(super) fn menu_entries(
     )
 }
 
-/// 解析的确定性测试门闩：只编译进测试与 native 测试引擎，不改变产品路径。
-#[cfg(any(test, feature = "native-markdown-tests"))]
+/// 解析的确定性单元测试门闩，不编译进产品或独立 native 消费者。
+#[cfg(test)]
 pub(crate) mod test_support {
     use std::sync::{
         Arc,

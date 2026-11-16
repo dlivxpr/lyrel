@@ -124,7 +124,7 @@ impl StructureEditPanel {
     }
 
     /// 测试消费者把键盘放进真实值控件（多行时为 `Textarea`）。
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(crate) fn focus_value(&self, window: &mut Window, cx: &mut App) {
         let handle = match &self.multi_value {
             Some(value) => value.read(cx).focus_handle(cx).clone(),

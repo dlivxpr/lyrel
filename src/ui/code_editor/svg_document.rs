@@ -126,7 +126,7 @@ impl SvgDocument {
         self.rendering
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(crate) fn rendered_revision(&self) -> Option<u64> {
         self.rendered_revision
     }
@@ -165,13 +165,13 @@ impl SvgDocument {
             let Some((snapshot, cancel)) = snapshot else {
                 return;
             };
-            #[cfg(any(test, feature = "native-markdown-tests"))]
+            #[cfg(test)]
             let gate = test_support::take_next_render();
             let result = crate::ui::host_ops::off_thread(move || {
                 if cancel.load(Ordering::Acquire) {
                     return None;
                 }
-                #[cfg(any(test, feature = "native-markdown-tests"))]
+                #[cfg(test)]
                 if let Some(gate) = gate {
                     gate.block();
                 }
@@ -886,8 +886,8 @@ pub(super) fn menu_entries(
         .menu(t(L10nKey::EditorImageActualSize), Box::new(ImageActualSize))
 }
 
-/// 预览的确定性测试门闩：只编译进测试与 native 测试引擎，不改变产品路径。
-#[cfg(any(test, feature = "native-markdown-tests"))]
+/// 预览的确定性单元测试门闩，不编译进产品或独立 native 消费者。
+#[cfg(test)]
 pub(crate) mod test_support {
     use std::sync::{
         Arc,
