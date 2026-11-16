@@ -116,7 +116,8 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 ## 分支策略与会话清理
 
 - `implement-spec` 等一次性、长时间运行的任务：会话分支以 PR 形式合入主分支；简单的问题修复直接提交主分支即可。
-- #279 的 `docs/file-preview-editing-design` 及后续功能分支同步主线时，将分支独有提交 rebase 到最新 `origin/main`，不反复双向 merge。共享分支改写前先协调；需更新已发布分支时只用 `--force-with-lease`，lease 拒绝则先核对远端新提交。最终 PR 使用 squash 或线性 rebase 合入；合入后的旧分支不再承载后续工作，不重写主分支或引入与任务无关的历史整理。
+- #279 的 `docs/file-preview-editing-design` 及后续功能分支同步主线时，将分支独有提交 rebase 到最新 `origin/main`，不反复双向 merge。共享分支改写前先协调；需更新已发布分支时只用 `--force-with-lease`，lease 拒绝则先核对远端新提交。最终 PR 仅使用 squash 合入保持线性提交图，不创建 merge-commit 气泡；合入后的旧分支不再承载后续工作，不重写主分支或引入与任务无关的历史整理。
+- 发行 `workspace.package.version` 提升：将 `cargo update --workspace --offline` 写回的 `Cargo.lock` 与 `Cargo.toml` 的 `version` 变更放入同一 commit，再打 `v<version>` tag 推送；`--locked` 构建拒绝锁文件版本漂移，`Cargo.toml` 单独修改会让 release 立即失败。
 - 会话完成的判定：会话分支已合入主分支，或会话更改已推送 GitHub 且 CI 通过。满足后清理：会话产生的中间文件、创建的分支与 worktree；若用过 Docker，删除会话拉取的镜像；若用过 WSL，清理其中的冗余文件；按实际使用收缩 WSL／Docker 虚拟磁盘。清理只针对会话引入的产物，主检出、既有分支和共享镜像不列入。
 
 ## Agent skills
