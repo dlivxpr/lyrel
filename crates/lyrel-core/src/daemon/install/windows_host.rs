@@ -254,12 +254,20 @@ pub(crate) fn launch_command(binary: &str, log: &str, exit: &str, nonce: &str) -
     // The supervisor is encoded on the far end rather than here: encoding it
     // twice would put it on the wire as base64 of base64 of UTF-16, and the
     // outer line has to fit cmd.exe's 8191 characters.
+    // Store app execution aliases and unversioned shims report version zero.
+    // Ask only those candidates for their runtime version and real PSHOME;
+    // passing the alias itself to WMI does not identify the installed image.
     powershell(
         "launch",
         &format!(
             "$s = {supervisor}\n\
-             $ps = Get-Command pwsh.exe -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object {{ $_.Version.Major -ge 7 }} | Select-Object -First 1\n\
-             $ps = if ($ps) {{ $ps.Path }} else {{ Join-Path $PSHOME 'powershell.exe' }}\n\
+             $ps = Get-Command pwsh.exe -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object {{ $_.Version.Major -ge 7 -or $_.Version.Major -eq 0 }} | Select-Object -First 1\n\
+             if ($ps -and $ps.Version.Major -eq 0) {{\n\
+               $pwshHome = & $ps.Path -NoLogo -NoProfile -NonInteractive -Command 'if ($PSVersionTable.PSVersion.Major -ge 7) {{ [Console]::Out.Write($PSHOME) }}'\n\
+               if ($LASTEXITCODE -ne 0) {{ [Console]::Error.WriteLine('Could not resolve the PowerShell supervisor: ' + $ps.Path); exit 1 }}\n\
+               $ps = if ($pwshHome) {{ Join-Path $pwshHome 'pwsh.exe' }} else {{ $null }}\n\
+             }} elseif ($ps) {{ $ps = $ps.Path }}\n\
+             if (-not $ps) {{ $ps = Join-Path $PSHOME 'powershell.exe' }}\n\
              $inner = '\"' + $ps + '\" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($s))\n\
              $bootstrap = '\"' + $env:ComSpec + '\" /d /s /c \"' + $inner + '\"'\n\
              $vars = [string[]](Get-ChildItem Env: | ForEach-Object {{ $_.Name + '=' + $_.Value }})\n\
