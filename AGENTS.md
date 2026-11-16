@@ -1,141 +1,67 @@
 # 仓库工作指南
 
-## 项目概览
+## 产品与架构
 
-lyrel 基于 [l0ng-ai](https://github.com/l0ng-ai) 的 Apache-2.0 许可终端源码独立开发，是 Rust 原生终端工作台：GPUI GPU 渲染、持久化 shell 会话、SSH、coding agent、Git/文件编辑，面向桌面本地开发与桌面远程开发。保留原始版权、Apache-2.0 许可证及真实第三方资源来源。
+lyrel 是基于 l0ng-ai 的 Apache-2.0 终端源码独立开发的 Rust/GPUI 终端工作台，面向桌面本地开发和桌面远程开发；Markdown/editor 是辅助能力，不扩展成独立写作产品或手机网关。保留原始版权、许可证和真实第三方资源来源。
 
-产品与根包为 `lyrel`，GUI 为 `lyrel-app`，CLI crate 为 `lyrel-cli`、命令为 `lyrel`，共享核心为 `lyrel-core`，server 为 `lyrel-server`，updater 为 `lyrel-updater`，统一从 `0.1.0` 独立编号，仅提供 stable。项目入口为 `https://github.com/dlivxpr/lyrel`；GitHub CI 与发布工作流位于 `.github/workflows/`。独立命令、`LYREL_*` 环境变量、数据与凭据命名空间不自动读取、迁移或接管其他产品的实例；应用更名不重置 IPC 协议版本。
+产品/根包为 `lyrel`，GUI 为 `lyrel-app`，CLI crate/命令为 `lyrel-cli` / `lyrel`，共享核心为 `lyrel-core`，server 为 `lyrel-server`，updater 为 `lyrel-updater`。独立 stable 版本、`LYREL_*` 环境变量、数据与凭据命名空间不自动读取、迁移或接管其他产品实例；更名不重置 IPC 协议版本。仓库：`https://github.com/dlivxpr/lyrel`。
 
-## 架构与数据流
+GUI/CLI 经共享 core 连接独立 Session Daemon，daemon 持有 PTY/shell/coding agent，并通过 SSH/stdio 连接远端 server；会话不依赖窗口存活。GUI 可用自身的 `--daemon` 模式拉起 daemon，server 是同一核心的 headless 入口。正式架构见 `docs/reference/architecture.mdx`。
 
-```mermaid
-flowchart LR
-    GUI["桌面 GPUI · lyrel-app"] <--> Client["lyrel-core 客户端"]
-    CLI["CLI · lyrel"] <--> Client
-    Client <-->|control / pane| Daemon["独立进程 Session Daemon"]
-    Daemon <--> PTY["PTY / shell / coding agent"]
-    Daemon <-->|SSH / stdio| Remote["远端 lyrel-server"]
-```
+## 修改入口
 
-- GUI 可用自身二进制的 `--daemon` 模式拉起守护进程；`lyrel-server` 是复用同一核心的 headless 入口。会话生命周期不依赖窗口是否打开。
-- `src/daemon.rs` 重导出 `lyrel_core::daemon`；`src/core/mod.rs` 重导出共享核心并补充 GUI 适配。修改共享逻辑应定位到 `crates/lyrel-core/`，不要在 GUI 层复制一套。
-- daemon 持有机器／工作区／标签页／pane 树并持久化；`src/ui/machine_mirror.rs` 是窗口侧镜像。保留拉取期间本地写操作的重放逻辑，避免旧快照覆盖新操作。
-- `lyrel-core` 保持无 GPUI 依赖；系统凭据存储留在 GUI。`lyrel-server` 唯一生产依赖是 `lyrel-core`，保持远端 server 的依赖精简。
-
-## 关键目录
-
-| 路径 | 修改范围 |
+| 路径 | 职责与约束 |
 | --- | --- |
-| `src/ui/` | 工作台、窗口、pane 布局、Git/文件/编辑器、设置与本地化 |
-| `src/terminal/` | 终端视图、输入、补全、搜索与输出渲染 |
-| `src/core/` | 共享 core 的 GUI 包装、系统集成、凭据与窗口状态 |
-| `crates/lyrel-core/` | 无 GUI 的领域模型、Host 抽象、会话 daemon、PTY、SSH 与 IPC |
-| `crates/lyrel-server/`、`crates/lyrel-cli/` | headless 服务端与面向用户／agent 的 CLI |
-| `scripts/`、`.github/scripts/` | 基准、补全数据转换，以及 CI／打包／平台断言脚本 |
-| `docs/`、`assets/` | Mintlify 文档、运行资源／补全数据 |
+| `src/main.rs`、`src/lib.rs::run` | 保留平台 subsystem 的薄 binary；GUI/daemon/agent-hook 分发与应用注册 |
+| `src/ui/`、`src/terminal/` | 工作台、编辑器、设置、终端输入与渲染；`app.rs` / `view.rs` 等大文件按行为定位范围阅读 |
+| `crates/lyrel-core/` | 无 GPUI 的领域模型、Host、daemon、PTY、SSH、IPC；共享逻辑在此修改 |
+| `src/daemon.rs`、`src/core/` | core 重导出与 GUI/系统适配，不复制共享实现 |
+| `crates/lyrel-cli/src/cli.rs`、`crates/lyrel-cli/src/backend.rs` | CLI 参数契约；依赖替换沿用 `Backend` trait 分层 |
+| `crates/lyrel-markdown-editor/`、`crates/lyrel-text/` | editor 源码适配；`lyrel-text` 保持 GUI-free，不反向依赖 editor |
+| `crates/lyrel-core/src/core/config.rs`、`src/core/config.rs` | 配置解析/进程覆盖；GUI 包装与测试写盘守卫 |
+| `Cargo.toml`、`Cargo.lock`、`.cargo/config.toml` | workspace、统一版本、features、锁定依赖与开发别名 |
+| `scripts/`、`.github/`、`docs/docs.json` | 开发与平台脚本、CI/发布工作流、文档导航 |
 
-## 开发命令
+## 工程底线
 
-以下命令在仓库根目录执行；`cargo dev` 使用 `.lyrel-dev` 隔离真实用户配置。
+- 工作区路径可能属于远端。文件、Git、监视等经 `Host` / `SharedHost` 注入，GUI 通过 `src/ui/host_ops.rs` 的 `HostOps` 在线程池执行；不能用本地文件系统解释远端路径或在 UI 线程执行阻塞 Host 调用。
+- `lyrel-core` 不依赖 GPUI，系统凭据存储留在 GUI；`lyrel-server` 唯一生产依赖为 core。Windows/macOS 到 Linux 的 SSH/SFTP、Host/PTY 和 WSL 接线不可因桌面退役删除。
+- daemon 持有并持久化机器/工作区/标签页/pane 树；`src/ui/machine_mirror.rs` 的拉取期间本地写重放必须保留，避免旧快照覆盖新操作。
+- GPUI 沿用 `Entity`、`Global`、`cx.spawn`、`background_executor`；GUI 只经 `gpui-kit` 官方 Fast 类型。daemon 的 std 线程/channel 与 SSH 引擎的 Tokio runtime 不混作同一个异步环境。
+- Host/文件错误用 `io::Result`，二进制边界用 `anyhow` 上下文；GUI 经 `HostOps::run_in` 和 `HostOps::notify_err` / error notification 呈现失败，保留 CLI 错误链与子进程退出码。
+- 修改终端输出热路径保留 `src/terminal/view.rs` 的隐藏 pane 通知门控，不因不可见输出触发整窗重绘。
+- UI 颜色取 `src/ui/presets.rs` / `src/ui/theme.rs` 的语义角色；文案经 `L10nKey` 同步 `en`、`zh-CN`。`system` 是配置模式，不是第三种翻译语言；OS 界面语言解析不能用 PTY locale 替代。
+- IPC 修改前读 `crates/lyrel-core/src/daemon/control.rs` 和 `crates/lyrel-core/src/daemon/protocol.rs`；增删 control 变体提升 `CONTROL_VERSION`，可忽略字段按 feature 协商，pane 协议版本另行处理。
+- 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path、`[patch]` 或修改下载源码。例外仅限 #236 的 Zorite editor/bidi、#241 的 ratex GUI，以及 #279 在正式架构文档「上游源码复用与适配」清单批准的固定 Glim MIT / Zorite MIT `gpui-pdf`；清单内优先复用真实实现，逐文件记录来源、原始摘要、许可和本地适配，不扩展到 GPL 应用代码或清单外资源。
+- Windows ConPTY 与 Windows server 仅支持 x86_64，远端 ARM64 Windows 明确拒绝；固定 ConPTY 文件对、许可、架构、版本和摘要校验 fail-closed，不静默回退系统实现，构建脚本不隐式下载。
+- 默认配置为 Unix `~/.config/lyrel`、Windows `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。测试/调试必须隔离，不能影响安装实例。产品 `TERM_PROGRAM=lyrel`，标准环境变量键保持原样；#248 兼容身份只限已知 coding agent 的命令作用域，显式值优先，结束恢复 pane 基线。
 
-| 目的 | 命令 |
+## 开发与验收
+
+构建、测试或运行验收先读 `.agent/skills/lyrel-development/SKILL.md`。Windows 常用入口为 `pwsh scripts/cargo-windows.ps1 build --locked`，macOS 为 `cargo build --locked`；`cargo dev` 使用 `.lyrel-dev`，Windows 启动前完成同配置 wrapper build。
+
+- Rust 使用 edition 2024、stable 和现有 lockfile，不把本机版本设为 MSRV；沿用 rustfmt，保留 Clippy 对 `dbg!` / `todo!` 的禁止。
+- Cargo 检查、构建和测试以当前检出的 zero-warning 为交付标准，遗留 warning 逐条说明理由。按改动选择最小检查，行为变更还需真实运行；纯规则/文档改动不触发无关产品构建。
+- 普通桌面单元测试归 library，不以 binary 的零用例代替；配置、socket 和子进程隔离，native 字形测试保留 OS 主线程约束。缺运行时、平台或外部工具不能跳过后宣称完整通过。
+- 报告实际命令、退出码和关键日志，区分已运行、跳过和未验证。Windows 通过不替代 Unix；CI/headless/截图不替代原生 UI、SSH、中文 IME、安装和在线更新验收；桌面交互优先后台自动化。
+
+## 按任务读取
+
+| 触发条件 | 入口 |
 | --- | --- |
-| 启动桌面开发实例（Windows/macOS） | `cargo dev` |
-| 桌面 Debug 构建／Release 构建 | `cargo build --locked` / `cargo build --release --locked` |
-| 查看 CLI 用法 | `cargo run --locked -p lyrel-cli -- --help` |
-| 准备官方 ConPTY（Windows 首次构建或 `.conpty/` 失效前运行一次） | `pwsh scripts/prepare-conpty.ps1` |
-| 启动隔离的 headless daemon | `cargo run --locked -p lyrel-server -- --daemon --config-dir .lyrel-dev` |
-| 桌面平台默认成员测试，不含独立 native 字形消费者 | `cargo test --locked` |
-| 桌面平台根 workspace 全成员测试 | `cargo test --workspace --locked` |
-| 桌面 updater 专项测试（Windows/macOS） | `cargo test --locked --features updater --bin lyrel-updater` |
-| 真实 native Markdown 字形消费者（Windows/macOS） | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` |
-| 真实 native 终端字形消费者（Windows/macOS） | `cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal` |
-| 桌面 library 单元测试 | `cargo test --locked -p lyrel --lib` |
-| 格式检查／写回 | `cargo fmt --check` / `cargo fmt` |
-| Host 架构边界检查，需 Bash 与 LF 脚本行尾 | `bash .github/scripts/check-host-boundary.sh` |
-| 补充 lint，CI 未运行此项 | `cargo clippy --workspace --all-targets --locked` |
+| 探索产品代码或领域概念 | `docs/agents/domain.md` 及任务涉及的正式文档 |
+| UI、布局、交互或文案 | `gpui-kit`、`gpui-kit-design-guides`、`docs/design-system.md`；语言解析见 `docs/customization/settings.mdx` |
+| 编辑 Markdown editor | `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md` |
+| 构建、测试、ConPTY、平台与运行验收 | `.agent/skills/lyrel-development/SKILL.md` |
+| issue/PR、分诊、依赖、分支同步或交付清理 | `.agent/skills/lyrel-github/SKILL.md` |
+| 获准实施多工单规格 | `.agent/skills/lyrel-implement-spec/SKILL.md` |
+| 版本提升、打包、发布或资产核验 | `.agent/skills/lyrel-release/SKILL.md` |
+| 用 CLI 操作 Lyrel 工作区/pane 或启动可见外部智能体 | `skills/lyrel/SKILL.md`；外部委派再读其 `references/delegation.md` |
 
-Windows：表中的 `cargo build`／`cargo test` 改用 `pwsh scripts/cargo-windows.ps1 build`／`pwsh scripts/cargo-windows.ps1 test`，其余参数不变；脚本从 Cargo JSON 的实际 executable 路径暂存固定 ConPTY，不依赖 Cargo 1.100 已改变的 `deps/`／`OUT_DIR` 布局。`cargo dev`／`cargo run` 前先完成同配置的 wrapper build。准备目录与独立产物契约见 `assets/windows/conpty/README.md`。
+项目专用 Skill 只存放在本仓库的通用目录 `.agent/skills/`，不放入 omp 专用目录或全局目录；`skills/lyrel/` 是对外分发的产品技能，不搬迁或复制。支持发现该目录的工具可用对应 Skill 入口，其他环境按文件路径读取；omp 可用 `skill://lyrel-*`。内置委派遵守当前工具契约，用实际可用的 agent 与隔离机制，不把模型 role 当作 agent 名；显式传递相关工程约束。
 
-Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text`、`lyrel-epub` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 下的 `native_markdown` 与 `native_terminal` 两个真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
+## 文案与交付权限
 
-Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`。`.gitattributes` 已为 `.sh` 固定 LF；先排除行尾问题，不通过扩大 allowlist 掩盖。
-
-## 书写语言
-
-- `AGENTS.md` 使用简体中文。
-- GitHub issue 的标题、正文与评论使用英文。
-- GitHub PR 的标题与正文使用英文。
-- Git 提交信息使用英文。
-- GitHub Release 标题仅使用版本标签（如 `v0.1.2`），不使用 Git 提交信息；变更说明写入正文。
-- `docs/` 下的文档使用简体中文；代码、命令、路径与 API 名保留原文。
-
-## 代码约定与常用模式
-
-- Rust 使用默认 rustfmt；函数／模块为 `snake_case`，类型为 `UpperCamelCase`。共享 Clippy 配置禁止 `dbg!` 和 `todo!`，允许 `type_complexity`。
-- 工作区路径可能属于远端。文件、Git、目录监视等操作通过 `Host`／`SharedHost` 注入，GUI 经 `src/ui/host_ops.rs` 的 `HostOps` 在线程池执行；不要在 UI 中直接用本地文件系统解析远端路径。
-- GPUI 使用 `Entity` 保存视图状态、`Global` 保存应用级状态。异步沿用 `cx.spawn`、`background_executor`，完成后通过实体／context 更新 UI；Host 阻塞调用不能放在 UI 线程。
-- daemon 使用 std 线程与 channel，SSH 引擎有自己的 Tokio runtime；不要将 GUI 与 daemon 视为同一个异步执行环境。
-- CLI 的依赖替换点是 `crates/lyrel-cli/src/backend.rs` 的 `Backend` trait；沿用真实 backend 与测试替身的分层。
-- Host/文件操作返回 `io::Result`；二进制边界使用 `anyhow` 和错误上下文。GUI 通过 `HostOps::run_in` 执行操作，在完成回调中用 `HostOps::notify_err`／error notification 展示失败，保留 CLI 的错误链与子进程退出码。
-- 修改终端输出热路径时保留隐藏 pane 的通知门控，避免不可见输出触发整窗重绘，见 `src/terminal/view.rs`。
-- 修改 UI 先读 `docs/design-system.md`；颜色取自 `src/ui/presets.rs` 与 `src/ui/theme.rs` 的语义角色。新增文案通过 `src/ui/i18n/` 的 `L10nKey`，同步 `en`、`zh-CN` 翻译；`system` 仅为配置选择模式，不是第三种翻译语言。语言解析规则见 `docs/customization/settings.mdx`，不得用 PTY locale 代替 OS 界面语言。
-- 修改 IPC 前读 `crates/lyrel-core/src/daemon/control.rs` 与 `crates/lyrel-core/src/daemon/protocol.rs`。增删 control 消息变体需提升 `CONTROL_VERSION`；可忽略字段按 feature 协商。pane 协议另有版本，不能混用。
-
-## 重要文件
-
-- `src/main.rs`：保留平台 subsystem 属性的薄 binary；`src/lib.rs::run`：GUI／daemon／agent-hook 角色分发、应用启动与全局注册。普通桌面单元测试归 library，不以 `--bin lyrel-app` 的零用例结果代替。
-- `src/ui/app.rs`、`src/terminal/view.rs`：工作台编排与终端主视图；文件很大，按符号或行为定位范围阅读。
-- `crates/lyrel-cli/src/cli.rs`：用户可见命令和参数契约。
-- `crates/lyrel-core/src/core/config.rs`：共享配置、目录解析和进程级覆盖；`src/core/config.rs` 是 GPUI 包装与测试写盘守卫。
-- `Cargo.toml`、`Cargo.lock`：workspace、统一版本、features 与正式锁定依赖；`.cargo/config.toml`：开发别名与 Windows 编译参数。
-- `build.rs`：Windows 图标资源；`crates/lyrel-core/build.rs`：共用 ConPTY 构建输入核验；`scripts/cargo-windows.ps1`：按 Cargo JSON 暂存实际程序与测试 executable 的 ConPTY。
-- `docs/docs.json`：文档导航；源码构建依赖见 `docs/getting-started/installation.mdx`。修改补全生成流程读 `scripts/fig-convert/README.md`，性能验证读 `scripts/bench/README.md`，后者依赖 macOS/zsh。
-
-## 运行时与工具偏好
-
-- Rust edition 2024，CI 使用 stable；仓库未固定具体 toolchain/MSRV。使用 Cargo 与现有 lockfile，不把本机 Rust 版本写成项目要求。
-- 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path 或 `[patch]`，也不修改下载源码。已接入的源码导入为 #236 指定 Zorite editor/bidi 与 #241 的 ratex GUI，独立维护于 `lyrel-markdown-editor`；编辑该模块先读 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。#279 另批准按 `docs/reference/architecture.mdx` 的「上游源码复用与适配」清单移植、修改固定版本 Glim MIT 模块与 Zorite MIT `gpui-pdf`，优先复用真实实现而非重新编写同等功能；导入前记录逐文件来源、原始摘要、许可及本地适配，不扩展到 GPL 应用代码或清单外资源。其余依赖仍走 registry。GUI 仍只经 `gpui-kit` 的官方 Fast 类型；`lyrel-text` 保持 GUI-free，不反向依赖 editor。
-- Git CLI 仍用于产品的 Git 工作流，不再是 Cargo Git 依赖的拉取前提。Windows MSVC 已设 `+crt-static`，不要用 `RUSTFLAGS` 意外覆盖；ConPTY 先运行 `pwsh scripts/prepare-conpty.ps1`，共享核心的构建脚本只消费准备结果。Linux headless 的 GSSAPI 依赖与 `LIBGSSAPI_IMPL=mit` 见 `.github/workflows/ci.yml`；Windows/macOS 连接 Linux 的 SSH/SFTP、Host/PTY 与 WSL 接线不可因桌面退役删除。
-- 默认配置目录为 Unix 的 `~/.config/lyrel`、Windows 的 `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。调试与测试使用隔离目录，避免影响已安装实例。产品级注入的 `TERM_PROGRAM` 值为 `lyrel`；标准环境变量键保持原样。已批准的 #248 例外只作用于已知 coding agent 的命令作用域启动：该命令内临时使用 `TERM_PROGRAM=kitty` 等兼容身份，显式值优先，命令结束恢复 pane 基线；不改变产品级身份或普通 shell。
-
-## 测试与质量保障
-
-- 单元测试多为内联 `#[cfg(test)] mod tests`；GUI 用 `#[gpui_kit::test]`／`TestAppContext`，异步集成测试用 `#[tokio::test]`。CLI E2E 与真实 native Markdown 字形目标均为 `harness = false` 的自定义 runner；后者由 `tests/native_markdown.rs` 在 OS 主线程初始化平台，不能移回 libtest worker。`native-markdown-tests` 非默认产品 feature，仅开放消费者所需支持代码。
-- 按改动选择测试，例如 `cargo test --locked -p lyrel-core`、`cargo test --locked -p lyrel-cli --test cli_e2e`；Host 契约复用 `crates/lyrel-core/src/host/conformance.rs` 的本地／stdio 共享套件。
-- `cargo check`／`cargo test`／`cargo build` 产生的 warning 视为必须修复项：以当前检出的 zero-warning 输出为交付标准，遗留 warning 须逐条说明理由。
-- 集成测试从 `env!("CARGO_BIN_EXE_lyrel-server")` 等获取真实二进制。沿用 `tempfile::TempDir`、隔离配置／socket、子进程退出清理；GUI 测试写配置前调用 `crate::core::config::pin_test_config_dir()`。
-- Pi 桥契约测试需要当前平台的 Node 22.19+ 位于 `PATH`；Linux 测试不能以 Windows 的 `node.exe` 代替。缺少运行时是验证前提失败，不能跳过用例后宣称完整套件通过。
-- 很多 server 集成测试受 `cfg(unix)` 限制；Windows 绿灯不能替代 Unix 验证。联网、真实 SSH/LSP 的 ignored 用例仅在具备前提时显式运行；检查外部工具缺失导致的跳过。
-- `.github/workflows/ci.yml` 覆盖 rustfmt、Host 边界、Windows/macOS 桌面与 headless 构建／测试，以及 Linux core/server/CLI 的完整 features 验证；桌面 updater 仅在 Windows/macOS 测试。普通测试步骤超时为 20 分钟，updater 为 10 分钟。`.github/workflows/release.yml` 在 `v<version>` 标签上构建完整平台资产并创建草稿；核对同一提交的 CI、资产、校验和与发布说明后再发布，已发布资产不被重跑覆盖。
-- 仓库未配置覆盖率工具或百分比阈值。
-- 行为变更除相关测试外还需实际运行受影响路径；UI 修改按 `docs/design-system.md` 做实际界面验收。交付时区分已运行、跳过和未验证项。
-- 真实程序的冒烟与集成验证优先用可复现脚本、CLI／headless 或后台进程完成，保留命令、退出码与关键日志；桌面交互优先用后台窗口自动化。仅当验收依赖前台焦点或后台无法完成的原生交互时申请前台操作，并履行所需审批；headless 结果不能替代 UI 验收。
-- Linux 相关构建、测试与真实运行优先使用 Docker 启动的轻量 Linux 发行版容器；镜像须兼容待测目标的 libc、依赖与运行时，并参照 CI 准备环境，不以缩小镜像为由删减验证范围。仅当 Docker 不可用或待测行为无法由容器覆盖（如 WSL 专项集成）时使用 WSL，并说明回退原因。
-
-## 分支策略与会话清理
-
-- `implement-spec` 等一次性、长时间运行的任务：会话分支以 PR 形式合入主分支；简单的问题修复直接提交主分支即可。
-- #279 的 `docs/file-preview-editing-design` 及后续功能分支同步主线时，将分支独有提交 rebase 到最新 `origin/main`，不反复双向 merge。共享分支改写前先协调；需更新已发布分支时只用 `--force-with-lease`，lease 拒绝则先核对远端新提交。最终 PR 仅使用 squash 合入保持线性提交图，不创建 merge-commit 气泡；合入后的旧分支不再承载后续工作，不重写主分支或引入与任务无关的历史整理。
-- 发行 `workspace.package.version` 提升：将 `cargo update --workspace --offline` 写回的 `Cargo.lock` 与 `Cargo.toml` 的 `version` 变更放入同一 commit，再打 `v<version>` tag 推送；`--locked` 构建拒绝锁文件版本漂移，`Cargo.toml` 单独修改会让 release 立即失败。
-- 会话完成的判定：会话分支已合入主分支，或会话更改已推送 GitHub 且 CI 通过。满足后清理：会话产生的中间文件、创建的分支与 worktree；若用过 Docker，删除会话拉取的镜像；若用过 WSL，清理其中的冗余文件；按实际使用收缩 WSL／Docker 虚拟磁盘。清理只针对会话引入的产物，主检出、既有分支和共享镜像不列入。
-
-## Agent skills
-
-CLI 操作使用 `skills/lyrel/SKILL.md`；委派其他 coding agent 前，按该 skill 读取 `references/delegation.md`。
-
-### 子智能体角色
-
-在 oh-my-pi 中需要委派子智能体时，调研类任务使用 `smol` 角色，代码类任务使用 `task` 角色。
-
-### 工单跟踪
-
-工单与规格使用 GitHub Issues；创建、读取或更新工单前，阅读 `docs/agents/issue-tracker.md`。
-
-### 分诊标签
-
-使用五种默认 triage 标签；分诊或设置工单状态前，阅读 `docs/agents/triage-labels.md`。
-
-### 领域文档
-
-领域文档为单上下文布局，产品术语与工程约束直接维护在相关正式文档中；探索代码前，阅读 `docs/agents/domain.md`。仅在用户明确要求时创建独立规格或工单，不自动生成文档目录。
+- `AGENTS.md`、Skill 和 `docs/` 使用简体中文；GitHub issue/PR 的标题、正文、评论及 Git 提交信息使用英文。GitHub Release 标题只用版本 tag，中文变更说明写入正文；路径、命令、代码和 API 保留原文。
+- 工单与规格使用 GitHub Issues，只有明确要求才新建规格、工单或文档目录。提供编号、调研、实现或发布规划均不自动授权额外 GitHub 写操作。
+- 交付方式以任务授权为准：本地任务完成并验证即可；提交、推送、合并、公开发布、历史改写和资源删除不能从完成条件反推授权。分支策略与清理边界见 GitHub Skill；保留用户改动和必需构建资产。
