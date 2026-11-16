@@ -5,6 +5,13 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+### 修复
+
+- #305：Linux Kitty `t=s` 共享内存在 opened-object 校验前以 `O_NONBLOCK` 打开，FIFO 等非 regular 对象立即拒收并执行既有一次性清理，不再阻塞 pane reader；保留正常 offset／length、有界读取与图片校验，macOS 和 Windows 路径不变。
+
+
 ## [0.3.5] - 2026-11-16
 
 ### 新增
