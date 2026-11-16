@@ -6300,7 +6300,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6380,7 +6380,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-cli"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -6394,7 +6394,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "async_zip",
@@ -6448,7 +6448,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-epub"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "encoding_rs",
  "html-escape",
@@ -6461,7 +6461,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-markdown-editor"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "gpui-kit",
  "image",
@@ -6479,7 +6479,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-pdf"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "hayro",
  "log",
@@ -6488,7 +6488,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-server"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
  "lyrel-core",
@@ -6501,7 +6501,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-text"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "encoding_rs",
  "globset",
