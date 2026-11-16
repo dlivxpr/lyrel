@@ -82,7 +82,7 @@ impl LyrelApp {
     pub(super) fn sftp_copy_selection(&mut self, cx: &mut Context<Self>) {
         let paths = self.sftp_selection_paths();
         if !paths.is_empty()
-            && let Some(host) = self.sftp_editor_host()
+            && let Some(host) = self.sftp_editor_host(cx)
         {
             Self::copy_file_paths(host, paths, cx);
         }
@@ -97,7 +97,7 @@ impl LyrelApp {
         let Some((source, paths)) = Self::file_tree_clipboard(cx) else {
             return;
         };
-        let Some(destination) = self.sftp_editor_host() else {
+        let Some(destination) = self.sftp_editor_host(cx) else {
             return;
         };
         let dir = PathBuf::from(into.unwrap_or_else(|| self.sftp_panel.cwd.clone()));
@@ -152,7 +152,7 @@ impl LyrelApp {
 
     pub(super) fn sftp_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let targets = self.sftp_selection_paths();
-        let Some(host) = self.sftp_editor_host() else {
+        let Some(host) = self.sftp_editor_host(cx) else {
             return;
         };
         if targets.is_empty() {
