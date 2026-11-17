@@ -140,14 +140,11 @@ pub fn pty_sender() {
             }
             "TITLE" => {
                 // Title scenarios end on the title itself: the shared
-                // completion marker would overwrite it with `KITTY_DONE`.
-                // The plain-text barrier after the bytes only certifies the
-                // fixture consumed the request; the kitty query below still
-                // proves the daemon parsed the output.
+                // `KITTY_DONE` marker would overwrite it with its own OSC 2.
+                // The plain-text `TITLE_DONE` certificate is therefore
+                // written further down, after this request's kitty barrier.
                 stats.record(&bytes);
                 output.write_all(&bytes).unwrap();
-                output.flush().unwrap();
-                write!(output, "\r\nTITLE_DONE_{serial}\r\n").unwrap();
                 output.flush().unwrap();
             }
             "FILE_SEND" => {
@@ -239,6 +236,16 @@ pub fn pty_sender() {
             barrier,
             b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\"
         );
+        // A TITLE request's certificate must not exist before this barrier is
+        // consumed. The test sends the next request the moment it sees the
+        // certificate, and those bytes would land in the barrier read above
+        // (`while !ends_with(ST)` consumes whatever arrives), failing this
+        // assertion and losing the next request entirely. Every other
+        // operation already writes its marker after the barrier.
+        if operation == "TITLE" {
+            write!(output, "\r\nTITLE_DONE_{serial}\r\n").unwrap();
+            output.flush().unwrap();
+        }
         // A non-digit terminates the serial even when older text remains
         // to its right. Never clear the row: that could delete a placement.
         // GPUI consumers observe the title after the cursor restore, not just

@@ -13,6 +13,8 @@
 - core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
 - 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
 - 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。
+- program-status 公共传输回归的执行 barrier 改由 shell 运行时拼接标记，避免 macOS bash 的输入回显／readline 重绘被误判为命令执行完成；保留记录数量、流顺序、prompt 归属及生命周期断言。
+- Unix 前景进程探针未识别到 agent 时，不再抹除尚未返回 shell prompt 的 rich-hook 会话；正向识别到其他 agent、权威 shell mark 与显式退出仍沿用原清理路径。TITLE 测试 producer 在消费 daemon 回复后才发完成凭据，避免下一请求被误读为上一请求的回复。
 - Draft PR 使用快速平台层，Ready／`ci:full` 恢复完整门禁；PR 检查生产图，主线保留生产构建与静态 CRT 断言。缓存禁止失败写回，POSIX CI 启用 sccache，nextest 保留零默认重试、逐例超时与单独的 native／CLI／doctest 入口；手动发行验证显式选择 `scope=full`，Dependabot 改为月度单组。相同 tree 的主线测试仅在完整 PR 门禁证据可验证时晋升。
 
 ### 依赖升级

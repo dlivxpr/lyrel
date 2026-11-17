@@ -416,6 +416,31 @@ fn program_attention_budget_is_per_source_not_a_same_pane_mute(cx: &mut TestAppC
         command_notification_take().is_empty(),
         "starting a rich turn is not a result"
     );
+    // The daemon samples the pane's foreground process on its own cadence.
+    // That heuristic is evidence about the process table, not authority over
+    // the turn: a rich session the agent's own hooks established must survive
+    // a sample that cannot see the agent (a wrapper, a just-started process,
+    // or this fixture pane). The sleep below only makes the next production
+    // sample due; it is not a wait for success. The real PTY read after it
+    // carries that sample, and every consumer pass below still asserts the
+    // authoritative Working state.
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    graphics_send_fixture(&other, cx, 751649, b"\x1b]2;probe-cadence\x07");
+    for _ in 0..50 {
+        graphics_consumer_progress(cx);
+        let session = other.read_with(cx, |view, _| view.agent_session());
+        assert!(
+            session.as_ref().is_some_and(|session| {
+                session.rich && session.status == crate::core::cli_agent::AgentStatus::Working
+            }),
+            "a foreground probe sample must not retire the rich turn: {session:?}"
+        );
+    }
+    command_notification_pump(cx);
+    assert!(
+        command_notification_take().is_empty(),
+        "a foreground probe sample is not a result"
+    );
     graphics_send_fixture(&other, cx, 751652, b"\x1b]7501;state=error:id=unrelated:app=child-task\x07\x1b]777;notify;lyrel://cli-agent;{\"v\":1,\"agent\":\"omp\",\"event\":\"stop\",\"session_id\":\"program-attention-agent\",\"result\":{\"outcome\":\"succeeded\"}}\x07");
     graphics_recovery_wait(cx, "the rich hook retains its own completed result", |cx| {
         other.read_with(cx, |view, _| {

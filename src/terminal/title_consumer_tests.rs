@@ -49,8 +49,9 @@ fn wait_daemon_title(control: &ControlClient, pane: u64, want: Option<&str>) {
 }
 
 /// Sends title bytes through the fixture's real PTY and waits for the
-/// plain-text barrier, which its `TITLE` operation deliberately leaves in
-/// place of the shared `KITTY_DONE` title.
+/// plain-text certificate it writes once the daemon has consumed the request.
+/// Its `TITLE` operation never writes the shared `KITTY_DONE` marker, whose
+/// own OSC 2 would replace the title under test.
 fn send_title_fixture(
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,

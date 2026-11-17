@@ -181,6 +181,8 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 `done`，并且是 [`lyrel wait`](/agents/orchestration) 阻塞等待时依据的状态。
 第四种状态 `idle` 不显示圆点——它表示智能体尚未开始一个轮次。
 
+Unix 前景进程名探针只是识别线索：已由 rich hooks 建立的会话，不会仅因包装器或启动时序使探针暂未识别到 agent 而消失。shell 返回提示符或正向识别到其他 agent 时仍更新原会话归属；轮次结果继续以 hooks 为准，不从进程名或静默时间推断。
+
 状态事件的可选 `request` 为单个增量更新：
 `{"id":"上游稳定身份","kind":"permission|question|plan-review","resolved":false}`；
 `resolved: true` 只解决同类型与同 ID 的请求。可选 `requests` 数组为当前会话的权威
