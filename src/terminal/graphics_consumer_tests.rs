@@ -3064,7 +3064,9 @@ fn glyph_daemon_frames_a_query_to_its_controller() {
         graphics_pty_fixture::hex(&glyph_query(0x100000))
     );
     daemon.panes().send_input(pane, request.as_bytes()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // CI's capacity-constrained macOS runners stretch a real daemon+PTY
+    // round trip well past a local machine's seconds.
+    let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         assert!(
             Instant::now() < deadline,

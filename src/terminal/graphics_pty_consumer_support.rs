@@ -407,7 +407,10 @@ fn graphics_recovery_wait(
     reason: &str,
     ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| {
+    // CI's capacity-constrained macOS runners stretch real daemon+PTY round
+    // trips well past a local machine's seconds; the bound only has to catch
+    // a wedged consumer, not measure latency.
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(120), ready, |_| {
         reason.to_owned()
     });
 }

@@ -17,8 +17,11 @@ use lyrel_core::core::program_status::{
 use lyrel_core::daemon::protocol::DaemonMsg;
 
 /// How long one consumer assertion may take before the test gives up. Every
-/// read is bounded by [`POLL`]; the deadline bounds the whole wait.
-pub const STREAM_WITHIN: Duration = Duration::from_secs(30);
+/// read is bounded by [`POLL`]; the deadline bounds the whole wait. CI's
+/// capacity-constrained macOS runners stretch a real daemon+PTY round trip
+/// well past a local machine's seconds, so the bound is generous — it only
+/// has to catch a wedged stream, not measure latency.
+pub const STREAM_WITHIN: Duration = Duration::from_secs(120);
 
 const POLL: Duration = Duration::from_millis(500);
 

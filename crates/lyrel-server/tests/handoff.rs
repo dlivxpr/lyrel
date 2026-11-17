@@ -27,8 +27,11 @@ use lyrel_core::core::program_status::{
 use lyrel_core::daemon::protocol::{DaemonMsg, PaneProgress, ProgressKind, ShellSpec, WinSize};
 use support::Status;
 
-const READY_WITHIN: Duration = Duration::from_secs(30);
-const STREAM_WITHIN: Duration = Duration::from_secs(30);
+const READY_WITHIN: Duration = Duration::from_secs(120);
+// CI's capacity-constrained macOS runners stretch real daemon+PTY round
+// trips well past a local machine's seconds; see STREAM_WITHIN in
+// program_status_support for the rationale.
+const STREAM_WITHIN: Duration = Duration::from_secs(120);
 
 struct Daemon {
     child: Child,
