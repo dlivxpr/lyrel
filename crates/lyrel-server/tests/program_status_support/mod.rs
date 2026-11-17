@@ -92,7 +92,8 @@ fn pump(session: &mut PaneSession, mut done: impl FnMut(&Pumped) -> bool) -> Pum
         assert!(
             Instant::now() < deadline,
             "the pane stream did not reach the expected state within {STREAM_WITHIN:?}; \
-             saw {:?}",
+             frames {:?} text {:?}",
+            pumped.frames,
             String::from_utf8_lossy(&pumped.text)
         );
         match session.recv() {

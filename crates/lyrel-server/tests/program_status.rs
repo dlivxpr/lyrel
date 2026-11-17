@@ -40,9 +40,10 @@ impl Daemon {
             .arg(dir.path())
             .env("LYREL_DATA_DIR", dir.path())
             .env("LYREL_CONTROL_SOCK", dir.path().join("control.sock"))
+            .env("LYREL_TRACE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .expect("start lyrel-server --daemon");
         let daemon = Daemon { child, dir };
