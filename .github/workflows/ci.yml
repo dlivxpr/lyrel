@@ -58,6 +58,7 @@ jobs:
       server: ${{ steps.diff.outputs.server }}
       release: ${{ steps.diff.outputs.release }}
       tier: ${{ steps.diff.outputs.tier }}
+      production: ${{ steps.diff.outputs.production }}
       matrix: ${{ steps.diff.outputs.matrix }}
       reuse: ${{ steps.reuse.outputs.reuse }}
     steps:
@@ -144,10 +145,9 @@ jobs:
       # 跨机器复用更稳。sccache 只缓存非增量产物，这个值也不影响其正确性。
       CARGO_INCREMENTAL: '0'
       LYREL_GRAPHICS_FIXTURE_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/debug/lyrel-graphics-fixture${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}
-    # Backstop under the per-step timeouts below. Without any timeout at all a
-    # hung test runs to GitHub's six-hour job limit, which is how a 90-second
-    # step turned into a six-hour one three times in a day.
-    timeout-minutes: 90
+    # 冷缓存需先编译完整依赖图，再链接大型 libtest；编译预算与逐例测试超时
+    # 分开。仍保留有限 job backstop，不回到 GitHub 默认六小时。
+    timeout-minutes: 120
     steps:
       - name: Checkout lyrel
         uses: actions/checkout@v7
@@ -230,18 +230,18 @@ jobs:
       # to be re-discarded before every commit. The release workflow locks its
       # build too.
 
-      # 生产图按分支职责收敛：PR 只做 cargo check（2~3 分钟，不设置 RUSTFLAGS，
-      # 保留 Windows +crt-static），main 跑完整生产 cargo build 并立刻做 CRT 门禁；
-      # 测试编译随后会用同名 exe 覆盖它们，所以 main 的检查必须紧跟生产构建。
+      # PR 与默认 scope=ci 只检查生产图，测试图仍编译全部真实 binaries；
+      # main / scope=full 保留完整生产构建，紧接着检查 CRT，防止测试图覆盖证据。
       - name: Check desktop production graph
-        if: runner.os != 'Linux' && github.event_name == 'pull_request'
+        if: runner.os != 'Linux' && needs.preflight.outputs.production != 'true'
         timeout-minutes: 30
         run: cargo check --locked --features updater --target ${{ matrix.target }}
 
       - name: Build desktop production binaries
-        if: runner.os != 'Linux' && github.event_name != 'pull_request'
-        # Cold-cache builds have been observed at ~10 min; warm ones at ~90s.
-        timeout-minutes: 30
+        if: runner.os != 'Linux' && needs.preflight.outputs.production == 'true'
+        # 44152373197 的三平台冷启动中，两端仍持续编译却在 30 分钟被终止；
+        # 不把旧的十分钟估计当作冷构建上限。测试与缓存失败策略不变。
+        timeout-minutes: 45
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --features updater --target ${{ matrix.target }}
 
       - name: Build Linux headless
@@ -264,7 +264,7 @@ jobs:
       # proc-macro artifacts under it are host units, which are built without
       # the target's rustflags and legitimately import the CRT dynamically.
       - name: Assert the production binaries need no VC++ redistributable
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        if: runner.os == 'Windows' && needs.preflight.outputs.production == 'true'
         shell: pwsh
         run: |
           & ./.github/scripts/assert-no-vcruntime.ps1 `
@@ -278,13 +278,12 @@ jobs:
       # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
       # （含 GUI-free 的 lyrel-code-editor），新增成员自动进入门禁。
       #
-      # 1acd9477 的 macOS 日志中，测试图的普通 library 编译耗时约 21 分钟，
-      # 同一步的全部测试编译达到 30 分钟上限，尚未执行测试。
-      # 先完成 library 单元测试，避免同包的普通 library 与大型 libtest 并发争用；
-      # 第二步复用同一张图，补齐所有 binaries、integration tests 与原生目标。
+      # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
+      # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；
+      # 给这一编译阶段 45 分钟，第二步复用同图，逐例测试超时不变。
       - name: Compile desktop library unit tests
         if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
@@ -298,10 +297,10 @@ jobs:
         timeout-minutes: 15
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --workspace --features updater,native-markdown-tests,test-support --bin lyrel-graphics-fixture --target ${{ matrix.target }}
 
-      # PR 上没有生产 cargo build，但 cargo test 为每个二进制目标产出的仍是真实
-      # 可执行文件（不是 libtest harness），所以门禁检查的依然是这 4 个二进制。
+      # PR / scope=ci 没有生产 cargo build；测试图为四个 bin 生成的真实
+      # 可执行文件仍必须通过 CRT 门禁，不能因事件不是 PR 就漏掉它。
       - name: Assert the test-built binaries need no VC++ redistributable
-        if: runner.os == 'Windows' && github.event_name == 'pull_request' && needs.preflight.outputs.reuse != 'true'
+        if: runner.os == 'Windows' && needs.preflight.outputs.production != 'true' && needs.preflight.outputs.reuse != 'true'
         shell: pwsh
         run: |
           & ./.github/scripts/assert-no-vcruntime.ps1 `

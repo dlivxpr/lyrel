@@ -142,18 +142,19 @@ function classify(files) {
 function gate(env, event) {
   if (env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
     // 手动触发的默认 scope 是 ci：验证与 PR 一致，但不额外跑发行打包。
-    return { tier: 'full', packaging: event?.inputs?.scope === 'full' };
+    const production = event?.inputs?.scope === 'full';
+    return { tier: 'full', packaging: production, production };
   }
   if (env.GITHUB_EVENT_NAME === 'pull_request') {
     if (event?.action === 'labeled' && event.label?.name !== FULL_GATE_LABEL) {
       // 无关标签不改变代码：只留 preflight 作为状态信号，也不取消在跑的完整门禁。
-      return { tier: 'fast', skip: true };
+      return { tier: 'fast', skip: true, production: false };
     }
     const request = event?.pull_request ?? {};
     const full = Array.isArray(request.labels) && request.labels.some(label => label?.name === FULL_GATE_LABEL);
-    return { tier: request.draft === true && !full ? 'fast' : 'full' };
+    return { tier: request.draft === true && !full ? 'fast' : 'full', production: false };
   }
-  return { tier: 'full' };
+  return { tier: 'full', production: true };
 }
 
 function matrixFor(scopes, tier) {
@@ -182,7 +183,7 @@ function main(env = process.env) {
   // 快速层与手动 ci scope 都不产生需要上传的发行产物。
   if (decision.tier !== 'full') scopes = { ...scopes, server: false, release: false };
   if (decision.packaging === false) scopes = { ...scopes, release: false };
-  const result = { ...scopes, tier: decision.tier, matrix: matrixFor(scopes, decision.tier) };
+  const result = { ...scopes, tier: decision.tier, production: decision.production, matrix: matrixFor(scopes, decision.tier) };
   if (env.GITHUB_OUTPUT) {
     // 字符串（tier）要原样输出，布尔与 matrix 才用 JSON，否则下游比较会带上引号。
     const encode = value => (typeof value === 'string' ? value : JSON.stringify(value));

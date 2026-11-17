@@ -147,6 +147,7 @@ test('draft pull requests only run the fast Windows and Linux tier', (t) => {
   // Cargo 变更仍然覆盖桌面与 Linux，但快速层不跑 macOS、server 与发行打包。
   assert.deepEqual(scopes(result), [true, true, false, false]);
   assert.equal(result.tier, 'fast');
+  assert.equal(result.production, false);
   assert.deepEqual(result.matrix.include.map(row => row.target),
     ['x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
 });
@@ -156,6 +157,7 @@ test('ready pull requests run the full three-platform gate', (t) => {
   const result = repo.classify(event, merge, 'pull_request');
   assert.deepEqual(scopes(result), [true, true, true, false]);
   assert.equal(result.tier, 'full');
+  assert.equal(result.production, false);
   assert.deepEqual(result.matrix.include.map(row => row.target),
     ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
 });
@@ -193,4 +195,28 @@ test('an unrelated label never starts heavy validation', (t) => {
   const result = repo.classify(event, merge, 'pull_request');
   assert.deepEqual(scopes(result), [false, false, false, false]);
   assert.deepEqual(result.matrix.include, []);
+});
+
+for (const [name, event, production] of [
+  ['default ci', {}, false],
+  ['explicit ci', { inputs: { scope: 'ci' } }, false],
+  ['full', { inputs: { scope: 'full' } }, true],
+]) {
+  test(`manual ${name} keeps all platforms and selects the intended production build`, (t) => {
+    const repo = repository(t);
+    const result = repo.classify(event, undefined, 'workflow_dispatch');
+    assert.equal(result.production, production);
+    assert.equal(result.release, production);
+    assert.equal(result.tier, 'full');
+    assert.deepEqual(result.matrix.include.map(row => row.target),
+      ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+  });
+}
+
+test('main pushes retain the production build independently of the test tier', (t) => {
+  const repo = repository(t);
+  const after = repo.commit({ 'Cargo.toml': '[workspace]\n' });
+  const result = repo.classify({ before: repo.before, after });
+  assert.equal(result.production, true);
+  assert.equal(result.tier, 'full');
 });

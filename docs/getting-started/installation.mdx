@@ -179,9 +179,12 @@ Windows wrapper 实时显示 Cargo 的诊断与非 JSON 输出。普通 `test` �
 替代原生 OS 主线程初始化，也不把重试后的通过回填为第一次运行成功。
 
 CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready PR 或带 `ci:full`
-标签时恢复完整平台门禁。手动 CI 的 `scope=ci` 不自动打包，`scope=full` 才选择发行验证。
-PR 检查生产图并编译、执行测试图；主线保留生产构建与静态 CRT 门禁。相同 tree 的测试晋升
-只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即回到主线全量测试。
+标签时恢复完整平台门禁。手动 CI 的默认 `scope=ci` 与 PR 一样检查生产图、构建并执行完整测试图，
+不额外构建生产二进制或打包；`scope=full` 才选择生产构建和发行验证。
+主线保留生产构建与静态 CRT 门禁；PR／`scope=ci` 检查测试图生成的真实 bin。
+相同 tree 的测试晋升只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即全量测试。
+冷缓存的生产构建、desktop library 单测编译各保留 45 分钟上限，job 为 120 分钟；
+这是依据实际冷编译超时调整的运行预算，不是性能提升声明，逐例测试超时与失败不写缓存策略不变。
 CI 的 sccache 关闭 incremental 以缓存可复用 Rust 编译；本地仍默认保留 incremental，
 可按单次命令选择 `RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0`，不修改全局 Cargo 配置。
 实际收益须在相同工具链、feature、target 与缓存条件下计时，不保证固定提速比例。
