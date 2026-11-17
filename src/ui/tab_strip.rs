@@ -1290,7 +1290,7 @@ impl LyrelApp {
                     // The current one does nothing: only ⌘J and the title-bar
                     // panel tile put the panel away.
                     if this.right_panel_tab != tab {
-                        this.set_right_panel_tab(tab, cx);
+                        this.set_right_panel_tab(tab, window, cx);
                     }
                 }))
         });

@@ -1748,7 +1748,7 @@ impl LyrelApp {
             // pointing at a panel the reader could not see or reach from
             // there. Reveal it, then focus it.
             if !self.file_tree_on_screen(cx) {
-                self.set_right_panel_tab(crate::core::config::RightPanelTab::Files, cx);
+                self.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx);
             }
             self.file_tree.focus_handle.focus(window, cx);
         }

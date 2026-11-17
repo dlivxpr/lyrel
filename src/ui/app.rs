@@ -1462,7 +1462,7 @@ impl LyrelApp {
         if ctx.route.is_none() {
             return;
         }
-        self.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx);
+        self.set_right_panel_tab(crate::core::config::RightPanelTab::Info, window, cx);
         if !self.loopback_panel.is_open_for(ctx.pane_id) {
             self.toggle_managed_forward_form(ctx.pane_id, window, cx);
         }
