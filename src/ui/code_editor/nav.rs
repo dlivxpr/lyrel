@@ -977,8 +977,9 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> E {
         use crate::core::actions::{
-            EditorFocusLeftGroup, EditorFocusRightGroup, EditorGoToSymbol, EditorNavigateBack,
-            EditorNavigateForward, EditorSplitRight,
+            EditorDocumentOverflow, EditorFocusLeftGroup, EditorFocusRightGroup, EditorGoToSymbol,
+            EditorNavigateBack, EditorNavigateForward, EditorSplitRight,
+            FocusDocumentTabNavigation,
         };
         element
             .on_action(cx.listener(|this, _: &EditorSplitRight, window, cx| {
@@ -993,6 +994,18 @@ impl LyrelApp {
             }))
             .on_action(cx.listener(|this, _: &EditorFocusRightGroup, window, cx| {
                 if !this.editor_focus_group(false, window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusDocumentTabNavigation, window, cx| {
+                    if !this.focus_document_tab_navigation(window, cx) {
+                        cx.propagate();
+                    }
+                }),
+            )
+            .on_action(cx.listener(|this, _: &EditorDocumentOverflow, window, cx| {
+                if !this.editor_document_overflow(window, cx) {
                     cx.propagate();
                 }
             }))

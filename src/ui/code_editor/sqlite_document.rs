@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::table::{DataTable, TableEvent, TableSelection, TableState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
@@ -2193,6 +2194,7 @@ impl SqliteView {
                     .min_w_0()
                     .child(
                         DataTable::new(&self.grid)
+                            .scrollbar_mode(ScrollbarMode::Always)
                             .bordered(false)
                             .stripe(false)
                             .accessibility_label(label),

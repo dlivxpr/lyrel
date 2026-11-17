@@ -1243,6 +1243,17 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     t.list_active = rgb(interaction.choice).into();
     t.list_active_border = rgb(interaction.choice).into();
     t.list_hover = rgb(surfaces.popover.hover).into();
+    // The matched substring in a searchable list is still text. Its fallback
+    // would be gpui-component's stock `blue`, and the obvious accent fill is a
+    // background role; both can sit legibly enough on the popover but not on
+    // the keyboard row, which is painted in `accent`. `accent_foreground` is
+    // the ink already paired with that fill, and it clears the popover behind
+    // the unselected rows too. The row keeps the role paired with its own
+    // surface, so the match never turns into the least readable text in the
+    // list; `ProfileChoice::render_highlighted` adds the weight that makes the
+    // match stand out when the hue matches the row's ink.
+    let search_match_ink = t.accent_foreground;
+    t.list_highlight_foreground = search_match_ink;
 
     // gpui-component's `input` is the border role, also used by default
     // buttons. Giving it the field background would erase their outlines.
@@ -1496,6 +1507,55 @@ mod tests {
             // settings/overlay surface must retain their solid theme token.
             assert_eq!(cx.theme().sidebar.a, 1.0);
         });
+    }
+
+    #[gpui_kit::test]
+    fn profile_match_ink_clears_the_real_list_backgrounds(cx: &mut TestAppContext) {
+        let (_app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        fn packed(color: Hsla) -> u32 {
+            let rgb = crate::terminal::palette::hsla_to_rgb(color);
+            (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32
+        }
+        let warm = presets::Theme {
+            id: "search-highlight-warm".into(),
+            name: "Search Highlight Warm".into(),
+            dark: false,
+            background: presets::Fill::Solid(0xf4ecdf),
+            foreground: 0x27313a,
+            accent: 0xb4501e,
+            caret: None,
+            selection: None,
+            opacity: None,
+            blur: false,
+            image: None,
+            ansi16: presets::builtins().remove(0).ansi16,
+            path: None,
+        };
+        vcx.update(|_, cx| {
+            let mut themes = presets::all(cx);
+            themes.push(warm);
+            cx.set_global(presets::Themes(themes));
+        });
+        for preset in ["light", "dark", "search-highlight-warm"] {
+            vcx.update(|window, cx| {
+                cx.global_mut::<Config>().theme_preset = preset.to_owned();
+                apply_theme(Some(window), cx);
+                let theme = Theme::global(cx);
+                let ink = packed(theme.list_highlight_foreground);
+                // The popover behind every unselected row and the choice fill
+                // behind the keyboard row are the two surfaces the list paints.
+                for (surface, color) in [
+                    ("popover", theme.popover),
+                    ("keyboard row", *theme.tokens.accent),
+                ] {
+                    assert!(
+                        presets::contrast(ink, packed(color)) >= 4.5 - 0.01,
+                        "{preset}: match ink {ink:#08x} is unreadable on the {surface} {:#08x}",
+                        packed(color)
+                    );
+                }
+            });
+        }
     }
 
     #[test]

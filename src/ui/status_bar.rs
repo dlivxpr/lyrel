@@ -176,6 +176,17 @@ impl LyrelApp {
                     .and_then(|tab| tab.agent_row(cx))
             })
             .flatten();
+        let program = (!document)
+            .then(|| {
+                leaf.as_ref().and_then(|leaf| {
+                    leaf.read(cx).with_program_status(|status| {
+                        status
+                            .representative()
+                            .map(|record| crate::ui::program_status::current_status(record, cx))
+                    })
+                })
+            })
+            .flatten();
         let context = h_flex()
             .flex_1()
             .min_w_0()
@@ -249,6 +260,7 @@ impl LyrelApp {
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
             )
             .child(context)
+            .children(program)
             .when_some(agent, |bar, (agent, status)| {
                 let label = match crate::ui::tab_strip::agent_status_label(Some(status)) {
                     Some(state) => format!("{} · {state}", agent.display_name()),

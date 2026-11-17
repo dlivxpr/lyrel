@@ -511,6 +511,13 @@ mod tests {
             ),
             "this build advertises glyph state, so negotiate_pane must opt in"
         );
+        assert!(
+            matches!(
+                ClientMsg::read(reader).unwrap(),
+                ClientMsg::SubscribeProgramStatus
+            ),
+            "this build advertises program status, so negotiate_pane must opt in"
+        );
         assert!(matches!(
             ClientMsg::read(reader).unwrap(),
             ClientMsg::GraphicsCapacity { offers: false, .. }

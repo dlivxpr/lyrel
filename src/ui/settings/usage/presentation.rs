@@ -897,7 +897,9 @@ impl UsagePage {
                                 .w_full()
                                 .disabled(self.submitting || self.discovering)
                                 .placeholder(t(L10nKey::UsageChooseProfile))
-                                .accessibility_label(t(L10nKey::UsageProfile)),
+                                .accessibility_label(t(L10nKey::UsageProfile))
+                                .highlight_matches(true)
+                                .search_placeholder(t(L10nKey::UsageSearchProfiles)),
                             cx,
                         ))
                         .child(div().text_xs().text_color(muted).child(t(match provider {

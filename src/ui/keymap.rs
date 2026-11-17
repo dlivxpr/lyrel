@@ -651,7 +651,12 @@ fn control_code_binding_allowed(action: &str, chord: &str) -> bool {
         // code editor: in the terminal the chord is never matched, and in any
         // other field it falls through. VS Code's Go Forward, ⌃⇧-, folds to
         // Ctrl+_ (US) there.
-        || action_context(action) == Some(crate::ui::code_editor::NAV_KEY_CONTEXT)
+        || matches!(
+            action_context(action),
+            Some(context)
+                if context == crate::ui::code_editor::NAV_KEY_CONTEXT
+                    || context == crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT
+        )
         || (cfg!(not(target_os = "macos")) && chord == "ctrl-v")
 }
 
@@ -774,6 +779,10 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // and every browser use for the same thing.
         ("NextTab", "ctrl-tab"),
         ("PrevTab", "ctrl-shift-tab"),
+        // Enters the terminal-tab sidebar without touching the PTY's own Tab
+        // and arrow keys. ⌘⇧L is free on macOS; off it Ctrl+Shift+L is a
+        // window action over a letter, where the platform keeps the Shift.
+        ("FocusTerminalTabNavigation", "secondary-shift-l"),
         (
             "SelectNextTab",
             per_platform("secondary-shift-]", "ctrl-pagedown"),
@@ -883,6 +892,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ("PasteText", paste_text_default()),
         ("AlternatePaste", alternate_paste_default()),
         ("OpenSettings", "secondary-,"),
+        ("FocusSettingsNavigation", ""),
         (
             "ShowKeyboardShortcuts",
             if cfg!(target_os = "macos") {
@@ -962,6 +972,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ("ShowRightPanelSearch", ""),
         ("ShowRightPanelChanges", ""),
         ("ShowRightPanelGitHub", ""),
+        ("FocusRightPanelNavigation", ""),
         ("EditorSave", "secondary-s"),
         ("EditorSaveAs", "secondary-shift-s"),
         ("EditorGoToLine", "ctrl-g"),
@@ -989,6 +1000,18 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         (
             "EditorFocusRightGroup",
             per_platform("secondary-alt-right", "ctrl-alt-right"),
+        ),
+        // The focused group's document strip: ⌥T moves the keyboard into the
+        // tabs, ⌥⇧T opens the list of every open document (the `+N` control
+        // without a pointer). Both are scoped to the editor's own context, so
+        // a shell keeps the bytes.
+        (
+            "FocusDocumentTabNavigation",
+            per_platform("secondary-alt-t", "ctrl-alt-t"),
+        ),
+        (
+            "EditorDocumentOverflow",
+            per_platform("secondary-alt-shift-t", "ctrl-alt-shift-t"),
         ),
         // Unbound: ⌘N is New Window, and the editor's header has a + for it.
         ("EditorNewFile", ""),
@@ -1200,6 +1223,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             CommandGroup::TabsPanes,
             t(L10nKey::CmdRecentTabSwitcherReverse).to_string(),
         ),
+        "FocusTerminalTabNavigation" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::CmdFocusTerminalTabs).to_string(),
+        ),
         "SelectNextTab" => (CommandGroup::TabsPanes, t(L10nKey::CmdNextTab).to_string()),
         "SelectPrevTab" => (
             CommandGroup::TabsPanes,
@@ -1298,6 +1325,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "ShowRightPanelGitHub" => (
             CommandGroup::View,
             t(L10nKey::CmdRightPanelGitHub).to_string(),
+        ),
+        "FocusRightPanelNavigation" => (
+            CommandGroup::View,
+            t(L10nKey::CmdFocusRightPanelNavigation).to_string(),
         ),
         "FindInTerminal" => (
             CommandGroup::Terminal,
@@ -1400,6 +1431,14 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             CommandGroup::Terminal,
             t(L10nKey::EditorFocusRightGroup).to_string(),
         ),
+        "FocusDocumentTabNavigation" => (
+            CommandGroup::Terminal,
+            t(L10nKey::FocusDocumentTabNavigation).to_string(),
+        ),
+        "EditorDocumentOverflow" => (
+            CommandGroup::Terminal,
+            t(L10nKey::EditorDocumentOverflow).to_string(),
+        ),
         "EditorNewFile" => (
             CommandGroup::Terminal,
             t(L10nKey::EditorNewFile).to_string(),
@@ -1484,6 +1523,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "OpenSettings" => (
             CommandGroup::Application,
             t(L10nKey::CmdSettings).to_string(),
+        ),
+        "FocusSettingsNavigation" => (
+            CommandGroup::Application,
+            t(L10nKey::CmdFocusSettingsNavigation).to_string(),
         ),
         "ShowKeyboardShortcuts" => (
             CommandGroup::Application,
@@ -2026,9 +2069,15 @@ fn action_context(action: &str) -> Option<&'static str> {
         "EditorGoToSymbol"
         | "EditorNavigateBack"
         | "EditorNavigateForward"
-        | "EditorSplitRight"
-        | "EditorFocusLeftGroup"
-        | "EditorFocusRightGroup" => Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+        | "EditorSplitRight" => Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+        // The group choice and the strip's own entry/overflow chords have to
+        // keep working after the keyboard has moved into the strip.
+        "EditorFocusLeftGroup"
+        | "EditorFocusRightGroup"
+        | "FocusDocumentTabNavigation"
+        | "EditorDocumentOverflow" => {
+            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT)
+        }
         _ => None,
     }
 }
@@ -2088,6 +2137,9 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "SwapPanePrev" => load_binding(keystroke, SwapPanePrev, None, cx),
         "NextTab" => load_binding(keystroke, NextTab, None, cx),
         "PrevTab" => load_binding(keystroke, PrevTab, None, cx),
+        "FocusTerminalTabNavigation" => {
+            load_binding(keystroke, FocusTerminalTabNavigation, None, cx)
+        }
         "SelectNextTab" => load_binding(keystroke, SelectNextTab, None, cx),
         "SelectPrevTab" => load_binding(keystroke, SelectPrevTab, None, cx),
         "MoveTabLeft" => load_binding(keystroke, MoveTabLeft, None, cx),
@@ -2125,6 +2177,9 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ShowRightPanelFiles" => load_binding(keystroke, ShowRightPanelFiles, None, cx),
         "ShowRightPanelSearch" => load_binding(keystroke, ShowRightPanelSearch, None, cx),
         "ShowRightPanelGitHub" => load_binding(keystroke, ShowRightPanelGitHub, None, cx),
+        "FocusRightPanelNavigation" => {
+            load_binding(keystroke, FocusRightPanelNavigation, None, cx)
+        }
         "ScmCommit" => load_binding(keystroke, ScmCommit, action_context(action), cx),
         "ScmCommitAmend" => load_binding(keystroke, ScmCommitAmend, action_context(action), cx),
         "ScmStageAll" => load_binding(keystroke, ScmStageAll, None, cx),
@@ -2149,6 +2204,7 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "PasteText" => load_binding(keystroke, PasteText, action_context(action), cx),
         "AlternatePaste" => load_binding(keystroke, AlternatePaste, action_context(action), cx),
         "OpenSettings" => load_binding(keystroke, OpenSettings, None, cx),
+        "FocusSettingsNavigation" => load_binding(keystroke, FocusSettingsNavigation, None, cx),
         "ShowKeyboardShortcuts" => load_binding(keystroke, ShowKeyboardShortcuts, None, cx),
         "About" => load_binding(keystroke, About, None, cx),
         "CheckForUpdates" => load_binding(keystroke, CheckForUpdates, None, cx),
@@ -2199,13 +2255,25 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "EditorFocusLeftGroup" => load_binding(
             keystroke,
             EditorFocusLeftGroup,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
             cx,
         ),
         "EditorFocusRightGroup" => load_binding(
             keystroke,
             EditorFocusRightGroup,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            cx,
+        ),
+        "FocusDocumentTabNavigation" => load_binding(
+            keystroke,
+            FocusDocumentTabNavigation,
+            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            cx,
+        ),
+        "EditorDocumentOverflow" => load_binding(
+            keystroke,
+            EditorDocumentOverflow,
+            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
             cx,
         ),
         "EditorNewFile" => load_binding(keystroke, EditorNewFile, None, cx),

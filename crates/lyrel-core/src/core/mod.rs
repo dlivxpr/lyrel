@@ -22,6 +22,7 @@ pub mod pane_sidecar;
 pub mod paste;
 pub mod path_spelling;
 pub mod proc;
+pub mod program_status;
 pub mod session;
 pub mod shell_quote;
 pub mod shells;

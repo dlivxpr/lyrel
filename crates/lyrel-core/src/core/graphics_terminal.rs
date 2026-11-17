@@ -711,6 +711,13 @@ impl Handler for GraphicsState {
         self.discard_placements(|_| true);
         self.discard_resources(None);
         self.term.reset_state();
+        // RIS drops every OSC 7501 record; DECSTR and alternate-screen
+        // switches do not reach this callback. One signal is enough for the
+        // store's ordered clear, and a later RIS before another report is
+        // silent because no record remains.
+        if self.program_status_enabled && std::mem::take(&mut self.program_seen) {
+            self.program_signals.push(ProgramSignal::Reset);
+        }
         self.screen = 0;
         self.region = 0..i32::from(self.size.rows.max(1));
     }
@@ -1025,6 +1032,36 @@ impl Handler for GraphicsState {
 
     fn set_progress_report(&mut self, report: rio_vt::event::ProgressReport) {
         self.term.set_progress_report(report);
+    }
+
+    /// The released Rio parser has already validated every id/text/limit. The
+    /// pane keeps only the ordered signal; it must never build a second parser
+    /// or trust producer bytes that reached a mirror/replay path.
+    fn set_program_status(&mut self, status: rio_vt::event::ProgramStatus) {
+        if !self.program_status_enabled {
+            return;
+        }
+        self.program_seen = true;
+        self.program_signals.push(ProgramSignal::Report(status));
+    }
+
+    fn report_program_status_support(&mut self, terminator: &str) {
+        if !self.program_status_enabled {
+            return;
+        }
+        // The reply only ever carries the spec's fixed list, never anything a
+        // program reported. The live daemon is the sole answerer; a mirror or
+        // replayed query is deliberately silent.
+        self.program_queries.push(format!(
+            "\x1b]7501;{}{terminator}",
+            rio_vt::event::PROGRAM_STATUS_QUERY_REPLY
+        ));
+    }
+
+    fn prompt_start(&mut self) {
+        if self.program_status_enabled && self.program_seen {
+            self.program_signals.push(ProgramSignal::PromptStart);
+        }
     }
 
     fn set_modify_other_keys(&mut self, level: u8) {

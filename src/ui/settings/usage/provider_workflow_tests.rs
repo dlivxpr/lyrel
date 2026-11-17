@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::test::TestEventExt as _;
 
 fn scroll_usage_to_bottom(vcx: &mut VisualTestContext) {
     vcx.update(|window, cx| {
@@ -1295,4 +1296,315 @@ fn canceled_cookie_forms_never_authorize_after_a_blocked_native_boundary(cx: &mu
             }
         }
     }
+}
+
+const SEARCH_LONG_EN: &str =
+    "Work — 团队协作与远程开发配置（很长的 profile 名称用于布局验证）";
+const SEARCH_LONG_ZH: &str =
+    "工作资料与团队共享的浏览器配置（很长的 profile 名称用于布局验证）";
+
+/// Firefox profile discovery reads only `profiles.ini`; each profile still
+/// needs the exact DeepSeek origin database used when the chosen profile is
+/// imported and verified.
+fn searchable_profile_fixture(root: &std::path::Path) {
+    let profiles = [
+        ("a-personal", "Personal"),
+        ("b-work", "Work"),
+        ("c-workshop", "Workshop"),
+        ("d-work-long", SEARCH_LONG_EN),
+        ("e-zh-long", SEARCH_LONG_ZH),
+    ];
+    let mut ini = String::new();
+    for (index, (dir, label)) in profiles.iter().enumerate() {
+        let profile = root.join("Profiles").join(dir);
+        let storage = profile.join("storage/default/https+++platform.deepseek.com/ls");
+        std::fs::create_dir_all(&storage).unwrap();
+        let db = rusqlite::Connection::open(storage.join("data.sqlite")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE data(key TEXT PRIMARY KEY, conversion_type INTEGER, compression_type INTEGER, value BLOB)",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO data VALUES (?1,1,0,?2)",
+            rusqlite::params![
+                "userToken",
+                br#"{"userToken":"profile-search-token"}"#.as_slice()
+            ],
+        )
+        .unwrap();
+        ini.push_str(&format!(
+            "[Profile{index}]\nName={label}\nIsRelative=1\nPath=Profiles/{dir}\n"
+        ));
+    }
+    std::fs::write(root.join("profiles.ini"), ini).unwrap();
+}
+
+fn painted_texts(window: &gpui_kit::Window) -> Vec<String> {
+    gpui_kit::base::test_support::texts(window)
+        .into_iter()
+        .filter(|text| text.visible())
+        .map(|text| text.text().to_owned())
+        .collect()
+}
+
+fn painted_profile_count(vcx: &mut VisualTestContext, profile: &str) -> usize {
+    let prefix = format!("{profile} ");
+    let painted = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        painted_texts(window)
+    });
+    painted
+        .iter()
+        .filter(|text| {
+            text.as_str() == profile || text.as_str().starts_with(prefix.as_str())
+        })
+        .count()
+}
+
+fn assert_profile_visible(vcx: &mut VisualTestContext, profile: &str, expected: bool) {
+    let count = painted_profile_count(vcx, profile);
+    assert_eq!(
+        count > 0,
+        expected,
+        "profile {profile:?} {expected_word} in the visible option set",
+        expected_word = if expected { "missing" } else { "must not appear" },
+    );
+}
+
+fn filter_profile_options(vcx: &mut VisualTestContext, query: &str) {
+    click(vcx, "usage-profile");
+    vcx.update(|window, cx| window.input(query, cx));
+    vcx.run_until_parked();
+}
+
+fn wait_for_profile_discovery(
+    page: &Entity<UsagePage>,
+    vcx: &mut VisualTestContext,
+    expected: usize,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while !page.read_with(vcx, |page, _| {
+        !page.discovering && page.profile_items.len() == expected
+    }) {
+        vcx.run_until_parked();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "browser profile discovery did not reach {expected} choices"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn selected_profile(page: &Entity<UsagePage>, vcx: &VisualTestContext) -> Option<String> {
+    page.read_with(vcx, |page, cx| {
+        page.profiles.read(cx).selected_value().cloned()
+    })
+}
+
+fn saved_profile_label(account: &Account) -> Option<String> {
+    match &account.auth {
+        Authentication::BrowserLocalStorage { selection } => {
+            Some(selection.label().to_owned())
+        }
+        _ => None,
+    }
+}
+
+fn click_profile_label(vcx: &mut VisualTestContext, profile: &str) {
+    let prefix = format!("{profile} ");
+    let position = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let text = gpui_kit::base::test_support::texts(window)
+            .into_iter()
+            .find(|text| {
+                text.visible()
+                    && (text.text() == profile || text.text().starts_with(prefix.as_str()))
+            })
+            .unwrap_or_else(|| panic!("filtered profile {profile:?} is not painted"));
+        let bounds = text.bounds();
+        gpui_kit::point(bounds.origin.x + gpui_kit::px(4.), bounds.center().y)
+    });
+    vcx.update(|window, cx| {
+        window.pointer_move(position, None, cx);
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
+    vcx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("isolated-browser");
+    std::fs::create_dir_all(&root).unwrap();
+    searchable_profile_fixture(&root);
+    let path = dir.path().join("usage.json");
+    let (workspace, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(&mut vcx, path.clone(), vault.clone(), http.clone(), false);
+    let app = open(&workspace, &mut vcx);
+    click(&mut vcx, "usage-add");
+    click(&mut vcx, "usage-source");
+    vcx.simulate_keystrokes("down down enter");
+    vcx.run_until_parked();
+    type_into(&mut vcx, "usage-name", "Searchable profiles");
+    click(&mut vcx, "usage-browser");
+    vcx.simulate_keystrokes("down down down down down enter");
+    vcx.run_until_parked();
+    let page = app.update_in(&mut vcx, |a, _, _| {
+        a.active_settings().unwrap().usage.clone()
+    });
+    wait_for_profile_discovery(&page, &mut vcx, 5);
+
+    // A real query over the discovered labels narrows the painted rows; the
+    // structural list and the form's committed value stay untouched.
+    filter_profile_options(&mut vcx, "work");
+    assert_profile_visible(&mut vcx, "Work", true);
+    assert_profile_visible(&mut vcx, "Workshop", true);
+    assert_profile_visible(&mut vcx, SEARCH_LONG_EN, true);
+    assert_profile_visible(&mut vcx, "Personal", false);
+    assert_profile_visible(&mut vcx, SEARCH_LONG_ZH, false);
+    assert_eq!(selected_profile(&page, &vcx), None);
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0);
+    assert!(vault.is_empty());
+    assert!(!path.exists());
+
+    // Escape drops the query and cursor and restores the full option set; it
+    // cannot commit the search text as a profile.
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert_eq!(selected_profile(&page, &vcx), None);
+    let focused = vcx.update(|window, cx| {
+        let page = page.read(cx);
+        gpui_kit::Focusable::focus_handle(&*page.profiles.read(cx), cx).is_focused(window)
+    });
+    assert!(focused, "Escape must restore focus to the select trigger");
+    click(&mut vcx, "usage-profile");
+    for label in ["Personal", "Work", "Workshop", SEARCH_LONG_EN, SEARCH_LONG_ZH] {
+        assert_profile_visible(&mut vcx, label, true);
+    }
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+
+    // Simplified Chinese copy and a long Chinese label survive the same
+    // filtered-list geometry.
+    page.update(&mut vcx, |_, cx| {
+        crate::ui::i18n::set_locale("zh-CN");
+        cx.notify();
+    });
+    filter_profile_options(&mut vcx, "工作资料");
+    assert_profile_visible(&mut vcx, SEARCH_LONG_ZH, true);
+    assert_profile_visible(&mut vcx, "Personal", false);
+    assert_profile_visible(&mut vcx, "Work", false);
+    assert!(
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            painted_texts(window)
+                .iter()
+                .any(|text| text.contains("浏览器 profile"))
+        }),
+        "the settings form must keep its Simplified Chinese copy"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    page.update(&mut vcx, |_, cx| {
+        crate::ui::i18n::set_locale("en");
+        cx.notify();
+    });
+
+    // Keyboard selection inside the filtered view commits the second match,
+    // not the first row or an index from the unfiltered list.
+    filter_profile_options(&mut vcx, "work");
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        selected_profile(&page, &vcx),
+        Some("c-workshop".to_owned())
+    );
+    assert_profile_visible(&mut vcx, "Workshop", true);
+
+    http.reply(200, PLATFORM);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |data| data.stored.accounts.len() == 1);
+    let id = vcx.update(|_, cx| {
+        let account = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
+        assert_eq!(
+            saved_profile_label(account).as_deref(),
+            Some("Workshop")
+        );
+        account.id
+    });
+    assert!(vault.is_empty());
+    let saved = Accounts::load(path.clone(), vault.clone()).unwrap();
+    assert_eq!(
+        saved_profile_label(&saved.stored.accounts[0]).as_deref(),
+        Some("Workshop")
+    );
+    let metadata = std::fs::read_to_string(&path).unwrap();
+    assert!(metadata.contains("\"profile_id\":\"c-workshop\""));
+    assert!(metadata.contains("\"profile_label\":\"Workshop\""));
+    assert!(!metadata.contains("profile-search-token"));
+
+    // Pointer selection through the same filtered popup, followed by Escape
+    // while the committed profile is filtered out, keeps the committed profile
+    // and only submits the pointer choice.
+    click(&mut vcx, &format!("usage-replace-{id}"));
+    click(&mut vcx, "usage-browser");
+    vcx.simulate_keystrokes("down down down down down enter");
+    vcx.run_until_parked();
+    wait_for_profile_discovery(&page, &mut vcx, 5);
+    filter_profile_options(&mut vcx, "work");
+    assert_profile_visible(&mut vcx, SEARCH_LONG_EN, true);
+    assert_eq!(
+        painted_profile_count(&mut vcx, SEARCH_LONG_EN),
+        1,
+        "before the pointer commit only the filtered row shows the long label"
+    );
+    assert_eq!(selected_profile(&page, &vcx), None);
+    click_profile_label(&mut vcx, SEARCH_LONG_EN);
+    assert_eq!(
+        selected_profile(&page, &vcx),
+        Some("d-work-long".to_owned())
+    );
+
+    click(&mut vcx, "usage-profile");
+    assert_eq!(
+        painted_profile_count(&mut vcx, SEARCH_LONG_EN),
+        2,
+        "the committed trigger and the matching row both show the long label"
+    );
+    vcx.update(|window, cx| window.input("personal", cx));
+    vcx.run_until_parked();
+    assert_profile_visible(&mut vcx, "Personal", true);
+    assert_profile_visible(&mut vcx, "Workshop", false);
+    assert_eq!(
+        painted_profile_count(&mut vcx, SEARCH_LONG_EN),
+        1,
+        "the row is filtered out while the committed trigger keeps its value"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert_eq!(
+        selected_profile(&page, &vcx),
+        Some("d-work-long".to_owned())
+    );
+    assert_profile_visible(&mut vcx, SEARCH_LONG_EN, true);
+
+    http.reply(200, PLATFORM);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |data| {
+        data.stored
+            .accounts
+            .iter()
+            .any(|a| a.id == id && saved_profile_label(a).as_deref() == Some(SEARCH_LONG_EN))
+    });
+    let saved = Accounts::load(path, vault.clone()).unwrap();
+    assert_eq!(
+        saved_profile_label(saved.account(id).unwrap()).as_deref(),
+        Some(SEARCH_LONG_EN)
+    );
+    assert!(vault.is_empty());
 }

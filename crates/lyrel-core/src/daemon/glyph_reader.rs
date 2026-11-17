@@ -36,7 +36,7 @@ pub(super) fn consume(
                 framed.extend_from_slice(b"\x1b_");
                 framed.extend_from_slice(body);
                 framed.extend_from_slice(b"\x1b\\");
-                super::graphics_reader::text(state, &framed, gate, writer);
+                super::graphics_reader::text(state, &framed, gate, writer, true);
             }
         }
         GlyphOutcome::Query { cp, glossary } => request_query(state, cp, glossary),
@@ -113,6 +113,7 @@ mod tests {
             // attach through `pane_with_renderer`; this fixture stays silent.
             true,
             false,
+            false,
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -132,6 +133,7 @@ mod tests {
             false,
             true,
             true,
+            false,
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -266,6 +268,7 @@ mod pipeline_tests {
             // Both credentials: `q` only reaches a controller that declared
             // the monochrome-render opt-in, so the pipeline fixture renders.
             true,
+            false,
         );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();
@@ -283,7 +286,7 @@ mod pipeline_tests {
             &mut || Some(true),
             &mut discovery,
         );
-        graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics);
+        graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics, true);
         loop {
             match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(DaemonMsg::GlyphQuery { cp, .. }) => {

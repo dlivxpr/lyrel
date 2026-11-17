@@ -275,14 +275,26 @@ pub struct LyrelApp {
     pub(crate) document_dragging: Rc<Cell<bool>>,
     pub(crate) right_panel_visible: bool,
     pub(crate) right_panel_tab: RightPanelTab,
+    pub(crate) right_panel_nav_focus: gpui_kit::FocusHandle,
+    pub(crate) right_panel_nav_return: Option<gpui_kit::FocusHandle>,
+    pub(crate) right_panel_nav_wait: Cell<u8>,
+    pub(crate) right_panel_nav_renders: Cell<u8>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_scroll: gpui_kit::ScrollHandle,
-    /// The tab whose sidebar row is brought into view the next time it is
-    /// drawn. Read by the row, not by `activate`: a new tab has no row yet,
-    /// and the list's children are groups, so a tab index is no child index.
-    /// Keyed by the tab's id, not its index, so a reorder or close in between
-    /// cannot point it at another tab.
-    pub(crate) sidebar_reveal: Rc<Cell<Option<lyrel_core::core::machine::TabId>>>,
+    /// The sidebar row or group header brought into view the next time it is
+    /// drawn. Read by the row/header, not by `activate`: a new tab has no row
+    /// yet, and the list's children are groups, so a tab index is no child
+    /// index. Keyed by the tab or group identity, not its position, so a
+    /// reorder or close in between cannot point it at another tab.
+    pub(crate) sidebar_reveal: Rc<RefCell<Option<crate::ui::tab_sidebar::SidebarNavTarget>>>,
+    /// The one keyboard Tab stop for the visible terminal-tab sidebar. Focus
+    /// stays here while arrow keys rove a domain-keyed active descendant, so
+    /// activating a tab does not hand the keyboard to its shell.
+    pub(crate) sidebar_nav_focus: gpui_kit::FocusHandle,
+    /// The row or group header the sidebar's roving focus ring is on. Keyed by
+    /// domain identity rather than a slot: insertion, close, regrouping and
+    /// reorder all move rows without changing what this names.
+    pub(crate) sidebar_nav_target: Option<crate::ui::tab_sidebar::SidebarNavTarget>,
     pub(crate) reorder: Rc<RefCell<Option<crate::ui::reorder::Reorder>>>,
     pub(crate) pane_drag: crate::ui::pane_drag::PaneDragState,
     pub(crate) parked_deck: Entity<crate::ui::parked_deck::ParkedDeck>,
@@ -330,7 +342,7 @@ pub struct LyrelApp {
     /// A close question is on screen. It carries no target: the answer acts on
     /// the tab or pane captured when the question was raised, not on whatever
     /// the app happens to be pointing at by the time it is answered.
-    close_prompt_open: bool,
+    pub(crate) close_prompt_open: bool,
     window_bounds: Bounds<Pixels>,
     pub(crate) workspace: WorkspaceId,
     pub(crate) workspace_rename: Option<WorkspaceRename>,
@@ -339,6 +351,7 @@ pub struct LyrelApp {
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
     pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
+    pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
@@ -3089,6 +3102,35 @@ impl LyrelApp {
     }
 
     pub(crate) fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate_tab(index, true, window, cx);
+    }
+
+    /// Activates a tab from the sidebar's roving navigation. The session is
+    /// switched exactly as [`Self::activate`] switches it, but keyboard focus
+    /// stays in the sidebar so Up/Down, Home/End and Enter can carry on.
+    pub(crate) fn activate_from_sidebar_navigation(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_tab(index, false, window, cx);
+        if !self.sidebar_nav_focus.is_focused(window) {
+            window.focus(&self.sidebar_nav_focus, cx);
+        }
+    }
+
+    /// The one activation path. `focus_content` is what separates a click or
+    /// shortcut, which hands the keyboard to the pane (or the file tree, when
+    /// the document column owns the screen), from sidebar navigation, which
+    /// activates a session without leaving its roving Tab stop.
+    fn activate_tab(
+        &mut self,
+        index: usize,
+        focus_content: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // A tab is woken by being looked at, the way a browser reloads a
         // discarded tab when it is selected: a tab on screen is always a
         // running one, so there is no third state to draw. A wake that fails
@@ -3100,8 +3142,12 @@ impl LyrelApp {
             self.cancel_pane_drag(window, cx);
             self.tabs.activate(index, &mut self.maximized, window, cx);
             self.maybe_refresh_diff_overlay(cx);
-            self.sidebar_reveal.set(Some(self.tabs[index].id()));
-            if self.code_panel_visible() {
+            *self.sidebar_reveal.borrow_mut() = Some(
+                crate::ui::tab_sidebar::SidebarNavTarget::Tab(self.tabs[index].id()),
+            );
+            if !focus_content {
+                self.sync_window_title(window, cx);
+            } else if self.code_panel_visible() {
                 self.file_tree_refresh_roots(window, cx);
                 self.file_tree.focus_handle.focus(window, cx);
             } else {
@@ -3332,7 +3378,21 @@ impl LyrelApp {
         } {
             Self::kill_pane_off_thread(route, pane, cx);
         }
+        // The sidebar's roving focus names tabs by identity, so a close it
+        // was standing on has to name the survivor before the row goes. Ask
+        // while the closing tab is still there: after the removal its place
+        // in the visible order is gone with it.
+        let navigation_on_closing = self.sidebar_nav_target.as_ref()
+            == Some(&crate::ui::tab_sidebar::SidebarNavTarget::Tab(closing));
+        let navigation_successor = navigation_on_closing
+            .then(|| self.sidebar_nav_successor_after_close(closing, cx))
+            .flatten();
+        let sidebar_had_focus = self.sidebar_nav_focus.is_focused(window);
         self.tabs.remove(index);
+        if navigation_on_closing {
+            self.sidebar_nav_target = navigation_successor;
+            self.sidebar_nav_settle(cx);
+        }
         // Only losing the renaming tab itself ends the rename — closing an
         // unrelated tab must not throw the half-typed name away (#598).
         if self
@@ -3344,6 +3404,13 @@ impl LyrelApp {
         }
         self.wake_active_if_asleep(window, cx);
         self.focus_active(window, cx);
+        // Closing from inside the sidebar's own keyboard region is still
+        // navigation: the row that went may be gone, but the region it
+        // belonged to keeps the keyboard. A pointer close took focus onto its
+        // button first, so it keeps the existing content-focus outcome.
+        if sidebar_had_focus && !self.tabs.is_empty() {
+            window.focus(&self.sidebar_nav_focus, cx);
+        }
         self.save_session(cx);
         if remembered
             && let Some(unsent) =
@@ -4263,12 +4330,14 @@ impl LyrelApp {
             SwapPanePrev => self.swap_pane(false, window, cx),
             SelectNextTab => self.cycle_tab(true, window, cx),
             SelectPrevTab => self.cycle_tab(false, window, cx),
+            FocusTerminalTabNavigation => self.focus_terminal_tab_navigation(window, cx),
             MoveTabLeft => self.move_tab(false, cx),
             MoveTabRight => self.move_tab(true, cx),
             ToggleMaximizePane => self.toggle_maximize(window, cx),
             ToggleFullscreen => self.toggle_fullscreen(window, cx),
             ToggleLeftPanel => self.toggle_left_panel(cx),
             ToggleRightPanel => self.toggle_right_panel(cx),
+            FocusRightPanelNavigation => self.focus_right_panel_navigation(window, cx),
             ShowRightPanel(tab) => self.set_right_panel_tab(tab, cx),
             ResetFontSize => self.reset_font_size(cx),
             FindInTerminal => {
@@ -4351,6 +4420,9 @@ impl LyrelApp {
             CopyAgentSessionId => self.copy_agent_session_id(self.tabs.active_index(), window, cx),
             RenameWorkspace => self.start_workspace_rename(window, cx),
             OpenSettings => self.toggle_settings(window, cx),
+            FocusSettingsNavigation => self.open_settings_then(window, cx, |view, window, cx| {
+                view.focus_settings_navigation(window, cx)
+            }),
             ShowKeyboardShortcuts => {
                 self.open_settings_section(SettingsSection::Keybindings, window, cx)
             }

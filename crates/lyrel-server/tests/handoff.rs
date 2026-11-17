@@ -13,12 +13,19 @@
 
 #![cfg(unix)]
 
+#[path = "program_status_support/mod.rs"]
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use lyrel_core::client::PaneClient;
+use lyrel_core::core::program_status::{
+    ProgramRecord, ProgramState, ProgramStatusClient, ProgramStatusFrame,
+};
 use lyrel_core::daemon::protocol::{DaemonMsg, PaneProgress, ProgressKind, ShellSpec, WinSize};
+use support::Status;
 
 const READY_WITHIN: Duration = Duration::from_secs(30);
 const STREAM_WITHIN: Duration = Duration::from_secs(30);
@@ -31,20 +38,34 @@ struct Daemon {
 impl Daemon {
     fn start() -> Daemon {
         let dir = tempfile::TempDir::new().unwrap();
-        let child = Command::new(Self::binary())
+        let child = Self::spawn_child(dir.path());
+        let daemon = Daemon { child, dir };
+        daemon.await_ready();
+        daemon
+    }
+
+    fn spawn_child(config_dir: &Path) -> Child {
+        Command::new(Self::binary())
             .arg("--daemon")
             .arg("--config-dir")
-            .arg(dir.path())
-            .env("LYREL_DATA_DIR", dir.path())
-            .env("LYREL_CONTROL_SOCK", dir.path().join("control.sock"))
+            .arg(config_dir)
+            .env("LYREL_DATA_DIR", config_dir)
+            .env("LYREL_CONTROL_SOCK", config_dir.join("control.sock"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("start lyrel-server --daemon");
-        let daemon = Daemon { child, dir };
-        daemon.await_ready();
-        daemon
+            .expect("start lyrel-server --daemon")
+    }
+
+    /// A daemon process that died, not a handoff: the pty children go with it.
+    /// Starting the next image against the same config/data directory is the
+    /// only way to check that nothing program-status-shaped was written down.
+    fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.child = Self::spawn_child(self.dir.path());
+        self.await_ready();
     }
 
     fn binary() -> PathBuf {
@@ -638,4 +659,243 @@ fn a_handoff_keeps_the_pane_glyph_glossary() {
     );
 
     session.kill().expect("kill the pane");
+}
+
+/// Program status is daemon-owned state that must cross a same-session `exec`
+/// with the shell, but never as terminal history. The shell variable proves
+/// this is still the original process; the reconnect baseline proves the
+/// identity, both counters, the records and per-record recency came with it.
+#[test]
+fn a_handoff_keeps_program_status_identity_versions_and_records() {
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let before_pid = daemon.recorded_pid().expect("the daemon records its pid");
+    let before_instance = daemon.instance();
+
+    let mut session = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn an interactive pane");
+    let pane_id = session.pane_id();
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    let (_, baseline) = support::pump_baseline(&mut session);
+    let mut client = ProgramStatusClient::default();
+    assert!(client.apply(&baseline), "the spawn carries a baseline");
+
+    // Live authority arrives as ordered updates; nothing is reconstructed from
+    // the ring or from the producer's text.
+    let reports = support::reports(
+        &[
+            Status::new("working").app("buildapp").title("Tools"),
+            Status::new("done")
+                .id("release")
+                .title("Build")
+                .message("finished"),
+        ],
+        "true",
+    );
+    let pumped = support::run(&mut session, &reports);
+    support::apply_frames(&mut client, &pumped.frames);
+    let session_id = client.session_id().expect("a live lifetime").to_string();
+    let (semantic, result) = (client.semantic_version(), client.result_version());
+    let before: Vec<ProgramRecord> = client.records().cloned().collect();
+    assert_eq!(before.len(), 2);
+    let release = ProgramRecord::clone(support::record(&client, "release").unwrap());
+    assert_eq!(release.app(), Some("buildapp"));
+    assert!(release.result_version() > 0);
+
+    // A value only this live shell has: the pane that answers afterwards is
+    // provably the original process, not a replaced one.
+    session
+        .input(b"lyrel_kept=program-status-survivor; echo lyrel_prog_$lyrel_kept\r")
+        .expect("the shell takes input");
+    support::pump_until_text(&mut session, b"lyrel_prog_program-status-survivor");
+    drop(session);
+
+    panes
+        .hand_off(&Daemon::binary())
+        .expect("the daemon hands over");
+    daemon.await_ready();
+    assert_eq!(
+        daemon.recorded_pid(),
+        Some(before_pid),
+        "an exec keeps the process"
+    );
+    assert_ne!(
+        daemon.instance(),
+        before_instance,
+        "a new image has to be answering, or the exec never happened"
+    );
+
+    let mut session = panes
+        .attach(pane_id, size())
+        .expect("the pane is still there under the same id");
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    let (_, baseline) = support::pump_baseline(&mut session);
+    let snapshot = match &baseline {
+        ProgramStatusFrame::Baseline(snapshot) => snapshot.clone(),
+        _ => panic!("an attach must start with a baseline"),
+    };
+    assert_eq!(snapshot.session_id(), session_id.as_str());
+    assert_eq!(
+        snapshot.semantic_version(),
+        semantic,
+        "the semantic counter survives the exec"
+    );
+    assert_eq!(
+        snapshot.result_version(),
+        result,
+        "the result counter survives the exec"
+    );
+    assert_eq!(
+        snapshot.records(),
+        before.as_slice(),
+        "records, explicit apps, per-record versions and recency survive the exec"
+    );
+    client.apply(&baseline);
+    assert_eq!(client.session_id(), Some(session_id.as_str()));
+
+    session
+        .input(b"echo lyrel_after_$lyrel_kept\r")
+        .expect("the adopted shell still takes input");
+    support::pump_until_text(&mut session, b"lyrel_after_program-status-survivor");
+
+    // The carried counters are high-water marks, not a fresh store: leaving
+    // done is not a result, and re-entering it must climb past the pre-exec
+    // value even though the payload is identical.
+    let pumped = support::run(
+        &mut session,
+        &support::reports(
+            &[Status::new("working")
+                .id("release")
+                .app("buildapp")
+                .title("Build")
+                .message("finished")],
+            "true",
+        ),
+    );
+    let working = support::delta(&pumped.frames[0]).expect("one ordered update");
+    assert_eq!(working.session_id(), session_id.as_str());
+    assert_eq!(working.semantic_version(), semantic + 1);
+    assert_eq!(
+        working.result_version(),
+        result,
+        "leaving done is not a result"
+    );
+    support::apply_frames(&mut client, &pumped.frames);
+
+    let pumped = support::run(
+        &mut session,
+        &support::reports(
+            &[Status::new("done")
+                .id("release")
+                .app("buildapp")
+                .title("Build")
+                .message("finished")],
+            "true",
+        ),
+    );
+    let reentered = support::delta(&pumped.frames[0]).expect("one ordered update");
+    assert_eq!(reentered.session_id(), session_id.as_str());
+    assert!(reentered.semantic_version() > working.semantic_version());
+    assert!(
+        reentered.result_version() > result,
+        "a re-entered done is a new result, not a reused pre-exec one"
+    );
+    support::apply_frames(&mut client, &pumped.frames);
+    let after = support::record(&client, "release").unwrap();
+    assert_eq!(after.state(), ProgramState::Done);
+    assert_eq!(after.title(), release.title());
+    assert_eq!(after.message(), release.message());
+    assert_eq!(after.app(), release.app());
+    assert!(after.result_version() > release.result_version());
+    assert_eq!(after.result_version(), reentered.result_version());
+
+    session.kill().expect("kill the pane");
+}
+
+/// Records live only as long as the daemon and pty that own them. A binary
+/// restart drops the pane; the next shell must get a fresh lifetime and no
+/// records even when the payload is identical.
+#[test]
+fn a_daemon_restart_does_not_revive_program_status() {
+    let mut daemon = Daemon::start();
+    let panes = daemon.panes();
+    let mut session = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn an interactive pane");
+    let pane_id = session.pane_id();
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    let (_, baseline) = support::pump_baseline(&mut session);
+    let mut client = ProgramStatusClient::default();
+    assert!(client.apply(&baseline));
+    let pumped = support::run(
+        &mut session,
+        &support::reports(
+            &[Status::new("done")
+                .id("ghost")
+                .title("GhostTitle")
+                .message("last words")],
+            "true",
+        ),
+    );
+    support::apply_frames(&mut client, &pumped.frames);
+    let ghost =
+        ProgramRecord::clone(support::record(&client, "ghost").expect("the record is live"));
+    let session_id = client.session_id().unwrap().to_string();
+    assert!(ghost.result_version() > 0);
+    drop(session);
+
+    daemon.restart();
+    assert!(
+        panes
+            .list()
+            .expect("the restarted daemon lists panes")
+            .is_empty(),
+        "a new daemon image has no pane it did not start"
+    );
+    assert!(
+        panes.attach(pane_id, size()).is_err(),
+        "the killed daemon's pane is gone, not revived from anywhere"
+    );
+
+    let mut next = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn a new shell after the restart");
+    let (_, baseline) = support::pump_baseline(&mut next);
+    let mut next_client = ProgramStatusClient::default();
+    assert!(next_client.apply(&baseline));
+    assert_ne!(
+        next_client.session_id(),
+        Some(session_id.as_str()),
+        "a daemon restart does not carry the old session identity"
+    );
+    assert!(
+        next_client.records().next().is_none(),
+        "records are transient, never disk-backed"
+    );
+
+    let pumped = support::run(
+        &mut next,
+        &support::reports(
+            &[Status::new("done")
+                .id("ghost")
+                .title("GhostTitle")
+                .message("last words")],
+            "true",
+        ),
+    );
+    support::apply_frames(&mut next_client, &pumped.frames);
+    let revived = support::record(&next_client, "ghost").expect("the new shell owns its record");
+    assert_eq!(
+        revived.result_version(),
+        1,
+        "the new lifetime's first done starts its own result sequence"
+    );
+    assert_ne!(next_client.session_id(), Some(session_id.as_str()));
 }

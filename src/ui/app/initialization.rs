@@ -231,6 +231,7 @@ impl LyrelApp {
                 this.cancel_pane_drag(window, cx);
             }
             if window.is_window_active() {
+                crate::ui::motion::refresh_system(cx);
                 WorkspaceStore::focus(cx, this.workspace);
                 this.refresh_git_status_all(cx);
             }
@@ -372,9 +373,15 @@ impl LyrelApp {
             document_dragging: Rc::new(Cell::new(false)),
             right_panel_visible,
             right_panel_tab,
+            right_panel_nav_focus: cx.focus_handle(),
+            right_panel_nav_return: None,
+            right_panel_nav_wait: Cell::new(0),
+            right_panel_nav_renders: Cell::new(0),
             sidebar_collapsed,
             sidebar_scroll: gpui_kit::ScrollHandle::new(),
-            sidebar_reveal: Rc::new(Cell::new(None)),
+            sidebar_reveal: Rc::new(RefCell::new(None)),
+            sidebar_nav_focus: cx.focus_handle().tab_stop(true),
+            sidebar_nav_target: None,
             reorder: Rc::new(RefCell::new(None)),
             pane_drag: Rc::new(RefCell::new(None)),
             parked_deck,
@@ -400,6 +407,7 @@ impl LyrelApp {
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
             status_metrics: None,
             notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
+            program_attention: Default::default(),
             status_document_focus: None,
             connect: Default::default(),
             switcher: None,

@@ -40,6 +40,12 @@ impl TerminalView {
                 self.lifecycle.notify_output(cx);
             }
             PaneEvent::ProgressChanged => cx.emit(ProgressChanged),
+            PaneEvent::ProgramStatusChanged => {
+                let frames = self.terminal.take_program_status_updates();
+                if !frames.is_empty() {
+                    cx.emit(ProgramStatusChanged(frames));
+                }
+            }
             PaneEvent::Title(title) => {
                 self.set_title_when_settled(title, cx);
                 self.note_title_contract(cx);
@@ -207,7 +213,12 @@ impl TerminalView {
                                 cx.global::<Config>().notify_threshold_secs,
                             );
                             if elapsed >= threshold {
-                                self.notify_command_finished(&title, elapsed, cx);
+                                self.notify_command_finished(
+                                    &title,
+                                    self.terminal.last_exit_code(),
+                                    elapsed,
+                                    cx,
+                                );
                             }
                         }
                     }

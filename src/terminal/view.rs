@@ -92,6 +92,12 @@ impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 pub struct ProgressChanged;
 impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
 
+/// Ordered authoritative baseline/live frames, broadcast to independent windows.
+pub(crate) struct ProgramStatusChanged(
+    pub Vec<lyrel_core::core::program_status::ProgramStatusFrame>,
+);
+impl gpui_kit::EventEmitter<ProgramStatusChanged> for TerminalView {}
+
 /// A coding agent started running in this pane: its foreground went from no
 /// agent to this one. What quick launch counts as the agent being used.
 pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
@@ -1072,6 +1078,13 @@ impl TerminalView {
 
     pub(crate) fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
         self.terminal.progress()
+    }
+
+    pub(crate) fn with_program_status<R>(
+        &self,
+        read: impl FnOnce(&lyrel_core::core::program_status::ProgramStatusClient) -> R,
+    ) -> R {
+        self.terminal.with_program_status(read)
     }
 
     /// What this pane is in the middle of, when it can say so. `None` means
@@ -3372,7 +3385,11 @@ mod gpui_tests {
     include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");
+    include!("command_notification_consumer_tests.rs");
     include!("title_consumer_tests.rs");
+    include!("program_status_consumer_tests.rs");
+    include!("program_summary_consumer_tests.rs");
+    include!("program_attention_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
@@ -5217,7 +5234,7 @@ mod gpui_tests {
             .unwrap();
         cx.run_until_parked();
         assert_eq!(
-            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            cx.update(|cx| composer_input.read(cx).value()),
             "a",
             "Backspace deletes the family grapheme as one unit"
         );
@@ -5234,7 +5251,7 @@ mod gpui_tests {
             .unwrap();
         cx.run_until_parked();
         assert_eq!(
-            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            cx.update(|cx| composer_input.read(cx).value()),
             "中文",
             "committing a composition replaces its preedit in the draft"
         );
@@ -5298,7 +5315,7 @@ mod gpui_tests {
             .unwrap();
         draw(cx);
         assert_eq!(
-            cx.update(|cx| composer_input.read(cx).value().as_str()),
+            cx.update(|cx| composer_input.read(cx).value()),
             "",
             "secondary Enter submits the draft rather than typing into it"
         );

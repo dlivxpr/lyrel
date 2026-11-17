@@ -57,6 +57,13 @@ impl OutputObservation {
             || self.cwd.is_some()
     }
 
+    /// Whether this read carried any OSC 133 prompt mark at all. The pane only
+    /// probes foreground execution when one did, keeping the hot path free of
+    /// an extra syscall.
+    pub(in super::super) fn has_prompt_mark(&self) -> bool {
+        self.signals.shell.iter().any(|shell| shell.at_prompt)
+    }
+
     pub(super) fn apply(
         self,
         facts: &mut PaneFacts,
@@ -155,12 +162,14 @@ impl FactReader {
     pub(in super::super) fn observe(
         &mut self,
         observation: OutputObservation,
-        foreground_running: &impl Fn() -> bool,
+        prompt_foreground: bool,
         mut before: ReadProbe,
     ) -> OutputObservation {
         let mut signals = observation.signals;
-        // Most reads contain no mark, so do not pay for a foreground syscall.
-        if signals.shell.iter().any(|shell| shell.at_prompt) && foreground_running() {
+        // Most reads contain no mark, so the caller only probes foreground
+        // execution when one did. A relayed far prompt is suppressed exactly
+        // as before; the program-status cleanup below shares this decision.
+        if signals.shell.iter().any(|shell| shell.at_prompt) && prompt_foreground {
             suppress_relayed_prompt_marks(&mut signals.shell);
         }
         // Probe on the final near-shell prompt even inside the interval: it may

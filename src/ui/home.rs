@@ -3,8 +3,8 @@ use std::time::Duration;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex, v_flex};
 use gpui_kit::{
-    Animation, AnimationExt as _, App, Context, KeyDownEvent, Keystroke, MouseButton, div,
-    prelude::*, px,
+    Animation, AnimationExt as _, App, Context, KeyDownEvent, Keystroke, MouseButton,
+    TestSupportExt as _, div, prelude::*, px,
 };
 
 use crate::core::actions::{NewTab, OpenSettings, ReopenClosedTab, TogglePalette, ToggleSwitcher};
@@ -277,6 +277,7 @@ impl LyrelApp {
 
         v_flex()
             .id("home-page")
+            .test_support()
             .track_focus(&self.home_focus)
             .size_full()
             .items_center()

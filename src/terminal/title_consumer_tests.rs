@@ -1,5 +1,5 @@
-//! Consumer-visible title and OSC 8 contracts through the production window,
-//! the real isolated daemon/PTY, and the ordered pane stream.
+// Consumer-visible title and OSC 8 contracts through the production window,
+// the real isolated daemon/PTY, and the ordered pane stream.
 
 use std::time::Duration;
 
@@ -74,11 +74,7 @@ fn send_title_fixture(
 }
 
 /// Runs out the tab's title-settle timer and waits for the visible title.
-fn settle_window_title(
-    view: &Entity<TerminalView>,
-    cx: &mut TestAppContext,
-    want: &str,
-) {
+fn settle_window_title(view: &Entity<TerminalView>, cx: &mut TestAppContext, want: &str) {
     for _ in 0..400 {
         cx.run_until_parked();
         cx.executor().advance_clock(TITLE_SETTLE * 2);
@@ -107,9 +103,7 @@ fn pty_source() -> PtySource {
 /// authoritative fact and the window, including a fresh attach replay and a
 /// pane hidden at the time the title arrives.
 #[gpui_kit::test]
-fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(
-    cx: &mut TestAppContext,
-) {
+fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
@@ -126,12 +120,14 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(
     // A hidden pane still consumes the title for its tab label; visibility
     // gates painting, not the ordered facts. The registry reports the pane as
     // hidden, so the title below really arrives while it is not on screen.
-    declare_displayed(cx, [(view.entity_id(), false)]);
-    assert_eq!(
-        crate::terminal::lifecycle::displayed_for_test(cx, view.entity_id()),
-        Some(false),
-        "the pane consumer is actually hidden for this title"
-    );
+    cx.update(|cx| {
+        declare_displayed(cx, [(view.entity_id(), false)]);
+        assert_eq!(
+            crate::terminal::lifecycle::displayed_for_test(cx, view.entity_id()),
+            Some(false),
+            "the pane consumer is actually hidden for this title"
+        );
+    });
     send_title_fixture(&view, cx, 1, b"\x1b]2;  hidden ; title  \x1b\\");
     settle_window_title(&view, cx, "  hidden ; title  ");
     wait_daemon_title(&control, pane, Some("  hidden ; title  "));
@@ -139,24 +135,14 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(
     // 255 UTF-8 bytes are accepted whole, spaces and semicolons included.
     let at_limit = format!("  {} ;end ", "t".repeat(247));
     assert_eq!(at_limit.len(), 255);
-    send_title_fixture(
-        &view,
-        cx,
-        2,
-        format!("\x1b]0;{at_limit}\x1b\\").as_bytes(),
-    );
+    send_title_fixture(&view, cx, 2, format!("\x1b]0;{at_limit}\x1b\\").as_bytes());
     settle_window_title(&view, cx, &at_limit);
     wait_daemon_title(&control, pane, Some(&at_limit));
 
     // 256 bytes are rejected whole; neither consumer truncates or loses the
     // previous valid title.
     let over = "x".repeat(256);
-    send_title_fixture(
-        &view,
-        cx,
-        3,
-        format!("\x1b]2;{over}\x07").as_bytes(),
-    );
+    send_title_fixture(&view, cx, 3, format!("\x1b]2;{over}\x07").as_bytes());
     settle_window_title(&view, cx, &at_limit);
     wait_daemon_title(&control, pane, Some(&at_limit));
 
@@ -237,7 +223,7 @@ fn title_consumer_older_endpoint_warns_once_and_keeps_the_session(cx: &mut TestA
     use crate::ui::tab::Tab;
 
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-    let (client_side, mut old_daemon) = crate::terminal::test_stream_pair();
+    let (client_side, mut old_daemon) = test_stream_pair();
     let old_version = DaemonVersion {
         protocol: PROTOCOL_VERSION,
         build: "0.3.4".into(),
@@ -301,7 +287,7 @@ fn title_consumer_older_endpoint_warns_once_and_keeps_the_session(cx: &mut TestA
 
     // A capable endpoint keeps the same session and says nothing: parity is
     // claimed only where the endpoint actually implements it.
-    let (client_side, mut current_daemon) = crate::terminal::test_stream_pair();
+    let (client_side, mut current_daemon) = test_stream_pair();
     let capable = app.update_in(&mut vcx, |app, window, cx| {
         let terminal = RemoteTerminal::from_stream_with_endpoint(
             client_side,
@@ -335,35 +321,27 @@ fn title_consumer_older_endpoint_warns_once_and_keeps_the_session(cx: &mut TestA
 /// synthetic endpoint must not become a title, and the previous valid title
 /// stands on every platform (the raw byte path is PTY-exact only on Unix).
 #[gpui_kit::test]
-fn title_consumer_invalid_utf8_from_the_ordered_stream_is_rejected_whole(
-    cx: &mut TestAppContext,
-) {
+fn title_consumer_invalid_utf8_from_the_ordered_stream_is_rejected_whole(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
     DaemonMsg::Output(b"\x1b]2;kept title\x07".to_vec())
         .encode(&mut daemon)
         .unwrap();
-    let titled = |window: &gpui_kit::WindowHandle<TerminalView>,
-                  cx: &mut TestAppContext,
-                  want: &str| {
-        for _ in 0..300 {
-            cx.run_until_parked();
-            cx.executor().advance_clock(TITLE_SETTLE * 2);
-            cx.run_until_parked();
-            if window
-                .update(cx, |view, _, _| view.title == want)
-                .unwrap()
-            {
-                return;
+    let titled =
+        |window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext, want: &str| {
+            for _ in 0..300 {
+                cx.run_until_parked();
+                cx.executor().advance_clock(TITLE_SETTLE * 2);
+                cx.run_until_parked();
+                if window.update(cx, |view, _, _| view.title == want).unwrap() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(2));
             }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        panic!(
-            "window title never became {want:?}; last was {:?}",
-            window
-                .update(cx, |view, _, _| view.title.clone())
-                .unwrap()
-        );
-    };
+            panic!(
+                "window title never became {want:?}; last was {:?}",
+                window.update(cx, |view, _, _| view.title.clone()).unwrap()
+            );
+        };
     titled(&window, cx, "kept title");
     DaemonMsg::Output(b"\x1b]2;bad \xff utf8\x07".to_vec())
         .encode(&mut daemon)
@@ -410,9 +388,7 @@ fn osc8_consumer_keeps_semicolons_ids_and_the_2047_byte_boundary(cx: &mut TestAp
     // Semicolon-bearing destination.
     bytes.extend_from_slice(b"\x1b[5;1H\x1b]8;;https://example.com/a;b\x1b\\LINK\x1b]8;;\x1b\\");
     // Repeated ids: the last non-empty one is the stored id.
-    bytes.extend_from_slice(
-        b"\x1b[6;1H\x1b]8;id=first:id=last;https://two\x1b\\ID\x1b]8;;\x1b\\",
-    );
+    bytes.extend_from_slice(b"\x1b[6;1H\x1b]8;id=first:id=last;https://two\x1b\\ID\x1b]8;;\x1b\\");
     // Exactly 2047 combined bytes: empty params + ';' + 2046-byte URI.
     let at_limit = "u".repeat(2046);
     bytes.extend_from_slice(b"\x1b[7;1H");

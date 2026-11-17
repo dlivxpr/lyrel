@@ -23,7 +23,10 @@ fn a_pane_states_a_title_whenever_it_is_not_the_placeholder() {
 
     // A title from the program running in it.
     assert_eq!(stated_title("vim — main.rs"), Some("vim — main.rs"));
-    assert_eq!(stated_title(" user@host:~/repo "), Some(" user@host:~/repo "));
+    assert_eq!(
+        stated_title(" user@host:~/repo "),
+        Some(" user@host:~/repo ")
+    );
     // A default lyrel chose for the pane itself is a name, not the absence
     // of one: an SSH pane answers to its host (#438) and a workspace pane
     // to its workspace, and neither gives way to a directory.
@@ -117,6 +120,234 @@ fn a_notification_title_keeps_at_most_two_segments() {
 fn settle(cx: &mut TestAppContext) {
     cx.executor().advance_clock(TITLE_SETTLE * 2);
     cx.run_until_parked();
+}
+fn configure_notifications(
+    cx: &mut TestAppContext,
+    mode: crate::core::config::NotifyMode,
+    threshold_secs: u64,
+) {
+    cx.update(|cx| {
+        let mut config = cx.global::<crate::core::config::Config>().clone();
+        config.notify_on_command_finish = mode;
+        config.notify_threshold_secs = threshold_secs;
+        cx.set_global(config);
+    });
+}
+
+fn report_prompt(
+    daemon: &mut crate::daemon::transport::Stream,
+    at_prompt: bool,
+    last_exit: Option<i32>,
+) {
+    crate::daemon::protocol::DaemonMsg::Prompt {
+        active: true,
+        at_prompt,
+        last_exit,
+    }
+    .encode(daemon)
+    .unwrap();
+}
+
+fn wait_for_shell(
+    window: &gpui_kit::WindowHandle<TerminalView>,
+    cx: &mut TestAppContext,
+    ready: impl Fn(&TerminalView) -> bool,
+    what: &str,
+) {
+    for _ in 0..400 {
+        if window.update(cx, |view, _, _| ready(view)).unwrap() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("timed out waiting for {what}");
+}
+
+/// Invoke the production foreground lifecycle instead of touching the view's
+/// completion fields. It owns both the command lifecycle and notification
+/// policy.
+fn pump_foreground(cx: &mut TestAppContext) {
+    // Let the lifecycle task reach its first timer before moving the clock.
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(310));
+    cx.run_until_parked();
+}
+
+/// One ordinary command through the ordered daemon stream: at a prompt, leaving
+/// it, then back with the shell's result.
+fn ordinary_command(
+    window: &gpui_kit::WindowHandle<TerminalView>,
+    daemon: &mut crate::daemon::transport::Stream,
+    cx: &mut TestAppContext,
+    exit: Option<i32>,
+) {
+    report_prompt(daemon, true, None);
+    wait_for_shell(window, cx, |view| view.terminal.at_prompt(), "a prompt");
+    report_prompt(daemon, false, None);
+    wait_for_shell(
+        window,
+        cx,
+        |view| !view.terminal.at_prompt(),
+        "the command to start",
+    );
+    pump_foreground(cx);
+    report_prompt(daemon, true, exit);
+    wait_for_shell(
+        window,
+        cx,
+        |view| view.terminal.at_prompt() && view.terminal.last_exit_code() == exit,
+        "the command result",
+    );
+    pump_foreground(cx);
+}
+
+fn take_notifications() -> Vec<crate::terminal::desktop_notification::DeliveredNotification> {
+    crate::terminal::desktop_notification::take_test_notifications()
+}
+
+#[gpui_kit::test]
+fn ordinary_command_notifications_keep_the_existing_threshold_and_mode(cx: &mut TestAppContext) {
+    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    crate::ui::i18n::set_locale("en");
+
+    configure_notifications(cx, crate::core::config::NotifyMode::Always, 3600);
+    ordinary_command(&window, &mut daemon, cx, Some(0));
+    assert!(
+        take_notifications().is_empty(),
+        "a command under the configured threshold stays quiet"
+    );
+
+    configure_notifications(cx, crate::core::config::NotifyMode::Never, 0);
+    ordinary_command(&window, &mut daemon, cx, Some(0));
+    assert!(
+        take_notifications().is_empty(),
+        "notify_on_command_finish=never remains a hard gate"
+    );
+
+    configure_notifications(cx, crate::core::config::NotifyMode::Always, 0);
+    ordinary_command(&window, &mut daemon, cx, Some(0));
+    let notes = take_notifications();
+    assert_eq!(
+        notes.len(),
+        1,
+        "the ordinary path delivered once: {notes:?}"
+    );
+    assert!(
+        notes[0].body.contains("succeeded"),
+        "zero is reported as success: {:?}",
+        notes[0].body
+    );
+    assert_eq!(
+        notes[0].title, "lyrel",
+        "the local pane keeps its app title"
+    );
+    assert_eq!(
+        notes[0].pane,
+        Some(window.update(cx, |_, _, cx| cx.entity_id()).unwrap()),
+        "the retained OS routing still reveals this pane"
+    );
+}
+
+#[gpui_kit::test]
+fn rich_agent_hooks_suppress_ordinary_command_completion(cx: &mut TestAppContext) {
+    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
+
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    crate::ui::i18n::set_locale("en");
+    configure_notifications(cx, crate::core::config::NotifyMode::Always, 0);
+
+    crate::daemon::protocol::DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
+        .encode(&mut daemon)
+        .unwrap();
+    crate::daemon::protocol::DaemonMsg::AgentStatus(Some(AgentSessionState {
+        status: AgentStatus::Working,
+        session_id: Some("sid-command-notification".into()),
+        launch_argv: Some(vec!["omp".into()]),
+        rich: true,
+        ..Default::default()
+    }))
+    .encode(&mut daemon)
+    .unwrap();
+    wait_for_shell(
+        &window,
+        cx,
+        |view| view.agent_session().is_some_and(|session| session.rich),
+        "the rich agent session",
+    );
+    report_prompt(&mut daemon, true, None);
+    wait_for_shell(&window, cx, |view| view.terminal.at_prompt(), "a prompt");
+    pump_foreground(cx);
+
+    ordinary_command(&window, &mut daemon, cx, Some(0));
+    assert!(
+        take_notifications().is_empty(),
+        "rich hooks own this agent outcome; ordinary completion must not duplicate it"
+    );
+}
+
+/// A nested shell or `ssh` relay publishes its `D` with `at_prompt` held false
+/// by the daemon. That is not a local command boundary even when it carries an
+/// exit code, so only the outer command's accepted result may notify.
+#[gpui_kit::test]
+fn a_relayed_result_does_not_replace_the_outer_commands_outcome(cx: &mut TestAppContext) {
+    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    crate::ui::i18n::set_locale("en");
+    configure_notifications(cx, crate::core::config::NotifyMode::Always, 0);
+
+    report_prompt(&mut daemon, true, None);
+    wait_for_shell(&window, cx, |view| view.terminal.at_prompt(), "a prompt");
+    report_prompt(&mut daemon, false, None);
+    wait_for_shell(
+        &window,
+        cx,
+        |view| !view.terminal.at_prompt(),
+        "the command to start",
+    );
+    pump_foreground(cx);
+
+    report_prompt(&mut daemon, false, Some(23));
+    wait_for_shell(
+        &window,
+        cx,
+        |view| view.terminal.last_exit_code() == Some(23),
+        "the relayed result",
+    );
+    pump_foreground(cx);
+    assert!(
+        take_notifications().is_empty(),
+        "a relayed result never becomes a local completion"
+    );
+
+    report_prompt(&mut daemon, true, Some(7));
+    wait_for_shell(
+        &window,
+        cx,
+        |view| view.terminal.at_prompt() && view.terminal.last_exit_code() == Some(7),
+        "the outer result",
+    );
+    pump_foreground(cx);
+    let notes = take_notifications();
+    assert_eq!(notes.len(), 1, "only the outer command notified: {notes:?}");
+    assert!(
+        notes[0].body.contains("exit code 7"),
+        "the outer command's own status is reported: {:?}",
+        notes[0].body
+    );
+    assert!(
+        !notes[0].body.contains("23"),
+        "the relayed nested status is not attributed to the outer command: {:?}",
+        notes[0].body
+    );
 }
 
 #[gpui_kit::test]

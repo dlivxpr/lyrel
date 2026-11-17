@@ -164,10 +164,15 @@ fn apply_reloaded_config(
     // keymap below is: this watcher fires on every config write, and a sidebar
     // drag has no business touching the registry.
     let language_changed = cx.global::<Config>().gui_language != config.gui_language;
+    let motion_changed =
+        cx.global::<Config>().motion_preference != config.motion_preference;
     if language_changed {
         crate::ui::i18n::set_locale(&config.gui_language);
     }
     cx.set_global(config);
+    if motion_changed {
+        crate::ui::motion::apply(cx);
+    }
     reload_themes(cx);
     crate::ui::theme::apply_cursor_hide_mode(cx);
     // The menu bar is built once from the current locale, so editing
@@ -813,6 +818,7 @@ pub fn run() {
         // The load above is reused rather than re-read: reading the same
         // file twice at launch would report the same failure twice.
         cx.set_global(config);
+        crate::ui::motion::apply(cx);
         crate::ui::theme::refresh_system_appearance(cx);
         crate::core::session::WorkspaceStore::init(cx);
         crate::ui::windows::WindowRegistry::init(cx);

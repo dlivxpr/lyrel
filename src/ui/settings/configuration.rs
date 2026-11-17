@@ -81,6 +81,7 @@ impl SettingsWindow {
             .map(|s| s.saved_config.clone());
         if let Some(snapshot) = snapshot {
             cx.set_global(snapshot);
+            crate::ui::motion::apply(cx);
             if let Some(s) = self.active_settings_mut() {
                 s.save_error = None;
             }
@@ -137,6 +138,21 @@ impl SettingsWindow {
 
     pub(crate) fn set_dim_inactive_panes(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.dim_inactive_panes = on);
+    }
+
+    /// Applies immediately, before the debounced config watcher sees the save:
+    /// every open window shares one application-wide motion flag.
+    pub(crate) fn set_motion_preference(
+        &mut self,
+        preference: MotionPreference,
+        cx: &mut Context<Self>,
+    ) {
+        if cx.global::<Config>().motion_preference == preference {
+            return;
+        }
+        cx.global_mut::<Config>().motion_preference = preference;
+        crate::ui::motion::apply(cx);
+        self.persist_settings_config(cx);
     }
 
     pub(crate) fn set_cursor_blink(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -297,6 +313,9 @@ impl SettingsWindow {
         match title {
             L10nKey::SettingsDimInactivePanes => {
                 self.set_dim_inactive_panes(defaults.dim_inactive_panes, cx)
+            }
+            L10nKey::SettingsMotionPreference => {
+                self.set_motion_preference(defaults.motion_preference, cx)
             }
             L10nKey::SettingsCursorBlink => self.set_cursor_blink(defaults.cursor_blink, cx),
             L10nKey::SettingsCursorShape => self.set_cursor_style(defaults.cursor_style, cx),

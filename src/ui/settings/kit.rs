@@ -591,9 +591,14 @@ pub(crate) fn select_trigger(
     leading: Option<AnyElement>,
     open: bool,
     tk: &Tk,
-) -> Stateful<Div> {
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
+    let label = label.into();
     h_flex()
         .id(id)
+        .test_support()
+        .role(gpui_kit::Role::Button)
+        .aria_label(label.clone())
+        .aria_expanded(open)
         .h(px(26.))
         .w(px(CONTROL_W))
         .flex_shrink_0()
@@ -610,7 +615,7 @@ pub(crate) fn select_trigger(
         .text_color(tk.fg)
         .whitespace_nowrap()
         .children(leading)
-        .child(div().flex_1().min_w_0().truncate().child(label.into()))
+        .child(div().flex_1().min_w_0().truncate().child(label))
         .child(chevron_down(tk))
 }
 
@@ -645,9 +650,15 @@ pub(crate) fn menu_panel(tk: &Tk) -> Div {
 }
 
 /// One pickable row in a popover menu.
-pub(crate) fn menu_row(id: impl Into<ElementId>, highlighted: bool, tk: &Tk) -> Stateful<Div> {
+pub(crate) fn menu_row(
+    id: impl Into<ElementId>,
+    highlighted: bool,
+    tk: &Tk,
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
     h_flex()
         .id(id)
+        .test_support()
+        .role(gpui_kit::Role::MenuItem)
         .flex_shrink_0()
         .h(px(26.))
         .pl(px(6.))

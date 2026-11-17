@@ -207,6 +207,14 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &crate::terminal::view::ProgramStatusChanged, window, cx| {
+                app.on_program_status_changed(view, &ev.0, window, cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &view,
             window,
             |app, _view, _: &crate::terminal::view::AgentSessionChanged, _window, cx| {
@@ -269,6 +277,41 @@ impl LyrelApp {
         Self::watch_open_file_requests(&view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
+    }
+
+    /// Authoritative program frames reach every window independently. The
+    /// affected tab's summary is refreshed before deciding to repaint: a
+    /// record another pane already outranks changes nothing on screen, and
+    /// neither does one the status bar is not showing. The next ticket's
+    /// window-local attention reads the same frames through
+    /// `observe_program_attention`; it never becomes summary state here.
+    pub(super) fn on_program_status_changed(
+        &mut self,
+        view: &Entity<TerminalView>,
+        frames: &[lyrel_core::core::program_status::ProgramStatusFrame],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let reminder_changed = self.observe_program_attention(view, frames, window, cx);
+        let active = self.tabs.active_index();
+        let mut summary_changed = false;
+        let mut in_active_tab = false;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            if !tab.contains_leaf(view.entity_id()) {
+                continue;
+            }
+            summary_changed |= tab.refresh_program_summary(cx);
+            in_active_tab |= index == active;
+        }
+        // The bar presents the focused-or-first pane's representative, which
+        // can sit behind a tab-wide state another pane owns. Compare what it
+        // would paint rather than whether any record moved.
+        let current_changed = in_active_tab
+            && self.status_document_context(window, cx).is_none()
+            && self.tabs[active].refresh_current_program_status(window, cx);
+        if reminder_changed || summary_changed || current_changed {
+            cx.notify();
+        }
     }
 
     pub(super) fn kill_pane_off_thread(

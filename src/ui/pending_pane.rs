@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use gpui_kit::base::TestTextExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Animation, AnimationExt as _, Context, EventEmitter, FocusHandle, Focusable, SharedString,
-    Window, div, prelude::*, px,
+    TestSupportExt as _, Window, div, prelude::*, px,
 };
 
 use crate::daemon::protocol::ShellSpec;
@@ -311,30 +312,44 @@ impl Render for PendingPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (muted, dim) = (theme.muted_foreground, theme.muted_foreground.opacity(0.75));
+        let pane_entity = cx.entity_id().as_u64() as usize;
 
         let body = match &self.state {
-            PendingState::Connecting => v_flex()
-                .items_center()
-                .gap(px(10.))
-                .child(
-                    Icon::new(IconName::LoaderCircle)
-                        .size(px(18.))
-                        .text_color(dim)
-                        .with_animation(
-                            "pending-pane-spin",
-                            Animation::new(Duration::from_millis(900)).repeat(),
-                            |icon, delta| {
-                                icon.transform(gpui_kit::Transformation::rotate(
-                                    gpui_kit::percentage(delta),
-                                ))
-                            },
-                        ),
-                )
-                .child(div().text_sm().text_color(muted).child(t_fmt(
-                    L10nKey::PendingConnecting,
-                    &[("machine", &self.machine)],
-                )))
-                .into_any_element(),
+            PendingState::Connecting => {
+                let label: SharedString =
+                    t_fmt(L10nKey::PendingConnecting, &[("machine", &self.machine)]).into();
+                v_flex()
+                    .id(("pending-pane-connecting", pane_entity))
+                    .test_support()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        Icon::new(IconName::LoaderCircle)
+                            .size(px(18.))
+                            .text_color(dim)
+                            .with_animation(
+                                ("pending-pane-spin", pane_entity),
+                                Animation::new(Duration::from_millis(900)).repeat(),
+                                |icon, delta| {
+                                    icon.transform(gpui_kit::Transformation::rotate(
+                                        gpui_kit::percentage(delta),
+                                    ))
+                                },
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(("pending-pane-connecting-label", pane_entity))
+                            .test_support()
+                            .role(gpui_kit::Role::Status)
+                            .aria_label(label.clone())
+                            .text_sm()
+                            .text_color(muted)
+                            .child(label.clone())
+                            .test_text(label),
+                    )
+                    .into_any_element()
+            }
             PendingState::Failed(reason) => v_flex()
                 .items_center()
                 .gap(px(10.))

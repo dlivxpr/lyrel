@@ -158,6 +158,11 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &NextTab, window, cx| this.tab_switch(true, window, cx)))
         .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.tab_switch(false, window, cx)))
         .on_action(
+            cx.listener(|this, _: &FocusTerminalTabNavigation, window, cx| {
+                this.focus_terminal_tab_navigation(window, cx)
+            }),
+        )
+        .on_action(
             cx.listener(|this, _: &SelectNextTab, window, cx| this.cycle_tab(true, window, cx)),
         )
         .on_action(
@@ -227,6 +232,11 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &ToggleLeftPanel, _window, cx| this.toggle_left_panel(cx)))
         .on_action(
             cx.listener(|this, _: &ToggleRightPanel, _window, cx| this.toggle_right_panel(cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &FocusRightPanelNavigation, window, cx| {
+                this.focus_right_panel_navigation(window, cx)
+            }),
         )
         .on_action(cx.listener(|this, _: &ShowRightPanelInfo, _window, cx| {
             this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx)
@@ -311,6 +321,13 @@ impl LyrelApp {
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         root.on_action(
             cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &FocusSettingsNavigation, window, cx| {
+                this.open_settings_then(window, cx, |view, window, cx| {
+                    view.focus_settings_navigation(window, cx)
+                })
+            }),
         )
         .on_action(
             cx.listener(|this, _: &RestartDaemon, window, cx| {

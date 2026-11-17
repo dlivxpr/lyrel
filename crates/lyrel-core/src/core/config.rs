@@ -225,6 +225,15 @@ pub struct Config {
     pub theme_preset_dark: String,
     #[serde(default = "default_true")]
     pub theme_legible_palette: bool,
+    /// How much motion the application itself uses. Standard animation
+    /// wrappers read the framework flag this drives; terminal content, shell
+    /// programs and cursor protocols are untouched.
+    ///
+    /// Missing is [`MotionPreference::System`], so a config written before the
+    /// setting existed follows the operating system without rewriting any
+    /// other key.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub motion_preference: MotionPreference,
     pub window_opacity: Option<f32>,
     pub window_blur: Option<bool>,
     #[serde(default, deserialize_with = "de_lenient")]
@@ -634,6 +643,21 @@ pub enum NewTabPosition {
     End,
 }
 
+/// The user's application motion policy.
+///
+/// `System` is the missing-value default: the application reads the operating
+/// system's reduced-motion preference at startup and window reactivation. The
+/// other two are explicit overrides that survive system changes until the user
+/// switches back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MotionPreference {
+    #[default]
+    System,
+    Reduce,
+    Allow,
+}
+
 /// Native window backdrop material for the Windows GUI. Other platforms retain
 /// the value for config synchronization but do not use it for rendering.
 /// `Auto` keeps the legacy behavior where theme blur decides between blurred
@@ -801,6 +825,7 @@ impl Default for Config {
             theme_preset_light: "light".to_string(),
             theme_preset_dark: "dark".to_string(),
             theme_legible_palette: true,
+            motion_preference: MotionPreference::System,
             window_opacity: None,
             window_blur: None,
             window_backdrop: WindowBackdrop::default(),
@@ -1850,6 +1875,38 @@ mod tests {
         assert_eq!(cfg.confirm_close, ConfirmClose::WhenBusy);
         let cfg: Config = serde_json::from_str(r#"{"confirm_close": "sometimes"}"#).unwrap();
         assert_eq!(cfg.confirm_close, ConfirmClose::WhenBusy);
+    }
+
+    #[test]
+    fn motion_preference_round_trips_under_its_written_names() {
+        for (mode, name) in [
+            (MotionPreference::System, "system"),
+            (MotionPreference::Reduce, "reduce"),
+            (MotionPreference::Allow, "allow"),
+        ] {
+            let cfg = Config {
+                motion_preference: mode,
+                ..Config::default()
+            };
+            let json = serde_json::to_value(&cfg).unwrap();
+            assert_eq!(json["motion_preference"], name);
+            assert_eq!(
+                serde_json::from_value::<Config>(json).unwrap().motion_preference,
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn a_config_without_motion_preference_follows_system_without_touching_other_keys() {
+        let config: Config =
+            serde_json::from_str(r#"{"font_size": 19.0, "theme": "dark"}"#).unwrap();
+        assert_eq!(config.motion_preference, MotionPreference::System);
+        assert_eq!(config.font_size, 19.0);
+        assert_eq!(config.theme, "dark");
+
+        let invalid: Config = serde_json::from_str(r#"{"motion_preference": "less"}"#).unwrap();
+        assert_eq!(invalid.motion_preference, MotionPreference::System);
     }
 
     #[test]

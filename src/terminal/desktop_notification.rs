@@ -24,6 +24,21 @@ pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Opt
     let summary = sanitize_notification_text(title.unwrap_or("lyrel"), NOTIFY_TITLE_MAX);
     let body = sanitize_notification_text(body, NOTIFY_BODY_MAX);
 
+    #[cfg(test)]
+    if TEST_NOTIFICATIONS.with(|slot| slot.borrow().is_some()) {
+        TEST_NOTIFICATIONS.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("the current test opted in")
+                .push(DeliveredNotification {
+                    pane,
+                    title: summary,
+                    body,
+                });
+        });
+        return;
+    }
+
     #[cfg(target_os = "macos")]
     {
         macos_notify::deliver(summary, body, pane.map(|p| p.as_u64()));
@@ -51,6 +66,50 @@ pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Opt
             let _ = notif.show();
         });
     }
+}
+
+/// The sanitized payload handed to the OS delivery boundary.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub(crate) struct DeliveredNotification {
+    pub(crate) pane: Option<EntityId>,
+    pub(crate) title: String,
+    pub(crate) body: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_NOTIFICATIONS: std::cell::RefCell<Option<Vec<DeliveredNotification>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Scoped to one test thread; dropping it restores any previous capture.
+#[cfg(test)]
+pub(crate) struct TestNotificationCapture(Option<Vec<DeliveredNotification>>);
+
+#[cfg(test)]
+impl Drop for TestNotificationCapture {
+    fn drop(&mut self) {
+        TEST_NOTIFICATIONS.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn capture_test_notifications() -> TestNotificationCapture {
+    TestNotificationCapture(TEST_NOTIFICATIONS.with(|slot| slot.replace(Some(Vec::new()))))
+}
+
+#[cfg(test)]
+pub(crate) fn take_test_notifications() -> Vec<DeliveredNotification> {
+    TEST_NOTIFICATIONS.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    })
 }
 
 /// Longest title / body we hand to a notification backend.

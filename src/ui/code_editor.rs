@@ -103,6 +103,9 @@ pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoo
 /// JSON 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
 pub(crate) use json_document::KEY_CONTEXT as JSON_KEY_CONTEXT;
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+/// The chords that belong to the editor's text field and still have to work
+/// while the header strip holds the keyboard.
+pub(crate) const NAV_OR_STRIP_KEY_CONTEXT: &str = "Input || DocumentStrip";
 pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
 pub(crate) use pdf_document::{
     PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
@@ -365,6 +368,18 @@ pub(crate) struct LocalFile {
     pub(crate) indent: Indent,
 }
 
+/// Where one editor group's header strip has the keyboard, and the document
+/// that was in front when it got there. The pair is what lets a group keep its
+/// own cell across a focus swap or a group switch, while a change made
+/// anywhere else — a quick open, a link, the list — moves the target back to
+/// the new document in front instead of leaving the strip on a cell the user
+/// did not choose there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StripNav {
+    pub(crate) cell: BufferId,
+    pub(crate) active: BufferId,
+}
+
 /// One tab's view of the editor: which buffers it shows, in the order its
 /// strip draws them, and which one is in front.
 pub(crate) struct TabCode {
@@ -383,6 +398,13 @@ pub(crate) struct TabCode {
     /// what decides which files keep a place in the header's strip when
     /// it cannot hold them all (see `strip`).
     pub(crate) recent: Vec<BufferId>,
+    /// Where the keyboard sits in each editor group's header strip: the
+    /// document whose cell is that group's roving Tab stop, and the document
+    /// that was in front when it was chosen. Keyed by group, so a focus swap
+    /// or a group switch leaves the other group's place alone. A document
+    /// that is closed, hidden, or no longer in the strip is skipped when the
+    /// strip is next drawn (see `strip`).
+    pub(crate) strip_nav: std::collections::HashMap<split::GroupId, StripNav>,
 }
 
 impl TabCode {
@@ -397,6 +419,7 @@ impl TabCode {
             selected: Default::default(),
             split: None,
             recent: Vec::new(),
+            strip_nav: Default::default(),
         }
     }
 
@@ -468,6 +491,10 @@ pub(crate) struct EditorPanelState {
     problems: problems::ProblemsPane,
     /// The header's list of every open file, while it is open.
     strip_picker: Option<strip::StripPicker>,
+    /// The keyboard, while it is in the shared header strip. The strip is one
+    /// Tab stop for the whole focused group (see `strip`); the document it
+    /// is on is each group's own remembered cell.
+    strip_keyboard: gpui_kit::FocusHandle,
     /// The focus of a panel with no file in it. Without one there is nothing
     /// in the panel to hold the focus, so closing the last file handed it to
     /// the terminal and the next ⌘W closed the terminal instead of the panel.
@@ -497,6 +524,7 @@ impl EditorPanelState {
             nav: nav::EditorNav::new(cx),
             problems: Default::default(),
             strip_picker: None,
+            strip_keyboard: cx.focus_handle().tab_stop(true),
             empty_focus: cx.focus_handle(),
             had_focus: None,
         }
@@ -2048,6 +2076,10 @@ impl LyrelApp {
     /// whole: ⌘S from the find box should still save.
     pub(crate) fn editor_panel_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
         self.editor_has_focus(window, cx)
+            // The header strip is part of the panel: with the cells holding
+            // the keyboard, ⌘S and the other document commands still act on
+            // the document in front.
+            || (self.code_panel_visible() && self.editor.strip_keyboard.is_focused(window))
             || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
             || self.editor.bar_has_focus(window, cx)
             || self
@@ -2498,7 +2530,7 @@ impl LyrelApp {
     fn editor_tab_menu(
         menu: PopupMenu,
         app: &gpui_kit::WeakEntity<Self>,
-        pos: usize,
+        id: BufferId,
         cx: &gpui_kit::App,
     ) -> PopupMenu {
         let Some(this) = app.upgrade() else {
@@ -2508,7 +2540,7 @@ impl LyrelApp {
         let Some(files) = this.tab_code().map(|c| c.files.clone()) else {
             return menu;
         };
-        let Some(&id) = files.get(pos) else {
+        let Some(pos) = files.iter().position(|f| *f == id) else {
             return menu;
         };
         let others: Vec<BufferId> = files.iter().copied().filter(|f| *f != id).collect();
@@ -3713,19 +3745,26 @@ impl LyrelApp {
             .map(|c| c.strip_split(cap))
             .unwrap_or_default();
         let active_id = self.tab_code().and_then(TabCode::active_id);
-        let files: Vec<(usize, SharedString, String, bool, bool)> = shown
+        // The cells the strip actually draws, in strip order — the group's
+        // remembered focus target is clamped to these, so closing a document
+        // or a group switch never leaves the keyboard on a cell that is gone.
+        let mut nav_ids: Vec<BufferId> = Vec::with_capacity(shown.len());
+        let cells: Vec<(usize, BufferId, SharedString, String, bool, bool)> = shown
             .into_iter()
             .filter_map(|(pos, id)| {
                 let f = self.editor.buffers.get(id)?;
+                nav_ids.push(id);
                 let tip = if f.untitled.is_some() {
                     f.label().to_string()
                 } else {
                     f.path.display().to_string()
                 };
-                Some((pos, f.label(), tip, Some(id) == active_id, f.dirty))
+                Some((pos, id, f.label(), tip, Some(id) == active_id, f.dirty))
             })
             .collect();
-        let strip = if files.is_empty() {
+        let strip_focused = self.editor.strip_keyboard.is_focused(window);
+        let nav_focus = self.editor_strip_target(&nav_ids);
+        let strip = if cells.is_empty() {
             div()
                 .min_w_0()
                 .px(px(8.))
@@ -3735,14 +3774,44 @@ impl LyrelApp {
                 .child(SharedString::from(t(L10nKey::EditorNoFileOpen)))
                 .into_any_element()
         } else {
+            let count = cells.len();
+            let keys = nav_ids.clone();
             h_flex()
                 .id("editor-file-tabs")
+                // One Tab stop for the group, and the keyboard contract of a
+                // tab list: Left/Right and Home/End move the focused cell
+                // without activating it, Enter/Space activate, Escape hands
+                // the keyboard back to the text. The focused cell is the
+                // group's own remembered document (see `strip`).
+                .key_context(strip::KEY_CONTEXT)
+                .role(gpui_kit::Role::TabList)
+                .aria_label(t(L10nKey::EditorDocumentTabs))
+                .aria_orientation(gpui_kit::accesskit::Orientation::Horizontal)
+                .track_focus(&self.editor.strip_keyboard)
+                .on_key_down(cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                    this.editor_strip_key(&keys, ev, window, cx);
+                }))
                 .min_w_0()
                 .gap(px(2.))
                 .overflow_hidden()
-                .children(files.into_iter().map(|(pos, name, tip, active, dirty)| {
-                    self.render_file_tab(pos, name, tip, active, dirty, cx)
-                }))
+                .children(cells.into_iter().enumerate().map(
+                    |(index, (_, id, name, tip, active, dirty))| {
+                        self.render_file_tab(
+                            strip::StripCell {
+                                id,
+                                name,
+                                tip,
+                                active,
+                                dirty,
+                                nav_focused: Some(id) == nav_focus,
+                                strip_focused,
+                                position: index + 1,
+                                count,
+                            },
+                            cx,
+                        )
+                    },
+                ))
                 .into_any_element()
         };
         let back = self.render_document_terminal_button(chrome, window, cx);
@@ -3811,18 +3880,25 @@ impl LyrelApp {
     /// says there is something to lose before the × offers to lose it.
     fn render_file_tab(
         &self,
-        pos: usize,
-        name: SharedString,
-        tip: String,
-        active: bool,
-        dirty: bool,
+        cell: strip::StripCell,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let group: SharedString = format!("editor-file-tab-{pos}").into();
+        let strip::StripCell {
+            id,
+            name,
+            tip,
+            active,
+            dirty,
+            nav_focused,
+            strip_focused,
+            position,
+            count,
+        } = cell;
+        let group: SharedString = format!("editor-file-tab-{}", id.0).into();
         let slot = 16.;
         let muted = cx.theme().muted_foreground;
         let close = div()
-            .id(("editor-file-tab-close", pos))
+            .id(("editor-file-tab-close", id.0))
             .role(gpui_kit::Role::Button)
             .aria_label(format!("{} {name}", t(L10nKey::Close)))
             .flex_none()
@@ -3835,7 +3911,7 @@ impl LyrelApp {
             .child(Icon::new(IconName::Close).xsmall().text_color(muted))
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.editor_close_file(pos, window, cx);
+                this.editor_close_buffer(id, window, cx);
             }));
         // Unsaved is a state, not an alarm: the dot is in caption ink, the
         // same as the `+N` button's, not the warning hue.
@@ -3855,13 +3931,15 @@ impl LyrelApp {
                 )
             });
         div()
-            .id(("editor-file-tab", pos))
+            .id(("editor-file-tab", id.0))
             .role(gpui_kit::Role::Tab)
             .aria_label(match dirty {
                 true => format!("{name}, {}", t(L10nKey::SettingsUnsaved)),
                 false => name.to_string(),
             })
             .aria_selected(active)
+            .aria_position_in_set(position)
+            .aria_size_of_set(count)
             .group(group.clone())
             .occlude()
             .flex_none()
@@ -3875,6 +3953,16 @@ impl LyrelApp {
             .pr(px(6.))
             .rounded(px(strip::CELL_RADIUS))
             .text_size(gpui_kit::rems(strip::CELL_TEXT))
+            // The strip's keyboard focus, drawn inside the cell and distinct
+            // from the selected treatment: the selected document is where
+            // the text is, the focused cell is what Enter or Space will show.
+            // The transparent border keeps the label from shifting when it
+            // lights up.
+            .border_1()
+            .border_color(match nav_focused && strip_focused {
+                true => cx.theme().primary,
+                false => gpui_kit::transparent_black(),
+            })
             .map(|d| match active {
                 true => d
                     .font_weight(gpui_kit::FontWeight::MEDIUM)
@@ -3914,17 +4002,17 @@ impl LyrelApp {
                 gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
             })
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.editor_activate(pos, window, cx);
+                this.editor_strip_activate(id, window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, window, cx| {
-                    this.editor_close_file(pos, window, cx);
+                    this.editor_close_buffer(id, window, cx);
                 }),
             )
             .context_menu({
                 let app = cx.entity().downgrade();
-                move |menu, _window, cx| Self::editor_tab_menu(menu, &app, pos, cx)
+                move |menu, _window, cx| Self::editor_tab_menu(menu, &app, id, cx)
             })
             .into_any_element()
     }
