@@ -274,11 +274,13 @@ fn collect_program_output(
 /// Resolve the prompt marks a read staged while its bytes published. Called
 /// only after `consume` has fanned the read out: the locality probe may block
 /// on a process query, so it runs once, after subscribers already hold the
-/// output. Marks the probe calls local apply to the store; anything else is
-/// dropped without prompting a cleanup delta.
+/// output. `prompt_foreground` is the same lazily-evaluated probe the read's
+/// `FactReader` uses to suppress relayed marks: a prompt that is NOT the
+/// foreground process's (i.e. the local shell's own mark) cleans transient
+/// records; a relayed/foreground mark is dropped without a cleanup delta.
 pub(super) fn finish_program_output(
     state: &Arc<Mutex<PaneState>>,
-    prompt_local: &dyn Fn() -> bool,
+    prompt_foreground: &dyn Fn() -> bool,
 ) {
     let mut st = state.lock().unwrap();
     let pending = std::mem::take(&mut st.pending_prompt_signals);
@@ -286,7 +288,7 @@ pub(super) fn finish_program_output(
         return;
     }
     let mut frames = Vec::new();
-    if prompt_local() {
+    if !prompt_foreground() {
         for _ in 0..pending {
             if let Some(delta) = st.program.prompt() {
                 frames.push(crate::core::program_status::ProgramStatusFrame::Update(
