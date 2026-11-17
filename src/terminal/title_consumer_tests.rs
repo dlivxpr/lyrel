@@ -66,6 +66,22 @@ fn send_title_fixture(
         if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
             return;
         }
+        // The fixture runs its own barrier assertion; a dead producer must be
+        // reported with its own output instead of burning the whole deadline.
+        if view.read_with(cx, |view, _| view.terminal.child_exited()) {
+            view.read_with(cx, |view, _| {
+                let text = view.scrollback_text();
+                let start = text
+                    .char_indices()
+                    .rev()
+                    .nth(255)
+                    .map_or(0, |(index, _)| index);
+                panic!(
+                    "the PTY title fixture exited before completing request {serial}; tail={:?}",
+                    &text[start..]
+                );
+            });
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "the PTY title fixture never completed request {serial}"

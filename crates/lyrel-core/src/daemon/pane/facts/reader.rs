@@ -77,7 +77,19 @@ impl OutputObservation {
         // A hop must land before its first integrated remote prompt is latched.
         super::latch_remote_prompt(facts, saw_prompt_mark);
         if let Some(agent) = self.agent {
-            super::apply_agent(facts, agent, emit);
+            // Process-name recognition can miss wrappers or a just-started
+            // agent. Its absence cannot retire a hook-established rich turn
+            // before the shell returns; positive detection still can switch
+            // agents. Keep authoritative shell-mark handling unchanged.
+            let keep_rich_turn = agent.is_none()
+                && !facts.shell.at_prompt
+                && facts
+                    .agent_session
+                    .as_ref()
+                    .is_some_and(|session| session.rich);
+            if !keep_rich_turn {
+                super::apply_agent(facts, agent, emit);
+            }
         }
         super::apply_probed_cwd(facts, self.cwd, emit);
     }
