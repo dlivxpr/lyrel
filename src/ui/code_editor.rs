@@ -3794,9 +3794,11 @@ impl LyrelApp {
                 .aria_label(t(L10nKey::EditorDocumentTabs))
                 .aria_orientation(gpui_kit::accesskit::Orientation::Horizontal)
                 .track_focus(&self.editor.strip_keyboard)
-                .on_key_down(cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                    this.editor_strip_key(&keys, ev, window, cx);
-                }))
+                .on_key_down(
+                    cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                        this.editor_strip_key(&keys, ev, window, cx);
+                    }),
+                )
                 .min_w_0()
                 .gap(px(2.))
                 .overflow_hidden()
@@ -3884,11 +3886,7 @@ impl LyrelApp {
     /// One file in the header's strip: its name, and a slot that shows the
     /// unsaved dot at rest and the close button under the pointer — the dot
     /// says there is something to lose before the × offers to lose it.
-    fn render_file_tab(
-        &self,
-        cell: strip::StripCell,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_file_tab(&self, cell: strip::StripCell, cx: &mut Context<Self>) -> AnyElement {
         let strip::StripCell {
             id,
             name,

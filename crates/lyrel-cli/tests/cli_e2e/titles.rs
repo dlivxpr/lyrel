@@ -78,18 +78,9 @@ pub(super) fn validated_titles_reach_daemon_facts_from_a_real_pty(daemon: &Daemo
     let mut serial = 0;
     let mut write_title = |bytes: &[u8]| {
         serial += 1;
-        pane.input(
-            format!(
-                "TITLE {serial} 0 {} 0\n",
-                terminal_pty_fixture::hex(bytes)
-            )
-            .as_bytes(),
-        )
-        .expect("write a title through the real PTY");
-        collect_pane_output_until(
-            &mut pane,
-            format!("TITLE_DONE_{serial}").as_bytes(),
-        );
+        pane.input(format!("TITLE {serial} 0 {} 0\n", terminal_pty_fixture::hex(bytes)).as_bytes())
+            .expect("write a title through the real PTY");
+        collect_pane_output_until(&mut pane, format!("TITLE_DONE_{serial}").as_bytes());
     };
 
     // 255 bytes exactly, with leading/trailing spaces and semicolons that

@@ -1299,13 +1299,7 @@ impl DaemonPane {
         pane_colors: bool,
         glyph_state: bool,
     ) -> u64 {
-        self.observe_with_colors_glyphs_and_program(
-            observer,
-            gate,
-            pane_colors,
-            glyph_state,
-            false,
-        )
+        self.observe_with_colors_glyphs_and_program(observer, gate, pane_colors, glyph_state, false)
     }
 
     pub fn observe_with_colors_glyphs_and_program(

@@ -1014,9 +1014,7 @@ fn retention_daemon_linux_shm_fifo_is_rejected_without_stalling_the_reader() {
     let fifo = Fifo(path.clone());
     let name = format!("/{}", path.file_name().unwrap().to_str().unwrap());
     let encoded = base64::engine::general_purpose::STANDARD.encode(name.as_bytes());
-    let request = format!(
-        "\x1b_Ga=T,i=91,p=9,t=s,f=32,s=1,v=1,C=1,O=0,S=4,q=0;{encoded}\x1b\\"
-    );
+    let request = format!("\x1b_Ga=T,i=91,p=9,t=s,f=32,s=1,v=1,C=1,O=0,S=4,q=0;{encoded}\x1b\\");
 
     // The production daemon and the PTY sender are both finite subprocesses.
     // This deadline is on the parent's socket read, so a blocking open becomes
@@ -1109,9 +1107,7 @@ fn retention_daemon_linux_regular_shm_keeps_bounded_region_and_one_shot_cleanup(
     drop(object);
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(name.as_bytes());
-    let request = format!(
-        "\x1b_Ga=T,i=92,p=9,t=s,f=32,s=1,v=1,C=1,O=13,S=4,q=0;{encoded}\x1b\\"
-    );
+    let request = format!("\x1b_Ga=T,i=92,p=9,t=s,f=32,s=1,v=1,C=1,O=13,S=4,q=0;{encoded}\x1b\\");
     let replies = consumer.exchange(request.as_bytes(), 1);
     assert_eq!(replies, [b"\x1b_Gi=92,p=9;OK\x1b\\".to_vec()]);
     let image = consumer
@@ -1126,8 +1122,8 @@ fn retention_daemon_linux_regular_shm_keeps_bounded_region_and_one_shot_cleanup(
     assert_eq!(image.to_rgba8().unwrap(), [0, 0, 255, 255]);
 
     // One-shot: the sender's shm object is consumed, not left behind.
-    let path = std::path::Path::new("/dev/shm")
-        .join(name.to_str().unwrap().trim_start_matches('/'));
+    let path =
+        std::path::Path::new("/dev/shm").join(name.to_str().unwrap().trim_start_matches('/'));
     assert!(
         std::fs::symlink_metadata(&path).is_err(),
         "the consumed regular shm handoff must be unlinked"

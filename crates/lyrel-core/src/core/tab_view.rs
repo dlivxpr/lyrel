@@ -279,10 +279,7 @@ mod tests {
             ("\u{25D0} fixing the switcher", "\u{25D1} fixing the parser"),
             ("vim", "vim \u{2014} main.rs"),
             ("", "vim"),
-            (
-                "  \u{25D0} fixing the switcher ",
-                "fixing the switcher",
-            ),
+            ("  \u{25D0} fixing the switcher ", "fixing the switcher"),
         ] {
             assert!(!same_title_ignoring_status_mark(a, b), "on {a:?} / {b:?}");
         }

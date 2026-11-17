@@ -2181,9 +2181,7 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ShowRightPanelFiles" => load_binding(keystroke, ShowRightPanelFiles, None, cx),
         "ShowRightPanelSearch" => load_binding(keystroke, ShowRightPanelSearch, None, cx),
         "ShowRightPanelGitHub" => load_binding(keystroke, ShowRightPanelGitHub, None, cx),
-        "FocusRightPanelNavigation" => {
-            load_binding(keystroke, FocusRightPanelNavigation, None, cx)
-        }
+        "FocusRightPanelNavigation" => load_binding(keystroke, FocusRightPanelNavigation, None, cx),
         "ScmCommit" => load_binding(keystroke, ScmCommit, action_context(action), cx),
         "ScmCommitAmend" => load_binding(keystroke, ScmCommitAmend, action_context(action), cx),
         "ScmStageAll" => load_binding(keystroke, ScmStageAll, None, cx),

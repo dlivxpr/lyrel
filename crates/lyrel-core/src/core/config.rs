@@ -1891,7 +1891,9 @@ mod tests {
             let json = serde_json::to_value(&cfg).unwrap();
             assert_eq!(json["motion_preference"], name);
             assert_eq!(
-                serde_json::from_value::<Config>(json).unwrap().motion_preference,
+                serde_json::from_value::<Config>(json)
+                    .unwrap()
+                    .motion_preference,
                 mode
             );
         }

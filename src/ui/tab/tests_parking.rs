@@ -60,19 +60,14 @@ fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(
-    cx: &mut TestAppContext,
-) {
+fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let parked = app.update_in(&mut vcx, |app, window, cx| {
         let current = app.tabs[0].pane.first_leaf().unwrap();
         let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
-        app.tabs[0].pane.split_leaf(
-            current.entity_id(),
-            Axis::Horizontal,
-            false,
-            parked.clone(),
-        );
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
         window.focus(&current.focus_handle(cx), cx);
         app.park_pane(parked.entity_id(), window, cx);
         parked
@@ -91,8 +86,8 @@ fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(
     });
 
     vcx.update(|_, cx| {
-        cx.global_mut::<crate::core::config::Config>().motion_preference =
-            crate::core::config::MotionPreference::Reduce;
+        cx.global_mut::<crate::core::config::Config>()
+            .motion_preference = crate::core::config::MotionPreference::Reduce;
         crate::ui::motion::apply(cx);
     });
     vcx.run_until_parked();

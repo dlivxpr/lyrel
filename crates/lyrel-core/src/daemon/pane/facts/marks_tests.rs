@@ -1,8 +1,8 @@
 use super::super::test_support::{drain, test_state};
 use super::super::*;
 use super::output_marks::{OscSniffer, hex_val, parse_osc7, percent_decode, strip_uri_drive_slash};
-use crate::core::osc::MAX_TITLE_BYTES;
 use super::*;
+use crate::core::osc::MAX_TITLE_BYTES;
 
 #[test]
 fn progress_is_ordered_retained_and_only_command_boundaries_clear_it() {
@@ -261,7 +261,10 @@ fn a_rejected_title_preserves_the_stored_title_and_its_lifetime() {
         (st).with_facts(|facts, emit| apply_signals(facts, s.feed(bytes), emit))
     };
 
-    read(&mut st, b"\x1b]133;A\x07\x1b]0;  prompt ; title  \x07\x1b]133;B\x07");
+    read(
+        &mut st,
+        b"\x1b]133;A\x07\x1b]0;  prompt ; title  \x07\x1b]133;B\x07",
+    );
     assert_eq!(
         st.facts.osc_title.as_deref(),
         Some("  prompt ; title  "),

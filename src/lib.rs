@@ -164,8 +164,7 @@ fn apply_reloaded_config(
     // keymap below is: this watcher fires on every config write, and a sidebar
     // drag has no business touching the registry.
     let language_changed = cx.global::<Config>().gui_language != config.gui_language;
-    let motion_changed =
-        cx.global::<Config>().motion_preference != config.motion_preference;
+    let motion_changed = cx.global::<Config>().motion_preference != config.motion_preference;
     if language_changed {
         crate::ui::i18n::set_locale(&config.gui_language);
     }

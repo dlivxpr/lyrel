@@ -586,7 +586,10 @@ impl LyrelApp {
     fn focus_right_panel_selected_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.right_panel_nav_focus, cx);
         window.focus_next(cx);
-        if window.focused(cx).is_some_and(|focused| focused == self.right_panel_nav_focus) {
+        if window
+            .focused(cx)
+            .is_some_and(|focused| focused == self.right_panel_nav_focus)
+        {
             // The stop was not in the map yet; one more render will settle it.
             self.right_panel_nav_wait.set(1);
         }
@@ -595,11 +598,7 @@ impl LyrelApp {
     /// Consumed at the top of each panel render while an entry is pending.
     /// Cancels if anything else took focus first, so a slow hand-off never
     /// steals focus back from a pointer or shortcut.
-    fn poll_right_panel_navigation_focus(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn poll_right_panel_navigation_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wait = self.right_panel_nav_wait.get();
         if wait == 0 {
             return;

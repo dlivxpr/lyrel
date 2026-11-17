@@ -286,7 +286,15 @@ mod pipeline_tests {
             &mut || Some(true),
             &mut discovery,
         );
-        graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics, true);
+        graphics_reader::consume(
+            extracted,
+            &state,
+            &gate,
+            &writer,
+            Some(1),
+            &mut graphics,
+            true,
+        );
         loop {
             match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(DaemonMsg::GlyphQuery { cp, .. }) => {

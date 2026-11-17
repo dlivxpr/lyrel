@@ -15,9 +15,8 @@ use std::cell::{Cell, RefCell};
 use uuid::Uuid;
 
 use crate::core::config::{
-    BellMode, Config, ConfirmClose, CursorStyle, LinkFileOpen, MotionPreference,
-    MouseZoomModifier, NewTabPosition, NotifyMode, PromptCursorStyle, UI_FONT_SIZE_DEFAULT,
-    WindowBackdrop,
+    BellMode, Config, ConfirmClose, CursorStyle, LinkFileOpen, MotionPreference, MouseZoomModifier,
+    NewTabPosition, NotifyMode, PromptCursorStyle, UI_FONT_SIZE_DEFAULT, WindowBackdrop,
 };
 use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, UI_FONT_SIZE_STEP};
 use crate::ui::host_ops::HostId;

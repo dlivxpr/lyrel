@@ -822,11 +822,7 @@ impl UsagePage {
                             })
                             .collect();
                         page.profiles.update(cx, |s, cx| {
-                            s.set_items(
-                                SearchableVec::from(page.profile_items.clone()),
-                                window,
-                                cx,
-                            )
+                            s.set_items(SearchableVec::from(page.profile_items.clone()), window, cx)
                         });
                         if page.profile_items.is_empty() {
                             page.error = Some(UsageError::BrowserMissing);

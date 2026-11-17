@@ -1298,10 +1298,8 @@ fn canceled_cookie_forms_never_authorize_after_a_blocked_native_boundary(cx: &mu
     }
 }
 
-const SEARCH_LONG_EN: &str =
-    "Work — 团队协作与远程开发配置（很长的 profile 名称用于布局验证）";
-const SEARCH_LONG_ZH: &str =
-    "工作资料与团队共享的浏览器配置（很长的 profile 名称用于布局验证）";
+const SEARCH_LONG_EN: &str = "Work — 团队协作与远程开发配置（很长的 profile 名称用于布局验证）";
+const SEARCH_LONG_ZH: &str = "工作资料与团队共享的浏览器配置（很长的 profile 名称用于布局验证）";
 
 /// Firefox profile discovery reads only `profiles.ini`; each profile still
 /// needs the exact DeepSeek origin database used when the chosen profile is
@@ -1355,9 +1353,7 @@ fn painted_profile_count(vcx: &mut VisualTestContext, profile: &str) -> usize {
     });
     painted
         .iter()
-        .filter(|text| {
-            text.as_str() == profile || text.as_str().starts_with(prefix.as_str())
-        })
+        .filter(|text| text.as_str() == profile || text.as_str().starts_with(prefix.as_str()))
         .count()
 }
 
@@ -1367,7 +1363,11 @@ fn assert_profile_visible(vcx: &mut VisualTestContext, profile: &str, expected: 
         count > 0,
         expected,
         "profile {profile:?} {expected_word} in the visible option set",
-        expected_word = if expected { "missing" } else { "must not appear" },
+        expected_word = if expected {
+            "missing"
+        } else {
+            "must not appear"
+        },
     );
 }
 
@@ -1403,9 +1403,7 @@ fn selected_profile(page: &Entity<UsagePage>, vcx: &VisualTestContext) -> Option
 
 fn saved_profile_label(account: &Account) -> Option<String> {
     match &account.auth {
-        Authentication::BrowserLocalStorage { selection } => {
-            Some(selection.label().to_owned())
-        }
+        Authentication::BrowserLocalStorage { selection } => Some(selection.label().to_owned()),
         _ => None,
     }
 }
@@ -1483,7 +1481,13 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     });
     assert!(focused, "Escape must restore focus to the select trigger");
     click(&mut vcx, "usage-profile");
-    for label in ["Personal", "Work", "Workshop", SEARCH_LONG_EN, SEARCH_LONG_ZH] {
+    for label in [
+        "Personal",
+        "Work",
+        "Workshop",
+        SEARCH_LONG_EN,
+        SEARCH_LONG_ZH,
+    ] {
         assert_profile_visible(&mut vcx, label, true);
     }
     vcx.simulate_keystrokes("escape");
@@ -1520,10 +1524,7 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     filter_profile_options(&mut vcx, "work");
     vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
-    assert_eq!(
-        selected_profile(&page, &vcx),
-        Some("c-workshop".to_owned())
-    );
+    assert_eq!(selected_profile(&page, &vcx), Some("c-workshop".to_owned()));
     assert_profile_visible(&mut vcx, "Workshop", true);
 
     http.reply(200, PLATFORM);
@@ -1531,10 +1532,7 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     settle(&mut vcx, |data| data.stored.accounts.len() == 1);
     let id = vcx.update(|_, cx| {
         let account = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
-        assert_eq!(
-            saved_profile_label(account).as_deref(),
-            Some("Workshop")
-        );
+        assert_eq!(saved_profile_label(account).as_deref(), Some("Workshop"));
         account.id
     });
     assert!(vault.is_empty());
