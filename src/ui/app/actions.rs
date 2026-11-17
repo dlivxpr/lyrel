@@ -238,20 +238,20 @@ impl LyrelApp {
                 this.focus_right_panel_navigation(window, cx)
             }),
         )
-        .on_action(cx.listener(|this, _: &ShowRightPanelInfo, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelInfo, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelChanges, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Scm, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelChanges, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Scm, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelFiles, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Files, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelFiles, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelSearch, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Search, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelSearch, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Search, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(

@@ -22,6 +22,7 @@ pub(super) fn test_state(alive: bool) -> PaneState {
         subscriptions: Subscriptions::new(false, None),
         facts: PaneFacts::default(),
         program: crate::core::program_status::ProgramStatusStore::new(),
+        pending_prompt_signals: 0,
         ssh_phase: None,
         modes: TerminalModes::default(),
         alive,

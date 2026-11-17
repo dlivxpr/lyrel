@@ -430,7 +430,7 @@ pub(crate) fn free_local_path(
 }
 
 impl LyrelApp {
-    pub(crate) fn toggle_sftp(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_sftp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::core::config::RightPanelTab;
         if self.right_panel_visible && self.right_panel_tab == RightPanelTab::Files {
             self.toggle_right_panel(cx);

@@ -621,21 +621,27 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(crate) fn set_right_panel_tab(&mut self, tab: RightPanelTab, cx: &mut Context<Self>) {
-        // Every way to find in files ends here, and none of them has a
-        // `Window` to move focus with; the Files field takes it on its next
-        // frame.
+    pub(crate) fn set_right_panel_tab(
+        &mut self,
+        tab: RightPanelTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The Files field still takes focus on its next frame rather than
+        // here: a tab switch does not preempt the entry-cancel below.
         if tab == RightPanelTab::Search {
             self.panel_search.focus_pending = true;
         }
         let tab = shown_tab(tab);
+        if self.right_panel_nav_wait.get() != 0 {
+            // An explicit show command retires a pending keyboard entry even
+            // when it names the tab already selected: the user asked for the
+            // page, not for the roving stop, so the entry's origin keeps the
+            // keyboard rather than staying inside a scope the entry
+            // abandoned mid-flight.
+            self.leave_right_panel_navigation(window, cx);
+        }
         if self.right_panel_tab != tab {
-            if self.right_panel_nav_wait.get() != 0 {
-                // Replacing the pending target retires its request. Keep the
-                // return handle so render can rescue focus if the failed
-                // hand-off had already placed our non-stop scope.
-                self.right_panel_nav_wait.set(0);
-            }
             self.sftp_retire_revalidation();
         }
         self.right_panel_tab = tab;

@@ -1438,6 +1438,35 @@ impl TerminalView {
                 if let Some(c) = self.composer.as_mut() {
                     c.highlighted = 0;
                 }
+                // GPUI 0.10 defers the paste's scroll target into the same
+                // prepaint that then lets it clobber the layout's caret
+                // reveal with a stale-height clamp, leaving the caret below
+                // the box. Ask for one more pass: the next frame paints
+                // first, then this callback runs with that fresh layout and
+                // scrolls the caret back inside.
+                let input = _input.clone();
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, cx| {
+                        input.update(cx, |state, cx| {
+                            let Some((caret, _)) = state.cursor_layout() else {
+                                return;
+                            };
+                            let bounds = state.input_bounds();
+                            let mut y = state.scroll_offset().y;
+                            let content_top = caret.top() - bounds.top();
+                            let content_bottom = caret.bottom() - bounds.top();
+                            if content_top + y < px(0.) {
+                                y = -content_top;
+                            } else if content_bottom + y > bounds.size.height {
+                                y = bounds.size.height - content_bottom;
+                            } else {
+                                return;
+                            }
+                            state
+                                .set_scroll_offset(gpui_kit::point(state.scroll_offset().x, y), cx);
+                        });
+                    });
+                });
                 self.remember_composer(cx);
                 self.warm_menu_sources(cx);
             }

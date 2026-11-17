@@ -187,7 +187,6 @@ pub(super) fn text(
     bytes: &[u8],
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
-    prompt_local: bool,
 ) {
     let mut state = state.lock().unwrap();
     let effects = state
@@ -195,7 +194,6 @@ pub(super) fn text(
         .as_mut()
         .map(|graphics| graphics.output(bytes))
         .unwrap_or_default();
-    let (program_frames, program_queries) = collect_program_output(&mut state, prompt_local);
     // Taken after the same parse that produced the text, and published after
     // the text frame: a query in this chunk is answered by the consumer's own
     // parse at its exact stream position, while this projection is what a
@@ -212,6 +210,9 @@ pub(super) fn text(
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
     }
+    // Prompt marks only stage here; `finish_program_output` applies them
+    // once this read has fully fanned out and the probe is safe.
+    let (program_frames, program_queries) = collect_program_output(&mut state);
     publish_program_output(&mut state, program_frames);
     if let Some(frame) = colors {
         let PaneState {
@@ -228,11 +229,11 @@ pub(super) fn text(
 }
 
 /// Apply validated report/reset signals to the pane's single store and turn
-/// the resulting deltas into ordered frames. Prompt cleanup only runs when the
-/// same read's `FactReader` attribution said this prompt was the local shell's.
+/// the resulting deltas into ordered frames. Prompt marks only stage here;
+/// `finish_program_output` applies them once this read's bytes have fanned
+/// out and the locality probe is safe to run.
 fn collect_program_output(
     st: &mut PaneState,
-    prompt_local: bool,
 ) -> (
     Vec<crate::core::program_status::ProgramStatusFrame>,
     Vec<String>,
@@ -251,10 +252,14 @@ fn collect_program_output(
     for signal in signals {
         let delta = match signal {
             crate::core::graphics_state::ProgramSignal::Report(report) => st.program.report(report),
-            crate::core::graphics_state::ProgramSignal::PromptStart if prompt_local => {
-                st.program.prompt()
+            // Prompt marks stage for the caller's post-publish pass: deciding
+            // whether this prompt is the local shell's can block on a process
+            // probe, and that must wait until this read's bytes have fanned
+            // out to subscribers.
+            crate::core::graphics_state::ProgramSignal::PromptStart => {
+                st.pending_prompt_signals = st.pending_prompt_signals.saturating_add(1);
+                None
             }
-            crate::core::graphics_state::ProgramSignal::PromptStart => None,
             crate::core::graphics_state::ProgramSignal::Reset => st.program.reset(),
         };
         if let Some(delta) = delta {
@@ -264,6 +269,33 @@ fn collect_program_output(
         }
     }
     (frames, queries)
+}
+
+/// Resolve the prompt marks a read staged while its bytes published. Called
+/// only after `consume` has fanned the read out: the locality probe may block
+/// on a process query, so it runs once, after subscribers already hold the
+/// output. Marks the probe calls local apply to the store; anything else is
+/// dropped without prompting a cleanup delta.
+pub(super) fn finish_program_output(
+    state: &Arc<Mutex<PaneState>>,
+    prompt_local: &dyn Fn() -> bool,
+) {
+    let mut st = state.lock().unwrap();
+    let pending = std::mem::take(&mut st.pending_prompt_signals);
+    if pending == 0 {
+        return;
+    }
+    let mut frames = Vec::new();
+    if prompt_local() {
+        for _ in 0..pending {
+            if let Some(delta) = st.program.prompt() {
+                frames.push(crate::core::program_status::ProgramStatusFrame::Update(
+                    delta,
+                ));
+            }
+        }
+    }
+    publish_program_output(&mut st, frames);
 }
 
 fn publish_program_output(
@@ -591,11 +623,10 @@ pub(super) fn consume(
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     controller: Option<u64>,
     graphics: &mut GraphicsSniffer,
-    prompt_local: bool,
 ) {
     match extracted {
         Extracted::Plain(bytes) => {
-            text(state, bytes, gate, writer, prompt_local);
+            text(state, bytes, gate, writer);
         }
         Extracted::Parts(parts) => {
             for part in parts {
@@ -609,7 +640,7 @@ pub(super) fn consume(
                                 .map(|graphics| graphics.output(&bytes))
                                 .unwrap_or_default();
                             let (program_frames, program_queries) =
-                                collect_program_output(&mut state, prompt_local);
+                                collect_program_output(&mut state);
                             let mut frames = Vec::new();
                             append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
                             if !frames.is_empty() {
@@ -621,7 +652,7 @@ pub(super) fn consume(
                         answer_program_status_queries(writer, program_queries);
                     }
                     Part::Graphics(Segment::Output(bytes)) => {
-                        text(state, &bytes, gate, writer, prompt_local);
+                        text(state, &bytes, gate, writer);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
                         let source_work = image.as_ref().map(|image| {

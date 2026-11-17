@@ -4346,7 +4346,7 @@ impl LyrelApp {
             ToggleLeftPanel => self.toggle_left_panel(cx),
             ToggleRightPanel => self.toggle_right_panel(cx),
             FocusRightPanelNavigation => self.focus_right_panel_navigation(window, cx),
-            ShowRightPanel(tab) => self.set_right_panel_tab(tab, cx),
+            ShowRightPanel(tab) => self.set_right_panel_tab(tab, window, cx),
             ResetFontSize => self.reset_font_size(cx),
             FindInTerminal => {
                 if self.editor_markdown_search(false, window, cx) {

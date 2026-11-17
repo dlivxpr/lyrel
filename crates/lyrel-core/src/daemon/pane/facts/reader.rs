@@ -162,14 +162,12 @@ impl FactReader {
     pub(in super::super) fn observe(
         &mut self,
         observation: OutputObservation,
-        prompt_foreground: bool,
+        foreground_running: &impl Fn() -> bool,
         mut before: ReadProbe,
     ) -> OutputObservation {
         let mut signals = observation.signals;
-        // Most reads contain no mark, so the caller only probes foreground
-        // execution when one did. A relayed far prompt is suppressed exactly
-        // as before; the program-status cleanup below shares this decision.
-        if signals.shell.iter().any(|shell| shell.at_prompt) && prompt_foreground {
+        // Most reads contain no mark, so do not pay for a foreground syscall.
+        if signals.shell.iter().any(|shell| shell.at_prompt) && foreground_running() {
             suppress_relayed_prompt_marks(&mut signals.shell);
             // A/B do not carry an exit code. Clear the parser's standing value
             // too, or the outer shell's next A/B would revive the relayed D.

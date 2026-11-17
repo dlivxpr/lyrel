@@ -64,6 +64,11 @@ struct PaneState {
     /// frames; the Unix transient handoff carries it so a same-session `exec`
     /// keeps the session identity, counters and recency.
     program: crate::core::program_status::ProgramStatusStore,
+    /// Prompt marks staged while this read's bytes publish. Each one applies
+    /// to `program` only when the post-publish probe says the prompt was the
+    /// local shell's: resolving locality may block on a process query, and it
+    /// must never hold output hostage.
+    pending_prompt_signals: u32,
     /// A native SSH pane's connection phase, as last sent. Status frames go
     /// only to whoever is attached at the time, so a window reattaching to a
     /// live session learned nothing and drew it as an unknown remote — no
@@ -665,6 +670,7 @@ impl DaemonPane {
                     spawn.remote.clone(),
                 ),
                 program: crate::core::program_status::ProgramStatusStore::new(),
+                pending_prompt_signals: 0,
                 ssh_phase: None,
                 modes: TerminalModes::default(),
                 alive: true,
@@ -829,6 +835,7 @@ impl DaemonPane {
                 subscriptions: Subscriptions::new(false, None),
                 facts,
                 program: carried_program.unwrap_or_default(),
+                pending_prompt_signals: 0,
                 ssh_phase: None,
                 modes,
                 alive: true,
@@ -886,6 +893,7 @@ impl DaemonPane {
             ),
             facts: PaneFacts::new(None, None, None, Some(remote)),
             program: crate::core::program_status::ProgramStatusStore::new(),
+            pending_prompt_signals: 0,
             ssh_phase: None,
             modes: TerminalModes::default(),
             alive: true,
@@ -1108,12 +1116,18 @@ impl DaemonPane {
                             // output. Only cheap OSC metadata precedes the readiness marker;
                             // shell/agent scope and foreground probes follow publication.
                             let mut observation = facts_reader.parse(extracted.output());
-                            // One probe per read, and only when a prompt mark is
-                            // present: the same decision suppresses relayed shell
-                            // marks and the program-status prompt cleanup.
-                            let prompt_foreground =
-                                observation.has_prompt_mark() && foreground_running();
-                            let prompt_local = !prompt_foreground;
+                            // The foreground probe is evaluated lazily, after
+                            // the read's bytes reach consumers: a blocking
+                            // probe must not hold publication hostage, and
+                            // most reads carry no prompt mark at all.
+                            let has_mark = observation.has_prompt_mark();
+                            let prompt_foreground = {
+                                let probe = std::cell::OnceCell::new();
+                                let foreground_running = &foreground_running;
+                                move || {
+                                    *probe.get_or_init(|| has_mark && foreground_running())
+                                }
+                            };
 
                             let tr1 = trace.then(std::time::Instant::now);
                             // Plain output adds no pre-publication facts lock or apply.
@@ -1132,13 +1146,17 @@ impl DaemonPane {
                                 &writer,
                                 controller,
                                 &mut graphics,
-                                prompt_local,
                             );
+                            // With every byte of this read already fanned
+                            // out, the staged prompt marks may resolve their
+                            // locality — the probe can block, so it runs only
+                            // now, never before publication.
+                            graphics_reader::finish_program_output(&state, &prompt_foreground);
                             if let Some((change, pane, alive)) = metadata_change {
                                 change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
                             }
                             let observation =
-                                facts_reader.observe(observation, prompt_foreground, before);
+                                facts_reader.observe(observation, &prompt_foreground, before);
                             let mut st = state.lock().unwrap();
                             let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
                             graphics.set_local(st.facts.remote().is_none());
@@ -1921,15 +1939,7 @@ mod tests {
                 for bytes in extracted.output() {
                     passthrough.extend_from_slice(bytes);
                 }
-                graphics_reader::consume(
-                    extracted,
-                    &state,
-                    &gate,
-                    &writer,
-                    Some(1),
-                    &mut graphics,
-                    true,
-                );
+                graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics);
             }
             let recorded = state.lock().unwrap().ring.flatten();
             assert_eq!(

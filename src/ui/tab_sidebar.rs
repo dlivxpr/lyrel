@@ -302,16 +302,19 @@ impl LyrelApp {
             let header = SidebarNavTarget::Group(key);
             targets.contains(&header).then_some(header)
         });
-        let target = self
-            .sidebar_nav_target
-            .clone()
+        // Entry follows the active selection, not where a previous visit left
+        // its roving target: sessions may have switched behind the sidebar,
+        // and Enter must activate what is current. The remembered target only
+        // covers an active tab nothing visible can stand in for.
+        let target = active
+            .map(SidebarNavTarget::Tab)
             .filter(|target| targets.contains(target))
+            .or(active_header)
             .or_else(|| {
-                active
-                    .map(SidebarNavTarget::Tab)
+                self.sidebar_nav_target
+                    .clone()
                     .filter(|target| targets.contains(target))
             })
-            .or(active_header)
             .or_else(|| {
                 targets
                     .iter()

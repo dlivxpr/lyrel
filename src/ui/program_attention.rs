@@ -184,11 +184,14 @@ struct ProgramNotices {
 
 struct NoticeSource {
     session: String,
-    /// Highest result version any viewer actually notified for. A version
-    /// becomes the floor only when a notice went out; a viewer that saw the
-    /// change live advances its own `seen` instead, so a transition that was
-    /// never delivered still reaches the next unwatched viewer.
-    result: u64,
+    /// Highest result version any viewer actually notified for, per record. A
+    /// version becomes the floor only when a notice went out; a viewer that
+    /// saw the change live advances its own `seen` instead, so a transition
+    /// that was never delivered still reaches the next unwatched viewer.
+    /// Keyed by record id: versions are pane-wide counters, so a scalar floor
+    /// raised by one record would suppress an independent record that no
+    /// window was ever notified about.
+    delivered: HashMap<String, u64>,
     budget: NoteBudget,
     viewers: Vec<NoticeViewer>,
 }
@@ -222,17 +225,20 @@ impl ProgramNotices {
         });
         let entry = self.sources.entry(source).or_insert_with(|| NoticeSource {
             session: delta.session_id().to_owned(),
-            result: 0,
+            delivered: HashMap::new(),
             budget: NoteBudget::default(),
             viewers: Vec::new(),
         });
         if entry.session != delta.session_id() {
             entry.session = delta.session_id().to_owned();
-            entry.result = 0;
+            entry.delivered.clear();
             entry.budget = NoteBudget::default();
             for viewer in &mut entry.viewers {
                 viewer.seen = 0;
             }
+        }
+        for id in delta.removed() {
+            entry.delivered.remove(id);
         }
         let position = entry.viewers.iter().position(|viewer| {
             viewer
@@ -260,7 +266,8 @@ impl ProgramNotices {
                 entry.viewers[position].seen = entry.viewers[position].seen.max(version);
                 continue;
             }
-            if version <= entry.result || version <= entry.viewers[position].seen {
+            let floor = entry.delivered.get(record.id()).copied().unwrap_or(0);
+            if version <= floor || version <= entry.viewers[position].seen {
                 continue;
             }
             let (allowed, dropped) = entry.budget.admit(now, 1);
@@ -271,7 +278,9 @@ impl ProgramNotices {
                 notices.push(crate::ui::program_status::record_label(record));
             }
             entry.viewers[position].seen = version;
-            entry.result = entry.result.max(version);
+            entry
+                .delivered
+                .insert(record.id().to_owned(), floor.max(version));
         }
         notices
     }
@@ -307,9 +316,17 @@ impl crate::ui::app::LyrelApp {
                 now,
             );
             if !notices.is_empty() {
-                let title = view
-                    .read(cx)
-                    .notification_title(Some(t(L10nKey::ProgramSource)), cx);
+                // Same reports from different panes are indistinguishable
+                // unless the title says which pane they came from; untrusted
+                // program text stays in the body either way.
+                let title = {
+                    let view = view.read(cx);
+                    let lead = match view.stated_title() {
+                        Some(pane) => format!("{} · {pane}", t(L10nKey::ProgramSource)),
+                        None => t(L10nKey::ProgramSource).to_string(),
+                    };
+                    view.notification_title(Some(&lead), cx)
+                };
                 for body in notices {
                     crate::terminal::desktop_notification::notify_desktop_for_pane(
                         Some(&title),

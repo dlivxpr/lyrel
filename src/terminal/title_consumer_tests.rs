@@ -367,9 +367,10 @@ fn hyperlink_at(
 
 /// The pinned Rio parser's explicit OSC 8 contract, observed in the real
 /// window's cells after a real PTY/daemon round trip: semicolons stay in the
-/// URI, repeated ids take the last non-empty value, 2047 combined bytes open
-/// and 2048 neither open nor close, an empty URI with an id is ignored, and
-/// an empty URI without one closes.
+/// URI, repeated ids take the last non-empty value, a link sent without `id`
+/// gets a synthesized non-empty one, 2047 combined bytes open and 2048
+/// neither open nor close, an empty URI with an id is ignored, and an empty
+/// URI without one closes.
 #[gpui_kit::test]
 fn osc8_consumer_keeps_semicolons_ids_and_the_2047_byte_boundary(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
@@ -412,10 +413,14 @@ fn osc8_consumer_keeps_semicolons_ids_and_the_2047_byte_boundary(cx: &mut TestAp
 
     graphics_send_fixture(&view, cx, 1, &bytes);
 
+    let semicolon_link = hyperlink_at(&view, cx, 4, 0).expect("the link opens");
     assert_eq!(
-        hyperlink_at(&view, cx, 4, 0),
-        Some(("".to_string(), "https://example.com/a;b".to_string())),
+        semicolon_link.1, "https://example.com/a;b",
         "the semicolon is part of the destination"
+    );
+    assert!(
+        !semicolon_link.0.is_empty(),
+        "a link sent without an id still gets a synthesized one"
     );
     assert_eq!(
         hyperlink_at(&view, cx, 5, 0),

@@ -2248,6 +2248,10 @@ pub(super) mod gpui_tests {
                 CommandKind::EditorNavigateBack,
                 CommandKind::EditorNavigateForward,
                 CommandKind::EditorSplitRight,
+                CommandKind::EditorFocusLeftGroup,
+                CommandKind::EditorFocusRightGroup,
+                CommandKind::FocusDocumentTabNavigation,
+                CommandKind::EditorDocumentOverflow,
             ]
         );
     }

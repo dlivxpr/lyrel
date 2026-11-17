@@ -154,6 +154,19 @@ impl PaneConnection {
             guard.replayed = false;
         }
 
+        // The event drain above can eat the only wakeup the queued program
+        // frames had: the reader only sends `ProgramStatusChanged` when the
+        // pending queue goes empty -> non-empty. Re-arm it or program
+        // attention stays stale until the pane is reopened.
+        if !signals
+            .program_updates
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .is_empty()
+        {
+            proxy.send(PaneEvent::ProgramStatusChanged);
+        }
+
         signals.exited.store(false, Ordering::SeqCst);
         *exited = false;
         {

@@ -21,6 +21,7 @@
 //! editor leads with a pill naming the terminal it covers, which docks it back
 //! beside that terminal.
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -533,6 +534,7 @@ impl LyrelApp {
             .any(|id| self.editor.buffers.get(*id).is_some_and(|f| f.dirty));
         let button = h_flex()
             .id("editor-strip-more")
+            .test_support()
             .occlude()
             .flex_none()
             .h(px(CELL_H))
@@ -657,7 +659,8 @@ impl LyrelApp {
                 }));
             list = list.child(
                 h_flex()
-                    .id(("editor-strip-row", i))
+                    .id(SharedString::from(format!("editor-strip-row-{i}")))
+                    .test_support()
                     .group(group)
                     .flex_none()
                     .h(px(PICKER_ROW_H))
