@@ -647,15 +647,16 @@ fn steals_a_control_code(chord: &str) -> bool {
 /// simply swallows the byte does not belong on this list.
 fn control_code_binding_allowed(action: &str, chord: &str) -> bool {
     matches!(action, "EditorSave" | "EditorGoToLine")
-        // Bound in the text field's context only, and handled only by the
-        // code editor: in the terminal the chord is never matched, and in any
-        // other field it falls through. VS Code's Go Forward, ⌃⇧-, folds to
-        // Ctrl+_ (US) there.
+        // Editor navigation stays in its text contexts, except document-strip
+        // entry whose Root consumer explicitly falls through from a terminal
+        // when no strip can take focus. VS Code's Go Forward, ⌃⇧-, folds to
+        // Ctrl+_ (US) in the editor.
         || matches!(
             action_context(action),
             Some(context)
                 if context == crate::ui::code_editor::NAV_KEY_CONTEXT
                     || context == crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT
+                    || context == DOCUMENT_NAVIGATION_KEY_CONTEXT
         )
         || (cfg!(not(target_os = "macos")) && chord == "ctrl-v")
 }
@@ -1003,8 +1004,8 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ),
         // The focused group's document strip: ⌥T moves the keyboard into the
         // tabs, ⌥⇧T opens the list of every open document (the `+N` control
-        // without a pointer). Both are scoped to the editor's own context, so
-        // a shell keeps the bytes.
+        // without a pointer). Terminal and ordinary editor content can both
+        // enter; the Root consumer falls through when no strip can take focus.
         (
             "FocusDocumentTabNavigation",
             per_platform("secondary-alt-t", "ctrl-alt-t"),
@@ -2056,6 +2057,8 @@ fn keystroke_is_valid(s: &str) -> bool {
     any
 }
 
+const DOCUMENT_NAVIGATION_KEY_CONTEXT: &str = "Terminal || Input || DocumentStrip";
+
 fn action_context(action: &str) -> Option<&'static str> {
     match action {
         "FindInTerminal" | "ClearScrollback" | "InsertNewline" | "CopyText" | "PasteText"
@@ -2070,13 +2073,14 @@ fn action_context(action: &str) -> Option<&'static str> {
         | "EditorNavigateBack"
         | "EditorNavigateForward"
         | "EditorSplitRight" => Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
-        // The group choice and the strip's own entry/overflow chords have to
-        // keep working after the keyboard has moved into the strip.
-        "EditorFocusLeftGroup"
-        | "EditorFocusRightGroup"
-        | "FocusDocumentTabNavigation"
-        | "EditorDocumentOverflow" => {
+        // The group choice keeps working after the keyboard moves into the
+        // strip. Strip entry and overflow additionally start in a terminal;
+        // their Root consumer propagates when no document can take focus.
+        "EditorFocusLeftGroup" | "EditorFocusRightGroup" => {
             Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT)
+        }
+        "FocusDocumentTabNavigation" | "EditorDocumentOverflow" => {
+            Some(DOCUMENT_NAVIGATION_KEY_CONTEXT)
         }
         _ => None,
     }
@@ -2267,13 +2271,13 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "FocusDocumentTabNavigation" => load_binding(
             keystroke,
             FocusDocumentTabNavigation,
-            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            Some(DOCUMENT_NAVIGATION_KEY_CONTEXT),
             cx,
         ),
         "EditorDocumentOverflow" => load_binding(
             keystroke,
             EditorDocumentOverflow,
-            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            Some(DOCUMENT_NAVIGATION_KEY_CONTEXT),
             cx,
         ),
         "EditorNewFile" => load_binding(keystroke, EditorNewFile, None, cx),
@@ -3814,6 +3818,27 @@ mod gpui_tests {
                     "{keys} in the editor"
                 );
                 assert!(!fired(cx, keys).contains(&action), "{keys} in a terminal");
+            }
+            for (keys, action) in [
+                (
+                    per_platform("secondary-alt-t", "ctrl-alt-t"),
+                    FocusDocumentTabNavigation::name_for_type(),
+                ),
+                (
+                    per_platform("secondary-alt-shift-t", "ctrl-alt-shift-t"),
+                    EditorDocumentOverflow::name_for_type(),
+                ),
+            ] {
+                assert_eq!(
+                    in_input(keys).first(),
+                    Some(&action),
+                    "{keys} in the editor"
+                );
+                assert_eq!(
+                    fired(cx, keys).first(),
+                    Some(&action),
+                    "{keys} in a terminal"
+                );
             }
             assert_eq!(
                 fired(cx, "secondary-shift-o").first(),

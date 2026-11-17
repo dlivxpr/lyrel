@@ -964,6 +964,22 @@ impl LyrelApp {
                 CommandKind::EditorNavigateForward,
             ),
             (L10nKey::CmdEditorSplitRight, CommandKind::EditorSplitRight),
+            (
+                L10nKey::EditorFocusLeftGroup,
+                CommandKind::EditorFocusLeftGroup,
+            ),
+            (
+                L10nKey::EditorFocusRightGroup,
+                CommandKind::EditorFocusRightGroup,
+            ),
+            (
+                L10nKey::FocusDocumentTabNavigation,
+                CommandKind::FocusDocumentTabNavigation,
+            ),
+            (
+                L10nKey::EditorDocumentOverflow,
+                CommandKind::EditorDocumentOverflow,
+            ),
         ]
         .into_iter()
         .map(|(key, kind)| Item::localized(key, kind).in_group(CommandGroup::View))

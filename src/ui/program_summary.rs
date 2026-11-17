@@ -257,9 +257,9 @@ impl ProgramSummaryCache {
     /// The current summary, rebuilt only when a leaf's projection moved.
     fn summary(&mut self, leaves: &[Entity<TerminalView>], cx: &App) -> Option<Rc<ProgramSummary>> {
         if !self.matches(leaves, cx) {
-            let (keys, entries) = collect(leaves, cx);
+            let (keys, next) = collect(leaves, cx);
             self.keys = keys;
-            self.summary = summarize(entries).map(Rc::new);
+            self.summary = next.map(Rc::new);
         }
         self.summary.clone()
     }
@@ -274,9 +274,8 @@ impl ProgramSummaryCache {
     /// one whose record order and text are unchanged, leaves the previous
     /// value in place and returns `false`.
     fn refresh(&mut self, leaves: &[Entity<TerminalView>], cx: &App) -> bool {
-        let (keys, entries) = collect(leaves, cx);
+        let (keys, next) = collect(leaves, cx);
         self.keys = keys;
-        let next = summarize(entries);
         let changed = self.summary.as_deref() != next.as_ref();
         if changed {
             self.summary = next.map(Rc::new);
@@ -349,49 +348,60 @@ impl Tab {
     }
 }
 
-fn collect(leaves: &[Entity<TerminalView>], cx: &App) -> (Vec<LeafKey>, Vec<ProgramEntry>) {
+fn collect(leaves: &[Entity<TerminalView>], cx: &App) -> (Vec<LeafKey>, Option<ProgramSummary>) {
     let mut keys = Vec::with_capacity(leaves.len());
-    let mut entries = Vec::new();
+    let mut entries = Vec::with_capacity(TOOLTIP_RECORDS + 1);
+    let mut count = 0usize;
     for leaf in leaves {
-        let pane_id = leaf.read(cx).pane_id;
-        // One lock per leaf: the key and the records it describes must come
-        // from the same applied projection, or a frame landing between the two
-        // reads could leave the cache claiming a state it never stored.
-        let (key, records) = leaf.read(cx).with_program_status(|status| {
-            (
-                LeafKey::of(leaf.entity_id(), status),
-                status.records().cloned().collect::<Vec<_>>(),
-            )
+        let view = leaf.read(cx);
+        let pane_id = view.pane_id;
+        // Select each pane's bounded leaders by reference under its existing
+        // lock. Records that cannot appear in the card are never cloned.
+        view.with_program_status(|status| {
+            keys.push(LeafKey::of(leaf.entity_id(), status));
+            let mut leaders: [Option<&ProgramRecord>; TOOLTIP_RECORDS + 1] =
+                [None; TOOLTIP_RECORDS + 1];
+            for record in status.records() {
+                count += 1;
+                let position = leaders.iter().position(|candidate| {
+                    candidate.is_none_or(|candidate| {
+                        record_order(record, pane_id, candidate, pane_id).is_lt()
+                    })
+                });
+                if let Some(position) = position {
+                    leaders.copy_within(position..TOOLTIP_RECORDS, position + 1);
+                    leaders[position] = Some(record);
+                }
+            }
+            for record in leaders.into_iter().flatten() {
+                let position = entries
+                    .iter()
+                    .position(|candidate: &ProgramEntry| {
+                        record_order(record, pane_id, &candidate.record, candidate.pane_id).is_lt()
+                    })
+                    .unwrap_or(entries.len());
+                if position <= TOOLTIP_RECORDS {
+                    if entries.len() > TOOLTIP_RECORDS {
+                        entries.pop();
+                    }
+                    entries.insert(
+                        position,
+                        ProgramEntry {
+                            pane_id,
+                            record: record.clone(),
+                        },
+                    );
+                }
+            }
         });
-        keys.push(key);
-        entries.extend(
-            records
-                .into_iter()
-                .map(|record| ProgramEntry { pane_id, record }),
-        );
     }
-    (keys, entries)
-}
-
-/// Fold every current record into the one program state a tab presents.
-///
-/// Blocked outranks error, then working, done and idle. Ties use the daemon's
-/// own recency; two panes can carry the same record id, so the id and then the
-/// pane id make the rest deterministic.
-fn summarize(mut entries: Vec<ProgramEntry>) -> Option<ProgramSummary> {
-    if entries.is_empty() {
-        return None;
-    }
-    entries.sort_by(urgency_order);
-    let hidden = entries.len().saturating_sub(TOOLTIP_RECORDS + 1);
-    entries.truncate(TOOLTIP_RECORDS + 1);
     let mut entries = entries.into_iter();
-    let representative = entries.next()?;
-    Some(ProgramSummary {
+    let summary = entries.next().map(|representative| ProgramSummary {
         representative,
         others: entries.collect(),
-        hidden,
-    })
+        hidden: count.saturating_sub(TOOLTIP_RECORDS + 1),
+    });
+    (keys, summary)
 }
 
 fn urgency(record: &ProgramRecord) -> u8 {
@@ -405,10 +415,15 @@ fn urgency(record: &ProgramRecord) -> u8 {
 }
 
 /// Ascending order, best first.
-fn urgency_order(left: &ProgramEntry, right: &ProgramEntry) -> std::cmp::Ordering {
-    urgency(right.record())
-        .cmp(&urgency(left.record()))
-        .then_with(|| right.record().updated().cmp(&left.record().updated()))
-        .then_with(|| left.record().id().cmp(right.record().id()))
-        .then_with(|| left.pane_id.cmp(&right.pane_id))
+fn record_order(
+    left: &ProgramRecord,
+    left_pane: u64,
+    right: &ProgramRecord,
+    right_pane: u64,
+) -> std::cmp::Ordering {
+    urgency(right)
+        .cmp(&urgency(left))
+        .then_with(|| right.updated().cmp(&left.updated()))
+        .then_with(|| left.id().cmp(right.id()))
+        .then_with(|| left_pane.cmp(&right_pane))
 }

@@ -802,6 +802,9 @@ impl DaemonPane {
         let glyph_reset_epoch = modes.resets();
         let carried_glyphs = carried.glyphs.is_some();
         let carried_program = carried.program.take();
+        if let Some(program) = carried_program.as_ref() {
+            graphics.restore_program_status_gate(program);
+        }
         let glyphs = carried.glyphs.take().and_then(|bytes| {
             let frame = crate::core::glyph_protocol::GlyphFrame::decode(&bytes)?;
             GlyphSession::from_frame(frame)

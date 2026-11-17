@@ -22,9 +22,7 @@ fn choose_motion(vcx: &mut gpui_kit::VisualTestContext, index: usize) {
 #[gpui_kit::test]
 fn motion_preference_round_trips_through_settings_and_reload(cx: &mut TestAppContext) {
     let (settings, mut vcx) = settings_window::harness(cx);
-    let dir = std::env::temp_dir().join(format!("lyrel-motion-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    crate::core::config::set_config_dir(dir.clone());
+    let dir = crate::core::config::config_dir_path().expect("the harness pins a scratch config");
     settings.update_in(&mut vcx, |settings, window, cx| {
         cx.global_mut::<Config>().font_size = 17.0;
         settings.navigate_settings(
@@ -33,6 +31,14 @@ fn motion_preference_round_trips_through_settings_and_reload(cx: &mut TestAppCon
             window,
             cx,
         );
+        let search = settings
+            .active_settings()
+            .unwrap()
+            .navigation
+            .search()
+            .clone();
+        search.update(cx, |search, cx| search.set_value("motion", window, cx));
+        settings.autoselect_settings_search(cx);
     });
     vcx.run_until_parked();
 

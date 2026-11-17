@@ -751,6 +751,7 @@ impl RemoteTerminal {
         cell_h: u16,
         version: Option<DaemonVersion>,
     ) -> anyhow::Result<()> {
+        self.connection.retire(&self.images);
         self.pane_version = version;
         if !self.pane_version.as_ref().is_some_and(|version| {
             version.has_feature(crate::daemon::protocol::FEATURE_PROGRAM_STATUS)

@@ -123,6 +123,7 @@ impl PaneConnection {
         self.viewport_reporter.clone()
     }
 
+    /// The owner retires the old reader before resetting shared projections.
     pub(super) fn adopt_relink(
         &mut self,
         stream: Stream,
@@ -134,7 +135,6 @@ impl PaneConnection {
         buffered: Vec<u8>,
         route: &PaneRoute,
     ) -> anyhow::Result<()> {
-        self.retire(&signals.images);
         while events.try_recv().is_ok() {}
         if let Ok(mut pending) = signals.clipboard_writes.lock() {
             pending.clear();

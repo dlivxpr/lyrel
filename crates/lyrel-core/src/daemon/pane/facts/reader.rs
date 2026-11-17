@@ -171,6 +171,9 @@ impl FactReader {
         // as before; the program-status cleanup below shares this decision.
         if signals.shell.iter().any(|shell| shell.at_prompt) && prompt_foreground {
             suppress_relayed_prompt_marks(&mut signals.shell);
+            // A/B do not carry an exit code. Clear the parser's standing value
+            // too, or the outer shell's next A/B would revive the relayed D.
+            self.sniffer.shell.last_exit_code = None;
         }
         // Probe on the final near-shell prompt even inside the interval: it may
         // be the last output after ssh exits, and must clear remote history scope.

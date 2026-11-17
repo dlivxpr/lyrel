@@ -235,7 +235,11 @@ impl SettingsWindow {
         if wait == 0 {
             return;
         }
-        if window.focused(cx) != *self.navigation_entry.borrow() {
+        // focus_next can leave our own non-stop scope in place until the
+        // selected tab is registered. Keep the pending entry through that
+        // frame; any other focus owner still cancels it.
+        let own_scope = self.navigation_focus.is_focused(window);
+        if window.focused(cx) != *self.navigation_entry.borrow() && !own_scope {
             self.cancel_settings_navigation_entry();
             return;
         }

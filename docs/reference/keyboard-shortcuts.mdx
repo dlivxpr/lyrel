@@ -66,6 +66,20 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 
 左上角的侧栏、随处搜索、新建标签页与右上角的向右分屏、向下分屏、右面板按钮，在侧栏收起和文档铺满时仍可用。按钮提示显示当前平台及自定义键位的实际快捷键；不再提供 `ToggleTabSidebar` 横向布局命令。<kbd>Escape</kbd> 关闭随处搜索后，输入返回之前的终端或文档。
 
+<a id="navigation"></a>
+## 导航区域
+
+| 操作 | 操作名 | macOS | Windows／Linux |
+|---|---|---|---|
+| 聚焦终端标签侧栏 | `FocusTerminalTabNavigation` | <kbd>⌘ ⇧ L</kbd> | <kbd>Ctrl ⇧ L</kbd> |
+| 聚焦右侧面板页签 | `FocusRightPanelNavigation` | 无默认绑定 | 无默认绑定 |
+| 聚焦设置分区导航 | `FocusSettingsNavigation` | 无默认绑定 | 无默认绑定 |
+| 聚焦左／右编辑器组 | `EditorFocusLeftGroup`／`EditorFocusRightGroup` | <kbd>⌘ ⌥ ←</kbd>／<kbd>⌘ ⌥ →</kbd> | <kbd>Ctrl Alt ←</kbd>／<kbd>Ctrl Alt →</kbd> |
+| 聚焦当前组的文档标签 | `FocusDocumentTabNavigation` | <kbd>⌘ ⌥ T</kbd> | <kbd>Ctrl Alt T</kbd> |
+| 打开全部文档列表（`+N`） | `EditorDocumentOverflow` | <kbd>⌘ ⌥ ⇧ T</kbd> | <kbd>Ctrl Alt ⇧ T</kbd> |
+
+导航组内使用方向键和 Home／End 移动，Enter／Space 手动激活，Escape 返回所属内容。入口作用域、侧栏分组、`+N` 焦点恢复和编辑器文本中的键位例外见[导航区域的键盘入口](/customization/keybindings#navigation-focus)。
+
 <a id="terminal"></a>
 ## 终端
 
@@ -146,10 +160,10 @@ shell、构建或智能体任务，重新打开工作区即可继续。Windows �
 | 工作区 | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
 | 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
 | Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |
-| 面板 | `ShowRightPanelInfo` · `ShowRightPanelFiles` · `ShowRightPanelSearch` · `ShowRightPanelChanges` · `ShowRightPanelGitHub` |
+| 面板 | `ShowRightPanelInfo` · `ShowRightPanelFiles` · `ShowRightPanelSearch` · `ShowRightPanelChanges` · `ShowRightPanelGitHub` · `FocusRightPanelNavigation` |
 | 文档 | `EditorNewMarkdownFile`（新建 Markdown 文档）· `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview`（切换 Markdown 即时编辑 / 源码）· `ToggleDocumentWrap` |
 | SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
-| 应用 | `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
+| 应用 | `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` · `FocusSettingsNavigation` |
 
 `EditorNewMarkdownFile` 没有默认快捷键，可从全局搜索执行“新建 Markdown 文档”，也可自行绑定。它创建原生 Markdown 文档，另存为建议扩展名为 `.md`；普通文本新建（包括编辑器中的 `Ctrl+N`）与 `OpenScrollbackInEditor` 仍使用普通文本编辑器。`ToggleDocumentPreview` 保留原操作标识，现有自定义快捷键继续切换同一 Markdown 文档的即时编辑 / 源码，两种模式共用撤销历史。
 

@@ -43,7 +43,7 @@ pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Opt
     {
         macos_notify::deliver(summary, body, pane.map(|p| p.as_u64()));
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(test)))]
     {
         if let Some(pane) = pane
             && try_clickable_notification(&summary, &body, pane.as_u64())
@@ -442,7 +442,7 @@ fn reveal_pane(leaf_id: u64) {
     }
 }
 
-#[cfg(not(any(target_os = "macos", all(target_os = "windows", not(test)))))]
+#[cfg(all(not(target_os = "macos"), not(test), not(target_os = "windows")))]
 fn try_clickable_notification(_title: &str, _body: &str, _leaf_id: u64) -> bool {
     // Linux notifications go through notify-rust; click-to-reveal would need a
     // D-Bus action listener of its own.

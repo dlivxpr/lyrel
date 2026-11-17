@@ -278,24 +278,31 @@ fn a_peer_without_the_opt_in_never_sees_program_status_frames() {
     .unwrap();
     old.flush().unwrap();
 
-    // The current peer receives this exact valid report, so the negative gate
-    // assertion below cannot pass just because the parser dropped the input.
+    // The current peer receives these exact valid reports, so the negative
+    // gate assertion below cannot pass just because the parser dropped input.
+    // Keep transient records alive until exit to exercise its cleanup frame.
     let pumped = support::run(
         &mut controller,
         &support::reports(
-            &[Status::new("working").id("gated").title("Visible")],
+            &[
+                Status::new("working").id("gated").title("Visible"),
+                Status::new("blocked").id("blocked").kind("permission"),
+            ],
             "true",
         ),
     );
-    let delta = update(&pumped);
     assert_eq!(
-        support::changed_ids(delta),
-        vec!["gated"],
-        "the current consumer must see the reported record"
+        pumped.frames.len(),
+        2,
+        "the current consumer must see both reported records"
     );
     support::apply_frames(&mut client, &pumped.frames);
     let gated = support::record(&client, "gated").expect("current peer applied the frame");
     assert_eq!(gated.title(), Some("Visible"));
+    assert_eq!(
+        support::record(&client, "blocked").unwrap().state(),
+        ProgramState::Blocked
+    );
 
     // Drain the old peer: it sees the same output bytes, because it observes
     // the same pane write, but never the frame kind it did not negotiate.
@@ -323,6 +330,45 @@ fn a_peer_without_the_opt_in_never_sees_program_status_frames() {
     assert!(
         !old_text.is_empty(),
         "the old peer observed the same live pane the controller did"
+    );
+
+    // Exit must still reach that old peer with the real status. The transient
+    // cleanup delta is ordered before Exited for opted-in consumers only; an
+    // unknown additive frame must never displace the exit on the old stream.
+    support::send_line(&mut controller, "exit");
+    let (pumped, code) = support::wait_exit(&mut controller);
+    assert_eq!(code, Some(0));
+    let delta = update(&pumped);
+    assert_eq!(
+        delta.removed().to_vec(),
+        collection(&["blocked", "gated"]),
+        "exit cleans both transient records before the controller sees Exited"
+    );
+
+    let deadline = Instant::now() + STREAM_WITHIN;
+    let old_code = loop {
+        assert!(
+            Instant::now() < deadline,
+            "the old peer never received the pane exit"
+        );
+        match DaemonMsg::read(&mut old) {
+            Ok(DaemonMsg::ProgramStatus(_)) => {
+                panic!("a peer that never opted in received the exit cleanup frame")
+            }
+            Ok(DaemonMsg::Exited { code }) => break code,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("old pane stream failed before Exited: {error}"),
+        }
+    };
+    assert_eq!(
+        old_code,
+        Some(0),
+        "the old peer received the real exit code"
     );
 }
 

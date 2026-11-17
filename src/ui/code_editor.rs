@@ -1015,6 +1015,12 @@ impl LyrelApp {
         self.tab_code().is_some_and(|c| c.visible)
     }
 
+    /// Temporary document surfaces keep their own keyboard until dismissed.
+    /// The ordinary editor, docked or filled, is content rather than a modal.
+    pub(crate) fn document_navigation_overlay_open(&self) -> bool {
+        self.code_panel_visible() && (self.editor.strip_picker.is_some() || self.editor.has_bar())
+    }
+
     /// The buffer in front of the active tab's editor.
     fn active_buffer(&self) -> Option<&OpenFile> {
         self.editor.buffers.get(self.tab_code()?.active_id()?)

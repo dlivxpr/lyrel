@@ -1,10 +1,12 @@
 //! Production Root consumers for manual-activation navigation, not private focus helpers.
-use crate::core::actions::{FocusRightPanelNavigation, FocusSettingsNavigation};
+use crate::core::actions::{
+    FocusRightPanelNavigation, FocusSettingsNavigation, FocusTerminalTabNavigation,
+    ShowRightPanelFiles,
+};
 use crate::core::config::RightPanelTab;
 use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext, px, size};
-
+use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext, px, size};
 fn settle(cx: &mut VisualTestContext) {
     for _ in 0..4 {
         cx.run_until_parked();
@@ -76,6 +78,83 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
         });
     }
     crate::ui::i18n::set_locale("en");
+}
+
+#[gpui_kit::test]
+fn panel_navigation_retry_yields_to_a_real_external_focus_change(cx: &mut TestAppContext) {
+    let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.simulate_resize(size(px(1000.), px(720.)));
+    app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+    vcx.dispatch_action(FocusRightPanelNavigation);
+
+    // A real Root navigation action takes focus before the pending entry's
+    // first frame. The old panel retry must not steal it back on a later render.
+    vcx.dispatch_action(FocusTerminalTabNavigation);
+    settle(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.sidebar_nav_focus.is_focused(window));
+        assert!(!app.right_panel_nav_focus.contains_focused(window, cx));
+    });
+}
+
+#[gpui_kit::test]
+fn panel_navigation_new_request_replaces_the_pending_origin(cx: &mut TestAppContext) {
+    let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.simulate_resize(size(px(1000.), px(720.)));
+    app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+    vcx.dispatch_action(FocusRightPanelNavigation);
+    vcx.dispatch_action(FocusTerminalTabNavigation);
+    vcx.dispatch_action(FocusRightPanelNavigation);
+    settle(&mut vcx);
+    vcx.update(|window, cx| {
+        assert_eq!(window.find("right-panel-tab-info").focused(), Some(true));
+        window.press("escape", cx);
+    });
+    app.update_in(&mut vcx, |app, window, _| {
+        assert!(
+            app.sidebar_nav_focus.is_focused(window),
+            "Escape uses the new request's owning content, not the old terminal origin"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn panel_navigation_owner_replacement_cancels_pending_entry(cx: &mut TestAppContext) {
+    let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.simulate_resize(size(px(1000.), px(720.)));
+    let content = app.update_in(&mut vcx, |app, window, cx| {
+        app.focus_active(window, cx);
+        window.focused(cx).expect("terminal content owns focus")
+    });
+    vcx.dispatch_action(FocusRightPanelNavigation);
+    vcx.dispatch_action(ShowRightPanelFiles);
+    settle(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(content.is_focused(window));
+        assert!(!app.right_panel_nav_focus.contains_focused(window, cx));
+    });
+}
+
+#[gpui_kit::test]
+fn settings_navigation_retry_yields_to_external_input_focus(cx: &mut TestAppContext) {
+    let (settings, mut vcx) = crate::ui::settings::test_window::harness(cx);
+    vcx.simulate_resize(size(px(960.), px(700.)));
+    vcx.dispatch_action(FocusSettingsNavigation);
+    let search = settings.update_in(&mut vcx, |settings, window, cx| {
+        let search = settings
+            .active_settings()
+            .unwrap()
+            .navigation
+            .search()
+            .clone();
+        search.update(cx, |input, cx| input.focus(window, cx));
+        search.read(cx).focus_handle(cx)
+    });
+    settle(&mut vcx);
+    settings.update_in(&mut vcx, |settings, window, _| {
+        assert!(search.is_focused(window));
+        assert!(!settings.navigation_focus_handle().is_focused(window));
+    });
 }
 
 #[gpui_kit::test]

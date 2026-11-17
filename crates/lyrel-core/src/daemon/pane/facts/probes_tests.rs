@@ -70,6 +70,85 @@ fn foreground_program_prompt_marks_do_not_claim_the_prompt() {
     assert!(local.shell.last().unwrap().at_prompt);
 }
 
+#[test]
+fn relayed_exit_status_is_not_reused_for_the_outer_prompt() {
+    struct Chunks {
+        chunks: std::collections::VecDeque<(bool, Vec<u8>)>,
+        foreground: Arc<AtomicBool>,
+    }
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some((foreground, chunk)) = self.chunks.pop_front() else {
+                return Ok(0);
+            };
+            self.foreground.store(foreground, Ordering::SeqCst);
+            buf[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    let foreground = Arc::new(AtomicBool::new(false));
+    let state = Arc::new(Mutex::new(test_state(true)));
+    let (sub_tx, sub_rx) = mpsc::channel();
+    attach_subscriber(&mut state.lock().unwrap(), sub_tx);
+    drain(&sub_rx);
+
+    let running = foreground.clone();
+    DaemonPane::spawn_reader(
+        state,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(OutputGate::new()),
+        Box::new(Chunks {
+            chunks: [
+                (false, b"]133;C;ssh box;aid=lyrel".to_vec()),
+                (true, b"]133;D;23".to_vec()),
+                (false, b"]133;A]133;B".to_vec()),
+                (false, b"]133;C;fixture;aid=lyrel".to_vec()),
+                (false, b"]133;D;7".to_vec()),
+            ]
+            .into_iter()
+            .collect(),
+            foreground,
+        }),
+        null_writer(),
+        move || running.load(Ordering::SeqCst),
+        ForegroundProbes {
+            group: Box::new(|| None),
+            remote: Box::new(|| None),
+            agent: Box::new(|| None),
+            cwd: Box::new(|| None),
+            local_group: |_| Some(true),
+        },
+        Arc::new(DeathReporter::new(|| {})),
+    )
+    .join()
+    .unwrap();
+
+    let prompts: Vec<_> = sub_rx
+        .try_iter()
+        .filter_map(|msg| match msg {
+            DaemonMsg::Prompt {
+                active,
+                at_prompt,
+                last_exit,
+            } => Some((active, at_prompt, last_exit)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec![
+            (true, false, None),
+            (true, false, None),
+            (true, true, None),
+            (true, false, None),
+            (true, true, Some(7)),
+        ],
+        "a relayed D;23 is not the outer shell's result; only the local D;7 is"
+    );
+}
+
 /// A prompt mark that arrives while the pane is pointed at a remote host
 /// can only be the far shell's — the near one cannot be at a prompt while
 /// the connection owns its pty. That is what proves the far side runs the

@@ -692,6 +692,9 @@ fn a_handoff_keeps_program_status_identity_versions_and_records() {
                 .id("release")
                 .title("Build")
                 .message("finished"),
+            Status::new("idle").id("idle"),
+            Status::new("blocked").id("blocked").kind("question"),
+            Status::new("error").id("error"),
         ],
         "true",
     );
@@ -700,7 +703,7 @@ fn a_handoff_keeps_program_status_identity_versions_and_records() {
     let session_id = client.session_id().expect("a live lifetime").to_string();
     let (semantic, result) = (client.semantic_version(), client.result_version());
     let before: Vec<ProgramRecord> = client.records().cloned().collect();
-    assert_eq!(before.len(), 2);
+    assert_eq!(before.len(), 5);
     let release = ProgramRecord::clone(support::record(&client, "release").unwrap());
     assert_eq!(release.app(), Some("buildapp"));
     assert!(release.result_version() > 0);
@@ -763,9 +766,63 @@ fn a_handoff_keeps_program_status_identity_versions_and_records() {
         .expect("the adopted shell still takes input");
     support::pump_until_text(&mut session, b"lyrel_after_program-status-survivor");
 
-    // The carried counters are high-water marks, not a fresh store: leaving
-    // done is not a result, and re-entering it must climb past the pre-exec
-    // value even though the payload is identical.
+    // No report has arrived since the exec. A local prompt must therefore use
+    // the restored store, not the new parser's report-history latch, to clean
+    // idle/working/blocked while retaining done/error.
+    let pumped = support::run(&mut session, "printf '\\033]133;A\\007'");
+    assert_eq!(
+        pumped.frames.len(),
+        1,
+        "the restored prompt must publish a delta"
+    );
+    let prompt = support::delta(&pumped.frames[0]).expect("prompt cleanup is an update");
+    assert_eq!(
+        prompt.removed().to_vec(),
+        vec!["".to_owned(), "blocked".to_owned(), "idle".to_owned()],
+        "prompt drops the root working record and every other transient state"
+    );
+    assert!(prompt.semantic_version() > semantic);
+    assert_eq!(
+        prompt.result_version(),
+        result,
+        "prompt is not a new result"
+    );
+    support::apply_frames(&mut client, &pumped.frames);
+    assert_eq!(
+        support::record(&client, "release").unwrap().state(),
+        ProgramState::Done
+    );
+    assert_eq!(
+        support::record(&client, "error").unwrap().state(),
+        ProgramState::Error
+    );
+
+    // RIS likewise needs no fresh report to rearm the parser. It clears the
+    // surviving results while preserving the same lifetime and counter floor.
+    let pumped = support::run(&mut session, "printf '\\033c'");
+    assert_eq!(
+        pumped.frames.len(),
+        1,
+        "the restored RIS must publish a delta"
+    );
+    let reset = support::delta(&pumped.frames[0]).expect("RIS cleanup is an update");
+    assert_eq!(
+        reset.removed().to_vec(),
+        vec!["error".to_owned(), "release".to_owned()]
+    );
+    assert!(reset.semantic_version() > prompt.semantic_version());
+    assert_eq!(reset.result_version(), result, "RIS is not a new result");
+    support::apply_frames(&mut client, &pumped.frames);
+    assert!(
+        client.records().next().is_none(),
+        "RIS clears every restored record"
+    );
+    assert_eq!(client.session_id(), Some(session_id.as_str()));
+    let cleared_semantic = client.semantic_version();
+
+    // The carried result counter remains a high-water mark after prompt/RIS:
+    // working is not a result, and re-entering identical done must climb past
+    // the pre-exec value rather than aliasing the cleared record.
     let pumped = support::run(
         &mut session,
         &support::reports(
@@ -779,12 +836,8 @@ fn a_handoff_keeps_program_status_identity_versions_and_records() {
     );
     let working = support::delta(&pumped.frames[0]).expect("one ordered update");
     assert_eq!(working.session_id(), session_id.as_str());
-    assert_eq!(working.semantic_version(), semantic + 1);
-    assert_eq!(
-        working.result_version(),
-        result,
-        "leaving done is not a result"
-    );
+    assert!(working.semantic_version() > cleared_semantic);
+    assert_eq!(working.result_version(), result, "working is not a result");
     support::apply_frames(&mut client, &pumped.frames);
 
     let pumped = support::run(

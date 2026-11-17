@@ -102,9 +102,10 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     program_assert_unread(&mut av, 1);
     program_assert_unread(&mut bv, 1);
     let notes = command_notification_take();
-    assert!(
-        !notes.is_empty(),
-        "a live blocked transition reaches OS delivery"
+    assert_eq!(
+        notes.len(),
+        1,
+        "two windows share one program-source OS notice: {notes:?}"
     );
     assert!(
         notes
@@ -148,9 +149,10 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     av.run_until_parked();
     bv.run_until_parked();
     let notes = command_notification_take();
-    assert!(
-        !notes.is_empty(),
-        "changing the blocked kind is meaningful attention"
+    assert_eq!(
+        notes.len(),
+        1,
+        "a blocked-kind transition notifies once across windows: {notes:?}"
     );
     assert!(notes.iter().all(|note| note.body.contains("Answer needed")));
     graphics_send_fixture(

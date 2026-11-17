@@ -2514,6 +2514,8 @@ impl LyrelApp {
             }
             CloseOutcome::Collapsed => {
                 if let Some(leaf) = &focused {
+                    self.program_attention
+                        .forget(leaf.read(cx).program_source());
                     Self::kill_pane_off_thread(
                         leaf.read(cx).pane_route(),
                         leaf.read(cx).pane_id,
@@ -2565,6 +2567,8 @@ impl LyrelApp {
             CloseOutcome::RemoveSelf => self.close_tab_inner(index, true, window, cx),
             CloseOutcome::NotFound => {}
             CloseOutcome::Collapsed => {
+                self.program_attention
+                    .forget(view.read(cx).program_source());
                 Self::kill_pane_off_thread(view.read(cx).pane_route(), view.read(cx).pane_id, cx);
                 if index == self.tabs.active_index() {
                     self.maximized = None;
@@ -3336,6 +3340,10 @@ impl LyrelApp {
             return;
         }
         self.maximized = None;
+        for leaf in self.tabs[index].pane.terminals() {
+            self.program_attention
+                .forget(leaf.read(cx).program_source());
+        }
         let closing = self.tabs[index].id();
         self.editor_close_tab_files(index, cx);
         self.editor_forget_tab(closing, cx);
@@ -4495,6 +4503,18 @@ impl LyrelApp {
             EditorGoToSymbol => self.editor_go_to_symbol(window, cx),
             EditorNavigateBack => self.editor_navigate(false, window, cx),
             EditorNavigateForward => self.editor_navigate(true, window, cx),
+            EditorFocusLeftGroup => {
+                self.editor_focus_group(true, window, cx);
+            }
+            EditorFocusRightGroup => {
+                self.editor_focus_group(false, window, cx);
+            }
+            FocusDocumentTabNavigation => {
+                self.focus_document_tab_navigation(window, cx);
+            }
+            EditorDocumentOverflow => {
+                self.editor_document_overflow(window, cx);
+            }
             EditorSplitRight => {
                 self.editor_split(window, cx);
             }

@@ -341,6 +341,18 @@ impl LyrelApp {
         .on_action(
             cx.listener(|this, _: &ToggleCodePanel, window, cx| this.toggle_code_panel(window, cx)),
         )
+        .on_action(
+            cx.listener(|this, _: &FocusDocumentTabNavigation, window, cx| {
+                if !this.focus_document_tab_navigation(window, cx) {
+                    cx.propagate();
+                }
+            }),
+        )
+        .on_action(cx.listener(|this, _: &EditorDocumentOverflow, window, cx| {
+            if !this.editor_document_overflow(window, cx) {
+                cx.propagate();
+            }
+        }))
         .on_action(cx.listener(|this, _: &EditorSave, window, cx| {
             if !this.editor_panel_has_focus(window, cx) {
                 cx.propagate();

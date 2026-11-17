@@ -328,24 +328,34 @@ fn a_relayed_result_does_not_replace_the_outer_commands_outcome(cx: &mut TestApp
         "a relayed result never becomes a local completion"
     );
 
-    report_prompt(&mut daemon, true, Some(7));
+    // The outer shell drew only A/B: without its own D, its result is unknown.
+    report_prompt(&mut daemon, true, None);
     wait_for_shell(
         &window,
         cx,
-        |view| view.terminal.at_prompt() && view.terminal.last_exit_code() == Some(7),
-        "the outer result",
+        |view| view.terminal.at_prompt() && view.terminal.last_exit_code().is_none(),
+        "the outer prompt without a local result",
     );
     pump_foreground(cx);
     let notes = take_notifications();
     assert_eq!(notes.len(), 1, "only the outer command notified: {notes:?}");
     assert!(
-        notes[0].body.contains("exit code 7"),
-        "the outer command's own status is reported: {:?}",
+        notes[0].body.contains("exit status unknown"),
+        "an absent outer status is explicitly unknown: {:?}",
         notes[0].body
     );
     assert!(
         !notes[0].body.contains("23"),
         "the relayed nested status is not attributed to the outer command: {:?}",
+        notes[0].body
+    );
+
+    ordinary_command(&window, &mut daemon, cx, Some(7));
+    let notes = take_notifications();
+    assert_eq!(notes.len(), 1, "the next local command notified: {notes:?}");
+    assert!(
+        notes[0].body.contains("exit code 7"),
+        "a genuine local D;7 remains authoritative: {:?}",
         notes[0].body
     );
 }

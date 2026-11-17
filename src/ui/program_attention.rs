@@ -32,9 +32,6 @@ struct PaneObservation {
     semantic: u64,
     results: u64,
     records: HashMap<String, ResultCursor>,
-    // This budget belongs to this pane's OSC 7501 source, not shell completion,
-    // rich hooks or a program-supplied id. Rotating ids cannot bypass the cap.
-    budget: NoteBudget,
 }
 
 impl PaneObservation {
@@ -81,12 +78,14 @@ pub(crate) struct AttentionChange {
 }
 
 impl ProgramAttention {
+    pub(crate) fn forget(&mut self, source: ProgramSource) {
+        self.panes.remove(&source);
+    }
     pub(crate) fn observe(
         &mut self,
         source: ProgramSource,
         frame: &ProgramStatusFrame,
         deliver: bool,
-        now: Instant,
     ) -> AttentionChange {
         let mut change = AttentionChange {
             reminder_changed: false,
@@ -107,7 +106,6 @@ impl ProgramAttention {
                             semantic: snapshot.semantic_version(),
                             results: snapshot.result_version(),
                             records: HashMap::new(),
-                            budget: NoteBudget::default(),
                         },
                     );
                 }
@@ -145,21 +143,8 @@ impl ProgramAttention {
                     pane.records.remove(id);
                 }
                 for record in delta.changed() {
-                    if pane.update_record(record, false) {
-                        // Result-version identity suppresses repeats. The
-                        // independent source budget only limits delivery rate;
-                        // it never claims correlation with a shell/agent event.
-                        let (allowed, dropped) = pane.budget.admit(now, usize::from(deliver));
-                        if deliver && dropped {
-                            change
-                                .notices
-                                .push(t(L10nKey::ProgramNotesDropped).to_owned());
-                        }
-                        if allowed != 0 {
-                            change
-                                .notices
-                                .push(crate::ui::program_status::record_label(record));
-                        }
+                    if pane.update_record(record, false) && deliver {
+                        change.notices.push(record.id().to_owned());
                     }
                 }
                 pane.semantic = delta.semantic_version();
@@ -192,6 +177,106 @@ impl ProgramAttention {
     }
 }
 
+#[derive(Default)]
+struct ProgramNotices {
+    sources: HashMap<ProgramSource, NoticeSource>,
+}
+
+struct NoticeSource {
+    session: String,
+    /// Highest result version any viewer actually notified for. A version
+    /// becomes the floor only when a notice went out; a viewer that saw the
+    /// change live advances its own `seen` instead, so a transition that was
+    /// never delivered still reaches the next unwatched viewer.
+    result: u64,
+    budget: NoteBudget,
+    viewers: Vec<NoticeViewer>,
+}
+
+struct NoticeViewer {
+    view: gpui_kit::WeakEntity<crate::terminal::view::TerminalView>,
+    /// Highest result version this viewer saw while watching, so it is never
+    /// replayed to this window later.
+    seen: u64,
+}
+
+impl gpui_kit::Global for ProgramNotices {}
+
+impl ProgramNotices {
+    fn deliver(
+        &mut self,
+        source: ProgramSource,
+        view: &gpui_kit::Entity<crate::terminal::view::TerminalView>,
+        frame: &ProgramStatusFrame,
+        wanted: &[String],
+        now: Instant,
+    ) -> Vec<String> {
+        let ProgramStatusFrame::Update(delta) = frame else {
+            return Vec::new();
+        };
+        self.sources.retain(|_, source| {
+            source
+                .viewers
+                .retain(|viewer| viewer.view.upgrade().is_some());
+            !source.viewers.is_empty()
+        });
+        let entry = self.sources.entry(source).or_insert_with(|| NoticeSource {
+            session: delta.session_id().to_owned(),
+            result: 0,
+            budget: NoteBudget::default(),
+            viewers: Vec::new(),
+        });
+        if entry.session != delta.session_id() {
+            entry.session = delta.session_id().to_owned();
+            entry.result = 0;
+            entry.budget = NoteBudget::default();
+            for viewer in &mut entry.viewers {
+                viewer.seen = 0;
+            }
+        }
+        let position = entry.viewers.iter().position(|viewer| {
+            viewer
+                .view
+                .upgrade()
+                .is_some_and(|viewer| viewer.entity_id() == view.entity_id())
+        });
+        let position = match position {
+            Some(position) => position,
+            None => {
+                entry.viewers.push(NoticeViewer {
+                    view: view.downgrade(),
+                    seen: 0,
+                });
+                entry.viewers.len() - 1
+            }
+        };
+        let mut notices = Vec::new();
+        for record in delta.changed() {
+            let version = record.result_version();
+            if !wanted.iter().any(|id| id == record.id()) {
+                // This viewer observed the transition live, so mark it seen.
+                // The shared floor is untouched: a client that never got the
+                // notice still delivers it the first time it is not watching.
+                entry.viewers[position].seen = entry.viewers[position].seen.max(version);
+                continue;
+            }
+            if version <= entry.result || version <= entry.viewers[position].seen {
+                continue;
+            }
+            let (allowed, dropped) = entry.budget.admit(now, 1);
+            if dropped {
+                notices.push(t(L10nKey::ProgramNotesDropped).to_owned());
+            }
+            if allowed != 0 {
+                notices.push(crate::ui::program_status::record_label(record));
+            }
+            entry.viewers[position].seen = version;
+            entry.result = entry.result.max(version);
+        }
+        notices
+    }
+}
+
 impl crate::ui::app::LyrelApp {
     pub(crate) fn observe_program_attention(
         &mut self,
@@ -212,13 +297,20 @@ impl crate::ui::app::LyrelApp {
         let now = Instant::now();
         let mut changed = false;
         for frame in frames {
-            let update = self.program_attention.observe(source, frame, deliver, now);
+            let update = self.program_attention.observe(source, frame, deliver);
             changed |= update.reminder_changed;
-            if !update.notices.is_empty() {
+            let notices = cx.default_global::<ProgramNotices>().deliver(
+                source,
+                view,
+                frame,
+                &update.notices,
+                now,
+            );
+            if !notices.is_empty() {
                 let title = view
                     .read(cx)
                     .notification_title(Some(t(L10nKey::ProgramSource)), cx);
-                for body in update.notices {
+                for body in notices {
                     crate::terminal::desktop_notification::notify_desktop_for_pane(
                         Some(&title),
                         &body,

@@ -1360,6 +1360,18 @@ impl GraphicsState {
         self
     }
 
+    /// Rebuild the parser-side prompt/RIS allocation gate after a handoff.
+    /// The restored store remains the only authority: RIS can clear any
+    /// retained record, and a prompt can clear retained transient records.
+    /// An empty store leaves the gate off, avoiding signals on a pane that
+    /// has never produced a report (or has nothing left to clean).
+    pub fn restore_program_status_gate(
+        &mut self,
+        program: &crate::core::program_status::ProgramStatusStore,
+    ) {
+        self.program_seen = !program.snapshot().records().is_empty();
+    }
+
     /// Drain the validated signals in the exact order the parser produced
     /// them. Called under the pane state lock, immediately after `output`.
     pub fn take_program_signals(&mut self) -> Vec<ProgramSignal> {

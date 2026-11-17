@@ -25,8 +25,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Anchor, AnyElement, Context, Entity, FontWeight, SharedString, Subscription, Window, anchored,
-    deferred, div, px, rems,
+    Anchor, AnyElement, Context, Entity, Focusable as _, FontWeight, SharedString, Subscription,
+    Window, anchored, deferred, div, px, rems,
 };
 
 use super::{BufferId, StripNav, TabCode};
@@ -43,10 +43,10 @@ const PICKER_W: f32 = 340.;
 const PICKER_LIST_MAX_H: f32 = 340.;
 const PICKER_ROW_H: f32 = 28.;
 
-/// The strip's own key context. The editor's chords that have to keep working
-/// while the cells hold the keyboard — the group focus pair, and the two
-/// document-tab actions — are bound in `Input || DocumentStrip`; the text
-/// field's other bindings stay out of the strip.
+/// The strip's own key context. The group focus pair is bound in
+/// `Input || DocumentStrip` so it keeps working while the cells hold the
+/// keyboard. Strip entry and overflow additionally accept `Terminal` at the
+/// workbench Root; the text field's other bindings stay out of the strip.
 pub(crate) const KEY_CONTEXT: &str = "DocumentStrip";
 
 /// One file cell the header strip draws, and everything the cell needs to
@@ -202,6 +202,21 @@ impl LyrelApp {
         self.tab_code()?.strip_target(visible)
     }
 
+    /// Whether a real terminal or the ordinary editor content owns the
+    /// keyboard. Navigation entry must not fire through a picker, an editor
+    /// prompt, or another workbench input merely because it has Input context.
+    fn document_navigation_content_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
+        if self.editor_has_focus(window, cx) || self.editor.strip_keyboard.is_focused(window) {
+            return true;
+        }
+        self.tabs.get(self.tabs.active_index()).is_some_and(|tab| {
+            tab.pane
+                .leaves()
+                .iter()
+                .any(|leaf| leaf.contains_focused(window, cx))
+        })
+    }
+
     /// Moves the keyboard into the focused group's strip, on the document it
     /// remembers. Nothing is brought to the front: entering the strip shows
     /// what Enter would open, and leaves the text as it was.
@@ -210,7 +225,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.code_panel_visible() || self.tab_code().is_none_or(|code| code.files.is_empty()) {
+        if !self.code_panel_visible()
+            || self.tab_code().is_none_or(|code| code.files.is_empty())
+            || self.sidebar_nav_overlay_open(window)
+            || !self.document_navigation_content_has_focus(window, cx)
+        {
             return false;
         }
         self.editor.strip_keyboard.focus(window, cx);
@@ -229,7 +248,19 @@ impl LyrelApp {
         if !self.code_panel_visible() || self.tab_code().is_none_or(|code| code.files.is_empty()) {
             return false;
         }
-        self.editor_toggle_strip_picker(window, cx);
+        if let Some(picker) = &self.editor.strip_picker {
+            // The same chord closes the list only while the list itself holds
+            // the keyboard. A picker sitting under a search, a prompt or
+            // another overlay does not answer for that surface's keys.
+            if !picker.input.read(cx).focus_handle(cx).is_focused(window) {
+                return false;
+            }
+        } else if self.sidebar_nav_overlay_open(window)
+            || !self.document_navigation_content_has_focus(window, cx)
+        {
+            return false;
+        }
+        self.editor_toggle_strip_picker(window, cx, true);
         true
     }
 
@@ -380,13 +411,14 @@ impl LyrelApp {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
+        from_keyboard: bool,
     ) {
         if self.editor.strip_picker.is_some() {
             self.editor_close_strip_picker(window, cx);
             return;
         }
         let n = self.tab_code().map_or(0, |c| c.files.len());
-        let restore_strip = self.editor.strip_keyboard.is_focused(window);
+        let restore_strip = from_keyboard && self.editor.strip_keyboard.is_focused(window);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t_fmt(L10nKey::EditorStripSearch, &[("n", &n.to_string())]))
@@ -433,13 +465,17 @@ impl LyrelApp {
             .as_ref()
             .is_some_and(|picker| picker.restore_strip);
         self.editor.strip_picker = None;
-        if let Some(pos) = self
+        if restore_strip {
+            // Selection changes the front document, not the keyboard owner.
+            // The select path also remembers this document against the group
+            // that is focused now, so the next render exposes a valid cell.
+            self.editor_strip_select(id, window, cx);
+            self.editor.strip_keyboard.focus(window, cx);
+        } else if let Some(pos) = self
             .tab_code()
             .and_then(|c| c.files.iter().position(|f| *f == id))
         {
             self.editor_activate(pos, window, cx);
-        } else if restore_strip {
-            self.editor.strip_keyboard.focus(window, cx);
         }
         cx.notify();
     }
@@ -535,7 +571,7 @@ impl LyrelApp {
                 }
             }))
             .on_click(cx.listener(|this, _, window, cx| {
-                this.editor_toggle_strip_picker(window, cx);
+                this.editor_toggle_strip_picker(window, cx, false);
             }));
         Some(
             div()
@@ -863,7 +899,6 @@ mod tests {
         assert_eq!(code.recent, vec![ids[2], ids[0]]);
     }
 }
-
 #[cfg(test)]
 mod gpui_tests {
     use std::path::PathBuf;
@@ -875,6 +910,9 @@ mod gpui_tests {
     use super::super::nav::gpui_tests::open_rs;
     use super::super::{BufferKind, test_host};
     use super::*;
+    use crate::core::actions::{
+        FocusDocumentTabNavigation, FocusRightPanelNavigation, FocusTerminalTabNavigation,
+    };
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::host_ops::HostId;
 
@@ -919,6 +957,20 @@ mod gpui_tests {
         })
     }
 
+    fn picker_has_keys(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
+        vcx.update(|window, cx| {
+            app.read(cx)
+                .editor
+                .strip_picker
+                .as_ref()
+                .is_some_and(|picker| picker.input.read(cx).focus_handle(cx).is_focused(window))
+        })
+    }
+
+    fn sidebar_has_keys(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
+        vcx.update(|window, cx| app.read(cx).sidebar_nav_focus.is_focused(window))
+    }
+
     fn dirty(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, id: BufferId) -> bool {
         app.read_with(vcx, |app, _| app.editor.buffers.get(id).unwrap().dirty)
     }
@@ -943,6 +995,12 @@ mod gpui_tests {
         vcx.simulate_keystrokes("secondary-alt-t");
         assert!(strip_has_keys(&app, &mut vcx));
         assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/c.rs"));
+
+        // Tab leaves the one-stop group and Shift+Tab comes back to it.
+        vcx.simulate_keystrokes("tab");
+        assert!(!strip_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("shift-tab");
+        assert!(strip_has_keys(&app, &mut vcx));
 
         // Moving the focused cell does not activate.
         vcx.simulate_keystrokes("left");
@@ -1056,6 +1114,17 @@ mod gpui_tests {
         vcx.simulate_keystrokes("secondary-alt-t");
         assert!(strip_has_keys(&app, &mut vcx));
         vcx.simulate_keystrokes("secondary-alt-shift-t");
+        assert!(picker_has_keys(&app, &mut vcx));
+
+        // The picker is above both navigation surfaces. Their entry actions
+        // cannot pull the keyboard out of it or expose the strip behind it.
+        vcx.dispatch_action(FocusTerminalTabNavigation);
+        vcx.dispatch_action(FocusRightPanelNavigation);
+        vcx.dispatch_action(FocusDocumentTabNavigation);
+        assert!(picker_has_keys(&app, &mut vcx));
+        assert!(!sidebar_has_keys(&app, &mut vcx));
+        assert!(!strip_has_keys(&app, &mut vcx));
+
         vcx.simulate_keystrokes("a l p h a");
         vcx.simulate_keystrokes("enter");
         settle(&mut vcx);
@@ -1064,6 +1133,22 @@ mod gpui_tests {
             PathBuf::from("/strip/alpha.rs"),
             "the hidden document came forward"
         );
+        assert!(
+            strip_has_keys(&app, &mut vcx),
+            "confirming a keyboard-opened picker restores the strip"
+        );
+
+        // The newly-fronted hidden document is the strip's valid roving cell:
+        // Right and Enter activate its visible neighbour, then Home returns.
+        vcx.simulate_keystrokes("right");
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/alpha.rs"));
+        vcx.simulate_keystrokes("enter");
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/delta.rs"));
+        assert!(strip_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("home");
+        vcx.simulate_keystrokes("enter");
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/alpha.rs"));
+        assert!(strip_has_keys(&app, &mut vcx));
 
         // Cancelling restores the keyboard to the strip it was opened from.
         vcx.simulate_keystrokes("secondary-alt-t");
@@ -1084,6 +1169,97 @@ mod gpui_tests {
         assert!(content_has_keys(&app, &mut vcx));
         assert!(!strip_has_keys(&app, &mut vcx));
         assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/alpha.rs"));
+    }
+
+    #[gpui_kit::test]
+    fn terminal_content_enters_the_document_strip_through_the_root_keymap(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        crate::ui::i18n::set_locale("en");
+        for name in ["a", "b", "c"] {
+            open_rs(&app, &mut vcx, &format!("/strip/{name}.rs"));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_document_layout(crate::core::config::DocumentLayout::Dock, cx);
+            app.focus_active(window, cx);
+        });
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let tab = &app.tabs[app.tabs.active_index()];
+            assert!(
+                tab.pane
+                    .leaves()
+                    .iter()
+                    .any(|leaf| leaf.contains_focused(window, cx))
+            );
+        });
+
+        // This is the real terminal key context and Root action consumer, not
+        // a direct call to the strip's focus method.
+        vcx.simulate_keystrokes("secondary-alt-t");
+        assert!(strip_has_keys(&app, &mut vcx));
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/c.rs"));
+
+        vcx.simulate_keystrokes("right");
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/c.rs"));
+        vcx.simulate_keystrokes("enter");
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/a.rs"));
+        assert!(strip_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("tab");
+        assert!(!strip_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("shift-tab");
+        assert!(strip_has_keys(&app, &mut vcx));
+
+        // Document navigation's explicit return route is the owning editor.
+        vcx.simulate_keystrokes("escape");
+        assert!(content_has_keys(&app, &mut vcx));
+        assert!(!strip_has_keys(&app, &mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn editor_content_enters_sidebar_navigation_and_returns_to_the_editor(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        crate::ui::i18n::set_locale("en");
+        open_rs(&app, &mut vcx, "/strip/editor.rs");
+        settle(&mut vcx);
+        assert!(content_has_keys(&app, &mut vcx));
+
+        vcx.dispatch_action(FocusTerminalTabNavigation);
+        assert!(sidebar_has_keys(&app, &mut vcx));
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/editor.rs"));
+        vcx.simulate_keystrokes("enter");
+        assert!(sidebar_has_keys(&app, &mut vcx));
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/editor.rs"));
+
+        vcx.simulate_keystrokes("tab");
+        assert!(!sidebar_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("shift-tab");
+        assert!(sidebar_has_keys(&app, &mut vcx));
+        vcx.simulate_keystrokes("escape");
+        assert!(content_has_keys(&app, &mut vcx));
+        assert!(!sidebar_has_keys(&app, &mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn pointer_opened_hidden_document_list_keeps_content_focus(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        crate::ui::i18n::set_locale("en");
+        for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
+            open_rs(&app, &mut vcx, &format!("/strip/{name}.rs"));
+        }
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("secondary-alt-t");
+        assert!(strip_has_keys(&app, &mut vcx));
+
+        // Even when the strip had focus before the pointer press, opening the
+        // picker is a pointer interaction and selection keeps pointer focus.
+        vcx.update(|window, cx| window.click("editor-strip-more", cx));
+        settle(&mut vcx);
+        assert!(picker_has_keys(&app, &mut vcx));
+        vcx.update(|window, cx| window.click("editor-strip-row-0", cx));
+        settle(&mut vcx);
+        assert_eq!(front(&app, &mut vcx), PathBuf::from("/strip/beta.rs"));
+        assert!(content_has_keys(&app, &mut vcx));
+        assert!(!strip_has_keys(&app, &mut vcx));
     }
 
     #[gpui_kit::test]

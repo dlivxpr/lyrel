@@ -571,6 +571,9 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 fn suppress_relayed_prompt_marks(shell: &mut Vec<ShellState>) {
     for s in shell.iter_mut() {
         s.at_prompt = false;
+        // A nested or remote D describes that shell's command, not the outer
+        // one. With no trusted local D, the outer result is unknown.
+        s.last_exit_code = None;
     }
     shell.dedup_by(|a, b| {
         let same = a.active == b.active

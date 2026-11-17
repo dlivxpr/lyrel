@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+### 依赖升级
+
+- #303／#304：GPUI Kit 原子升级为正式 registry 的精确 `=0.10.0`，继续经官方 `gpui-fast` facade 解析 Fast `0.1.16` 系列；`rio-vt`／`rio-graphics`／`rio-unicode` 同步固定为 `=0.5.32`，锁定对应的 `rio-grapheme-width 0.5.32`。保留无 GPUI 的共享 core、既有 PTY／daemon／Host／终端绘制与独立 Markdown 编辑器，不引入 Rio 的 PTY、窗口、Sugarloaf、installer 或 librio。
+- #304：daemon 与 GUI 在支持 `validated-titles` 的端点上统一 OSC 0／2 标题规则：严格 UTF-8、最多 255 字节、不裁剪合法空白并保留分号，空字符串继续 reset，无效或超限报告整体拒收且不改变标题及 `TitleLifetime`。旧端点保留现有会话并显示兼容／更新提示，不声称标题一致，不自动替换服务或从原始回放补造事实。
+
+### 新增
+
+- #307：**设置 → 外观 → 动态效果**新增持久化、热应用的三态 `motion_preference`：`system` 跟随系统，`reduce` 减少动态效果，`allow` 允许既有动效；默认跟随系统，切回后移除覆盖并在启动及 Windows／macOS 窗口重新激活时读取系统偏好。减少动态效果保留静态活动反馈，不改写终端字节、TUI 动画或光标协议。
+- #308／#309／#310：右侧面板、设置分区、终端标签侧栏和聚焦编辑器组的共享文档标签支持单一 roving Tab 停靠点、方向键回绕、Home／End、Enter／Space 手动激活及 Escape 返回所属内容。新增可配置的区域入口，保留终端 Tab 输入、指针焦点、侧栏分组展开和文档 `+N` 选择器；不新增逐组文档条、文档条滚动或文档拖拽。
+- #311：用量页的动态浏览器 profile 选择支持真实过滤和主题语义色匹配高亮，保留稳定选项、取消与焦点恢复；较短固定 provider／browser 列表及全局搜索不变。
+- #312：SQLite `DataTable` 局部滚动条改为常显，仅遍历当前加载的行页／列窗；分屏保留独立焦点、选择和本地偏移，查询、筛选、排序、分页、列窗与加载数据仍归共享文档，全局滚动条策略不变。
+- #306：普通命令完成 OS 通知区分退出码 `0` 成功、已知非零失败及退出状态未知，保留既有通知模式、耗时阈值、OSC 133 归属与 rich-hook 去重；不把缺失退出码当成功，不把 OSC 7501 当命令退出事实，也不加入应用收件箱或新增历史。
+- #314／#315／#316：OSC 7501 提供 daemon 所有的有界当前程序记录、层级与整记录替换、256 条 LRU 上限、当前快照和有序更新，以及活动 pane 状态栏和标签页摘要。摘要按 `blocked` > `error` > `working` > `done` > `idle` 和最近更新排序，有界悬停卡保留来源归属；只有进入 `blocked`／`error` 或 `blocked` 原因种类变化才发送 OS 提醒，`done` 不另发完成通知。每个窗口／client 按 daemon result version 独立确认实际查看的结果，隐藏／停放／后台 pane 不算已读，查看 `blocked` 不构成授权或解决状态；旧端点不自动升级或接管，OS 提醒不进入应用收件箱。
+
+### 验证边界
+
+- 当前 Windows library 编译已消除 warning，但生产 native 矩阵尚未完成，不能写成完整 Windows 验收通过。Linux public lifecycle 12/12、handoff 2/2、core 10/10 已通过；这些结果不替代其他平台或真实原生交互、系统 IME 验收。
+- 旧提交 `86f107` 的 CI preflight fmt 失败，保留失败记录，未标为通过；当前没有可据此宣称最终组合 macOS CI 或原生 macOS 矩阵通过的证据。
+
 ### 修复
 
 - #305：Linux Kitty `t=s` 共享内存在 opened-object 校验前以 `O_NONBLOCK` 打开，FIFO 等非 regular 对象立即拒收并执行既有一次性清理，不再阻塞 pane reader；保留正常 offset／length、有界读取与图片校验，macOS 和 Windows 路径不变。

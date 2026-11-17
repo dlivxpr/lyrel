@@ -459,11 +459,13 @@ impl LyrelApp {
     /// above the sidebar keep their dismissal priority; this is only reached
     /// while the sidebar itself holds focus and no such surface is open.
     fn sidebar_nav_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_active(window, cx);
+        self.focus_previous_content(window, cx);
         cx.notify();
     }
 
-    fn sidebar_nav_overlay_open(&self, window: &Window) -> bool {
+    /// Modal surfaces above workbench navigation. A visible code panel is
+    /// ordinary content; a diff, picker, or document prompt is not.
+    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window) -> bool {
         let settings_here = self.settings.as_ref().is_some_and(|_| {
             self.settings_window
                 .is_none_or(|(settings, _)| settings == window.window_handle())
@@ -473,10 +475,11 @@ impl LyrelApp {
             || self.close_prompt_open
             || self.switcher.is_some()
             || self.worktree_prompt.is_some()
+            || self.document_navigation_overlay_open()
             || self
                 .tabs
                 .get(self.tabs.active_index())
-                .is_some_and(|tab| tab.document_front().is_some())
+                .is_some_and(|tab| tab.document_front() == Some(crate::ui::tab::OverlayTop::Diff))
     }
 
     fn sidebar_nav_key_down(

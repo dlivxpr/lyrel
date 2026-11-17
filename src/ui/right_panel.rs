@@ -525,7 +525,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs.is_empty() || self.right_panel_nav_focus.within_focused(window, cx) {
+        if self.tabs.is_empty()
+            || self.right_panel_nav_focus.within_focused(window, cx)
+            || self.sidebar_nav_overlay_open(window)
+        {
             return;
         }
         self.right_panel_nav_return = window.focused(cx);
@@ -601,7 +604,10 @@ impl LyrelApp {
         if wait == 0 {
             return;
         }
-        if window.focused(cx) != self.right_panel_nav_return {
+        // A failed focus_next leaves our own non-stop scope focused. That is
+        // the retry's intermediate state, not an external focus change.
+        let own_scope = self.right_panel_nav_focus.is_focused(window);
+        if window.focused(cx) != self.right_panel_nav_return && !own_scope {
             self.right_panel_nav_wait.set(0);
             self.right_panel_nav_return = None;
             return;
@@ -625,6 +631,12 @@ impl LyrelApp {
         }
         let tab = shown_tab(tab);
         if self.right_panel_tab != tab {
+            if self.right_panel_nav_wait.get() != 0 {
+                // Replacing the pending target retires its request. Keep the
+                // return handle so render can rescue focus if the failed
+                // hand-off had already placed our non-stop scope.
+                self.right_panel_nav_wait.set(0);
+            }
             self.sftp_retire_revalidation();
         }
         self.right_panel_tab = tab;
@@ -645,7 +657,12 @@ impl LyrelApp {
         if panel_open {
             self.right_panel_nav_renders
                 .set(self.right_panel_nav_renders.get().saturating_add(1));
-            self.poll_right_panel_navigation_focus(window, cx);
+            if self.right_panel_nav_wait.get() == 0 && self.right_panel_nav_focus.is_focused(window)
+            {
+                self.leave_right_panel_navigation(window, cx);
+            } else {
+                self.poll_right_panel_navigation_focus(window, cx);
+            }
         } else {
             self.right_panel_nav_renders.set(0);
             if self.right_panel_nav_wait.get() != 0 {
