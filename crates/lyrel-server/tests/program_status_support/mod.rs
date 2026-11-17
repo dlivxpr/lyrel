@@ -25,11 +25,21 @@ pub const STREAM_WITHIN: Duration = Duration::from_secs(120);
 
 const POLL: Duration = Duration::from_millis(500);
 
-/// A shell execution barrier. The value appears literally once in the echoed
-/// command line and once in the command's own output, so waiting for two
-/// occurrences waits for execution rather than for the tty echo.
-const BARRIER_VAR: &str = "LYREL_PS_BARRIER";
-const BARRIER_VALUE: &str = "__lyrel_ps_barrier__";
+/// A shell execution barrier. The input line the tty echoes never contains
+/// the joined value: the closing `printf` joins two halves at run time, so
+/// only an executed command can put `__lyrel_ps_barrier__` on the output
+/// stream. A literal marker cannot distinguish an echo from execution, and a
+/// platform shell may echo one input line before it executes anything: macOS
+/// `/bin/sh` is bash, and input written before its prompt/readline is ready
+/// can be echoed by the tty and redisplayed by the line editor. Requiring the
+/// joined value once therefore proves execution and cannot be satisfied by an
+/// echo, no matter how many times the platform redraws the pending line.
+const BARRIER_VALUE_HEAD: &str = "__lyrel_ps_";
+const BARRIER_VALUE_TAIL: &str = "barrier__";
+
+fn barrier_value() -> String {
+    format!("{BARRIER_VALUE_HEAD}{BARRIER_VALUE_TAIL}")
+}
 
 static SETTLE_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -57,23 +67,6 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         && haystack
             .windows(needle.len())
             .any(|window| window == needle)
-}
-
-fn occurrences(haystack: &[u8], needle: &[u8]) -> usize {
-    if needle.is_empty() {
-        return 0;
-    }
-    let mut found = 0;
-    let mut at = 0;
-    while at + needle.len() <= haystack.len() {
-        if &haystack[at..at + needle.len()] == needle {
-            found += 1;
-            at += needle.len();
-        } else {
-            at += 1;
-        }
-    }
-    found
 }
 
 pub fn send_line(session: &mut PaneSession, line: &str) {
@@ -119,30 +112,27 @@ pub fn pump_until_text(session: &mut PaneSession, needle: &[u8]) -> Pumped {
     pump(session, |pumped| pumped.contains(needle))
 }
 
-pub fn pump_until_occurrences(session: &mut PaneSession, needle: &[u8], wanted: usize) -> Pumped {
-    pump(session, |pumped| {
-        occurrences(&pumped.text, needle) >= wanted
-    })
-}
-
-/// Wait for the value a [`run`] barrier prints. Both the controller and a
-/// read-only observer see the assignment echo first and the printed value
-/// second; requiring both occurrences proves the shell executed the line.
+/// Wait for the value a [`run`] barrier prints. The joined value exists only
+/// in an executed command's output, so one occurrence is execution; a
+/// controller and every observer see that printed value once.
 pub fn pump_past_barrier(session: &mut PaneSession) -> Pumped {
-    pump_until_occurrences(session, BARRIER_VALUE.as_bytes(), 2)
+    let value = barrier_value();
+    pump_until_text(session, value.as_bytes())
 }
 
 fn barrier(session: &mut PaneSession, command: &str) -> Pumped {
-    let line =
-        format!("{BARRIER_VAR}={BARRIER_VALUE}; {command}; printf '%s\\n' \"${BARRIER_VAR}\"");
+    let line = format!("{command}; printf '%s%s\\n' '{BARRIER_VALUE_HEAD}' '{BARRIER_VALUE_TAIL}'");
     send_line(session, &line);
     pump_past_barrier(session)
 }
 
 /// The daemon-side settle: a comment line is echoed by the tty as soon as it
 /// is written, so seeing its echo proves the reader loop has consumed every
-/// earlier byte. Program frames are published after the text of the read that
-/// produced them, so a settle keeps them inside the collected window.
+/// earlier byte. The barrier guarantees the shell already executed the command
+/// before this line is written, so the echo lands after every byte whose
+/// frames the settle must collect. The reader publishes one read's text and
+/// then its frames before it reads the next chunk, and both travel on the same
+/// ordered connection, so a later echo cannot overtake those frames.
 pub fn settle(session: &mut PaneSession) -> Pumped {
     let token = format!(
         "lyrel_ps_settle_{}",
