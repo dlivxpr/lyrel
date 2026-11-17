@@ -1255,7 +1255,7 @@ impl LyrelApp {
         if !self.right_panel_open(cx) {
             self.toggle_right_panel(cx);
         }
-        self.set_right_panel_tab(RightPanelTab::Files, cx);
+        self.set_right_panel_tab(RightPanelTab::Files, window, cx);
     }
 
     fn file_tree_key_down(
