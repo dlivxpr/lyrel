@@ -21,6 +21,9 @@ fn choose_motion(vcx: &mut gpui_kit::VisualTestContext, index: usize) {
 
 #[gpui_kit::test]
 fn motion_preference_round_trips_through_settings_and_reload(cx: &mut TestAppContext) {
+    // Every test in this process writes to the same scratch config.json; keep
+    // a save→load→assert sequence atomic against a concurrent writer.
+    let _config_file = Config::lock_config_file();
     let (settings, mut vcx) = settings_window::harness(cx);
     let dir = crate::core::config::config_dir_path().expect("the harness pins a scratch config");
     settings.update_in(&mut vcx, |settings, window, cx| {
