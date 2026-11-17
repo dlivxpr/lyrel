@@ -28,12 +28,7 @@ use std::time::Duration;
 
 use super::markdown::images::{self, Bitmap, ImageFormat};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-
-mod gif;
-mod tiff;
-
-use gif::GifPlayback;
-use tiff::TiffPages;
+use lyrel_code_editor::image::{GifError, GifPlayback, TiffError, TiffPageError, TiffPages};
 
 gpui_kit::actions!(
     image,
@@ -95,11 +90,10 @@ pub(super) fn decode_loaded(bytes: Vec<u8>, format: ImageFormat) -> ImageOutcome
     let bytes: Arc<[u8]> = Arc::from(bytes);
     match format {
         ImageFormat::Gif => {
-            let mut player =
-                GifPlayback::new(bytes).map_err(|error| SharedString::from(error.to_string()))?;
+            let mut player = GifPlayback::new(bytes).map_err(|error| gif_error_message(&error))?;
             let (rgba, delay) = player
                 .next_frame()
-                .map_err(|error| SharedString::from(error.to_string()))?
+                .map_err(|error| gif_error_message(&error))?
                 .ok_or_else(|| SharedString::from(t(L10nKey::EditorImageAnimationEmpty)))?;
             Ok(DecodedImage::Gif {
                 player,
@@ -109,13 +103,83 @@ pub(super) fn decode_loaded(bytes: Vec<u8>, format: ImageFormat) -> ImageOutcome
         }
         ImageFormat::Tiff => TiffPages::open(bytes)
             .map(|pages| DecodedImage::Tiff { pages })
-            .map_err(|error| SharedString::from(error.to_string())),
+            .map_err(|error| tiff_error_message(&error)),
         _ => {
             let (rgba, format) = images::decode_static(&bytes)
                 .map_err(|error| SharedString::from(error.to_string()))?;
             // The decoder names the bytes it actually recognised; the name
             // claimed by the opener only labels a failure.
             Ok(DecodedImage::Static { rgba, format })
+        }
+    }
+}
+
+fn mib(bytes: u64) -> u64 {
+    bytes.div_ceil(1024 * 1024)
+}
+
+/// The decoders live in the GUI-free crate; their user-facing wording is
+/// localized here, together with every other editor message.
+fn gif_error_message(error: &GifError) -> SharedString {
+    match error {
+        GifError::Budget { required, limit } => t_fmt(
+            L10nKey::EditorImageAnimationLimit,
+            &[
+                ("required", &mib(*required).to_string()),
+                ("limit", &mib(*limit).to_string()),
+            ],
+        )
+        .into(),
+        GifError::EmptyCanvas | GifError::NoFrames => t(L10nKey::EditorImageAnimationEmpty).into(),
+        GifError::Truncated => t(L10nKey::EditorImageAnimationTruncated).into(),
+        GifError::Decode(message) => {
+            format!("{} ({message})", t(L10nKey::EditorImageUndecodable)).into()
+        }
+    }
+}
+
+fn tiff_error_message(error: &TiffError) -> SharedString {
+    match error {
+        TiffError::Pages { limit } => t_fmt(
+            L10nKey::EditorImagePagesLimit,
+            &[("pages", &limit.to_string())],
+        )
+        .into(),
+        TiffError::Corrupt(message) => {
+            format!("{} ({message})", t(L10nKey::EditorImageUndecodable)).into()
+        }
+    }
+}
+
+fn tiff_page_error_message(error: &TiffPageError) -> SharedString {
+    match error {
+        TiffPageError::Missing => t(L10nKey::EditorImagePageMissing).into(),
+        TiffPageError::Dimensions {
+            width,
+            height,
+            limit,
+        } => t_fmt(
+            L10nKey::EditorImagePageDimensionsLimit,
+            &[
+                ("width", &width.to_string()),
+                ("height", &height.to_string()),
+                ("limit", &limit.to_string()),
+            ],
+        )
+        .into(),
+        TiffPageError::Budget { required, limit } => t_fmt(
+            L10nKey::EditorImagePageBytesLimit,
+            &[
+                ("required", &mib(*required).to_string()),
+                ("limit", &mib(*limit).to_string()),
+            ],
+        )
+        .into(),
+        TiffPageError::Unsupported(layout) => {
+            format!("{} ({layout})", t(L10nKey::EditorImagePageUnsupported)).into()
+        }
+        TiffPageError::Corrupt(message) => {
+            format!("{} ({message})", t(L10nKey::EditorImageUndecodable)).into()
         }
     }
 }
@@ -340,7 +404,7 @@ impl ImageDocument {
         &mut self,
         generation: u64,
         page: usize,
-        decoded: Result<image::RgbaImage, tiff::TiffPageError>,
+        decoded: Result<image::RgbaImage, TiffPageError>,
         cx: &mut Context<Self>,
     ) {
         let Media::Tiff(run) = &mut self.media else {
@@ -356,7 +420,7 @@ impl ImageDocument {
         }
         let content = match decoded {
             Ok(image) => ImageContent::Ready(images::bitmap(image, cx)),
-            Err(error) => ImageContent::Failed(error.to_string().into()),
+            Err(error) => ImageContent::Failed(tiff_page_error_message(&error)),
         };
         run.cache.insert(page, content);
         run.order.push_back(page);
@@ -444,7 +508,7 @@ impl ImageDocument {
     fn gif_install(
         &mut self,
         generation: u64,
-        decoded: Result<Option<(image::RgbaImage, Duration)>, gif::GifError>,
+        decoded: Result<Option<(image::RgbaImage, Duration)>, GifError>,
         cx: &mut Context<Self>,
     ) {
         let Media::Gif(run) = &mut self.media else {
@@ -462,7 +526,7 @@ impl ImageDocument {
             Ok(None) => run.finished = true,
             Err(error) => {
                 run.finished = true;
-                run.frame = ImageContent::Failed(error.to_string().into());
+                run.frame = ImageContent::Failed(gif_error_message(&error));
             }
         }
         cx.notify();

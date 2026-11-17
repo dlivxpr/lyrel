@@ -3,6 +3,7 @@ use super::super::*;
 use super::links::{self, Target};
 use gpui_kit::component::{WindowExt as _, button::Button};
 use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
+use lyrel_code_editor::image::MAX_PIXELS;
 use lyrel_core::host::Host;
 use lyrel_markdown_editor::{
     Document, DocumentEvent, EditorEvent as NativeEvent, EditorState as MarkdownEditor,
@@ -10,7 +11,6 @@ use lyrel_markdown_editor::{
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 type Signature = (HostId, PathBuf);

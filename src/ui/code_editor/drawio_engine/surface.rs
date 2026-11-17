@@ -1055,7 +1055,7 @@ mod windows_host {
     /// Reads a POST request stream with a hard ceiling: anything larger than
     /// the document budget plus slack is cut off and refused by `respond`.
     unsafe fn read_request_body(stream: &windows::Win32::System::Com::IStream) -> Option<Vec<u8>> {
-        const LIMIT: usize = assets::MAX_DOCUMENT_BYTES + 1;
+        const LIMIT: usize = lyrel_code_editor::drawio::MAX_DOCUMENT_BYTES + 1;
         let mut body = Vec::with_capacity(64 * 1024);
         let mut chunk = [0u8; 16 * 1024];
         loop {

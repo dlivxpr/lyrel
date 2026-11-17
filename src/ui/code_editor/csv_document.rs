@@ -1,7 +1,7 @@
 //! CSV／TSV 文档：一份逐行保真的共享源码，加上从它派生的虚拟化表格。
 //!
 //! 表格不是第二份文档：`CsvDocument` 只按当前 `Document` revision 解析一份
-//! 完整逻辑表（记录／字段源区间与稳定身份在 `csv_document::table`），
+//! 完整逻辑表（记录／字段源区间与稳定身份在 `lyrel_code_editor::csv::table`），
 //! 每个分组各有自己的选择、列窗口、筛选、排序、滚动与焦点。筛选和排序只
 //! 重排视图里的记录编号；打开、导航、排序、筛选和复制都不修改源文。
 //!
@@ -29,12 +29,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-mod edit;
-mod table;
-
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use edit::CsvEdit;
-use table::{CsvCellId, CsvSort, CsvTable, CsvTableError, DEFAULT_LIMITS, DETAIL_CHARS};
+use lyrel_code_editor::csv::CsvDocumentState;
+use lyrel_code_editor::csv::TableInstall;
+use lyrel_code_editor::csv::edit::{self, CsvEdit};
+use lyrel_code_editor::csv::table;
+use lyrel_code_editor::csv::table::{
+    CsvCellId, CsvSort, CsvTable, CsvTableError, DEFAULT_LIMITS, DETAIL_CHARS,
+};
 
 gpui_kit::actions!(
     csv_document,
@@ -91,19 +93,14 @@ impl CsvMode {
 pub(crate) struct CsvDocument {
     document: Entity<Document>,
     delimiter: u8,
-    table: Option<Arc<CsvTable>>,
-    error: Option<CsvTableError>,
-    parsing: bool,
-    generation: u64,
-    parse_running: bool,
-    cancel: Arc<AtomicBool>,
+    state: CsvDocumentState,
     _parse: Option<gpui_kit::Task<()>>,
     _document: Subscription,
 }
 
 impl Drop for CsvDocument {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.state.cancel();
     }
 }
 
@@ -115,12 +112,7 @@ impl CsvDocument {
         let mut this = Self {
             document,
             delimiter,
-            table: None,
-            error: None,
-            parsing: false,
-            generation: 0,
-            parse_running: false,
-            cancel: Arc::default(),
+            state: CsvDocumentState::new(),
             _parse: None,
             _document: watch,
         };
@@ -137,26 +129,21 @@ impl CsvDocument {
     }
 
     pub(crate) fn table(&self) -> Option<Arc<CsvTable>> {
-        self.table.clone()
+        self.state.table()
     }
 
     pub(crate) fn error(&self) -> Option<CsvTableError> {
-        self.error.clone()
+        self.state.error()
     }
 
     pub(crate) fn is_parsing(&self) -> bool {
-        self.parsing
+        self.state.is_parsing()
     }
 
     /// 源文一旦变化就丢弃旧表：旧记录区间不再对应当前 revision，不能继续
     /// 用于定位或复制，也不能被迟到的解析结果替换。
     fn invalidate(&mut self, cx: &mut Context<Self>) {
-        self.cancel.store(true, Ordering::Release);
-        self.generation = self.generation.wrapping_add(1);
-        self.table = None;
-        self.error = None;
-        self.parsing = true;
-        if !self.parse_running {
+        if self.state.invalidate() {
             self.schedule(cx);
         }
         cx.notify();
@@ -167,20 +154,19 @@ impl CsvDocument {
     fn schedule(&mut self, cx: &mut Context<Self>) {
         let revision = self.document.read(cx).revision();
         let identity = self.document.entity_id();
-        let generation = self.generation;
+        let generation = self.state.generation();
         let delimiter = self.delimiter;
         self._parse = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PARSE_DEBOUNCE).await;
             let captured = this
                 .update(cx, |this, cx| {
                     let document = this.document.read(cx);
-                    if this.generation != generation || document.revision() != revision {
+                    if this.state.generation() != generation || document.revision() != revision {
                         return None;
                     }
                     let text = document.snapshot().shared_text();
-                    this.parse_running = true;
-                    this.cancel.store(false, Ordering::Release);
-                    Some((text, this.cancel.clone()))
+                    let cancel = this.state.begin_parse();
+                    Some((text, cancel))
                 })
                 .ok()
                 .flatten();
@@ -203,47 +189,17 @@ impl CsvDocument {
             .await
             .flatten();
             let _ = this.update(cx, |this, cx| {
-                this.parse_running = false;
+                this.state.end_parse();
                 this._parse = None;
-                this.install(identity, revision, generation, outcome, cx);
+                let fresh = this.document.entity_id() == identity
+                    && this.document.read(cx).revision() == revision
+                    && this.state.generation() == generation;
+                match this.state.install(fresh, outcome) {
+                    TableInstall::Installed => cx.notify(),
+                    TableInstall::Retry => this.schedule(cx),
+                }
             });
         }));
-    }
-
-    fn install(
-        &mut self,
-        identity: gpui_kit::EntityId,
-        revision: u64,
-        generation: u64,
-        outcome: Option<Result<CsvTable, CsvTableError>>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.document.entity_id() != identity
-            || self.document.read(cx).revision() != revision
-            || self.generation != generation
-        {
-            // A late result describes a source the document no longer holds.
-            self.parsing = true;
-            self.schedule(cx);
-            return;
-        }
-        self.parsing = false;
-        match outcome {
-            Some(Ok(table)) => {
-                self.error = None;
-                self.table = Some(Arc::new(table));
-                cx.notify();
-            }
-            Some(Err(CsvTableError::Cancelled)) | None => {
-                self.parsing = true;
-                self.schedule(cx);
-            }
-            Some(Err(error)) => {
-                self.table = None;
-                self.error = Some(error);
-                cx.notify();
-            }
-        }
     }
 }
 

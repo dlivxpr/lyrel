@@ -20,15 +20,14 @@ use gpui_kit::{
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::drawio_engine::assets::MAX_DOCUMENT_BYTES;
 use super::drawio_engine::bridge::Command;
-use super::drawio_engine::document::{DrawioError, DrawioSource};
 #[cfg(not(test))]
 use super::drawio_engine::session::PreviewTheme;
 #[cfg(not(test))]
 use super::drawio_engine::surface::{ParentWindow, SurfaceError};
 use super::drawio_engine::surface::{SurfaceEvent, SurfaceHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_code_editor::drawio::{DrawioError, DrawioSource, MAX_DOCUMENT_BYTES, parse};
 
 gpui_kit::actions!(
     drawio_document,
@@ -161,7 +160,7 @@ impl DrawioDocument {
             cx.notify();
             return Ok(());
         }
-        let source = super::drawio_engine::parse(&bytes)?;
+        let source = parse(&bytes)?;
         self.push_past();
         self.edit = self.edit.wrapping_add(1);
         self.fingerprint = fingerprint;

@@ -11,10 +11,7 @@
 //! 普通 history；写入前按 revision 与整篇解析复核。
 
 use std::ops::Range;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use gpui_kit::ScrollStrategy;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -30,21 +27,21 @@ use gpui_kit::{
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 
+use lyrel_code_editor::state::{ProjectionResult, ProjectionState};
+use lyrel_code_editor::tree::{self, SourceLocation, Treelike, VisibleRow};
+use lyrel_code_editor::yaml::mutation::{
+    self, Mutation, MutationError, NodeTarget, UnsupportedEdit,
+};
+use lyrel_code_editor::yaml::projection::{
+    self, ContainerKind, ProjectionFailure, STRUCTURE_DEPTH, STRUCTURE_INPUT_BYTES,
+    STRUCTURE_NODES, YamlNodeKind, YamlProjection, YamlScalarKind,
+};
+
 use super::structure_edit::{EditField, StructureEditEvent, StructureEditPanel};
 use super::structure_rows::{
     StructureRowData, source_body_for, structure_error, structure_loading, structure_row,
 };
-use super::structure_view::{self, SourceLocation, Treelike, VisibleRow};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-
-pub(crate) mod mutation;
-pub(crate) mod projection;
-
-use mutation::{Mutation, MutationError, NodeTarget, UnsupportedEdit};
-use projection::{
-    ContainerKind, ProjectionFailure, STRUCTURE_DEPTH, STRUCTURE_INPUT_BYTES, STRUCTURE_NODES,
-    YamlNodeKind, YamlProjection, YamlScalarKind,
-};
 
 /// 合并连续输入；每份文档最多一个 worker 与一次在途解析。
 const PARSE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(120);
@@ -74,21 +71,14 @@ impl YamlMode {
 /// 一份 YAML 文件的内容：共享 Document 与按最新 revision 安装的投影。
 pub(crate) struct YamlDocument {
     document: Entity<Document>,
-    projection: Option<Arc<YamlProjection>>,
-    failure: Option<ProjectionFailure>,
-    parsing: bool,
-    installed_revision: Option<u64>,
-    generation: u64,
-    pending: bool,
-    worker_running: bool,
-    cancel: Arc<AtomicBool>,
+    state: ProjectionState<YamlProjection, ProjectionFailure>,
     _worker: Option<Task<()>>,
     _document: Subscription,
 }
 
 impl Drop for YamlDocument {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.state.cancel();
     }
 }
 
@@ -99,14 +89,7 @@ impl YamlDocument {
         });
         let mut this = Self {
             document,
-            projection: None,
-            failure: None,
-            parsing: false,
-            installed_revision: None,
-            generation: 0,
-            pending: false,
-            worker_running: false,
-            cancel: Arc::default(),
+            state: ProjectionState::new(),
             _worker: None,
             _document: watch,
         };
@@ -119,60 +102,53 @@ impl YamlDocument {
     }
 
     pub(crate) fn projection(&self) -> Option<&YamlProjection> {
-        self.projection.as_deref()
+        self.state.projection()
+    }
+
+    pub(crate) fn shared_projection(&self) -> Option<Arc<YamlProjection>> {
+        self.state.shared_projection()
     }
 
     pub(crate) fn failure(&self) -> Option<ProjectionFailure> {
-        self.failure
+        self.state.failure()
     }
 
     pub(crate) fn is_parsing(&self) -> bool {
-        self.parsing
+        self.state.is_parsing()
     }
 
     pub(crate) fn installed_revision(&self) -> Option<u64> {
-        self.installed_revision
+        self.state.installed_revision()
     }
 
     fn invalidate(&mut self, cx: &mut Context<Self>) {
-        self.cancel.store(true, Ordering::Release);
-        self.generation = self.generation.wrapping_add(1);
-        self.projection = None;
-        self.failure = None;
-        self.parsing = true;
-        self.pending = true;
-        if !self.worker_running {
+        if self.state.invalidate() {
             self.start_worker(cx);
         }
         cx.notify();
     }
 
     fn start_worker(&mut self, cx: &mut Context<Self>) {
-        self.worker_running = true;
+        self.state.begin_worker();
         self._worker = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(PARSE_DEBOUNCE).await;
                 let job = this
                     .update(cx, |this, cx| {
-                        if !this.pending {
-                            this.parsing = false;
-                            this.worker_running = false;
+                        let Some(job) = this.state.take_job() else {
                             cx.notify();
                             return None;
-                        }
-                        this.pending = false;
+                        };
                         let document = this.document.read(cx);
-                        let snapshot = document.snapshot();
-                        let revision = document.revision();
-                        let generation = this.generation;
-                        this.cancel.store(false, Ordering::Release);
-                        Some((snapshot, revision, generation, this.cancel.clone()))
+                        Some((document.snapshot(), document.revision(), job))
                     })
                     .ok()
                     .flatten();
-                let Some((snapshot, revision, generation, cancel)) = job else {
+                let Some((snapshot, revision, job)) = job else {
                     break;
                 };
+                let generation = job.generation();
+                let cancel = Arc::clone(job.cancel());
                 #[cfg(test)]
                 let gate = test_support::take_next_parse();
                 let result = crate::ui::host_ops::off_thread(move || {
@@ -190,28 +166,15 @@ impl YamlDocument {
                 .unwrap_or(Err(ProjectionFailure::Cancelled));
                 let keep_going = this
                     .update(cx, |this, cx| {
-                        let document = this.document.read(cx);
-                        if this.generation == generation && document.revision() == revision {
-                            match result {
-                                Ok(projection) => {
-                                    this.projection = Some(Arc::new(projection));
-                                    this.failure = None;
-                                    this.installed_revision = Some(revision);
-                                }
-                                Err(ProjectionFailure::Cancelled) => {}
-                                Err(failure) => {
-                                    this.projection = None;
-                                    this.failure = Some(failure);
-                                    this.installed_revision = None;
-                                }
-                            }
-                        }
-                        this.parsing = this.pending;
-                        if !this.pending {
-                            this.worker_running = false;
-                        }
+                        let current = this.document.read(cx).revision();
+                        let result = match result {
+                            Ok(projection) => ProjectionResult::Ready(projection),
+                            Err(ProjectionFailure::Cancelled) => ProjectionResult::Cancelled,
+                            Err(failure) => ProjectionResult::Failed(failure),
+                        };
+                        let keep_going = this.state.install(generation, revision, current, result);
                         cx.notify();
-                        this.pending
+                        keep_going
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -659,7 +622,7 @@ impl YamlView {
 
     fn current_projection(&self, cx: &App) -> Option<Arc<YamlProjection>> {
         let document = self.document.read(cx);
-        let projection = document.projection.clone()?;
+        let projection = document.shared_projection()?;
         let installed = document.installed_revision()?;
         let source = document.document().clone();
         (source.read(cx).revision() == installed).then_some(projection)
@@ -1042,7 +1005,7 @@ impl YamlView {
             let yaml_document = self.document.read(cx);
             let document = yaml_document.document().clone();
             let editor = self.source.clone();
-            let projection = yaml_document.projection.clone();
+            let projection = yaml_document.shared_projection();
             let installed = yaml_document.installed_revision();
             let revision = document.read(cx).revision();
             let text = document.read(cx).snapshot().shared_text();
@@ -1127,7 +1090,7 @@ impl YamlView {
     fn sync_structure(&mut self, cx: &mut Context<Self>) {
         let (projection, revision) = {
             let document = self.document.read(cx);
-            (document.projection.clone(), document.installed_revision())
+            (document.shared_projection(), document.installed_revision())
         };
         let Some(projection) = projection else {
             self.rows.clear();
@@ -1169,7 +1132,7 @@ impl YamlView {
         if revision_changed {
             self.mark_edit_stale(cx);
         }
-        self.rows = structure_view::visible_rows(projection.as_ref(), &self.expanded);
+        self.rows = tree::visible_rows(projection.as_ref(), &self.expanded);
     }
 
     fn rebuild_rows(&mut self, cx: &App) {
@@ -1177,7 +1140,7 @@ impl YamlView {
             .document
             .read(cx)
             .projection()
-            .map(|projection| structure_view::visible_rows(projection, &self.expanded))
+            .map(|projection| tree::visible_rows(projection, &self.expanded))
             .unwrap_or_default();
     }
 
@@ -1196,7 +1159,7 @@ impl YamlView {
         self.mutation_notice = None;
         self.selected = Some(index);
         self.selected_path = Some(path);
-        if let Some(row) = structure_view::row_of(&self.rows, index) {
+        if let Some(row) = tree::row_of(&self.rows, index) {
             self.structure_scroll
                 .scroll_to_item(row, ScrollStrategy::Nearest);
         }
@@ -1249,7 +1212,7 @@ impl YamlView {
             _ => 0,
         };
         if step != 0 {
-            let Some(node) = structure_view::move_selection(&self.rows, self.selected, step) else {
+            let Some(node) = tree::move_selection(&self.rows, self.selected, step) else {
                 return;
             };
             self.select_node(node, cx);
@@ -1258,20 +1221,20 @@ impl YamlView {
         }
         match key {
             "home" => {
-                if let Some(node) = structure_view::first_node(&self.rows) {
+                if let Some(node) = tree::first_node(&self.rows) {
                     self.select_node(node, cx);
                     cx.stop_propagation();
                 }
             }
             "end" => {
-                if let Some(node) = structure_view::last_node(&self.rows) {
+                if let Some(node) = tree::last_node(&self.rows) {
                     self.select_node(node, cx);
                     cx.stop_propagation();
                 }
             }
             "right" => {
                 let Some(selected) = self.selected else {
-                    if let Some(node) = structure_view::first_node(&self.rows) {
+                    if let Some(node) = tree::first_node(&self.rows) {
                         self.select_node(node, cx);
                     }
                     cx.stop_propagation();
@@ -1281,7 +1244,7 @@ impl YamlView {
                     let projection = self.document.read(cx).projection();
                     let expandable = projection.is_some_and(|p| p.is_expandable(selected));
                     let expanded = self.expanded.get(selected).copied().unwrap_or(false);
-                    let child = structure_view::first_child_node(&self.rows, selected);
+                    let child = tree::first_child_node(&self.rows, selected);
                     (expandable, expanded, child)
                 };
                 if expandable && !expanded {
@@ -1298,7 +1261,7 @@ impl YamlView {
                 let expanded = self.expanded.get(selected).copied().unwrap_or(false);
                 if expanded {
                     self.toggle_node(selected, cx);
-                } else if let Some(parent) = structure_view::parent_node(&self.rows, selected) {
+                } else if let Some(parent) = tree::parent_node(&self.rows, selected) {
                     self.select_node(parent, cx);
                 }
                 cx.stop_propagation();

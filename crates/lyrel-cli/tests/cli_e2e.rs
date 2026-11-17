@@ -1,6 +1,9 @@
+use std::collections::VecDeque;
 use std::io::{BufRead as _, Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use lyrel_core::client::{ControlClient, PaneClient};
@@ -94,10 +97,9 @@ fn main() {
         return;
     }
 
-    // Output is already uncaptured; CI's libtest flag is not a case filter.
-    let filter = std::env::args().skip(1).find(|arg| arg != "--nocapture");
+    let options = Options::parse(std::env::args().skip(1));
 
-    let tests: &[(&str, fn(&Daemon))] = &[
+    let tests: &[Case] = &[
         (
             "agents_report_continuous_state_age",
             agents::agents_report_continuous_state_age,
@@ -218,28 +220,172 @@ fn main() {
         ),
     ];
 
-    let mut failed = 0;
-    for (name, test) in tests {
-        if let Some(filter) = filter.as_deref()
-            && !name.contains(filter)
-        {
-            continue;
+    let selected: Vec<Case> = tests
+        .iter()
+        .copied()
+        .filter(|(name, _)| options.matches(name))
+        .collect();
+
+    if options.list {
+        for (name, _) in &selected {
+            println!("{name}: test");
         }
-        let daemon = Daemon::start();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&daemon)));
-        drop(daemon);
-        match outcome {
-            Ok(()) => println!("test {name} ... ok"),
-            Err(_) => {
-                failed += 1;
-                println!("test {name} ... FAILED");
-            }
-        }
+        println!();
+        println!("{} tests, 0 benchmarks", selected.len());
+        return;
     }
+    if selected.is_empty() {
+        match options.filter.as_deref() {
+            Some(filter) => eprintln!("cli_e2e: no tests matched `{filter}`"),
+            None => eprintln!("cli_e2e: no tests available on this platform"),
+        }
+        std::process::exit(2);
+    }
+
+    let total = selected.len();
+    // One worker per case at most; extra threads would only contend.
+    let concurrency = options.concurrency.min(total);
+    // The lock is only held while a case is claimed, never while it runs: an
+    // e2e case owns a daemon and a temp profile, and unrelated cases must be
+    // able to claim and start their own in parallel.
+    let queue = Mutex::new(VecDeque::from(selected));
+    let failed = AtomicUsize::new(0);
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..concurrency {
+            scope.spawn(|| {
+                while let Some((name, test)) = claim(&queue) {
+                    let case_started = Instant::now();
+                    // Starting the daemon belongs inside the guard: a failed
+                    // readiness probe is that case's failure, not a worker
+                    // that abandons the rest of the queue.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let daemon = Daemon::start();
+                        test(&daemon);
+                    }));
+                    let elapsed = case_started.elapsed().as_secs_f64();
+                    match outcome {
+                        Ok(()) => println!("test {name} ... ok ({elapsed:.2}s)"),
+                        Err(_) => {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            println!("test {name} ... FAILED ({elapsed:.2}s)");
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let elapsed = started.elapsed().as_secs_f64();
+    let failed = failed.load(Ordering::Relaxed);
     if failed > 0 {
-        eprintln!("{failed} e2e test(s) failed");
+        eprintln!("{failed} of {total} e2e test(s) failed ({elapsed:.2}s)");
         std::process::exit(1);
     }
+    println!("all {total} e2e tests passed ({elapsed:.2}s)");
+}
+
+/// The `harness = false` stand-in for libtest's argument grammar.
+///
+/// CI runs this target as part of a whole-workspace `cargo test`, which passes
+/// `--nocapture`; local runs add a substring filter, `--exact`, `--list`, or a
+/// thread override. Anything else is rejected instead of silently becoming a
+/// filter that selects nothing.
+struct Options {
+    filter: Option<String>,
+    exact: bool,
+    list: bool,
+    concurrency: usize,
+}
+
+impl Options {
+    fn parse(args: impl IntoIterator<Item = String>) -> Options {
+        let mut args = args.into_iter();
+        let mut filter = None;
+        let mut exact = false;
+        let mut list = false;
+        let mut threads = None;
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--nocapture" => {}
+                "--exact" => exact = true,
+                "--list" => list = true,
+                "--test-threads" => {
+                    let value = args
+                        .next()
+                        .unwrap_or_else(|| usage_error("--test-threads needs a value"));
+                    threads = Some(threads_value(&value, "--test-threads"));
+                }
+                _ if arg.starts_with("--test-threads=") => {
+                    threads = Some(threads_value(
+                        &arg["--test-threads=".len()..],
+                        "--test-threads=",
+                    ));
+                }
+                _ if arg.starts_with('-') => usage_error(&format!("unrecognized option `{arg}`")),
+                _ => {
+                    if filter.replace(arg).is_some() {
+                        usage_error("only one test filter is supported");
+                    }
+                }
+            }
+        }
+        let concurrency = threads
+            .or_else(threads_from_env)
+            .unwrap_or_else(default_concurrency);
+        Options {
+            filter,
+            exact,
+            list,
+            concurrency,
+        }
+    }
+
+    fn matches(&self, name: &str) -> bool {
+        let Some(filter) = self.filter.as_deref() else {
+            return true;
+        };
+        if self.exact {
+            name == filter
+        } else {
+            name.contains(filter)
+        }
+    }
+}
+
+fn default_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 4))
+        .unwrap_or(4)
+}
+
+/// One registered e2e case: its name and its daemon-bound body.
+type Case = (&'static str, fn(&Daemon));
+
+/// Takes the next case. The mutex guard lives only for this call, so a slow
+/// case never blocks other workers from claiming their own.
+fn claim(queue: &Mutex<VecDeque<Case>>) -> Option<Case> {
+    queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop_front()
+}
+
+fn threads_from_env() -> Option<usize> {
+    let value = std::env::var("LYREL_TEST_THREADS").ok()?;
+    Some(threads_value(value.trim(), "LYREL_TEST_THREADS"))
+}
+
+fn threads_value(raw: &str, source: &str) -> usize {
+    match raw.parse::<usize>() {
+        Ok(value) if value > 0 => value,
+        _ => usage_error(&format!("{source} must be a positive integer, got `{raw}`")),
+    }
+}
+
+fn usage_error(message: &str) -> ! {
+    eprintln!("cli_e2e: {message}");
+    eprintln!("usage: cli_e2e [FILTER] [--exact] [--list] [--nocapture] [--test-threads=N]");
+    std::process::exit(2);
 }
 
 struct Daemon {

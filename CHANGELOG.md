@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### 开发与 CI
+
+- 结构化 JSON／JSONL、TOML、YAML、XML、CSV／TSV、GIF／TIFF 与 draw.io 的纯模型迁入无 GPUI 的内部 `lyrel-code-editor`；工作台继续持有 Document、Host、history、保存与本地化，现有模型和真实消费者回归保留。
+- core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
+- 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
+- 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。
+- Draft PR 使用快速平台层，Ready／`ci:full` 恢复完整门禁；PR 检查生产图，主线保留生产构建与静态 CRT 断言。缓存禁止失败写回，POSIX CI 启用 sccache，nextest 保留零默认重试、逐例超时与单独的 native／CLI／doctest 入口；手动发行验证显式选择 `scope=full`，Dependabot 改为月度单组。相同 tree 的主线测试仅在完整 PR 门禁证据可验证时晋升。
+
 ### 依赖升级
 
 - #303／#304：GPUI Kit 原子升级为正式 registry 的精确 `=0.10.0`，继续经官方 `gpui-fast` facade 解析 Fast `0.1.16` 系列；`rio-vt`／`rio-graphics`／`rio-unicode` 同步固定为 `=0.5.32`，锁定对应的 `rio-grapheme-width 0.5.32`。保留无 GPUI 的共享 core、既有 PTY／daemon／Host／终端绘制与独立 Markdown 编辑器，不引入 Rio 的 PTY、窗口、Sugarloaf、installer 或 librio。
@@ -23,8 +31,8 @@
 
 ### 验证边界
 
-- 当前 Windows library 编译已消除 warning，但生产 native 矩阵尚未完成，不能写成完整 Windows 验收通过。Linux public lifecycle 12/12、handoff 2/2、core 10/10 已通过；这些结果不替代其他平台或真实原生交互、系统 IME 验收。
-- 旧提交 `86f107` 的 CI preflight fmt 失败，保留失败记录，未标为通过；当前没有可据此宣称最终组合 macOS CI 或原生 macOS 矩阵通过的证据。
+- 本次优化已运行 Windows 全量普通测试、主线程 native Markdown 37 例、native terminal 3 例、CLI E2E 29 例，以及 Linux headless 全量普通测试、CLI E2E 30 例和 doctest。首轮 Windows 的 5 个失败项已逐项修复并定点通过；Linux 的 2 个权限／用户环境前提失败在非 root 且提供 `USER` 后通过。保留首轮失败记录，不把分批修复验证写成一次全量零失败。
+- 当前最终组合尚无成功的 macOS CI 证据；本机 Windows／Linux 结果不替代该门禁，也不证明实体 Mac 交互、系统 IME、真实 SSH、安装或在线更新验收。
 
 ### 修复
 

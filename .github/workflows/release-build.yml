@@ -67,7 +67,7 @@ jobs:
           workspaces: lyrel
           shared-key: release-v2-x86_64-pc-windows-msvc-desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       - name: Prepare ConPTY
         working-directory: lyrel
@@ -126,7 +126,7 @@ jobs:
           workspaces: lyrel
           shared-key: release-v2-aarch64-apple-darwin-desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       - name: Build all default binaries with updater
         working-directory: lyrel
@@ -306,7 +306,7 @@ jobs:
           workspaces: lyrel
           shared-key: release-v2-${{ matrix.target }}-server-musl
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       # lyrel-server 已是 workspace 成员，完整 stable 发行不再允许跳过 server。
 
@@ -406,7 +406,7 @@ jobs:
           workspaces: lyrel
           shared-key: release-v2-${{ matrix.target }}-server-macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
 
       - name: Download immutable CI server artifact
@@ -508,7 +508,7 @@ jobs:
           workspaces: lyrel
           shared-key: release-v2-${{ matrix.target }}-server-windows
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       # The server's build.rs fails closed without the prepared ConPTY pair,
       # and the packaging step below zips exactly the files it staged beside

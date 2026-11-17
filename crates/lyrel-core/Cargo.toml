@@ -249,6 +249,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_Threading",
@@ -277,11 +278,8 @@ md5 = "0.8"
 # unify the feature on from the GUI package anyway). The AGENTS.md warning
 # about feature-gated tests is exactly what this avoids.
 # terminal-width 同理：窄化到 core 的测试也必须覆盖真实 Rio 格宽对照。
-lyrel-core = { path = ".", features = ["remote-install", "terminal-width", "github"] }
+lyrel-core = { path = ".", features = ["remote-install", "terminal-width", "github", "test-support"] }
 
-# `test-util` unlocks tokio's paused clock (`start_paused`) so the ssh prompt
-# broker's timeout/retry tests run instantly instead of in real time.
-tokio = { version = "1.53.3", features = ["test-util", "macros", "rt"] }
 
 # `gssapi` — GSSAPI/Kerberos `gssapi-with-mic` SSH auth (`daemon::ssh::auth`).
 #
@@ -302,6 +300,8 @@ tokio = { version = "1.53.3", features = ["test-util", "macros", "rt"] }
 # vanishes the moment anyone narrows to `-p lyrel-core`.
 [features]
 default = []
+# Paused clocks belong to test graphs, never the default server/GUI graph.
+test-support = ["tokio/test-util"]
 gssapi = ["dep:libgssapi"]
 # 只控制 GUI 输入栏与 CLI 表格的测宽 API；VT 网格本身也是 daemon 的必需依赖。
 terminal-width = []

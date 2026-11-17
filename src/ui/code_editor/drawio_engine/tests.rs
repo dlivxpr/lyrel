@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use super::assets::{self, ENGINE_URL, EngineBody, SHELL_URL};
 use super::bridge::{BridgeEvent, Command, LiveSession, MAX_MESSAGE_BYTES};
-use super::document::{self, DiagramContent, RootKind};
 use super::session::{DocumentSession, PreviewTheme, SessionId, SessionToken};
+use lyrel_code_editor::drawio;
+use lyrel_code_editor::drawio::{DiagramContent, MAX_DOCUMENT_BYTES, RootKind};
 
 fn asset_bytes(path: &str) -> &'static [u8] {
     assets::asset_manifest()
@@ -30,7 +31,7 @@ fn every_distributed_asset_matches_its_pinned_hash_and_has_a_license() {
     for (path, bytes, expected, license, csp) in assets::asset_manifest() {
         assert!(!bytes.is_empty(), "{path} is empty");
         assert_eq!(
-            document::sha256_hex(bytes),
+            drawio::sha256_hex(bytes),
             expected,
             "{path} bytes changed without updating PROVENANCE"
         );
@@ -109,7 +110,7 @@ fn distribution_notices_and_engine_provenance_are_present() {
     );
     assert_eq!(
         provenance["artifact"]["viewer_sha256"],
-        document::sha256_hex(asset_bytes("/drawio/viewer-static.min.js"))
+        drawio::sha256_hex(asset_bytes("/drawio/viewer-static.min.js"))
     );
 }
 
@@ -253,8 +254,7 @@ fn only_the_live_session_document_is_addressable() {
     assert_eq!(refused.0.status, 403);
     let missing = assets::respond("GET", &format!("{}{path}", assets::ORIGIN), None, None);
     assert_eq!(missing.0.status, 403);
-    let oversized =
-        DocumentSession::new(Arc::from(vec![b' '; assets::MAX_DOCUMENT_BYTES + 1])).unwrap();
+    let oversized = DocumentSession::new(Arc::from(vec![b' '; MAX_DOCUMENT_BYTES + 1])).unwrap();
     let mut oversized = LiveSession::for_test(
         oversized.body.clone(),
         oversized.id,
@@ -364,13 +364,13 @@ fn the_native_shell_handshake_retires_tokens_and_sequences() {
 #[test]
 fn representative_compressed_and_uncompressed_documents_parse() {
     let compressed = br#"<mxfile host="test"><diagram id="p1" name="Packed">rVZdb9owEP01SLwUKeTDBB5b6NqHqVK7TkXiCbkQa0mVxFnstN2/3zlOIAk0oFTCSnD33t3z2OfXjx9XBT8GqQ</diagram><diagram id="p2" name="Packed 2">eNpVj8FqAzEMRP9F5x5s2bK9WfpDaW5NwmY30G5TbA0t/fuuL+1UJLO8</diagram></mxfile>"#;
-    let parsed = document::parse(compressed).unwrap();
+    let parsed = drawio::parse(compressed).unwrap();
     assert_eq!(parsed.root, RootKind::File);
     assert_eq!(parsed.pages.len(), 2);
     assert_eq!(parsed.pages[0].content, DiagramContent::Compressed);
 
     let plain = br#"<mxfile><diagram id="a" name="One"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram><diagram id="b"><mxGraphModel><root/></mxGraphModel></diagram></mxfile>"#;
-    let parsed = document::parse(plain).unwrap();
+    let parsed = drawio::parse(plain).unwrap();
     assert_eq!(parsed.pages.len(), 2);
     assert_eq!(parsed.pages[0].content, DiagramContent::Inline);
     assert_eq!(parsed.pages[0].name.as_deref(), Some("One"));
@@ -464,7 +464,7 @@ fn engine_commits_are_session_scoped_and_sequence_gated() {
     );
     assert_eq!(foreign.status, 403);
     // An oversized body is a 413, never a silent truncation.
-    let big = vec![b' '; assets::MAX_DOCUMENT_BYTES + 1];
+    let big = vec![b' '; MAX_DOCUMENT_BYTES + 1];
     let (response, _) = assets::respond(
         "POST",
         &format!("{}{}/commit/2", assets::ORIGIN, base),

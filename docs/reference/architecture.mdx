@@ -9,7 +9,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 ## 可执行程序与共享核心
 
-workspace 包含八个 crate；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`，EPUB 与 PDF 的 GUI-free 读取分别属于 `lyrel-epub` 与 `lyrel-pdf`。
+workspace 按生产能力与测试夹具拆分；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，结构化文档引擎属于 GUI-free `lyrel-code-editor`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`，EPUB 与 PDF 的 GUI-free 读取分别属于 `lyrel-epub` 与 `lyrel-pdf`。
 
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
@@ -19,11 +19,21 @@ workspace 包含八个 crate；桌面 GUI、CLI 和 headless server 复用 `lyre
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
 | `lyrel-text` | 编码、BOM、逐行行尾与 EditorConfig 策略，供普通文件工作台和 Markdown Document 复用 | 不依赖 GPUI、app 或 Host |
 | `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
+| `lyrel-code-editor` | JSON／JSONL、TOML、YAML、XML 的保真投影／局部 mutation、CSV 表格、GIF／TIFF 解码、draw.io 文档解析及 revision／generation guard | 不依赖 GPUI，不持有 Host/path、Document、history、保存或 UI 本地化 |
 | `lyrel-epub` | DRM-free 可重排 EPUB 的容器、OPF、目录、章节清洗、本地插图与阅读状态模型 | 不打开文件、不持有 Host/path、不执行 publisher CSS/字体、不写回 EPUB |
 | `lyrel-pdf` | PDF 解析、页度量与栅格化、文本层、大纲／链接、只读表单描述与文本字符串编码 | 不打开文件、不持有 Host/path、不写回或重排 PDF |
 | 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
+| `lyrel-graphics-fixture`（仅测试） | 轻量真实 daemon 与 PTY producer，供桌面消费者复用 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
+
+结构化文档纯引擎的实现与模型测试集中在 `crates/lyrel-code-editor/src/`，工作台的
+`src/ui/code_editor/*_document.rs` 仅保留 Document／Host 适配、异步调度与呈现；来源记录
+仍在对应格式的 `UPSTREAM.toml`，其中本地路径及根 `LICENSE` 已指向迁移后的实际文件。
+下方源码复用表中的 `image_document/gif.rs`、`csv_document/edit.rs`、`structure_view`
+和 `xml_document/projection.rs` 是原模块名；当前对应 `lyrel-code-editor/src/image/gif.rs`、
+`csv/edit.rs`、`tree.rs` 和 `xml/projection.rs`。其他格式同样按 crate 内的 `json`、`toml`、
+`yaml`、`xml` 模块定位；UI 的 `structure_edit`／`structure_rows` 留在工作台。
 
 GUI 通过 `gpui-kit =0.10.0` 的官方 `gpui-fast` feature 选择 Fast，应用导入与测试宏仍使用 `gpui_kit` facade。GUI、daemon 图形镜像与 CLI capture 共用 `rio-vt =0.5.32` 的解析器和网格；Rio 的默认 features 关闭，不引入其 PTY、窗口或 GPU 渲染栈。平台 PTY 和终端绘制仍由 lyrel 自己接入。
 
@@ -324,7 +334,7 @@ PDF 引擎的格式兼容、保真文本编辑模型、SQLite 的并发读取与
 | 终端连接、交互与绘制 | [`terminal/`](https://github.com/dlivxpr/lyrel/tree/main/src/terminal) |
 | CLI 命令与依赖替换点 | [`lyrel-cli/src/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-cli/src)，沿用 `Backend` trait |
 
-桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free `lyrel-text`，显式排除根桌面包及 `lyrel-markdown-editor`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
+桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free 文本、结构化文档及读取模块，显式排除根桌面包、`lyrel-markdown-editor` 和仅桌面测试使用的 `lyrel-graphics-fixture`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
 
 验证需匹配被修改的边界：共享行为使用对应 core／server／CLI 用例和真实 daemon／PTY 路径；GUI 行为还需实际窗口观察；Unix、Windows、macOS 与真实 SSH 的证据分别记录。历史工单中的测试计数、二进制身份、失败与未验证项保留在原记录，不作为当前源码已重新验收的声明。
 

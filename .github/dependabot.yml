@@ -1,21 +1,35 @@
 version: 2
 updates:
   # 第三方 Rust 依赖统一来自 crates.io，精确身份由 Cargo.lock 固定。
+  # 月度单组是为了让依赖更新走一条 PR/一次 CI，而不是每个 crate 各开一条；
+  # 上游强契约 crate 用 `=` 精确锁定（见根 Cargo.toml 的 workspace.dependencies），
+  # 升级必须与 gpui/rio/russh 的适配一起做，因此不让 Dependabot 单独提。
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "deps"
     groups:
-      cargo-minor-patch:
-        update-types: ["minor", "patch"]
+      cargo-dependencies:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: gpui-kit
+      - dependency-name: rio-vt
+      - dependency-name: rio-unicode
+      - dependency-name: rio-graphics
+      - dependency-name: tree-sitter
+      - dependency-name: russh
+      - dependency-name: russh-sftp
+      - dependency-name: webview2-com
+      - dependency-name: wry
 
   # GitHub Actions used by the CI and release workflows.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "ci"

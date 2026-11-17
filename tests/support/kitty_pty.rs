@@ -1,21 +1,6 @@
 use std::io::{Read, Write};
 
-pub fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(text, "{byte:02x}").unwrap();
-    }
-    text
-}
-
-pub fn unhex(text: &str) -> Vec<u8> {
-    assert_eq!(text.len() % 2, 0);
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
+include!("hex.rs");
 
 pub fn raw_pty() {
     #[cfg(unix)]
@@ -90,10 +75,11 @@ impl OutputStats {
     }
 }
 
-// This is a real PTY child, not a daemon seam. Running the current test
-// binary avoids an external Python/Node/shell dependency on every platform.
-// Each request has a stream barrier; replies are read from the actual PTY
-// input and hex-printed so they cannot be intercepted as graphics again.
+// This is a real PTY child, not a daemon seam. The lightweight
+// `lyrel-graphics-fixture` process embeds this file, so no external
+// Python/Node/shell dependency is needed on every platform. Each request has a
+// stream barrier; replies are read from the actual PTY input and hex-printed
+// so they cannot be intercepted as graphics again.
 pub fn pty_sender() {
     if std::env::var_os("LYREL_PANE").is_none() {
         return;

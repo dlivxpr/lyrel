@@ -4,7 +4,8 @@
 # reader 只有只读表格，没有保真写回。它按本清单记录的记录／字段源区间计算
 # 单元格、表格粘贴与行列增删的局部替换，交给共享 Document 作为一次 history
 # 记录；不序列化整表、不使用排序／筛选后的显示位置、不改动未触及字段的
-# 拼写／引号／分隔符／BOM／编码／逐行行尾。字节级回归见 `edit_tests.rs`，
+# 拼写／引号／分隔符／BOM／编码／逐行行尾。字节级回归见
+# `crates/lyrel-code-editor/src/csv/edit_tests.rs`，
 # 生产工作台消费者见 `tests.rs`。
 repository = "https://github.com/glimapp/glim"
 revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
@@ -15,7 +16,7 @@ maintainer = "Lyrel"
 
 [[source]]
 upstream = "crates/glim-services/src/csv.rs"
-local = "table.rs"
+local = "crates/lyrel-code-editor/src/csv/table.rs"
 sha256 = "8bff2521ce94c3becfc55a02267b71d7a7fb3165a03b33e61858f602bef97b9b"
 scope = "csv::ReaderBuilder has_headers(false)/flexible(true) 的逻辑记录读取、quoted delimiter 与 multiline 语义、完整列集合、解析取消"
 adaptation = "输入改为共享 Document snapshot 的同一 Arc<String>；预算改为具名 CsvLimits 并拒绝而非返回局部页；用 csv::ByteRecord::position 与 reader position 补记录区间、用字段边界扫描器补原始字段区间，并逐字段与 csv 解码值核对；不再为页面持有 decoder 的 ResourcePool；字段值不常驻，显示/排序/筛选/复制按区间从源文解码"
@@ -23,7 +24,7 @@ rejected = "Glim ResourcePool/WorkingReservation、IO_BUFFER_BYTES 与 TextRowsB
 
 [[source]]
 upstream = "crates/glim-core/src/table.rs"
-local = "table.rs"
+local = "crates/lyrel-code-editor/src/csv/table.rs"
 sha256 = "d3e940b951efa519370c1b6d79ba02bbe81981746a4b53ef31b80b05cc656151"
 scope = "只读表页的 rows/columns/more 数据形状与“列数按完整逻辑记录取最大值”的契约"
 adaptation = "TablePage 形状并入 CsvTable 的完整记录集合；没有分页表也就不需要 more/TextRows；SQLite 页类型保持未导入"

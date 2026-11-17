@@ -1,33 +1,16 @@
 mod graphics_pty_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/kitty_pty.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/hex.rs"));
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/support/synchronized_capture.rs"
     ));
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/theme_pty.rs"
-    ));
 }
-
-#[test]
-#[ignore = "isolated daemon subprocess for the production GPUI consumer tests"]
-fn graphics_fixture_daemon() {
-    let Some(dir) = std::env::var_os("LYREL_GRAPHICS_TEST_DAEMON") else {
-        return;
-    };
-    lyrel_core::core::config::set_config_dir(dir.into());
-    lyrel_core::daemon::server::run_daemon().unwrap();
-}
-
-#[test]
-#[ignore = "real PTY sender subprocess shared with server client tests"]
-fn graphics_fixture_sender() {
-    graphics_pty_fixture::pty_sender();
-}
+/// The actual Ubuntu `libsixel-bin 1.10.5-1build1` output of
+/// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
+/// blue/yellow PPM. libsixel quantizes the scaled image, so the first pixel is
+/// `[184, 51, 61]` in RGBA (BGRA after the production decoder).
+#[cfg(test)]
+const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1^!21~$#0!20~#2!20~$#0!13BFFN^~~~#2~}!6{!12w$#2!20~$#0!20~#2!20N\x1b\\";
 
 include!("graphics_media_consumer_tests.rs");
 include!("theme_query_consumer_tests.rs");
@@ -1653,7 +1636,9 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                 let done_path = reply_path.with_extension("done");
                 graphics_recovery_wait(cx, "alternate admission did not complete", |cx| {
                     window
-                        .update(cx, |_, window, cx| window.render_frame(cx))
+                        .update(cx, |_, window, cx| {
+                            gpui_kit::test::TestWindowExt::render_frame(window, cx)
+                        })
                         .unwrap();
                     done_path.is_file()
                 });

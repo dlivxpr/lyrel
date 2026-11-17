@@ -6310,7 +6310,6 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "core-foundation 0.10.1",
- "csv",
  "cursor-icon",
  "encoding_rs",
  "fs2",
@@ -6321,11 +6320,11 @@ dependencies = [
  "gpui-pre-reqwest-client",
  "image",
  "jieba-rs",
- "jsonc-parser",
  "keyring",
  "libc",
  "log",
  "lsp-types",
+ "lyrel-code-editor",
  "lyrel-core",
  "lyrel-epub",
  "lyrel-markdown-editor",
@@ -6347,8 +6346,6 @@ dependencies = [
  "rio-graphics",
  "rio-unicode",
  "rio-vt",
- "rowan",
- "roxmltree 0.21.2",
  "rusqlite",
  "rusty-leveldb",
  "semver",
@@ -6361,7 +6358,6 @@ dependencies = [
  "snap",
  "tempfile",
  "tiff",
- "toml_edit 0.25.19+spec-1.1.0",
  "tray-icon",
  "tree-sitter",
  "unicode-segmentation",
@@ -6373,7 +6369,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "wry",
- "xmlparser",
  "yaml-edit",
  "yaml_serde",
  "zeroize",
@@ -6392,6 +6387,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-code-editor"
+version = "0.3.5"
+dependencies = [
+ "csv",
+ "gif 0.14.2",
+ "image",
+ "jsonc-parser",
+ "rowan",
+ "roxmltree 0.21.2",
+ "sha2 0.11.1",
+ "tiff",
+ "toml_edit 0.25.19+spec-1.1.0",
+ "xmlparser",
+ "yaml-edit",
 ]
 
 [[package]]
@@ -6459,6 +6471,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "lyrel-graphics-fixture"
+version = "0.3.5"
+dependencies = [
+ "libc",
+ "lyrel-core",
+ "sha2 0.11.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

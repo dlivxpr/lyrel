@@ -44,7 +44,6 @@ fn graphics_recovery_fresh_at(
     (view, window)
 }
 
-
 #[track_caller]
 fn graphics_recovery_stats(
     view: &Entity<TerminalView>,
@@ -944,8 +943,37 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     daemon.panes().kill(pane).unwrap();
 }
 
+/// Compact stand-in for the former 4K canvases. Deterministic xorshift pixels
+/// keep the PNG incompressible enough to cross several 4096-byte base64 APC
+/// chunks, while the decoded frame stays small enough to keep the replay test
+/// fast. The same bytes feed the expected BGRA buffer, so the assertion still
+/// compares the complete consumer-visible picture.
+const THREE_PNG_FRAME: (u32, u32) = (128, 72);
+
+fn three_png_frame(seed: u64) -> (Vec<u8>, Vec<u8>) {
+    let (width, height) = THREE_PNG_FRAME;
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    let mut state = seed.wrapping_mul(0x2545_f491_4f6c_dd1d) ^ 0x9e37_79b9_7f4a_7c15;
+    for _ in 0..width * height {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        rgba.extend_from_slice(&[state as u8, (state >> 8) as u8, (state >> 16) as u8, 255]);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_raw(width, height, rgba.clone())
+        .unwrap()
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let bgra = rgba
+        .chunks_exact(4)
+        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+        .collect();
+    (png.into_inner(), bgra)
+}
+
 #[gpui_kit::test]
-fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
+fn graphics_consumer_three_compact_pngs_live_then_fresh_replay_without_sender_redraw(
     cx: &mut TestAppContext,
 ) {
     use base64::Engine as _;
@@ -957,26 +985,27 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
         cx.set_global(Config::default());
     });
     // No reduced test limits or pre-decoded resource frames: all three real
-    // PNG uploads traverse PTY validation, daemon offers and the desktop decoder.
+    // PNG uploads traverse PTY validation, daemon offers and the desktop
+    // decoder. The compact pattern still spans several APC chunks and two text
+    // rows; the 8 MiB ring-budget load stays in the dedicated replay test.
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (prior, prior_window) = graphics_recovery_fresh(&daemon, pane, cx, 1000);
-    for (index, rgba) in [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]
-        .into_iter()
-        .enumerate()
-    {
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::from_pixel(3840, 2160, image::Rgba(rgba))
-            .write_to(&mut png, image::ImageFormat::Png)
-            .unwrap();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    for (index, seed) in [1u64, 2, 3].into_iter().enumerate() {
+        let (png, bgra) = three_png_frame(seed);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
         let chunks: Vec<_> = encoded.as_bytes().chunks(4096).collect();
+        assert!(
+            chunks.len() > 1,
+            "the compact frame must still cross 4096-byte APC chunk boundaries: {} bytes",
+            encoded.len()
+        );
         let mut command = format!("\x1b[{};5H", 6 + index * 3);
         for (chunk, payload) in chunks.iter().enumerate() {
             let more = usize::from(chunk + 1 != chunks.len());
             if chunk == 0 {
                 command.push_str(&format!(
-                    "\x1b_Ga=T,i={},p=1,c=2,r=1,C=1,f=100,m={more};",
+                    "\x1b_Ga=T,i={},p=1,c=4,r=2,C=1,f=100,m={more};",
                     500 + index
                 ));
             } else {
@@ -986,7 +1015,6 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
             command.push_str("\x1b\\");
         }
         graphics_send_fixture_with_replies(&prior, cx, 1001 + index, command.as_bytes(), 1);
-        let bgra = [rgba[2], rgba[1], rgba[0], rgba[3]].repeat(3840 * 2160);
         graphics_recovery_pixels(&prior, cx, 500 + index as u32, &bgra);
         graphics_assert_production_paint(prior_window, &prior, cx);
     }
@@ -1000,20 +1028,21 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
     graphics_recovery_destroy(prior, prior_window, cx);
 
     let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1005);
-    for (index, bgra) in [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255]]
-        .into_iter()
-        .enumerate()
-    {
-        graphics_recovery_pixels(&fresh, cx, 500 + index as u32, &bgra.repeat(3840 * 2160));
+    for (index, seed) in [1u64, 2, 3].into_iter().enumerate() {
+        let (_, bgra) = three_png_frame(seed);
+        graphics_recovery_pixels(&fresh, cx, 500 + index as u32, &bgra);
     }
     graphics_assert_production_paint(fresh_window, &fresh, cx);
     fresh.read_with(cx, |view, _| {
         assert_eq!(view.pane_id, pane);
         let images = graphics_visible_images(view);
         assert_eq!(images.len(), 3);
-        assert!(images.iter().all(
-            |image| !image.evicted && image.painted.load(std::sync::atomic::Ordering::Acquire)
-        ));
+        assert!(images.iter().all(|image| {
+            image.placement.span_cols == 4
+                && image.placement.span_rows == 2
+                && !image.evicted
+                && image.painted.load(std::sync::atomic::Ordering::Acquire)
+        }));
     });
     assert_eq!(
         graphics_recovery_stats(&fresh, cx, 1006),
@@ -1338,76 +1367,182 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(cx: &mut TestAppContext) {
+fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(
+    cx: &mut TestAppContext,
+) {
     use base64::Engine as _;
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     let encode = |pixels: &[u8]| base64::engine::general_purpose::STANDARD.encode(pixels);
-    let root = [255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255];
-    let source = [255,0,0,128, 12,34,56,78, 90,80,70,255, 0,0,0,0];
-    let request = format!("\x1b[5;1H\x1b_Ga=T,i=143,p=1,s=2,v=2,c=4,r=2,C=1;{}\x1b\\\x1b[8;1H\x1b_Ga=p,i=143,p=2,c=4,r=2,C=1\x1b\\\x1b_Ga=f,i=143,s=2,v=2,X=1;{}\x1b\\", encode(&root), encode(&source));
+    let root = [
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ];
+    let source = [255, 0, 0, 128, 12, 34, 56, 78, 90, 80, 70, 255, 0, 0, 0, 0];
+    let request = format!(
+        "\x1b[5;1H\x1b_Ga=T,i=143,p=1,s=2,v=2,c=4,r=2,C=1;{}\x1b\\\x1b[8;1H\x1b_Ga=p,i=143,p=2,c=4,r=2,C=1\x1b\\\x1b_Ga=f,i=143,s=2,v=2,X=1;{}\x1b\\",
+        encode(&root),
+        encode(&source)
+    );
     graphics_send_fixture_with_replies(&view, cx, 14300, request.as_bytes(), 3);
-    graphics_send_fixture_with_replies(&view, cx, 14301, b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0\x1b\\", 1);
-    let blended = [0,0,255,255, 0,127,128,255, 255,0,0,255, 255,255,255,255];
+    graphics_send_fixture_with_replies(
+        &view,
+        cx,
+        14301,
+        b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0\x1b\\",
+        1,
+    );
+    let blended = [
+        0, 0, 255, 255, 0, 127, 128, 255, 255, 0, 0, 255, 255, 255, 255, 255,
+    ];
     graphics_recovery_pixels(&view, cx, 143, &blended);
-    graphics_send_fixture_with_replies(&view, cx, 14302, b"\x1b_Ga=c,i=143,r=2,c=1,X=1,Y=0,w=1,h=1,x=0,y=1,C=1\x1b\\", 1);
-    let replaced = [0,0,255,255, 0,127,128,255, 56,34,12,78, 255,255,255,255];
+    graphics_send_fixture_with_replies(
+        &view,
+        cx,
+        14302,
+        b"\x1b_Ga=c,i=143,r=2,c=1,X=1,Y=0,w=1,h=1,x=0,y=1,C=1\x1b\\",
+        1,
+    );
+    let replaced = [
+        0, 0, 255, 255, 0, 127, 128, 255, 56, 34, 12, 78, 255, 255, 255, 255,
+    ];
     graphics_recovery_pixels(&view, cx, 143, &replaced);
     // Same-frame non-overlapping rectangles are valid and capture old pixels.
-    graphics_send_fixture_with_replies(&view, cx, 14303, b"\x1b_Ga=c,i=143,r=1,c=1,X=0,Y=1,w=1,h=1,x=1,y=1,C=1\x1b\\", 1);
-    let moved = [0,0,255,255, 0,127,128,255, 56,34,12,78, 56,34,12,78];
+    graphics_send_fixture_with_replies(
+        &view,
+        cx,
+        14303,
+        b"\x1b_Ga=c,i=143,r=1,c=1,X=0,Y=1,w=1,h=1,x=1,y=1,C=1\x1b\\",
+        1,
+    );
+    let moved = [
+        0, 0, 255, 255, 0, 127, 128, 255, 56, 34, 12, 78, 56, 34, 12, 78,
+    ];
     graphics_recovery_pixels(&view, cx, 143, &moved);
     for (serial, keys, status) in [
         (14304, "r=99,c=1", "ENOENT:Animation frame not found"),
         (14305, "r=1,c=99", "ENOENT:Animation frame not found"),
-        (14306, "r=1,c=1,w=1,h=1", "EINVAL:Overlapping frame rectangles"),
-        (14307, "r=2,c=1,X=1,w=2,h=1", "EINVAL:Frame rectangle outside image"),
-        (14308, "r=2,c=1,x=4294967295,w=1,h=1", "EINVAL:Frame rectangle outside image"),
+        (
+            14306,
+            "r=1,c=1,w=1,h=1",
+            "EINVAL:Overlapping frame rectangles",
+        ),
+        (
+            14307,
+            "r=2,c=1,X=1,w=2,h=1",
+            "EINVAL:Frame rectangle outside image",
+        ),
+        (
+            14308,
+            "r=2,c=1,x=4294967295,w=1,h=1",
+            "EINVAL:Frame rectangle outside image",
+        ),
     ] {
-        let observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize { cols:80, rows:24, cell_w:10, cell_h:20 }).unwrap();
-        observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+        let observer = daemon
+            .panes()
+            .observe(
+                pane,
+                crate::daemon::protocol::WinSize {
+                    cols: 80,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+            )
+            .unwrap();
+        observer
+            .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+            .unwrap();
         let request = format!("\x1b_Ga=c,i=143,p=7,q=1,{keys}\x1b\\");
-        view.read_with(cx, |view, _| view.terminal.write(format!("SEND {serial} 1 {} 0\n", graphics_pty_fixture::hex(request.as_bytes())).into_bytes()));
-        graphics_recovery_wait(cx, "compose refusal", |cx| view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};")));
+        view.read_with(cx, |view, _| {
+            view.terminal.write(
+                format!(
+                    "SEND {serial} 1 {} 0\n",
+                    graphics_pty_fixture::hex(request.as_bytes())
+                )
+                .into_bytes(),
+            )
+        });
+        graphics_recovery_wait(cx, "compose refusal", |cx| {
+            view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};"))
+        });
         let (text, _) = graphics_recovery_collect(observer, serial);
-        let expected = graphics_pty_fixture::hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
-        assert!(text.contains(&format!("KITTY_REPLY {serial} {expected}")), "{text}");
+        let expected =
+            graphics_pty_fixture::hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
+        assert!(
+            text.contains(&format!("KITTY_REPLY {serial} {expected}")),
+            "{text}"
+        );
         graphics_recovery_pixels(&view, cx, 143, &moved);
     }
-    graphics_send_fixture(&view, cx, 14309, b"\x1b_Ga=c,i=143,r=99,c=1,q=2\x1b\\\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0,q=1\x1b\\");
-    graphics_send_fixture_with_replies(&view, cx, 14320, b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=0,y=1\x1b\\", 1);
-    view.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
-    graphics_recovery_wait(cx, "translucent source-over pixels", |cx| view.read_with(cx, |view, _| {
-        graphics_visible_images(view).iter().all(|image| image.data.as_ref().is_some_and(|pixels|
-            pixels.as_bytes(0).unwrap()[8..12] == [13,8,198,167]))
-    }));
+    graphics_send_fixture(
+        &view,
+        cx,
+        14309,
+        b"\x1b_Ga=c,i=143,r=99,c=1,q=2\x1b\\\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0,q=1\x1b\\",
+    );
+    graphics_send_fixture_with_replies(
+        &view,
+        cx,
+        14320,
+        b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=0,y=1\x1b\\",
+        1,
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(graphics_visible_images(view).len(), 2)
+    });
+    graphics_recovery_wait(cx, "translucent source-over pixels", |cx| {
+        view.read_with(cx, |view, _| {
+            graphics_visible_images(view).iter().all(|image| {
+                image
+                    .data
+                    .as_ref()
+                    .is_some_and(|pixels| pixels.as_bytes(0).unwrap()[8..12] == [13, 8, 198, 167])
+            })
+        })
+    });
     // Delete the first frame: second frame becomes root, both placements stay.
     graphics_send_fixture(&view, cx, 14310, b"\x1b_Ga=d,d=f,i=143,r=1\x1b\\");
-    let promoted = [0,0,255,128, 56,34,12,78, 70,80,90,255, 0,0,0,0];
+    let promoted = [0, 0, 255, 128, 56, 34, 12, 78, 70, 80, 90, 255, 0, 0, 0, 0];
     graphics_recovery_pixels(&view, cx, 143, &promoted);
     graphics_assert_production_paint(window, &view, cx);
-    view.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
+    view.read_with(cx, |view, _| {
+        assert_eq!(graphics_visible_images(view).len(), 2)
+    });
     // Lowercase only-frame deletion preserves reusable data and placements.
     graphics_send_fixture(&view, cx, 14311, b"\x1b_Ga=d,d=f,i=143,r=999\x1b\\");
     graphics_recovery_pixels(&view, cx, 143, &promoted);
     let stopped = graphics_recovery_stats(&view, cx, 14312);
     graphics_recovery_destroy(view, window, cx);
     // Compose while invisible, append a reference, then delete the old base.
-    let request = format!("\x1b_Ga=f,i=143,c=1,s=1,v=1,X=1,q=2;{}\x1b\\\x1b_Ga=c,i=143,r=1,c=2,X=0,Y=1,w=1,h=1,x=1,y=0,C=1,q=2\x1b\\\x1b_Ga=d,d=f,i=143,r=1,q=2\x1b\\", encode(&[9,8,7,255]));
+    let request = format!(
+        "\x1b_Ga=f,i=143,c=1,s=1,v=1,X=1,q=2;{}\x1b\\\x1b_Ga=c,i=143,r=1,c=2,X=0,Y=1,w=1,h=1,x=1,y=0,C=1,q=2\x1b\\\x1b_Ga=d,d=f,i=143,r=1,q=2\x1b\\",
+        encode(&[9, 8, 7, 255])
+    );
     graphics_recovery_detached_request(&daemon, pane, "SEND", 14313, request.as_bytes());
     let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14314);
-    let detached = [7,8,9,255, 70,80,90,255, 70,80,90,255, 0,0,0,0];
+    let detached = [7, 8, 9, 255, 70, 80, 90, 255, 70, 80, 90, 255, 0, 0, 0, 0];
     graphics_recovery_pixels(&fresh, cx, 143, &detached);
     let updated = graphics_recovery_stats(&fresh, cx, 14315);
-    assert_ne!(updated, stopped, "only the explicit detached frame upload changes producer counters");
+    assert_ne!(
+        updated, stopped,
+        "only the explicit detached frame upload changes producer counters"
+    );
     graphics_recovery_destroy(fresh, window, cx);
     let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14316);
     graphics_recovery_pixels(&fresh, cx, 143, &detached);
-    assert_eq!(graphics_recovery_stats(&fresh, cx, 14317), updated, "fresh client does not ask for retransmission");
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 14317),
+        updated,
+        "fresh client does not ask for retransmission"
+    );
     graphics_send_fixture(&fresh, cx, 14318, b"\x1b_Ga=d,d=F,i=143\x1b\\");
-    graphics_recovery_wait(cx, "uppercase only-frame removal", |cx| fresh.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+    graphics_recovery_wait(cx, "uppercase only-frame removal", |cx| {
+        fresh.read_with(cx, |view, _| graphics_visible_images(view).is_empty())
+    });
     graphics_recovery_destroy(fresh, window, cx);
     let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14319);
-    fresh.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty()));
+    fresh.read_with(cx, |view, _| {
+        assert!(graphics_visible_images(view).is_empty())
+    });
     graphics_recovery_destroy(fresh, window, cx);
     daemon.panes().kill(pane).unwrap();
 }

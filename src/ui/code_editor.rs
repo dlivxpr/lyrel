@@ -44,7 +44,6 @@ mod markdown_search;
 mod pdf_document;
 mod structure_edit;
 mod structure_rows;
-mod structure_view;
 mod svg_document;
 mod text;
 mod toml_document;

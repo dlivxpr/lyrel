@@ -3,10 +3,22 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let events = prior_mode == "events";
-    let bash = crate::core::shells::detect_shells()
-        .into_iter()
-        .find(|shell| shell.label == "Git Bash")
-        .expect("the real ConPTY keyboard regression requires Git Bash");
+    // A private fixture may use a real Git Bash installed outside the product
+    // detector's standard roots (for example Scoop). An explicit bad path
+    // fails rather than silently selecting another shell.
+    let bash = std::env::var("LYREL_TEST_GIT_BASH").map_or_else(
+        |_| {
+            crate::core::shells::detect_shells()
+                .into_iter()
+                .find(|shell| shell.label == "Git Bash")
+                .expect("the real ConPTY keyboard regression requires Git Bash; set LYREL_TEST_GIT_BASH for a nonstandard installation")
+                .program
+        },
+        |path| {
+            assert!(std::path::Path::new(&path).is_file(), "LYREL_TEST_GIT_BASH must name an existing Git Bash executable");
+            path
+        },
+    );
     let daemon = GraphicsDaemonProcess::start_with(|command, dir| {
         let home = dir.join("home");
         std::fs::create_dir(&home).unwrap();
@@ -38,7 +50,7 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
             Some(daemon.dir.path().to_path_buf()),
             size,
             Some(crate::daemon::protocol::ShellSpec {
-                program: bash.program,
+                program: bash,
                 args: Vec::new(),
                 args_are_lyrel_defaults: true,
             }),

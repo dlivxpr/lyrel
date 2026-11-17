@@ -1,9 +1,3 @@
-#[test]
-#[ignore = "real theme-query application in an isolated PTY"]
-fn theme_fixture_sender() {
-    graphics_pty_fixture::theme_query_sender();
-}
-
 fn theme_wait_result(
     observer: &mut lyrel_core::client::PaneSession,
     cx: &mut TestAppContext,
@@ -129,21 +123,7 @@ fn theme_queries_cross_real_daemon_gui_replay_without_duplicates(cx: &mut TestAp
 }
 
 fn theme_fixture_shell() -> crate::daemon::protocol::ShellSpec {
-    crate::daemon::protocol::ShellSpec {
-        program: std::env::current_exe().unwrap().display().to_string(),
-        args: vec![
-            "--ignored".into(),
-            "--exact".into(),
-            format!(
-                "{}::theme_fixture_sender",
-                module_path!().split_once("::").unwrap().1
-            ),
-            "--nocapture".into(),
-            "--color=never".into(),
-            "--test-threads=1".into(),
-        ],
-        args_are_lyrel_defaults: false,
-    }
+    graphics_fixture_shell("theme")
 }
 
 fn theme_fixture_send(

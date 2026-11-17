@@ -46,6 +46,22 @@ function scopes(result) {
   return [result.desktop, result.linux, result.server, result.release];
 }
 
+// PR 事件的分类对象是合并结果，因此 fixture 也必须真的构造一个双父 merge。
+function pullRequest(t, { files, draft, labels = [], action = 'synchronize', label } = {}) {
+  const repo = repository(t);
+  repo.git('checkout', '--quiet', '-b', 'feature');
+  const head = repo.commit(files);
+  repo.git('checkout', '--quiet', 'main');
+  const base = repo.git('rev-parse', 'HEAD');
+  repo.git('merge', '--quiet', '--no-ff', 'feature', '-m', 'test merge');
+  const merge = repo.git('rev-parse', 'HEAD');
+  const request = { base: { sha: base }, head: { sha: head }, labels };
+  if (draft !== undefined) request.draft = draft;
+  const event = { action, pull_request: request };
+  if (label !== undefined) event.label = { name: label };
+  return { repo, event, merge };
+}
+
 test('a multi-commit push ending in documentation still validates the earlier core change', (t) => {
   const repo = repository(t);
   repo.commit({ 'crates/lyrel-core/src/lib.rs': 'pub fn changed() {}' });
@@ -70,6 +86,11 @@ for (const [name, files, expected] of [
   ['unknown and embedded skill inputs are not treated as documentation', { 'skills/example/SKILL.md': '# Skill' }, [true, true, true, false]],
   ['shared binary assertions also validate the release pipeline', { '.github/scripts/assert-static.sh': 'exit 1' }, [true, true, true, true]],
   ['desktop SDK selection also validates release packaging', { '.github/scripts/select-macos-sdk.sh': 'exit 1' }, [true, true, true, true]],
+  ['agent notes are not build inputs', { '.agent/pr-123.md': '# notes', '.agent/config.json': '{}' }, [false, false, false, false]],
+  ['documentation site content is not a build input', { 'docs/docs.json': '{}', 'docs/theme.css': 'body {}' }, [false, false, false, false]],
+  ['crate notices are not build inputs', { 'crates/lyrel-core/NOTICE.md': 'notice' }, [false, false, false, false]],
+  ['the GUI-free model crate is validated on Linux too', { 'crates/lyrel-code-editor/src/lib.rs': 'pub fn model() {}' }, [true, true, false, false]],
+  ['cargo configuration changes rebuild every Rust target', { '.cargo/config.toml': '[target.x86_64-unknown-linux-gnu]\n' }, [true, true, true, false]],
 ]) {
   test(name, (t) => {
     const repo = repository(t);
@@ -112,8 +133,64 @@ test('unavailable, rewritten, mismatched, or manually selected ranges fall back 
     { before: repo.before, after, forced: true },
     { before: repo.before, after: repo.before },
   ]) assert.deepEqual(scopes(repo.classify(event)), [true, true, true, true]);
-  assert.deepEqual(scopes(repo.classify({}, after, 'workflow_dispatch')), [true, true, true, true]);
+  // 手动 dispatch 默认 scope=ci：完整矩阵照跑，但不再顺带打包发行产物。
+  assert.deepEqual(scopes(repo.classify({}, after, 'workflow_dispatch')), [true, true, true, false]);
+  assert.deepEqual(scopes(repo.classify({ inputs: { scope: 'full' } }, after, 'workflow_dispatch')), [true, true, true, true]);
   assert.deepEqual(scopes(repo.classify({ before: repo.before, after }, repo.before)), [true, true, true, true]);
   assert.deepEqual(scopes(repo.classify({ pull_request: { base: { sha: repo.before }, head: { sha: after } } }, after, 'pull_request')),
     [true, true, true, true]);
+});
+
+test('draft pull requests only run the fast Windows and Linux tier', (t) => {
+  const { repo, event, merge } = pullRequest(t, { files: { 'Cargo.toml': '[workspace]\n' }, draft: true });
+  const result = repo.classify(event, merge, 'pull_request');
+  // Cargo 变更仍然覆盖桌面与 Linux，但快速层不跑 macOS、server 与发行打包。
+  assert.deepEqual(scopes(result), [true, true, false, false]);
+  assert.equal(result.tier, 'fast');
+  assert.deepEqual(result.matrix.include.map(row => row.target),
+    ['x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+});
+
+test('ready pull requests run the full three-platform gate', (t) => {
+  const { repo, event, merge } = pullRequest(t, { files: { 'Cargo.toml': '[workspace]\n' }, draft: false });
+  const result = repo.classify(event, merge, 'pull_request');
+  assert.deepEqual(scopes(result), [true, true, true, false]);
+  assert.equal(result.tier, 'full');
+  assert.deepEqual(result.matrix.include.map(row => row.target),
+    ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+});
+
+test('a missing draft flag is treated as ready instead of silently downgrading', (t) => {
+  const { repo, event, merge } = pullRequest(t, { files: { 'src/app.rs': 'fn app() {}' } });
+  const result = repo.classify(event, merge, 'pull_request');
+  assert.equal(result.tier, 'full');
+  assert.deepEqual(result.matrix.include.map(row => row.target),
+    ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']);
+});
+
+test('the ci:full label escalates a draft without waiting for review', (t) => {
+  const { repo, event, merge } = pullRequest(t, {
+    files: { 'src/app.rs': 'fn app() {}' },
+    draft: true,
+    labels: [{ name: 'ci:full' }],
+    action: 'labeled',
+    label: 'ci:full',
+  });
+  const result = repo.classify(event, merge, 'pull_request');
+  assert.equal(result.tier, 'full');
+  assert.deepEqual(scopes(result), [true, false, false, false]);
+  assert.deepEqual(result.matrix.include.map(row => row.target),
+    ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']);
+});
+
+test('an unrelated label never starts heavy validation', (t) => {
+  const { repo, event, merge } = pullRequest(t, {
+    files: { 'Cargo.toml': '[workspace]\n' },
+    draft: false,
+    action: 'labeled',
+    label: 'documentation',
+  });
+  const result = repo.classify(event, merge, 'pull_request');
+  assert.deepEqual(scopes(result), [false, false, false, false]);
+  assert.deepEqual(result.matrix.include, []);
 });

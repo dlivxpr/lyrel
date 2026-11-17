@@ -159,6 +159,43 @@ cargo test --locked -p lyrel --features native-markdown-tests \
 
 Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单例使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- '<完整 selector>' --exact --nocapture`；未知 exact selector 及零匹配 substring filter 均返回 exit `2`，不是通过。筛选只供定位，不代替完整无 filter 的执行。完整记录全部当前注册 case，并分别说明旧消费者的迁移边界。普通测试 `--no-fail-fast` 仍不能代替独立 native 目标；候选提交的结果重新记录。
 
+### 本地测试与 CI 分层
+
+`.cargo/config.toml` 提供 `t-check`、`t-core`、`t-lib`、`t-editor`、`t-cli`、
+`t-native-md` 和 `t-native-term`。例如 macOS 使用 `cargo t-lib`，Windows 使用
+`pwsh scripts/cargo-windows.ps1 t-lib`；附加的 Cargo 参数与 `--` 后的测试筛选照常传递。
+桌面普通／native 测试统一启用 `updater,native-markdown-tests,test-support`，
+`test-support` 将 Tokio paused clock 留在测试图中，不进入默认产品。GUI-free 单包测试
+仍可独立运行，不为追求相同指纹而编译整套 GUI；生产与测试、不同包选择仍可能产生合法重编。
+开发 profile 使用 `codegen-units = 256`，Release 的 thin LTO／单 CGU 不变。
+
+Windows wrapper 实时显示 Cargo 的诊断与非 JSON 输出。普通 `test` 仅调用一次 Cargo，
+由官方 target runner 在每个测试二进制启动前校验并暂存固定 ConPTY；不凭大小或时间戳
+信任 DLL。`--no-run` 仍从 `compiler-artifact.executable` 定位暂存目录。
+已安装 `cargo-nextest` 时，可使用 `pwsh scripts/cargo-windows.ps1 nextest run ...`：
+先生成不执行测试的 binary metadata、完成暂存，再按 metadata 复用构建；不会为每个 nextest case
+拉起 PowerShell。nextest 的 package／feature 选择用于编译阶段，运行阶段保留 profile、筛选与调度参数。
+原生 Markdown／terminal 和 CLI E2E 的 `harness = false` 入口继续单独运行；不由 nextest
+替代原生 OS 主线程初始化，也不把重试后的通过回填为第一次运行成功。
+
+CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready PR 或带 `ci:full`
+标签时恢复完整平台门禁。手动 CI 的 `scope=ci` 不自动打包，`scope=full` 才选择发行验证。
+PR 检查生产图并编译、执行测试图；主线保留生产构建与静态 CRT 门禁。相同 tree 的测试晋升
+只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即回到主线全量测试。
+CI 的 sccache 关闭 incremental 以缓存可复用 Rust 编译；本地仍默认保留 incremental，
+可按单次命令选择 `RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0`，不修改全局 Cargo 配置。
+实际收益须在相同工具链、feature、target 与缓存条件下计时，不保证固定提速比例。
+
+图形消费者使用无 GUI 的 `lyrel-graphics-fixture` 进程承载真实 daemon／PTY producer。
+完整桌面测试前可用 `cargo build --locked --workspace --features updater,native-markdown-tests,test-support --bin lyrel-graphics-fixture`
+预构建（Windows 同样使用 wrapper）。普通单包测试也会在缺失／过期时有锁地按需构建，
+不会回退到 GUI libtest；预构建产物可通过 `LYREL_GRAPHICS_FIXTURE_BIN` 指定绝对路径，
+仍须与当前 fixture／core 源码身份一致。三个显式 SSH 集成 target 保持原名，普通 core／server
+集成测试分别归 `core_integration`／`server_integration`；`--exact` 名称增加原文件 stem 的模块前缀。
+Windows 的真实 ConPTY 键盘回归需要 Git Bash；安装不在产品检测器的标准位置时，
+只对本次测试进程设置 `LYREL_TEST_GIT_BASH` 为真实 `bash.exe` 路径。指定路径不存在即失败，
+不会改用其他 shell，也不会修改产品 shell 检测或用户配置。
+
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
 GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.32`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.32`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。除下方明确的源码导入例外外，第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.32 -i rio-graphics@0.5.32 -i rio-unicode@0.5.32 -i rio-grapheme-width@0.5.32` 核对共同类型身份和 feature 边界。
@@ -237,8 +274,8 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
 
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
-    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features
-    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features
+    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --all-features
+    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --all-features
     ```
 
     不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。

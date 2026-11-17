@@ -227,13 +227,22 @@ impl PendingPane {
         let (sender, receiver) = smol::channel::bounded(1);
         cx.background_executor()
             .spawn(async move {
-                let result = spawn
-                    .create(&route, attach_only, native, &cancellation)
-                    .map(|parts| OwnedTerminal {
-                        parts: Some(parts),
-                        executor,
-                    })
-                    .map_err(|error| format!("{error:#}"));
+                // GPUI's test scheduler may execute background futures on the
+                // UI thread. Socket/Host handshakes require the real I/O pool
+                // in both native execution and isolated nextest processes.
+                let Some(result) = crate::ui::host_ops::off_thread(move || {
+                    spawn
+                        .create(&route, attach_only, native, &cancellation)
+                        .map(|parts| OwnedTerminal {
+                            parts: Some(parts),
+                            executor,
+                        })
+                        .map_err(|error| format!("{error:#}"))
+                })
+                .await
+                else {
+                    return;
+                };
                 let _ = sender.send(result).await;
             })
             .detach();
