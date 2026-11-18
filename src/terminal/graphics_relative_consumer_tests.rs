@@ -137,7 +137,7 @@ fn graphics_consumer_relative_validation_is_correlated_quiet_and_atomic(cx: &mut
                 assert!(
                     text.contains(&format!(
                         "KITTY_REPLY {serial} {}",
-                        graphics_pty_fixture::hex(reply.as_bytes())
+                        hex(reply.as_bytes())
                     )),
                     "{text}"
                 );
@@ -187,7 +187,7 @@ fn graphics_consumer_relative_numbered_replacements_reject_direct_and_indirect_c
         // Admission errors correlate by the requested public number, not an
         // invented image id; the exact protocol status must not become OK.
         let reply = b"\x1b_GI=73,p=1;ECYCLE:Placement cycle\x1b\\";
-        assert!(text.contains(&format!("KITTY_REPLY {serial} {}", graphics_pty_fixture::hex(reply))), "{text}");
+        assert!(text.contains(&format!("KITTY_REPLY {serial} {}", hex(reply))), "{text}");
         for pass in 0..3 {
             graphics_send_fixture(&view, cx, 660 + index * 3 + pass, b"\x1b[1;1Hcycle rejected");
             assert_eq!(anchors(cx), before, "rejected cycles must not accumulate relative offsets");
@@ -485,7 +485,7 @@ fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
             b"\x1b_Gi=82,p=3;ENOENT:Image not found\x1b\\".as_slice(),
             b"\x1b_Gi=82;ENOENT:Image not found\x1b\\".as_slice(),
         ] {
-            assert!(text.contains(&format!("KITTY_REPLY {} {}", serial + 7, graphics_pty_fixture::hex(reply))), "{lifecycle}: {text}");
+            assert!(text.contains(&format!("KITTY_REPLY {} {}", serial + 7, hex(reply))), "{lifecycle}: {text}");
         }
         daemon.panes().kill(pane).unwrap();
     }

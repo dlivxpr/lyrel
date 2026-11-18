@@ -34,8 +34,8 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
             .env_remove("BASH_ENV")
             .env_remove("ENV");
     });
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/support/kitty_keyboard_boundary.mjs")
+    let fixture = lyrel_test_support::support_dir()
+        .join("kitty_keyboard_boundary.mjs")
         .to_string_lossy()
         .replace('\\', "/");
     let size = crate::daemon::protocol::WinSize {

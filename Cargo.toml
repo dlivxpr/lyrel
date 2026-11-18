@@ -303,6 +303,9 @@ futures-channel = "0.3"
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 lyrel-core = { path = "crates/lyrel-core", features = ["test-support"] }
+# Shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
+# (the `lyrel-graphics-fixture` binary target of this package).
+lyrel-test-support = { path = "crates/lyrel-test-support" }
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
 # Workbench fixtures encode images and inspect the lossless YAML tree.
 gif = "0.14.2"

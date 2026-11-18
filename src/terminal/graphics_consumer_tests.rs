@@ -1,10 +1,7 @@
-mod graphics_pty_fixture {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/hex.rs"));
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/synchronized_capture.rs"
-    ));
-}
+use lyrel_test_support::hex::{hex, unhex};
+use lyrel_test_support::synchronized_capture::{
+    SYNC_CAPTURE_TEXT, SYNC_NEXT_TEXT, synchronized_capture_frame,
+};
 /// The actual Ubuntu `libsixel-bin 1.10.5-1build1` output of
 /// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
 /// blue/yellow PPM. libsixel quantizes the scaled image, so the first pixel is
@@ -743,10 +740,10 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                     let reply_path = replies.path().join(format!("probe-{serial}"));
                     let request = format!(
                         "SEND_ANY {serial} 1 {} 0 {}\n",
-                        graphics_pty_fixture::hex(
+                        hex(
                             b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"
                         ),
-                        graphics_pty_fixture::hex(reply_path.to_string_lossy().as_bytes()),
+                        hex(reply_path.to_string_lossy().as_bytes()),
                     );
                     terminals[2].1.read_with(cx, |view, _| {
                         view.terminal.write(request.clone().into_bytes())
@@ -772,7 +769,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                         })
                     });
                     let reply = std::fs::read_to_string(&reply_path).unwrap();
-                    let reply = graphics_pty_fixture::unhex(reply.trim());
+                    let reply = unhex(reply.trim());
                     if reply.ends_with(b";OK\x1b\\") {
                         break;
                     }
@@ -1625,8 +1622,8 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                 let reply_path = replies.path().join("alt-admission");
                 let request = format!(
                     "SEND_ANY 4 1 {} 0 {}\n",
-                    graphics_pty_fixture::hex(b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\"),
-                    graphics_pty_fixture::hex(reply_path.to_string_lossy().as_bytes()),
+                    hex(b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\"),
+                    hex(reply_path.to_string_lossy().as_bytes()),
                 );
                 let input_bytes = request.len();
                 view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -1644,7 +1641,7 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                 });
                 graphics_wait_fixture(&view, cx, 4, input_bytes);
                 let reply = std::fs::read_to_string(&reply_path).unwrap();
-                let reply = graphics_pty_fixture::unhex(reply.trim());
+                let reply = unhex(reply.trim());
                 assert!(
                     reply.ends_with(b";OK\x1b\\"),
                     "alternate image admission failed; placeholder={placeholder}; reply={:?}; allocations={}; {}",
@@ -2189,7 +2186,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         &view,
         cx,
         171,
-        &graphics_pty_fixture::synchronized_capture_frame(),
+        &synchronized_capture_frame(),
     );
     let visible_range = |view: &TerminalView, first: usize| {
         format!(
@@ -2204,14 +2201,14 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         |cx| {
             view.read_with(cx, |view, _| {
                 view.grid_snap.is_some()
-                    && visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT
+                    && visible_range(view, 3) == SYNC_CAPTURE_TEXT
             })
         },
         |cx| {
             view.read_with(cx, |view, _| {
             let term = view.terminal.term.lock();
             format!("quiet GUI did not converge to the CLI's shared Unicode/wrap range; expected={:?}; painted_rows={:?}; painted_geometry={:?}; live_geometry={}x{}; live_wrap={}; synchronized={}",
-                graphics_pty_fixture::SYNC_CAPTURE_TEXT,
+                SYNC_CAPTURE_TEXT,
                 view.grid_snap.as_ref().map(|_| (sync_presented_row(view, 3), sync_presented_row(view, 4))),
                 view.cell_geom.map(|geometry| (geometry.cols, geometry.rows)),
                 term.columns(), term.screen_lines(), term.mode().contains(rio_vt::crosswords::Mode::LINE_WRAP), term.synchronized_output())
@@ -2224,7 +2221,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         "settled GUI frame diverged from the shared capture range",
         |cx| {
             view.read_with(cx, |view, _| {
-                visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT
+                visible_range(view, 3) == SYNC_CAPTURE_TEXT
                     && view
                         .grid_snap
                         .as_ref()
@@ -2241,7 +2238,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         173,
         format!(
             "\x1b[?2026h\x1b[8;1H{}\x1b[?2026l",
-            graphics_pty_fixture::SYNC_NEXT_TEXT
+            SYNC_NEXT_TEXT
         )
         .as_bytes(),
     );
@@ -2250,7 +2247,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         "successive GUI update lost the shared capture range",
         |cx| {
             view.read_with(cx, |view, _| {
-                visible_range(view, 7) == graphics_pty_fixture::SYNC_NEXT_TEXT
+                visible_range(view, 7) == SYNC_NEXT_TEXT
                     && view
                         .grid_snap
                         .as_ref()
@@ -3046,7 +3043,7 @@ fn glyph_daemon_frames_a_query_to_its_controller() {
         .unwrap();
     let request = format!(
         "SEND 1 1 {} 0\n",
-        graphics_pty_fixture::hex(&glyph_query(0x100000))
+        hex(&glyph_query(0x100000))
     );
     // A separate input connection can overtake Attach; this query requires
     // the pane's controller to be bound before the producer writes it.

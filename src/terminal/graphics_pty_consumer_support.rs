@@ -5,16 +5,10 @@
 // These consumers need a real daemon and real raw-mode PTYs, not a GUI. The
 // old helper re-launched the multi-hundred-megabyte GUI libtest binary for
 // every daemon and every producer, so each test paid OS/GUI loading and a
-// scan of every unit test. `crates/lyrel-graphics-fixture` links only
-// `lyrel-core` and embeds the same `tests/support` producers; the tests below
-// still speak the real daemon protocol and still drive real ConPTY/unix PTYs.
-
-mod graphics_fixture_identity {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/fixture_identity.rs"
-    ));
-}
+// scan of every unit test. The `lyrel-graphics-fixture` binary of
+// `crates/lyrel-test-support` links only `lyrel-core` and embeds the same
+// shared producers; the tests below still speak the real daemon protocol and
+// still drive real ConPTY/unix PTYs.
 
 const GRAPHICS_FIXTURE_BIN: &str = "lyrel-graphics-fixture";
 const GRAPHICS_FIXTURE_BIN_ENV: &str = "LYREL_GRAPHICS_FIXTURE_BIN";
@@ -22,14 +16,14 @@ const GRAPHICS_FIXTURE_BIN_ENV: &str = "LYREL_GRAPHICS_FIXTURE_BIN";
 fn graphics_fixture_workspace_root() -> std::path::PathBuf {
     let compiled = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     if compiled
-        .join("crates/lyrel-graphics-fixture/Cargo.toml")
+        .join("crates/lyrel-test-support/Cargo.toml")
         .is_file()
     {
         return compiled.to_path_buf();
     }
     let current = std::env::current_dir().expect("test process working directory");
     if current
-        .join("crates/lyrel-graphics-fixture/Cargo.toml")
+        .join("crates/lyrel-test-support/Cargo.toml")
         .is_file()
     {
         return current;
@@ -45,12 +39,13 @@ fn graphics_fixture_workspace_root() -> std::path::PathBuf {
 static GRAPHICS_FIXTURE_EXPECTED_IDENTITY: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| {
         let root = graphics_fixture_workspace_root();
-        graphics_fixture_identity::fixture_source_identity(&root).unwrap_or_else(|error| {
-            panic!(
-                "cannot identify the graphics fixture sources under {}: {error}",
-                root.display()
-            )
-        })
+        lyrel_test_support::fixture_identity::fixture_source_identity(&root)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "cannot identify the graphics fixture sources under {}: {error}",
+                    root.display()
+                )
+            })
     });
 
 fn graphics_fixture_reported_identity(path: &std::path::Path) -> Option<String> {
@@ -73,13 +68,13 @@ fn graphics_fixture_verify(path: &std::path::Path) {
         Some(actual) if actual == expected => {}
         Some(actual) => panic!(
             "graphics fixture binary {} was built from other sources (expected identity {expected}, \
-             found {actual}); rebuild it with `cargo build -p lyrel-graphics-fixture --bin \
+             found {actual}); rebuild it with `cargo build -p lyrel-test-support --bin \
              {GRAPHICS_FIXTURE_BIN}`",
             path.display()
         ),
         None => panic!(
             "graphics fixture binary {} did not report its build identity; rebuild it with `cargo \
-             build -p lyrel-graphics-fixture --bin {GRAPHICS_FIXTURE_BIN}`",
+             build -p lyrel-test-support --bin {GRAPHICS_FIXTURE_BIN}`",
             path.display()
         ),
     }
@@ -131,7 +126,7 @@ fn graphics_fixture_host_triple() -> Option<&'static str> {
 /// test binary came from, and return the executable Cargo reported.
 fn graphics_fixture_run_cargo(profile_dir: &std::path::Path) -> std::path::PathBuf {
     let root = graphics_fixture_workspace_root();
-    let manifest = root.join("crates/lyrel-graphics-fixture/Cargo.toml");
+    let manifest = root.join("crates/lyrel-test-support/Cargo.toml");
     let mut command = std::process::Command::new(env!("CARGO"));
     command
         .current_dir(&root)
@@ -563,7 +558,7 @@ fn graphics_send_fixture_with_replies(
     let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
     let request = format!(
         "{operation} {serial} {replies} {} 0\n",
-        graphics_pty_fixture::hex(bytes)
+        hex(bytes)
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -1154,15 +1149,15 @@ fn glyph_send(
     let path = reply_path.to_string_lossy();
     let request = format!(
         "SEND_ANY {serial} {replies} {} 0 {}\n",
-        graphics_pty_fixture::hex(bytes),
-        graphics_pty_fixture::hex(path.as_bytes()),
+        hex(bytes),
+        hex(path.as_bytes()),
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     graphics_wait_fixture(view, cx, serial, input_bytes);
     let text = std::fs::read_to_string(reply_path)
         .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
-    graphics_pty_fixture::unhex(text.trim())
+    unhex(text.trim())
 }
 
 fn glyph_cell_bounds(

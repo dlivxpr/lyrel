@@ -6,12 +6,8 @@ use crate::terminal::remote::PtySource;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
-mod graphics_pty_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/kitty_pty.rs"
-    ));
-}
+use lyrel_test_support::hex::{hex, unhex};
+use lyrel_test_support::pty::pty_sender;
 
 include!("graphics_pty_consumer_support.rs");
 
@@ -35,7 +31,7 @@ pub(crate) fn run_fixture() -> Option<std::process::ExitCode> {
         .iter()
         .any(|argument| argument == &format!("{scope}::graphics_fixture_sender"))
     {
-        graphics_pty_fixture::pty_sender();
+        pty_sender();
         return Some(std::process::ExitCode::SUCCESS);
     }
     None

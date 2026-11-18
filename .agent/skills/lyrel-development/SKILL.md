@@ -37,6 +37,7 @@ description: >-
 | 隔离 headless daemon | `cargo run --locked -p lyrel-server -- --daemon --config-dir .lyrel-dev` |
 | 默认成员 / 全成员测试 | `cargo test --locked` / `cargo test --workspace --locked` |
 | core / CLI E2E | `cargo test --locked -p lyrel-core` / `cargo test --locked -p lyrel-cli --test cli_e2e` |
+| 文本 codec / 文档格式引擎 | `cargo test --locked -p lyrel-document --no-default-features` / `cargo test --locked -p lyrel-document --all-features` |
 | 桌面 library 测试 | `cargo test --locked -p lyrel --lib` |
 | 桌面 updater 测试 | `cargo test --locked --features updater --bin lyrel-updater` |
 | native Markdown / 终端 | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` / `cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal` |
@@ -44,14 +45,14 @@ description: >-
 | Host 边界 | `bash .github/scripts/check-host-boundary.sh` |
 | 补充 lint | `cargo clippy --workspace --all-targets --locked` |
 
-Windows/macOS 默认成员含桌面、editor、GUI-free `lyrel-text`、`lyrel-epub` 与 core/server/CLI；两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。updater 仅在 Windows/macOS 测试。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
+Windows/macOS 默认成员包含桌面、Markdown editor、GUI-free `lyrel-document` 与 core/server/CLI；两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。`lyrel-updater` 仅在 Windows/macOS 测试。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
 
 Host 边界脚本要求 LF；遇到 `$'\r': command not found` 或 `invalid option name` 时先核对行尾，不能扩大 allowlist 掩盖。补全生成读 `scripts/fig-convert/README.md`；性能验证读 `scripts/bench/README.md`，后者依赖 macOS/zsh。
 
 ## Linux
 
 - 优先使用兼容目标 libc、依赖和运行时的轻量 Docker Linux 容器，参照 CI 准备完整环境。仅在 Docker 不可用或容器不能覆盖目标行为（如 WSL 专项）时回退 WSL，并记录原因。
-- 构建使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；测试使用对应 `cargo test`。`lyrel-text` 可参与 headless 验证，GPUI 不得进入 core/server/CLI。
+- 构建使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；测试使用对应 `cargo test`。`lyrel-document` 的格式引擎和 `lyrel-test-support` 的测试夹具均参与 headless 验证，GPUI 不得进入 core/server/CLI。
 - 完整 features 需要 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。Pi 桥契约需要当前平台 Node 22.19+ 在 `PATH`，不能用 Windows 的 `node.exe` 替代 Linux Node。
 - 很多 server 集成用例受 `cfg(unix)` 限制，Windows 通过不能替代 Unix 验证；联网及真实 SSH/LSP 的 ignored 用例只在具备前提时显式执行。
 

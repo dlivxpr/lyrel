@@ -43,7 +43,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
         serial += 1;
         let command = format!(
             "{serial} {replies} {}{}",
-            terminal_pty_fixture::hex(bytes),
+            hex(bytes),
             if cfg!(windows) { "\r" } else { "\n" }
         );
         daemon.run_ok(&["send", &address, &command]);
@@ -66,11 +66,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
             if let Some((_, result)) = output.split_once(&marker)
                 && let Some((reply, _)) = result.split_once(" END")
             {
-                assert_eq!(
-                    reply,
-                    terminal_pty_fixture::hex(expected),
-                    "serial {serial}: {output}"
-                );
+                assert_eq!(reply, hex(expected), "serial {serial}: {output}");
                 break;
             }
             assert!(

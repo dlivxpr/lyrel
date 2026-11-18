@@ -139,7 +139,7 @@ readline 的所有功能仍然有效——这一层建立在其之上，而不�
 - GPUI 没有提供 physical／base-layout key，也不能可靠区分独立修饰键的左右位置。lyrel 不猜造这些信息；`4`（alternate keys）不会出现在有效模式、查询回复或恢复的栈中。现有 `8` 仅能报告框架实际提供的按键，不能据此宣称获得了缺失的物理键或完整左右修饰键信息。
 - 已开始的 IME 预编辑及平台明确优先交给字符输入的事件继续由输入法处理。只有提交文本写给当前输入所有者；程序同时启用 `8` 与 `16` 时，无物理键信息的提交使用 key code `0` 和 Unicode code points，且没有伪造的释放。
 
-协议字段及例外以 [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) 为准。原生验证可在隔离开发窗格中执行 `node tests/support/kitty_keyboard_boundary.mjs events 31`，检查有效回复为 `27`，依次按住并释放方向键、F3、Ctrl+Q、Shift+Tab，再用系统中文输入法提交文字；每个实际输入块都显示为 `KEYBOARD_EVENT_CHUNK:<hex>`。打开搜索、切换阅读按钮／其他窗格、切出窗口后再回来，检查没有孤立释放或重复文字。运行 `events 2` 对照普通字符与 Enter／Tab／Backspace 的例外，运行 `record` 对照未协商字节。真实 Windows／系统 IME／SSH 验收必须另记实际结果，不能用 headless 事件或直接调用文本处理器代替。
+协议字段及例外以 [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) 为准。原生验证可在隔离开发窗格中执行 `node crates/lyrel-test-support/support/kitty_keyboard_boundary.mjs events 31`，检查有效回复为 `27`，依次按住并释放方向键、F3、Ctrl+Q、Shift+Tab，再用系统中文输入法提交文字；每个实际输入块都显示为 `KEYBOARD_EVENT_CHUNK:<hex>`。打开搜索、切换阅读按钮／其他窗格、切出窗口后再回来，检查没有孤立释放或重复文字。运行 `events 2` 对照普通字符与 Enter／Tab／Backspace 的例外，运行 `record` 对照未协商字节。真实 Windows／系统 IME／SSH 验收必须另记实际结果，不能用 headless 事件或直接调用文本处理器代替。
 
 <Note>
   在 macOS 上开启 **将 Option (⌥) 用作 Meta** 后，<kbd>⌥</kbd> 组合键会完全绕过输入法，

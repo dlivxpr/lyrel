@@ -678,7 +678,7 @@ fn glyph_fixture_pane(daemon: &GraphicsDaemonProcess) -> u64 {
 fn glyph_fixture_write(daemon: &GraphicsDaemonProcess, pane: u64, bytes: &[u8]) {
     let request = format!(
         "SEND {}{}",
-        graphics_pty_fixture::hex(bytes),
+        hex(bytes),
         if cfg!(windows) { "\r\n" } else { "\n" }
     );
     daemon
@@ -825,7 +825,7 @@ fn glyph_state_outlives_the_replay_ring_for_a_fresh_production_consumer(cx: &mut
     std::fs::write(&filler, b"glyph replay filler\r\n".repeat(700_000)).unwrap();
     let request = format!(
         "FILE_SEND 3 0 {} 8192\n",
-        graphics_pty_fixture::hex(filler.to_str().unwrap().as_bytes())
+        hex(filler.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -931,7 +931,7 @@ fn glyph_clear_and_ris_reach_a_fresh_production_consumer_as_empty_state(cx: &mut
     );
     let request = format!(
         "FILE_SEND 3 0 {} 8192\n",
-        graphics_pty_fixture::hex(filler.to_str().unwrap().as_bytes())
+        hex(filler.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -982,7 +982,7 @@ fn glyph_clear_and_ris_reach_a_fresh_production_consumer_as_empty_state(cx: &mut
     graphics_send_fixture(&fresh, cx, 6, b"\x1bc");
     let request = format!(
         "FILE_SEND 7 0 {} 8192\n",
-        graphics_pty_fixture::hex(filler.to_str().unwrap().as_bytes())
+        hex(filler.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     fresh.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -1067,12 +1067,12 @@ fn glyph_state_survives_a_producer_that_truly_exits(cx: &mut TestAppContext) {
     );
     command.push_str(&format!(
         "SEND {}\n",
-        graphics_pty_fixture::hex(&glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 0))
+        hex(&glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 0))
     ));
     command.push_str("FLOOD 9437184\n");
     command.push_str(&format!(
         "SEND {}\n",
-        graphics_pty_fixture::hex(place.as_bytes())
+        hex(place.as_bytes())
     ));
     command.push_str("LYREL_GLYPH_EOF\n");
     command.push_str(&format!("echo {marker}\n"));

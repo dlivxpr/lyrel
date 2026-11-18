@@ -1,6 +1,4 @@
-mod owned_media_fixture {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/kitty_media.rs"));
-}
+use lyrel_test_support::kitty_media::{region_file, SharedMedia};
 
 fn media_command(id: u32, medium: char, name: &str, offset: u64, size: usize, quiet: u8) -> Vec<u8> {
     use base64::Engine;
@@ -32,9 +30,9 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
         (5, 's', 65533, 69632),
     ] {
         let file = dir.path().join(format!("tty-graphics-protocol-{serial}.rgba"));
-        let shared = (medium == 's').then(|| owned_media_fixture::SharedMedia::new(object_len, offset, &rgba));
+        let shared = (medium == 's').then(|| SharedMedia::new(object_len, offset, &rgba));
         let name = if let Some(shared) = &shared { shared.name.clone() } else {
-            owned_media_fixture::region_file(&file, if medium == 't' { offset as u64 + 8 } else { object_len as u64 }, offset as u64, &rgba);
+            region_file(&file, if medium == 't' { offset as u64 + 8 } else { object_len as u64 }, offset as u64, &rgba);
             file.to_str().unwrap().to_owned()
         };
         graphics_send_fixture_with_replies(&view, cx, serial, &media_command(145, medium, &name, offset as u64, if medium == 't' { 0 } else { 8 }, 0), 1);
@@ -69,8 +67,8 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
         std::fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap()
     };
     let large = dir.path().join("large-to-end.rgba");
-    owned_media_fixture::region_file(&large, object_len as u64, offset as u64, &rgba);
-    let shared_short = owned_media_fixture::SharedMedia::new(4096, 13, &rgba);
+    region_file(&large, object_len as u64, offset as u64, &rgba);
+    let shared_short = SharedMedia::new(4096, 13, &rgba);
     let mut failures: Vec<_> = names.into_iter().map(|name| ('f', name, 2, 8)).collect();
     failures.push(('f', large.to_str().unwrap().to_owned(), 0, 0));
     failures.push(('s', shared_short.name.clone(), shared_short.len() - 4, 8));
@@ -99,7 +97,7 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
                 .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
                 .unwrap();
             let command = media_command(146, medium, &name, region_offset, region_size, quiet);
-            let request = format!("SEND {serial} {} {} 1\n", usize::from(quiet != 2), graphics_pty_fixture::hex(&command));
+            let request = format!("SEND {serial} {} {} 1\n", usize::from(quiet != 2), hex(&command));
             view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
             let marker = format!("KITTY_DONE_{serial};");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -109,7 +107,7 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
             }
             let (text, _) = graphics_recovery_collect(observer, serial);
             if quiet != 2 {
-                let expected = graphics_pty_fixture::hex(b"\x1b_Gi=146,p=9;EBADF:Failed to read image file\x1b\\");
+                let expected = hex(b"\x1b_Gi=146,p=9;EBADF:Failed to read image file\x1b\\");
                 assert!(text.contains(&format!("KITTY_REPLY {serial} {expected}")), "wrong media refusal: serial={serial}, medium={medium}, name={name:?}, O={region_offset}, S={region_size}, q={quiet}; expected={expected}; PTY output={text:?}; grid={:?}", view.read_with(cx, |view, _| view.scrollback_text()));
             }
             if quiet == 2 {

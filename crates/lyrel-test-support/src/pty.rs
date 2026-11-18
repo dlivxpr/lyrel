@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-include!("hex.rs");
+use crate::hex::{hex, unhex};
 
 pub fn raw_pty() {
     #[cfg(unix)]
@@ -76,7 +76,7 @@ impl OutputStats {
 }
 
 // This is a real PTY child, not a daemon seam. The lightweight
-// `lyrel-graphics-fixture` process embeds this file, so no external
+// `lyrel-graphics-fixture` process embeds this module, so no external
 // Python/Node/shell dependency is needed on every platform. Each request has a
 // stream barrier; replies are read from the actual PTY input and hex-printed
 // so they cannot be intercepted as graphics again.

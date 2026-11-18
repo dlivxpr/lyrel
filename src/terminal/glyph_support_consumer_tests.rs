@@ -63,8 +63,8 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
     let q_path = replies.path().join("q");
     let request = format!(
         "SEND_ANY 1 1 {} 0 {}\n",
-        graphics_pty_fixture::hex(b"\x1b_25a1;q;cp=100000\x1b\\"),
-        graphics_pty_fixture::hex(q_path.to_string_lossy().as_bytes())
+        hex(b"\x1b_25a1;q;cp=100000\x1b\\"),
+        hex(q_path.to_string_lossy().as_bytes())
     );
     // The controller must be attached before its frontend-bound query runs;
     // input on a separate connection can overtake Attach on a busy host.
@@ -99,7 +99,7 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
             if path.with_extension("done").is_file()
                 && let Ok(text) = std::fs::read_to_string(path)
             {
-                return graphics_pty_fixture::unhex(text.trim());
+                return unhex(text.trim());
             }
             assert!(
                 std::time::Instant::now() < deadline,
@@ -119,8 +119,8 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
     let s_path = replies.path().join("s");
     let request = format!(
         "SEND_ANY 2 1 {} 0 {}\n",
-        graphics_pty_fixture::hex(b"\x1b_25a1;s\x1b\\"),
-        graphics_pty_fixture::hex(s_path.to_string_lossy().as_bytes())
+        hex(b"\x1b_25a1;s\x1b\\"),
+        hex(s_path.to_string_lossy().as_bytes())
     );
     ClientMsg::Input(request.into_bytes())
         .encode(&mut stream)
@@ -145,8 +145,8 @@ fn glyph_send_parts(
     let path = reply_path.to_string_lossy();
     let request = format!(
         "SEND_ANY {serial} {replies} {} 0 {}\n",
-        graphics_pty_fixture::hex(bytes),
-        graphics_pty_fixture::hex(path.as_bytes()),
+        hex(bytes),
+        hex(path.as_bytes()),
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -155,7 +155,7 @@ fn glyph_send_parts(
         .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
     text.trim()
         .split(',')
-        .map(graphics_pty_fixture::unhex)
+        .map(unhex)
         .collect()
 }
 
@@ -361,7 +361,7 @@ fn glyph_support_query_never_reaches_a_state_only_controller() {
     // input on the same connection cannot overtake Attach.
     let request = format!(
         "SEND_ANY 1 0 {} 0\n",
-        graphics_pty_fixture::hex(b"\x1b_25a1;q;cp=100000\x1b\\")
+        hex(b"\x1b_25a1;q;cp=100000\x1b\\")
     );
     ClientMsg::Input(request.into_bytes())
         .encode(&mut stream)

@@ -20,7 +20,7 @@ workspace 按生产能力与测试夹具拆分；桌面 GUI、CLI 和 headless s
 | `lyrel-document` | GUI-free 文档引擎：`default-features = false` 只编译编码/BOM/逐行行尾/EditorConfig 的 text codec；`formats` 解锁 JSON／JSONL、TOML、YAML、XML 的保真投影／局部 mutation、CSV 表格、GIF／TIFF 解码、draw.io 文档探测、EPUB 容器／章节清洗／阅读状态／全书搜索与只读 PDF 页度量／栅格化／文本层／大纲／表单描述，全部共享一个 `CancelToken`／`ProjectionState` 取消与 revision／generation guard | 不依赖 GPUI、`lyrel-core` 或 `lyrel-protocol`，不持有 Host/path、Document、history、保存或 UI 本地化，不写回任何格式 |
 | `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
 | 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
-| `lyrel-graphics-fixture`（仅测试） | 轻量真实 daemon 与 PTY producer，供桌面消费者复用 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
+| `lyrel-test-support`（仅测试） | 共享 GPUI-free 测试夹具库（真实 PTY／protocol producer、native-SSH 夹具）与轻量 `lyrel-graphics-fixture` daemon／PTY producer 进程 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
 
@@ -332,7 +332,7 @@ PDF 引擎的格式兼容、保真文本编辑模型、SQLite 的并发读取与
 | 终端连接、交互与绘制 | [`terminal/`](https://github.com/dlivxpr/lyrel/tree/main/src/terminal) |
 | CLI 命令与依赖替换点 | [`lyrel-cli/src/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-cli/src)，沿用 `Backend` trait |
 
-桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free 文本、结构化文档及读取模块，显式排除根桌面包、`lyrel-markdown-editor` 和仅桌面测试使用的 `lyrel-graphics-fixture`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
+桌面只支持 Windows／macOS；Linux 保留 core、server、CLI、GUI-free `lyrel-test-support` 夹具库与文本、结构化文档及读取模块，显式排除根桌面包和 `lyrel-markdown-editor`，不预留手机网关。共享夹具的修改同时触发桌面与 Linux headless 验证。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
 
 验证需匹配被修改的边界：共享行为使用对应 core／server／CLI 用例和真实 daemon／PTY 路径；GUI 行为还需实际窗口观察；Unix、Windows、macOS 与真实 SSH 的证据分别记录。历史工单中的测试计数、二进制身份、失败与未验证项保留在原记录，不作为当前源码已重新验收的声明。
 

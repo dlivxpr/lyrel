@@ -396,7 +396,7 @@ fn color_state_outlives_the_replay_ring_for_a_fresh_consumer(cx: &mut TestAppCon
     let line = format!(
         "2 {} {} 10500{}",
         usize::MAX,
-        graphics_pty_fixture::hex(&row),
+        hex(&row),
         if cfg!(windows) { "\r" } else { "\n" }
     );
     daemon.panes().send_input(pane, line.as_bytes()).unwrap();

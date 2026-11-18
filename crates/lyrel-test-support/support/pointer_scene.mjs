@@ -1,4 +1,5 @@
-// Run inside an isolated candidate lyrel pane: node tests/support/pointer_scene.mjs
+// Run inside an isolated candidate lyrel pane:
+// node crates/lyrel-test-support/support/pointer_scene.mjs
 // No terminal identity overrides or capability queries are sent.
 import process from 'node:process';
 
