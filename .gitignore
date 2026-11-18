@@ -20,6 +20,9 @@ openwiki/.last-update.json
 # Claude Code agent worktrees (transient)
 .claude/worktrees/
 
+# omp tool session state (per-machine adapter paths etc.)
+.omp/
+
 # local scratch notes (never committed)
 /todo.md
 
