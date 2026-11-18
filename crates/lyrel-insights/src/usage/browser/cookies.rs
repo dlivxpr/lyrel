@@ -419,7 +419,7 @@ fn chromium(
     let mut values = [None, None];
     #[cfg(target_os = "macos")]
     let mut password = None;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", test, feature = "test-support")))]
     let _ = reader;
     let mut count = 0;
     while let Some(row) = rows.next().map_err(sql_error)? {
@@ -450,7 +450,7 @@ fn chromium(
             if encrypted.starts_with(b"v20") || encrypted.starts_with(b"APPB") {
                 return Err(BrowserError::Protected);
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if let Some(boundary) = &reader.permission_boundary {
                 boundary(permission)?;
             }

@@ -193,7 +193,8 @@ impl ImportPermission {
 
 /// Test seam invoked immediately before any OS-interactive decryption step
 /// (macOS Keychain, Windows DPAPI); the GUI's workflow tests install a
-/// blocking boundary here. Production readers leave it `None`.
+/// blocking adapter here; it is compiled out of production readers.
+#[cfg(any(test, feature = "test-support"))]
 pub type PermissionBoundary =
     std::sync::Arc<dyn Fn(&ImportPermission) -> Result<(), BrowserError> + Send + Sync>;
 
@@ -204,6 +205,7 @@ pub struct BrowserReader {
     cookie_password: cookies::PasswordReader,
     #[cfg(target_os = "macos")]
     safari_file: cookies::FileReader,
+    #[cfg(any(test, feature = "test-support"))]
     pub permission_boundary: Option<PermissionBoundary>,
 }
 
@@ -276,6 +278,7 @@ impl BrowserReader {
             cookie_password: cookies::mac_password,
             #[cfg(target_os = "macos")]
             safari_file: cookies::read_file,
+            #[cfg(any(test, feature = "test-support"))]
             permission_boundary: None,
         }
     }
@@ -292,6 +295,7 @@ impl BrowserReader {
             cookie_password: cookies::mac_password,
             #[cfg(target_os = "macos")]
             safari_file: cookies::read_file,
+            #[cfg(any(test, feature = "test-support"))]
             permission_boundary: None,
         }
     }

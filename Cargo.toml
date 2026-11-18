@@ -296,6 +296,7 @@ futures-channel = "0.3"
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 lyrel-core = { path = "crates/lyrel-core", features = ["test-support"] }
+lyrel-insights = { path = "crates/lyrel-insights", features = ["test-support"] }
 # Shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
 # (the `lyrel-graphics-fixture` binary target of this package).
 lyrel-test-support = { path = "crates/lyrel-test-support" }

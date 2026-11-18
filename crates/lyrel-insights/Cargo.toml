@@ -17,14 +17,18 @@ publish = false
 # The usage module (models, provider scrapers and browser session readers)
 # is desktop-only. Linux builds the skills/statistics/github modules.
 
+[features]
+# Let the desktop's workflow tests exercise the real reader with an isolated
+# authorization adapter. Never enabled by a production dependency.
+test-support = []
+
 [dependencies]
 # The Host seam: `&dyn Host` file/session/statistics operations plus the
 # CLI-agent and git helpers these modules already shared through core.
 lyrel-core = { path = "../lyrel-core" }
 serde = { workspace = true }
 serde_json.workspace = true
-# SKILL.md frontmatter and hook metadata parsing — the same pinned
-# workspace YAML line lyrel-core uses.
+# SKILL.md frontmatter and hook metadata parsing.
 yaml_serde.workspace = true
 chrono = { version = "0.4.45", features = ["serde"] }
 # OpenCode service URL validation in statistics source binding (same crate and
