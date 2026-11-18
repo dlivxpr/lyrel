@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::keychain::{CredentialStore, InMemoryCredentialStore};
+use crate::core::keychain::InMemoryCredentialStore;
 use crate::ui::app::{LyrelApp, test_window::harness};
 use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
@@ -66,7 +66,7 @@ impl BalanceHttp for Http {
 fn install(
     vcx: &mut VisualTestContext,
     path: std::path::PathBuf,
-    vault: Arc<dyn CredentialStore>,
+    vault: Arc<dyn lyrel_insights::usage::SecretVault>,
     http: Arc<dyn BalanceHttp>,
     seed: bool,
 ) -> Option<Uuid> {
@@ -542,20 +542,22 @@ struct LockedVault {
     inner: InMemoryCredentialStore,
     locked: AtomicBool,
 }
-impl CredentialStore for LockedVault {
-    fn get(&self, s: &str, a: &str) -> crate::core::keychain::CredentialResult<Option<String>> {
-        self.inner.get(s, a)
+impl lyrel_insights::usage::SecretVault for LockedVault {
+    fn secret(
+        &self,
+        s: &str,
+        a: &str,
+    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
+        self.inner.secret(s, a)
     }
-    fn set(&self, s: &str, a: &str, v: &str) -> crate::core::keychain::CredentialResult<()> {
+    fn set_secret(&self, s: &str, a: &str, v: &str) -> Result<(), lyrel_insights::usage::VaultError> {
         if self.locked.load(Ordering::SeqCst) {
-            return Err(crate::core::keychain::CredentialError::Backend(
-                "locked".into(),
-            ));
+            return Err(lyrel_insights::usage::VaultError("locked".into()));
         }
-        self.inner.set(s, a, v)
+        self.inner.set_secret(s, a, v)
     }
-    fn delete(&self, s: &str, a: &str) -> crate::core::keychain::CredentialResult<()> {
-        self.inner.delete(s, a)
+    fn delete_secret(&self, s: &str, a: &str) -> Result<(), lyrel_insights::usage::VaultError> {
+        self.inner.delete_secret(s, a)
     }
 }
 

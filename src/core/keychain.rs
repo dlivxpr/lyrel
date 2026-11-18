@@ -100,6 +100,39 @@ impl CredentialStore for OsCredentialStore {
     }
 }
 
+/// The usage account manager in `lyrel-insights` persists its slot secrets
+/// through this narrow seam; the OS store already speaks the same three
+/// operations as `CredentialStore`, so this only adapts the error type.
+impl lyrel_insights::usage::SecretVault for OsCredentialStore {
+    fn secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
+        CredentialStore::get(self, service, account)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+    }
+
+    fn set_secret(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &str,
+    ) -> Result<(), lyrel_insights::usage::VaultError> {
+        CredentialStore::set(self, service, account, secret)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+    }
+
+    fn delete_secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<(), lyrel_insights::usage::VaultError> {
+        CredentialStore::delete(self, service, account)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+    }
+}
+
 /// A store with nothing in it, for building a spec whose secrets are going to
 /// be stripped anyway. Asking the real one costs a trip to `securityd` per
 /// credential, and the callers that want no secrets are the ones on the UI
@@ -144,6 +177,37 @@ impl InMemoryCredentialStore {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+impl lyrel_insights::usage::SecretVault for InMemoryCredentialStore {
+    fn secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
+        CredentialStore::get(self, service, account)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+    }
+
+    fn set_secret(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &str,
+    ) -> Result<(), lyrel_insights::usage::VaultError> {
+        CredentialStore::set(self, service, account, secret)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+    }
+
+    fn delete_secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<(), lyrel_insights::usage::VaultError> {
+        CredentialStore::delete(self, service, account)
+            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
     }
 }
 

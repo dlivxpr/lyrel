@@ -23,8 +23,6 @@ macro_rules! for_each_host_case {
             $($extra)*
             @cases
             read_dir_lists_and_sorts,
-            statistics_native_overview,
-            statistics_kimi_native_overview,
             read_dir_includes_hidden,
             read_dir_missing_is_not_found,
             read_dir_on_a_file_errors,
@@ -52,7 +50,6 @@ macro_rules! for_each_host_case {
             sqlite_reports_a_cancelled_page_without_retiring_the_view,
             sqlite_validates_identifiers_against_the_open_view,
             sqlite_filters_sorts_and_reads_values_in_bounded_chunks,
-            skills_browse_is_readonly_and_host_bound,
             write_file_creates_and_overwrites,
             write_file_reports_its_own_metadata,
             write_file_to_missing_parent_errors,
@@ -111,148 +108,6 @@ macro_rules! __host_case_table {
 }
 
 crate::for_each_host_case!(__host_case_table);
-
-pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
-    use crate::statistics::{DateWindow, StatisticsCache, discover_omp, scan};
-    let home = sandbox.path();
-    let config = h.join(home, "omp-config");
-    let agent = h.join(&h.join(&h.join(&config, "profiles"), "work"), "agent");
-    let sessions = h.join(&agent, "sessions");
-    h.create_dir(&sessions, true).unwrap();
-    let native = b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"model_usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":15,\"cost\":{\"total\":0}}}\n";
-    h.write_file(&h.join(&sessions, "native.jsonl"), native)
-        .unwrap();
-    let command = format!(
-        "HOME='{}' USERPROFILE='{}' PI_CONFIG_DIR='{}' XDG_DATA_HOME='{}' XDG_STATE_HOME='{}' omp --profile work",
-        home.display(),
-        home.display(),
-        config.display(),
-        home.display(),
-        home.display()
-    );
-    let launch = std::collections::HashMap::from([("omp".into(), command)]);
-    let sources = discover_omp(h, &launch).unwrap();
-    let mut cache = StatisticsCache::default();
-    let snapshot = scan(h, &sources, &mut cache).unwrap();
-    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
-    assert_eq!(totals.tokens().total(), Some(15));
-    assert_eq!(totals.recorded_usd(), Some(0.));
-    assert_eq!(totals.main_sessions(), 1);
-    assert!(totals.is_complete());
-    let analysis = snapshot
-        .analyze(
-            &DateWindow::all("UTC"),
-            chrono::Utc::now(),
-            Some("omp"),
-            2026,
-        )
-        .unwrap();
-    let day = analysis
-        .days()
-        .iter()
-        .find(|d| d.date().to_string() == "2026-03-08")
-        .unwrap();
-    assert_eq!(day.totals().tokens().total(), Some(15));
-    assert_eq!(day.totals().main_sessions(), 1);
-    assert_eq!(analysis.models()[0].label(), Some("test"));
-    assert_eq!(analysis.projects()[0].label(), Some("/work"));
-    assert_eq!(analysis.agents()[0].totals().recorded_usd(), Some(0.));
-    // A failed refresh retains known values rather than turning history into zero.
-    h.write_file(&h.join(&sessions, "native.jsonl"), b"{broken")
-        .unwrap();
-    let stale = scan(h, &sources, &mut cache).unwrap();
-    assert!(!stale.is_complete());
-    assert_eq!(
-        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
-        Some(15)
-    );
-    let analysis = stale
-        .analyze(&DateWindow::all("UTC"), chrono::Utc::now(), None, 2026)
-        .unwrap();
-    assert_eq!(analysis.totals().tokens().total(), Some(15));
-    assert_eq!(analysis.streaks().current(), None);
-    assert!(analysis.days().iter().all(|d| {
-        d.value(crate::statistics::analysis::Metric::Tokens)
-            .is_none()
-    }));
-    // pi's formal usage entries are not omp model_usage entries. The same Host transport
-    // must discover and read its isolated flat store without falling back to the GUI home.
-    let pi_sessions = h.join(home, "pi-private");
-    h.create_dir(&pi_sessions, true).unwrap();
-    h.write_file(&h.join(&pi_sessions, "pi.jsonl"), b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"kind\":\"future\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":2,\"cacheWrite\":4,\"totalTokens\":999,\"cost\":{\"total\":0}}}\n").unwrap();
-    let launch = std::collections::HashMap::from([(
-        "pi".into(),
-        format!(
-            "HOME='{}' USERPROFILE='{}' PI_CODING_AGENT_DIR='{}' pi --session-dir '{}'",
-            home.display(),
-            home.display(),
-            h.join(home, "pi-agent").display(),
-            pi_sessions.display()
-        ),
-    )]);
-    let sources = crate::statistics::discover_pi(h, &launch).unwrap();
-    let pi = scan(h, &sources, &mut cache).unwrap();
-    assert_eq!(
-        pi.aggregate(&DateWindow::all("UTC")).tokens().total(),
-        Some(21)
-    );
-    assert_eq!(
-        pi.aggregate(&DateWindow::all("UTC")).recorded_usd(),
-        Some(0.)
-    );
-    assert_eq!(pi.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
-    assert!(pi.is_complete());
-}
-
-pub fn statistics_kimi_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
-    use crate::statistics::{DateWindow, StatisticsCache, discover_kimi, scan};
-    let home = h.join(sandbox.path(), "kimi-home");
-    let session = h.join(&home, "sessions/wd_work_0123456789ab/session_native");
-    let main = h.join(&session, "agents/main");
-    let child = h.join(&session, "agents/agent-1");
-    h.create_dir(&main, true).unwrap();
-    h.create_dir(&child, true).unwrap();
-    h.write_file(
-        &h.join(&session, "state.json"),
-        br#"{"id":"session_native","cwd":"/work","createdAt":1792320000000}"#,
-    )
-    .unwrap();
-    let metadata =
-        "{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1792320000000}\n";
-    let turn = "{\"type\":\"usage.record\",\"agentId\":\"main\",\"model\":\"kimi-code/kimi-for-coding\",\"time\":1792320001000,\"usageScope\":\"turn\",\"usage\":{\"inputOther\":10,\"output\":2,\"inputCacheRead\":3,\"inputCacheCreation\":0}}\n";
-    let operation = turn.replace("\"turn\"", "\"session\"");
-    h.write_file(
-        &h.join(&main, "wire.jsonl"),
-        (metadata.to_owned() + turn + &operation).as_bytes(),
-    )
-    .unwrap();
-    h.write_file(
-        &h.join(&child, "wire.jsonl"),
-        (metadata.to_owned() + &turn.replace("\"main\"", "\"agent-1\"")).as_bytes(),
-    )
-    .unwrap();
-    let launch = std::collections::HashMap::from([(
-        "kimi".into(),
-        format!("KIMI_CODE_HOME='{}' kimi", home.display()),
-    )]);
-    let sources = discover_kimi(h, &launch).unwrap();
-    let mut cache = StatisticsCache::default();
-    let snapshot = scan(h, &sources, &mut cache).unwrap();
-    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
-    assert!(totals.is_complete(), "{:?}", snapshot.issues());
-    assert_eq!(totals.tokens().total(), Some(45));
-    assert_eq!(totals.main_sessions(), 1);
-    assert_eq!(totals.unpriced_calls(), 3);
-    assert_eq!(totals.recorded_usd(), None);
-    h.write_file(&h.join(&child, "wire.jsonl"), b"truncated")
-        .unwrap();
-    let stale = scan(h, &sources, &mut cache).unwrap();
-    assert!(!stale.is_complete());
-    assert_eq!(
-        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
-        Some(45)
-    );
-}
 
 #[doc(hidden)]
 #[macro_export]
@@ -2090,63 +1945,9 @@ mod tests {
         }
         assert_eq!(defined.len(), registered.len(), "duplicate registration");
         assert!(
-            defined.len() >= 52,
+            defined.len() >= 71,
             "the suite lost cases: {}",
             defined.len()
         );
     }
-}
-
-/// The same actual-file workflow runs locally and through the real stdio server.
-pub fn skills_browse_is_readonly_and_host_bound(h: &dyn Host, sb: &dyn Sandbox) {
-    use crate::skills::{ScanRequest, SourceKind, scan};
-    let home = h.join(sb.path(), "skills-home");
-    let project = h.join(sb.path(), "skills-project");
-    mkdir(h, &h.join(&project, ".git"));
-    let user = h.join(&h.join(&h.join(&home, ".agents"), "skills"), "review");
-    let project_skill = h.join(&h.join(&h.join(&project, ".agents"), "skills"), "review");
-    mkdir(h, &user);
-    mkdir(h, &project_skill);
-    let document = h.join(&user, "SKILL.md");
-    write(
-        h,
-        &document,
-        "---\nname: review\ndescription: Host user review\n---\n# Actual host instructions\n",
-    );
-    write(
-        h,
-        &h.join(&project_skill, "SKILL.md"),
-        "---\nname: review\ndescription: Host project review\n---\n# Different installation\n",
-    );
-    let untouched = h.join(&home, "untouched.txt");
-    write(h, &untouched, "unchanged");
-    let before = h.read_file(&document, 4096).unwrap();
-    let before_meta = h.stat(&document).unwrap();
-    let spelling = home.to_string_lossy();
-    let launches=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent|{
-        let agent_dir=if agent=="omp"{h.join(&h.join(&home,".omp"),"agent")}else{h.join(&h.join(&home,".pi"),"agent")};
-        (agent.to_owned(),format!("HOME='{spelling}' USERPROFILE='{spelling}' PROGRAMDATA='{spelling}/programdata' CLAUDE_CONFIG_DIR='{spelling}/.claude' XDG_DATA_HOME='{spelling}/.data' XDG_STATE_HOME='{spelling}/.state' PI_CONFIG_DIR=.omp OMP_PROFILE=default PI_PROFILE=default PI_CODING_AGENT_DIR='{}' KIMI_CODE_HOME='{spelling}/.kimi-code' HERMES_HOME='{spelling}/.hermes' XDG_CONFIG_HOME='{spelling}/.config' OPENCODE_CONFIG_DIR='{spelling}/.config/opencode' {agent}",agent_dir.display()))
-    }).collect();
-    let result = scan(
-        h,
-        &ScanRequest::new(&home)
-            .with_project(&project)
-            .with_launch_commands(launches),
-    )
-    .unwrap();
-    assert_eq!(result.host(), h.id());
-    assert_eq!(result.filtered("review", None).count(), 2);
-    let user = result
-        .filtered("Host user review", Some(SourceKind::UserShared))
-        .next()
-        .unwrap();
-    assert_eq!(user.document(), h.canonicalize(&document).unwrap());
-    assert!(
-        user.markdown()
-            .unwrap()
-            .contains("# Actual host instructions")
-    );
-    assert_eq!(h.read_file(&document, 4096).unwrap(), before);
-    assert_eq!(h.stat(&document).unwrap(), before_meta);
-    assert_eq!(h.read_file(&untouched, 1024).unwrap(), b"unchanged");
 }

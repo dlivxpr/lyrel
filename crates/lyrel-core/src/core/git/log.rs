@@ -1025,8 +1025,9 @@ fn rev(host: &dyn Host, root: &Path, spec: &str) -> Option<String> {
 ///
 /// Hand-rolled because the workspace carries neither `chrono` nor `time`, and
 /// thirty lines of arithmetic is a poor reason to add a dependency tree to a
-/// crate the headless server also builds.
-pub(crate) fn parse_iso8601(text: &str) -> Option<OffsetTs> {
+/// crate the headless server also builds. `pub` because `lyrel-insights`' GitHub
+/// model parses commit timestamps with the same arithmetic.
+pub fn parse_iso8601(text: &str) -> Option<OffsetTs> {
     let b = text.as_bytes();
     if !text.is_ascii() || b.len() < 19 {
         return None;

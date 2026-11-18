@@ -479,7 +479,7 @@ impl SettingsWindow {
         }
         if let Some(markdown) = skill.markdown() {
             let safe =
-                lyrel_core::core::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
+                lyrel_insights::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
             content.push(
                 div()
                     .pt_2()

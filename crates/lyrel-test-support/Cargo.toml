@@ -25,11 +25,13 @@ test = false
 # on first use. `test-support` mirrors the workspace's unified test graph
 # (`--features test-support` on the root package), which enables tokio's
 # `test-util` for lyrel-core.
+#
+# The old `github` feature is gone: skills/statistics/GitHub moved to
+# `lyrel-insights`, and core no longer defines the feature.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 lyrel-core = { path = "../lyrel-core", features = [
     "gssapi",
     "remote-install",
-    "github",
     "terminal-width",
     "test-support",
 ] }

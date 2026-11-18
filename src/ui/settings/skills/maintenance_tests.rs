@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::VisualTestContext;
 use gpui_kit::test::TestWindowExt;
-use lyrel_core::core::github::{ApiError, Reply, Transport};
+use lyrel_insights::github::{ApiError, Reply, Transport};
 
 struct UpdatedRepository;
 impl Transport for UpdatedRepository {

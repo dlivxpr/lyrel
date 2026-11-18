@@ -1,0 +1,95 @@
+[package]
+name = "lyrel-insights"
+version.workspace = true
+edition.workspace = true
+description = "GUI-free insights above the lyrel Host seam: skill discovery/catalog/install, coding-agent session telemetry, GitHub read queries, and desktop usage account/browser-session readers"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+# Everything here sits *above* the `lyrel-core` Host seam: it drives real
+# LocalHost/RemoteHost work through `&dyn Host` but never touches PTY, SSH or
+# GUI code, so both the desktop GUI and headless Linux CI build it. (#326
+# later cuts the lower dependency from lyrel-core to lyrel-protocol.)
+#
+# The crate is a production dependency of the root `lyrel` GUI package only;
+# `lyrel-server`, `lyrel-cli` and the static musl server never depend on it.
+# Desktop-only pieces (browser cookie/session readers and their SQLite,
+# LevelDB, AES-GCM and Snappy dependencies) are gated to macOS/Windows below:
+# Linux compiles the skills/statistics/github/usage-model modules only.
+
+[dependencies]
+# The Host seam: `&dyn Host` file/session/statistics operations plus the
+# CLI-agent and git helpers these modules already shared through core.
+lyrel-core = { path = "../lyrel-core" }
+serde = { workspace = true }
+serde_json.workspace = true
+# SKILL.md frontmatter and hook metadata parsing — the same pinned
+# workspace YAML line lyrel-core uses.
+yaml_serde.workspace = true
+chrono = { version = "0.4.45", features = ["serde"] }
+# OpenCode service URL validation in statistics source binding (same crate and
+# purpose as lyrel-core's non-optional `http` dependency).
+http = "1.5.0"
+# Skill content hashes (catalog/install), browser-session fingerprints and the
+# usage checksum helpers — the same locked sha2 line core already pins.
+sha2 = "0.11.1"
+base64 = "0.23.1"
+# Persisted usage account ids serialize through serde — the same v4+serde
+# feature line the root manifest already uses.
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+log.workspace = true
+# Skill catalog source decoding (skills.sh URL decoding and locale-aware
+# content collation). These used to be lyrel-core's optional `github`
+# feature; they are unconditional here because the transport above them is
+# this crate's whole reason to exist.
+url = "2"
+percent-encoding = "2"
+icu_collator = "=2.4.0"
+# The GitHub/skills HTTPS transports. rustls-based (no native TLS), the same
+# locked ureq line the desktop already uses. Proxy resolution is *injected*
+# by the desktop composition (`Option<ureq::Proxy>`), never resolved here.
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "win-system-proxy",
+    "socks-proxy",
+] }
+# Version-0 package parsing inside skill discovery.
+regex = "1"
+# Kimi Code hook metadata parsing inside skill discovery — the same crate the
+# agent-hooks editor in lyrel-core already pins.
+toml_edit = "0.25.17"
+# Pricing rows keep the common single-currency shape on the stack — the same
+# workspace smallvec line lyrel-core pins.
+smallvec.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# Desktop browser session/cookie readers. These live here — not in the root
+# GUI package — so headless Linux builds link no SQLite/LevelDB/AES/Snappy
+# for code they cannot reach.
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+rusty-leveldb = "4.0.2"
+snap = "1"
+fs2 = "0.4"
+zeroize = "1"
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows Chromium cookie decryption: same-user DPAPI unwrap plus AES-GCM,
+# the exact pinned line the GUI used. Never calls ABE or interactive APIs.
+aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
+# CryptUnprotectData for the same-user DPAPI unwrap above.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+# Timezone-window cases in the statistics suite (same line as lyrel-core's).
+chrono-tz = "0.10"
+# The insights-owned Host conformance cases execute against a real
+# `lyrel-server --stdio` child when LYREL_TEST_LYREL_SERVER points at the
+# binary; without it the local/fake-peer suites still run.
+lyrel-server = { path = "../lyrel-server" }
+
+[lints]
+workspace = true

@@ -15,7 +15,7 @@ use crate::ui::host_ops::HostOps;
 use crate::ui::host_registry::HostRegistry;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{Disableable, button::ButtonVariants, spinner::Spinner};
-use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
+use lyrel_insights::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

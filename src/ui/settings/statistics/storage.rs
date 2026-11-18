@@ -1,9 +1,9 @@
 //! 桌面本地的非秘密统计设置；公共目录请求只接收代理，不接收任何历史数据。
-use lyrel_core::statistics::{pricing::Pricing, sources::SourceBindings};
+use lyrel_insights::statistics::{pricing::Pricing, sources::SourceBindings};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path, time::Duration};
 
-pub(super) const CATALOG_URL: &str = lyrel_core::statistics::pricing::CATALOG_URL;
+pub(super) const CATALOG_URL: &str = lyrel_insights::statistics::pricing::CATALOG_URL;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct StoredStatistics {

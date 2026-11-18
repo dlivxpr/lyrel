@@ -44,11 +44,14 @@ required-features = ["native-markdown-tests"]
 # client used only to *download* a `lyrel-server` onto a remote machine
 # (decision D5). The server binary is the thing being downloaded, so it can
 # never take that path; the GUI, which is the client that pushes it, can.
-#
-# `github` is the right panel's GitHub tab: the same HTTPS client, pointed at
-# api.github.com.
-lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "github", "terminal-width"] }
+lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "terminal-width"] }
 
+# GUI-free insights above the `lyrel-core` Host seam: the right panel's GitHub
+# tab, Settings' skills/statistics/usage backends and their browser session
+# readers. The GUI is this crate's only production consumer — the headless
+# server and CLI never link it — so it stays a desktop-only dependency, while
+# the crate itself remains Linux-buildable (browser modules gated there).
+lyrel-insights = { path = "crates/lyrel-insights" }
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
 # All GUI-free document engines (text codec, structured projections, CSV,
@@ -97,13 +100,6 @@ smallvec.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 tempfile = "3"
-# Browser session import stays desktop-local; database recovery runs in memory.
-rusqlite = { version = "0.42.0", features = ["bundled"] }
-rusty-leveldb = "4.0.2"
-snap = "1"
-fs2 = "0.4"
-zeroize = "1"
-sha2 = "0.11.1"
 # LaunchServices sends files and custom URL schemes through gpui's unified
 # open-URL callback. `url` keeps the decoding and SSH authority parsing here
 # standards-compliant rather than treating percent escapes as literal paths,
@@ -111,8 +107,8 @@ sha2 = "0.11.1"
 # userinfo and man-page names back out.
 url = "2"
 percent-encoding = "2"
-# The code editor's language-server client (`ui::lsp`). The same version
-# gpui-component's LSP hooks take their types from.
+# Diff base decoding uses the opened file's selected encoding without changing its representation.
+encoding_rs.workspace = true
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
 encoding_rs.workspace = true
@@ -188,7 +184,6 @@ tray-icon = "0.26.1"
 # PATH comes back mangled. 0.61 is already in the tree (tray-icon pulls it), so
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
-aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -313,6 +308,12 @@ yaml-edit = { version = "=0.3.6", default-features = false }
 # Self-made PDF fixtures for the production workbench seam; never linked into
 # the released library.
 lyrel-document = { path = "crates/lyrel-document", features = ["test-fixtures"] }
+# Browser import moved to `lyrel-insights`, but the desktop workflow tests and
+# the SQLite document fixtures still build real SQLite databases themselves —
+# a dev-only dependency, never linked into the released GUI.
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+# Cross-process fixture-build locking in the terminal graphics consumer tests.
+fs2 = "0.4"
 
 [lints]
 workspace = true

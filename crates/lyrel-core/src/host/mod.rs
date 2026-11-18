@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "test-support"))]
 pub mod conformance;
 pub mod content_search;
 mod file_version;

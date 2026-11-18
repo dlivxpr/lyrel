@@ -264,7 +264,9 @@ impl Roots {
     }
 }
 
-pub(crate) fn omp_profile(
+/// Effective omp profile for one launcher environment, shared with
+/// `lyrel-insights`' statistics discovery across the crate boundary.
+pub fn omp_profile(
     environment: &std::collections::BTreeMap<String, String>,
 ) -> std::io::Result<Option<&str>> {
     let profile = environment

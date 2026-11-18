@@ -10,8 +10,8 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, relative, rems};
 
-use lyrel_core::core::github::stack::{Cell, StackRow};
-use lyrel_core::core::github::{
+use lyrel_insights::github::stack::{Cell, StackRow};
+use lyrel_insights::github::{
     ApiError, CheckState, GitHubRemote, Item, ItemState, Kind, Label, RepoSlug, StateFilter,
 };
 
@@ -996,7 +996,7 @@ mod gpui_tests {
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
-    use lyrel_core::core::github::{ApiError, Kind, Reply, Transport};
+    use lyrel_insights::github::{ApiError, Kind, Reply, Transport};
 
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{LyrelApp, test_window};
@@ -1325,7 +1325,7 @@ mod gpui_tests {
 
     #[gpui_kit::test]
     fn the_branchs_pull_request_is_pinned_and_its_running_checks_polled(cx: &mut TestAppContext) {
-        use lyrel_core::core::github::CheckState;
+        use lyrel_insights::github::CheckState;
 
         let root = scratch("branch-pull");
         git(&root, &["init", "--quiet", "-b", "feat/x"]);

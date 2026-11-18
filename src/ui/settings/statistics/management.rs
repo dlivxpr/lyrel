@@ -2,7 +2,7 @@
 use super::*;
 use gpui_kit::FocusHandle;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, button::Button};
-use lyrel_core::statistics::{pricing::UnitPrice, sources::SourceBinding};
+use lyrel_insights::statistics::{pricing::UnitPrice, sources::SourceBinding};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]

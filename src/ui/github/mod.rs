@@ -9,10 +9,10 @@
 //!   way the Source Control tab does (`scm_repo_root`), then its remotes read
 //!   through the `Host` — the tree can be on another machine.
 //! - **Which token.** Resolved once, on a worker, from the environment or the
-//!   GitHub CLI (`lyrel_core::core::github::token`). Refresh resolves it again,
+//!   GitHub CLI (`lyrel_insights::github::token`). Refresh resolves it again,
 //!   so a `gh auth login` in a pane takes effect without a restart. A
 //!   repository the active `gh` account cannot see is retried with the
-//!   CLI's other accounts (`lyrel_core::core::github::accounts`).
+//!   CLI's other accounts (`lyrel_insights::github::accounts`).
 //! - **The requests.** Made from *this* machine, never the remote host, on a
 //!   dedicated thread each — a slow link must never hold a UI frame.
 //!
@@ -35,14 +35,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Window};
-use lyrel_core::core::github::api::{self, ListQuery};
-use lyrel_core::core::github::stack::{StackRow, stack_order};
-use lyrel_core::core::github::{
-    ApiError, Detail, GitHubRemote, Item, Kind, RepoSlug, StateFilter, Transport,
-};
-
 use lyrel_core::core::config::RightPanelTab;
-use lyrel_core::core::github::CheckState;
+use lyrel_insights::github::api::{self, ListQuery};
+use lyrel_insights::github::stack::{StackRow, stack_order};
+use lyrel_insights::github::{
+    ApiError, CheckState, Detail, GitHubRemote, Item, Kind, RepoSlug, StateFilter, Transport,
+};
 
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{HostId, SharedHost};
@@ -262,9 +260,11 @@ where
 /// A token from `gh` comes with the CLI's other accounts behind it, listed
 /// only if the active one comes up short.
 fn system_connector(proxy: Option<String>) -> Connector {
-    use lyrel_core::core::github::accounts::{Account, FallbackTransport};
-    use lyrel_core::core::github::http::HttpTransport;
-    use lyrel_core::core::github::token::{self, TokenSource};
+    use lyrel_insights::github::accounts::{Account, FallbackTransport};
+    use lyrel_insights::github::http::HttpTransport;
+    use lyrel_insights::github::token::{self, TokenSource};
+    let proxy =
+        lyrel_core::daemon::install::proxy::resolve("https://api.github.com", proxy.as_deref());
     Arc::new(move || {
         let resolved = token::resolve_token_from_system();
         if let Some((_, source)) = &resolved {
@@ -273,7 +273,7 @@ fn system_connector(proxy: Option<String>) -> Connector {
         let from_gh = matches!(resolved, Some((_, TokenSource::GhCli)));
         let first: Arc<dyn Transport> = Arc::new(HttpTransport::new(
             resolved.map(|(t, _)| t),
-            proxy.as_deref(),
+            proxy.clone(),
         ));
         if !from_gh {
             return Connection { transport: first };
@@ -284,7 +284,7 @@ fn system_connector(proxy: Option<String>) -> Connector {
                 .into_iter()
                 .map(|(login, t)| Account {
                     login,
-                    transport: Arc::new(HttpTransport::new(Some(t), proxy.as_deref())),
+                    transport: Arc::new(HttpTransport::new(Some(t), proxy.clone())),
                 })
                 .collect()
         });
@@ -394,7 +394,7 @@ impl LyrelApp {
             }
         };
         let pick = self.github.remote_pick.get(&repo).map(String::as_str);
-        match lyrel_core::core::github::remote::default_remote(&remotes, pick) {
+        match lyrel_insights::github::remote::default_remote(&remotes, pick) {
             Some(chosen) => {
                 let chosen = chosen.clone();
                 GhTarget::Ready {
@@ -441,7 +441,7 @@ impl LyrelApp {
                     return;
                 }
                 let remotes =
-                    lyrel_core::core::github::remote::github_remotes(&out.unwrap_or_default());
+                    lyrel_insights::github::remote::github_remotes(&out.unwrap_or_default());
                 this.github.remotes.insert(
                     repo,
                     RemoteLookup::Ready {

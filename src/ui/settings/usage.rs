@@ -13,6 +13,15 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::{
     Context, Entity, Focusable as _, Global, Subscription, Task, Window, div, prelude::*,
 };
+use lyrel_insights::usage::{
+    BalanceHttp, HttpSource, UsageRequest, accounts, browser, platform, providers, query,
+    query_provider,
+};
+use lyrel_insights::usage::accounts::{
+    Account, Accounts, Authentication, Balance, Snapshot, StoredAccounts, UsageError,
+    VerifiedSource,
+};
+use providers::Provider;
 use std::{
     sync::{
         Arc, Mutex,
@@ -20,130 +29,8 @@ use std::{
     },
     time::Duration,
 };
-mod accounts;
-mod browser;
-mod platform;
 mod presentation;
-mod providers;
-use accounts::*;
-use providers::Provider;
 use uuid::Uuid;
-
-const ENDPOINT: &str = "https://api.deepseek.com/user/balance";
-#[derive(Clone, Copy)]
-enum HttpSource {
-    Official,
-    Platform(platform::SessionKind),
-    KimiApi,
-    KimiMe,
-    KimiWeb,
-    CommandWhoami,
-    CommandCredits,
-    CommandSubscriptions,
-    CommandSessionIdentity,
-    CommandEnhancement,
-    Provider(Provider, u8),
-}
-struct UsageRequest<'a> {
-    source: HttpSource,
-    secret: &'a str,
-    org: Option<&'a str>,
-}
-impl UsageRequest<'_> {
-    fn endpoint(&self) -> String {
-        let base = match self.source {
-            HttpSource::Official => ENDPOINT,
-            HttpSource::Platform(_) => platform::ENDPOINT,
-            HttpSource::KimiApi => "https://api.kimi.com/coding/v1/usages",
-            HttpSource::KimiMe => "https://api.kimi.com/coding/v1/me",
-            HttpSource::KimiWeb => {
-                "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats"
-            }
-            HttpSource::CommandWhoami => "https://api.commandcode.ai/alpha/whoami?limits=1",
-            HttpSource::CommandCredits => "https://api.commandcode.ai/alpha/billing/credits",
-            HttpSource::CommandSubscriptions => {
-                "https://api.commandcode.ai/alpha/billing/subscriptions"
-            }
-            HttpSource::CommandSessionIdentity => providers::command_code::IDENTITY_ENDPOINT,
-            HttpSource::CommandEnhancement => providers::command_code::SESSION_ENDPOINT,
-            HttpSource::Provider(provider, route) => match (provider, route) {
-                (Provider::StepFun, 0) => {
-                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit"
-                }
-                (Provider::StepFun, 1) => {
-                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus"
-                }
-                (Provider::StepFun, _) => {
-                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/UserInfo"
-                }
-                (Provider::MiMo, 0) => "https://platform.xiaomimimo.com/api/v1/balance",
-                (Provider::MiMo, 1) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail",
-                (Provider::MiMo, 2) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage",
-                (Provider::MiMo, _) => "https://platform.xiaomimimo.com/api/v1/userProfile",
-                _ => unreachable!("console provider route"),
-            },
-        };
-        let mut params = url::form_urlencoded::Serializer::new(String::new());
-        if let Some(org) = self.org {
-            params.append_pair("orgId", org);
-        }
-        let query = params.finish();
-        if query.is_empty() {
-            base.to_owned()
-        } else {
-            format!("{base}?{query}")
-        }
-    }
-    fn header_name(&self) -> &'static str {
-        match self.source {
-            HttpSource::CommandEnhancement | HttpSource::CommandSessionIdentity => "Cookie",
-            HttpSource::Official
-            | HttpSource::KimiApi
-            | HttpSource::KimiMe
-            | HttpSource::KimiWeb
-            | HttpSource::CommandWhoami
-            | HttpSource::CommandCredits
-            | HttpSource::CommandSubscriptions => "Authorization",
-            HttpSource::Platform(kind) => kind.header_name(),
-            HttpSource::Provider(Provider::StepFun, _) => "Oasis-Token",
-            HttpSource::Provider(..) => "Cookie",
-        }
-    }
-    fn authorization_value(&self) -> String {
-        match self.source {
-            HttpSource::CommandEnhancement | HttpSource::CommandSessionIdentity => {
-                self.secret.to_owned()
-            }
-            HttpSource::Official
-            | HttpSource::KimiApi
-            | HttpSource::KimiMe
-            | HttpSource::KimiWeb
-            | HttpSource::CommandWhoami
-            | HttpSource::CommandCredits
-            | HttpSource::CommandSubscriptions => format!("Bearer {}", self.secret),
-            HttpSource::Platform(kind) => kind.authorization_value(self.secret),
-            HttpSource::Provider(Provider::StepFun, _) => {
-                self.session_field("Oasis-Token").to_owned()
-            }
-            HttpSource::Provider(..) => self.secret.to_owned(),
-        }
-    }
-    fn session_field(&self, name: &str) -> &str {
-        self.secret
-            .split("; ")
-            .filter_map(|part| part.split_once('='))
-            .find_map(|(key, value)| (key == name).then_some(value))
-            .unwrap_or("")
-    }
-}
-/// The varying external HTTP boundary; source selection, parsing and transitions remain real.
-trait BalanceHttp: Send + Sync {
-    fn get(
-        &self,
-        request: &UsageRequest<'_>,
-        proxy: Option<&str>,
-    ) -> Result<(u16, Vec<u8>), UsageError>;
-}
 struct DeepSeekHttp;
 impl BalanceHttp for DeepSeekHttp {
     fn get(
@@ -170,7 +57,7 @@ impl DeepSeekHttp {
             builder = builder.proxy(Some(proxy));
         }
         let agent: ureq::Agent = builder.build().into();
-        let authorization = zeroize::Zeroizing::new(request.authorization_value());
+        let authorization = request.authorization_value();
         let mut response = if matches!(request.source, HttpSource::KimiWeb) {
             agent
                 .post(endpoint)
@@ -228,51 +115,6 @@ impl DeepSeekHttp {
         Ok((status, body))
     }
 }
-fn query(
-    http: &dyn BalanceHttp,
-    source: HttpSource,
-    secret: &str,
-    proxy: Option<&str>,
-) -> Result<Balance, UsageError> {
-    if let HttpSource::Provider(provider, _) = source {
-        return providers::query(http, provider, secret, proxy);
-    }
-    if secret.is_empty() || secret.contains(char::is_whitespace) {
-        return Err(UsageError::Authentication);
-    }
-    let (status, body) = http.get(
-        &UsageRequest {
-            source,
-            secret,
-            org: None,
-        },
-        proxy,
-    )?;
-    match source {
-        HttpSource::Official => accounts::decode(status, &body),
-        HttpSource::Platform(_) => platform::decode(status, &body).map(Balance::Platform),
-        _ => Err(UsageError::Response),
-    }
-}
-fn query_provider(
-    http: &dyn BalanceHttp,
-    provider: Provider,
-    source: HttpSource,
-    secret: &str,
-    proxy: Option<&str>,
-) -> Result<Balance, UsageError> {
-    match provider {
-        Provider::DeepSeek => query(http, source, secret, proxy),
-        Provider::Kimi => {
-            providers::kimi::query(http, !matches!(source, HttpSource::Official), secret, proxy)
-                .map(Balance::Provider)
-        }
-        Provider::CommandCode => {
-            providers::command_code::query(http, secret, proxy).map(Balance::Provider)
-        }
-        Provider::StepFun | Provider::MiMo => providers::query(http, provider, secret, proxy),
-    }
-}
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -327,16 +169,12 @@ impl SelectItem for Cadence {
     }
 }
 enum Material {
-    ApiKey(zeroize::Zeroizing<String>),
+    ApiKey(String),
     Session(platform::SessionMaterial),
     Browser(browser::BrowserSelection, platform::SessionMaterial),
-    ProviderSession(Provider, zeroize::Zeroizing<String>),
+    ProviderSession(Provider, String),
     ProviderBrowser(browser::BrowserSelection, browser::SessionMaterial),
-    Cookies(
-        Provider,
-        browser::BrowserSelection,
-        zeroize::Zeroizing<String>,
-    ),
+    Cookies(Provider, browser::BrowserSelection, String),
 }
 impl Material {
     fn secret(&self) -> &str {
@@ -385,22 +223,36 @@ impl Material {
         }
     }
 }
-impl SelectItem for Provider {
-    type Value = Self;
+/// GPUI select item for the insights-owned [`Provider`]; the orphan rule keeps
+/// the `SelectItem` impl in this crate, mirroring [`BrowserChoice`] below.
+#[derive(Clone, Copy)]
+struct ProviderChoice(Provider);
+impl SelectItem for ProviderChoice {
+    type Value = Provider;
     fn title(&self) -> gpui_kit::SharedString {
-        self.label().into()
+        self.0.label().into()
     }
-    fn value(&self) -> &Self {
-        self
+    fn value(&self) -> &Provider {
+        &self.0
     }
 }
-impl Provider {
-    fn sources(self) -> Vec<Source> {
-        match self {
-            Self::CommandCode => vec![Source::ApiKey],
-            Self::StepFun | Self::MiMo => vec![Source::Session, Source::Browser],
-            _ => vec![Source::ApiKey, Source::Session, Source::Browser],
-        }
+fn provider_sources(provider: Provider) -> Vec<Source> {
+    match provider {
+        Provider::CommandCode => vec![Source::ApiKey],
+        Provider::StepFun | Provider::MiMo => vec![Source::Session, Source::Browser],
+        _ => vec![Source::ApiKey, Source::Session, Source::Browser],
+    }
+}
+
+/// Provider-specific help copy lives in the GUI: the pure [`Provider`] model
+/// moved to `lyrel-insights` without any localization dependency.
+fn provider_help(provider: Provider) -> L10nKey {
+    match provider {
+        Provider::DeepSeek => L10nKey::UsageSessionHelp,
+        Provider::Kimi => L10nKey::UsageKimiHelp,
+        Provider::CommandCode => L10nKey::UsageCommandSessionHelp,
+        Provider::StepFun => L10nKey::UsageStepFunHelp,
+        Provider::MiMo => L10nKey::UsageMiMoHelp,
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -541,7 +393,7 @@ pub(crate) struct UsagePage {
     source: Entity<SelectState<Vec<Source>>>,
     browsers: Entity<SelectState<Vec<BrowserChoice>>>,
     profiles: Entity<SelectState<SearchableVec<ProfileChoice>>>,
-    provider: Entity<SelectState<Vec<Provider>>>,
+    provider: Entity<SelectState<Vec<ProviderChoice>>>,
     profile_items: Vec<ProfileChoice>,
     discovering: bool,
     discovery_version: u64,
@@ -626,11 +478,11 @@ impl UsagePage {
         let provider = cx.new(|cx| {
             SelectState::new(
                 vec![
-                    Provider::DeepSeek,
-                    Provider::Kimi,
-                    Provider::CommandCode,
-                    Provider::StepFun,
-                    Provider::MiMo,
+                    ProviderChoice(Provider::DeepSeek),
+                    ProviderChoice(Provider::Kimi),
+                    ProviderChoice(Provider::CommandCode),
+                    ProviderChoice(Provider::StepFun),
+                    ProviderChoice(Provider::MiMo),
                 ],
                 None,
                 window,
@@ -672,7 +524,7 @@ impl UsagePage {
         subs.push(
             cx.subscribe_in(&provider, window, |page, _, event, window, cx| {
                 if let SelectEvent::Confirm(Some(provider)) = event {
-                    let items = provider.sources();
+                    let items = provider_sources(*provider);
                     page.source.update(cx, |s, cx| {
                         s.set_items(items, window, cx);
                         s.set_selected_value(
@@ -864,13 +716,13 @@ impl UsagePage {
             _ => Provider::DeepSeek,
         };
         self.provider
-            .update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
+            .update(cx, |s, cx| s.set_selected_value(&ProviderChoice(provider), window, cx));
         self.source.update(cx, |s, cx| {
             s.set_items(
                 if matches!(edit, Edit::Enhance(_)) {
                     vec![Source::Session, Source::Browser]
                 } else {
-                    provider.sources()
+                    provider_sources(provider)
                 },
                 window,
                 cx,
@@ -972,7 +824,7 @@ impl UsagePage {
         .detach();
     }
     fn submit_enhancement(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        let input = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_owned());
+        let input = self.key.read(cx).value().trim().to_owned();
         self.key.update(cx, |s, cx| s.set_value("", window, cx));
         let from_browser = self.source.read(cx).selected_value() == Some(&Source::Browser);
         let cookie_name = self.cookie_name.read(cx).value().trim().to_owned();
@@ -996,7 +848,7 @@ impl UsagePage {
                         return Err(UsageError::Stale);
                     }
                     let ticket = accounts.begin_replace(id).ok_or(UsageError::Stale)?;
-                    (ticket, accounts.secret(id).map(zeroize::Zeroizing::new))
+                    (ticket, accounts.secret(id))
                 };
                 let verified = (|| {
                     let (selection, cookie) = if from_browser {
@@ -1089,7 +941,7 @@ impl UsagePage {
             Edit::Remove(id) => self.work(window, cx, move |a| a.remove(id)),
             Edit::Enhance(id) => self.submit_enhancement(id, window, cx),
             Edit::Add | Edit::Replace(_) => {
-                let secret = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_string());
+                let secret = self.key.read(cx).value().trim().to_string();
                 let source = self
                     .source
                     .read(cx)
@@ -1289,9 +1141,7 @@ impl UsagePage {
                         ) {
                             Ok(None)
                         } else {
-                            accounts
-                                .secret(id)
-                                .map(|s| Some(zeroize::Zeroizing::new(s)))
+                            accounts.secret(id).map(Some)
                         };
                         let enhancement = accounts.enhancement_secret(id);
                         let enhancement_browser =
@@ -1316,20 +1166,20 @@ impl UsagePage {
                         &*shared.http,
                         provider,
                         HttpSource::Official,
-                        secret.as_deref().map(|s| s.as_str()).unwrap_or(""),
+                        secret.as_deref().unwrap_or(""),
                         proxy.as_deref(),
                     ),
                     Authentication::ManualSession { kind, .. } => query(
                         &*shared.http,
                         HttpSource::Platform(kind),
-                        secret.as_deref().map(|s| s.as_str()).unwrap_or(""),
+                        secret.as_deref().unwrap_or(""),
                         proxy.as_deref(),
                     ),
                     Authentication::ProviderSession { provider, .. } => query_provider(
                         &*shared.http,
                         provider,
                         HttpSource::KimiWeb,
-                        secret.as_deref().map(|s| s.as_str()).unwrap_or(""),
+                        secret.as_deref().unwrap_or(""),
                         proxy.as_deref(),
                     ),
                     Authentication::BrowserLocalStorage { selection } => {

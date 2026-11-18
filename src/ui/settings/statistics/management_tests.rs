@@ -30,7 +30,7 @@ fn statistics_public_catalog_is_opt_in_and_failure_keeps_last_prices() {
         }
     }
     let http = ControlledHttp(AtomicUsize::new(0));
-    let mut pricing = lyrel_core::statistics::pricing::Pricing::default();
+    let mut pricing = lyrel_insights::statistics::pricing::Pricing::default();
     assert!(check_catalog(&mut pricing, &http, None, 10).is_err());
     assert_eq!(http.0.load(Ordering::SeqCst), 0);
     pricing.public_enabled = true;

@@ -150,10 +150,10 @@ impl UsagePage {
     fn open_add(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
         self.open_edit(Edit::Add, window, cx);
         self.provider.update(cx, |state, cx| {
-            state.set_selected_value(&provider, window, cx)
+            state.set_selected_value(&ProviderChoice(provider), window, cx)
         });
         self.source.update(cx, |state, cx| {
-            state.set_items(provider.sources(), window, cx);
+            state.set_items(provider_sources(provider), window, cx);
             state.set_selected_value(
                 &if matches!(provider, Provider::StepFun | Provider::MiMo) {
                     Source::Session
@@ -828,7 +828,7 @@ impl UsagePage {
                     Provider::DeepSeek => L10nKey::UsageOfficial,
                     Provider::Kimi => L10nKey::UsageKimiDisclosure,
                     Provider::CommandCode => L10nKey::UsageCommandDisclosure,
-                    _ => provider.help(),
+                    _ => provider_help(provider),
                 })));
                 form = form.child(dialog::labelled(
                     t(L10nKey::UsageApiKey),
@@ -852,7 +852,7 @@ impl UsagePage {
                     if provider == Provider::DeepSeek {
                         L10nKey::UsagePrivateDisclosure
                     } else {
-                        provider.help()
+                        provider_help(provider)
                     },
                 )));
                 if source == Source::Session {
@@ -874,7 +874,7 @@ impl UsagePage {
                             cx,
                         ))
                         .when(provider == Provider::DeepSeek, |form| {
-                            form.child(div().text_xs().text_color(muted).child(t(provider.help())))
+                            form.child(div().text_xs().text_color(muted).child(t(provider_help(provider))))
                         });
                 } else {
                     form = form
