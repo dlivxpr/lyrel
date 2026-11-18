@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
-use crate::ui::scm_snapshot::index_of;
 use crate::ui::app::LyrelApp;
 use crate::ui::file_copy;
 use crate::ui::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
@@ -16,6 +15,7 @@ use crate::ui::host_registry::HostRegistry;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, git_badge};
 use crate::ui::scm::status::{status_color, status_glyph};
+use crate::ui::scm_snapshot::index_of;
 use crate::ui::window_chrome::CONTENT_INSET;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};

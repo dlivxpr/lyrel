@@ -1,6 +1,6 @@
 use super::*;
-use crate::ui::scm::data::ScmData;
 use crate::ui::app::test_window::harness;
+use crate::ui::scm::data::ScmData;
 use gpui_kit::TestAppContext;
 
 fn repo(root: &str) -> RepoKey {

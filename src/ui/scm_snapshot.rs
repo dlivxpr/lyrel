@@ -44,11 +44,7 @@ pub const OPPORTUNISTIC_GIT_GAP: Duration = Duration::from_millis(1500);
 /// gutter markers draw from, or `None` until the first probe lands. The `Arc`
 /// identity is the controller's change-detection: the same pointer means
 /// "nothing moved", so callers must not copy out of this.
-pub fn status_of(
-    cx: &gpui_kit::App,
-    host: HostId,
-    root: &Path,
-) -> Option<Arc<WorkingTreeStatus>> {
+pub fn status_of(cx: &gpui_kit::App, host: HostId, root: &Path) -> Option<Arc<WorkingTreeStatus>> {
     cx.try_global::<crate::ui::scm::data::ScmData>()?
         .status_for(host, root)
 }

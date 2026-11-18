@@ -5388,10 +5388,10 @@ pub(crate) mod test_window {
     /// a round that drew nothing is not on its own enough to stop on — a burst
     /// still open is a frame already owed.
     pub(crate) fn quiesce(vcx: &mut VisualTestContext, cwd: Option<&std::path::Path>) {
-        use crate::ui::scm::data::ScmData;
-        use crate::ui::scm::status_cache::GitStatusCache;
         use crate::ui::app::render_probe;
         use crate::ui::host_ops::HostId;
+        use crate::ui::scm::data::ScmData;
+        use crate::ui::scm::status_cache::GitStatusCache;
 
         /// How long quiet has to hold before it counts as quiet.
         ///

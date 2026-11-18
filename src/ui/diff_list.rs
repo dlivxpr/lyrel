@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use gpui_kit::SharedString;
 
 use crate::core::config::DiffViewMode;
+use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
 use crate::ui::scm::diff::{
     AUTO_COLLAPSE_LINES, DiffSnapshot, FileDiff, FileStatus, MAX_RENDERED_FILES, Truncation,
 };
-use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
 
 /// Everything the file header row draws, lifted out of its [`FileDiff`].
 ///

@@ -537,11 +537,9 @@ impl LyrelApp {
         let host = f.host.clone();
         let wanted = BaseKey {
             path: f.path.clone(),
-            epoch: f
-                .gutter
-                .root
-                .as_deref()
-                .map_or(0, |root| crate::ui::scm_snapshot::epoch(cx, host.id(), root)),
+            epoch: f.gutter.root.as_deref().map_or(0, |root| {
+                crate::ui::scm_snapshot::epoch(cx, host.id(), root)
+            }),
         };
         if f.gutter.fetched.as_ref() == Some(&wanted) {
             return;

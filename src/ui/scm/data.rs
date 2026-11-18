@@ -1100,8 +1100,7 @@ impl LyrelApp {
             .unwrap_or_default();
         for host in held.into_iter().filter(|host| !live.contains(host)) {
             cx.default_global::<ScmData>().clear_host(host);
-            cx.default_global::<GitStatusCache>()
-                .clear_host(host);
+            cx.default_global::<GitStatusCache>().clear_host(host);
         }
         // Derived panel state has its own owner and can outlive the last
         // subscription. Inspect it in place, never copy historical roots to

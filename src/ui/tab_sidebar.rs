@@ -19,12 +19,12 @@ use crate::core::group_key::{
     AutoKey, GroupId, GroupKey, PinnedGroup, WorkspaceGroups, auto_key, auto_names, pinned_names,
     place,
 };
-use crate::ui::scm::status_cache::GitStatusCache;
 use crate::ui::app::LyrelApp;
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
+use crate::ui::scm::status_cache::GitStatusCache;
 use crate::ui::tab::Tab;
 use crate::ui::tab_strip::{
     DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_end_clusters, elide_label,
@@ -3627,8 +3627,8 @@ mod fold_tests {
     /// missing makes it return "no decision", which would leave every group
     /// below untouched and every assertion about moving vacuous.
     fn plant(app: &LyrelApp, i: usize, cwd: &str, root: &str, home: &str, cx: &mut gpui_kit::App) {
-        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use crate::ui::host_ops::HostId;
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
 
         let cwd = PathBuf::from(cwd);
         let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");
@@ -3657,8 +3657,8 @@ mod fold_tests {
 
     /// Put tab `i` somewhere the cache knows is in no repo at all.
     fn plant_plain(app: &LyrelApp, i: usize, cwd: &str, cx: &mut gpui_kit::App) {
-        use crate::ui::scm::status_cache::GitStatusCache;
         use crate::ui::host_ops::HostId;
+        use crate::ui::scm::status_cache::GitStatusCache;
 
         let cwd = PathBuf::from(cwd);
         let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");

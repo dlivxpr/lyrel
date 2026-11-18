@@ -26,8 +26,6 @@ use lyrel_core::core::git::status::{
     ChangeCode, DecoStatus, HeadState, RepoOperation, RepoPath, StatusEntry, WorkingTreeStatus,
 };
 
-use crate::ui::scm::data::status_of;
-use crate::ui::scm::diff::DiffSource;
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
@@ -36,6 +34,8 @@ use crate::ui::right_panel::{
 };
 use crate::ui::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
 use crate::ui::scm::ScmIntent;
+use crate::ui::scm::data::status_of;
+use crate::ui::scm::diff::DiffSource;
 use crate::ui::scm::path::split_display_path;
 use crate::ui::scm::state::{BranchInput, RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
@@ -1136,8 +1136,8 @@ impl LyrelApp {
         if self.scm.watch.is_some() {
             return;
         }
-        self.scm.watch = Some(cx.observe_global::<crate::ui::scm::data::ScmData>(
-            |this, cx| {
+        self.scm.watch = Some(
+            cx.observe_global::<crate::ui::scm::data::ScmData>(|this, cx| {
                 let Some((key, seen)) = this.scm.seen.clone() else {
                     return;
                 };
@@ -1146,8 +1146,8 @@ impl LyrelApp {
                     this.scm.seen = Some((key, now));
                     cx.notify();
                 }
-            },
-        ));
+            }),
+        );
     }
 
     fn scm_groups(
