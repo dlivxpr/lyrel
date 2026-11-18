@@ -5,6 +5,14 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
+/// Per-pane graphics byte budgets this build grants a pane session at
+/// negotiation (`ClientMsg::GraphicsCapacity`). The authoritative pane-side
+/// graphics state consumes the same two numbers, so the allowance a client
+/// announces and the ceiling the renderer enforces can never drift apart:
+/// they are one constant read from both sides of the wire.
+pub const MAX_PANE_ENCODED_BYTES: usize = 512 << 20;
+pub const MAX_PANE_DECODED_BYTES: usize = 512 << 20;
+
 pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 1280 << 20;
 /// Conservative 64-bit resource/placement ownership, including map/Arc headers.
 pub const GRAPHICS_METADATA_ENTRY_BYTES: usize = 512;
@@ -13,21 +21,27 @@ pub const MAX_AGGREGATE_GRAPHICS_METADATA_BYTES: usize = 16 << 20;
 static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static GRAPHICS_QUEUE_LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
-#[cfg(test)]
-pub(crate) fn inject_graphics_queue_limit(bytes: usize) {
+/// Pin the daemon-wide graphics queue budget below its production ceiling.
+/// Test-only: enabled by this crate's `test-support` feature so the core's
+/// retention tests (which run against `lyrel-protocol` as a dependency) can
+/// force the eviction paths without allocating gigabytes.
+#[cfg(any(test, feature = "test-support"))]
+pub fn inject_graphics_queue_limit(bytes: usize) {
     assert!(GRAPHICS_QUEUE_LIMIT.set(bytes).is_ok());
 }
 
-#[cfg(test)]
-pub(crate) fn graphics_queue_usage() -> usize {
+/// How many bytes the daemon-wide graphics queue currently accounts. Paired
+/// with [`inject_graphics_queue_limit`] for the same tests.
+#[cfg(any(test, feature = "test-support"))]
+pub fn graphics_queue_usage() -> usize {
     GRAPHICS_QUEUE_BYTES.load(std::sync::atomic::Ordering::Acquire)
 }
 
 fn graphics_queue_limit() -> usize {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(&bytes) = GRAPHICS_QUEUE_LIMIT.get() {
         return bytes;
     }
@@ -56,7 +70,11 @@ struct GraphicsPacketInner {
 pub struct GraphicsPacket(std::sync::Arc<GraphicsPacketInner>);
 
 impl GraphicsPacket {
-    pub(crate) fn try_encode(bytes: usize, encode: impl FnOnce() -> Vec<u8>) -> Option<Self> {
+    /// Encode one mutation against the daemon-wide queue budget, or return
+    /// `None` when the budget cannot take `bytes`. Cross-package seam: the
+    /// graphics authority lives in `lyrel-core`, the budget it encodes
+    /// against lives here with the wire values.
+    pub fn try_encode(bytes: usize, encode: impl FnOnce() -> Vec<u8>) -> Option<Self> {
         use std::sync::atomic::Ordering;
         GRAPHICS_QUEUE_BYTES
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
@@ -349,8 +367,8 @@ pub fn negotiate_pane_rendering<S: Read + Write>(
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
             ClientMsg::GraphicsCapacity {
-                encoded_bytes: crate::core::graphics_state::MAX_PANE_ENCODED_BYTES as u64,
-                decoded_bytes: crate::core::graphics_state::MAX_PANE_DECODED_BYTES as u64,
+                encoded_bytes: MAX_PANE_ENCODED_BYTES as u64,
+                decoded_bytes: MAX_PANE_DECODED_BYTES as u64,
                 offers: false,
             }
             .encode(stream)?;

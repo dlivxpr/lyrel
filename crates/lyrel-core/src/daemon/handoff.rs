@@ -190,7 +190,7 @@ pub fn take_over(
     for (i, fd) in kept.iter().enumerate() {
         if let Err(e) = keep_across_exec(*fd) {
             for fd in &kept[..i] {
-                let _ = close_on_exec_again(*fd);
+                let _ = crate::daemon::singleton::close_on_exec_again(*fd);
             }
             return anyhow::anyhow!("descriptor {fd} would not survive the exec: {e}");
         }
@@ -226,7 +226,7 @@ pub fn take_over(
         libc::pthread_sigmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut());
     }
     for fd in &kept {
-        let _ = close_on_exec_again(*fd);
+        let _ = crate::daemon::singleton::close_on_exec_again(*fd);
     }
     anyhow::anyhow!("could not exec {}: {failure}", exe.display())
 }
@@ -330,28 +330,7 @@ fn anonymous_file() -> std::io::Result<std::fs::File> {
 }
 
 fn keep_across_exec(fd: RawFd) -> std::io::Result<()> {
-    set_cloexec(fd, false)
-}
-
-/// Put close-on-exec back on a descriptor a failed handoff had cleared it from.
-pub(crate) fn close_on_exec_again(fd: RawFd) -> std::io::Result<()> {
-    set_cloexec(fd, true)
-}
-
-fn set_cloexec(fd: RawFd, on: bool) -> std::io::Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let flags = if on {
-        flags | libc::FD_CLOEXEC
-    } else {
-        flags & !libc::FD_CLOEXEC
-    };
-    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+    crate::daemon::singleton::clear_close_on_exec(fd)
 }
 
 /// Read back what the previous image left on `fd`.

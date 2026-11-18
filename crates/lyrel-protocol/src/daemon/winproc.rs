@@ -1,7 +1,15 @@
+//! Windows process enumeration and lifetime helpers shared by the daemon
+//! side (pane facts, port tables, installation reaps) and the client side
+//! (`spawn`'s version probes and stranded-daemon reaps). One implementation
+//! lives here so a thin client reaps exactly the way the daemon does.
+//!
+//! Public only as a cross-package seam: everything here is an internal
+//! utility, not a supported API surface.
+
 use std::collections::{HashSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Proc {
+pub struct Proc {
     pub pid: u32,
     pub parent: u32,
     pub name: String,
@@ -24,20 +32,20 @@ fn walk(procs: &[Proc], root: u32) -> Vec<(u32, u32, &str)> {
     out
 }
 
-pub(crate) fn descendants(procs: &[Proc], root: u32) -> Vec<u32> {
+pub fn descendants(procs: &[Proc], root: u32) -> Vec<u32> {
     let mut walked = walk(procs, root);
     walked.sort_by_key(|&(depth, ..)| std::cmp::Reverse(depth));
     walked.into_iter().map(|(_, pid, _)| pid).collect()
 }
 
-pub(crate) fn foreground_name(procs: &[Proc], shell_pid: u32) -> Option<String> {
+pub fn foreground_name(procs: &[Proc], shell_pid: u32) -> Option<String> {
     walk(procs, shell_pid)
         .into_iter()
         .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)))
         .map(|(_, _, name)| name.to_string())
 }
 
-pub(crate) fn snapshot() -> Vec<Proc> {
+pub fn snapshot() -> Vec<Proc> {
     checked_snapshot().unwrap_or_default()
 }
 
@@ -78,7 +86,7 @@ fn checked_snapshot() -> Option<Vec<Proc>> {
 
 /// ConPTY has no Unix foreground pgid. Inspect the complete owned shell tree
 /// at each indirect command instead; cached titles/remote UI facts are not proof.
-pub(crate) fn media_tree_is_local(root: u32) -> Option<bool> {
+pub fn media_tree_is_local(root: u32) -> Option<bool> {
     let first = checked_snapshot()?;
     let local = classify_media_tree(&first, root, image_path)?;
     if !local {
@@ -124,7 +132,7 @@ fn classify_media_tree(
     Some(true)
 }
 
-pub(crate) fn terminate(pid: u32) {
+pub fn terminate(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
     unsafe {
@@ -143,7 +151,7 @@ fn exe_name(raw: &[u16]) -> String {
 
 /// The full image path of a running process, or `None` for one this user
 /// cannot query (system processes, another session's).
-pub(crate) fn image_path(pid: u32) -> Option<std::path::PathBuf> {
+pub fn image_path(pid: u32) -> Option<std::path::PathBuf> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -172,7 +180,7 @@ pub(crate) fn image_path(pid: u32) -> Option<std::path::PathBuf> {
 /// makes a pid an identity: a process claiming to be the writer of a file
 /// must have started *before* that file was written, or it merely inherited
 /// the writer's number.
-pub(crate) fn creation_time(pid: u32) -> Option<std::time::SystemTime> {
+pub fn creation_time(pid: u32) -> Option<std::time::SystemTime> {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -210,7 +218,7 @@ pub(crate) fn creation_time(pid: u32) -> Option<std::time::SystemTime> {
 /// in time. A pid that cannot be opened is reported as exited: the handle is
 /// what names the process, and no handle means there is nothing left to wait
 /// on that this user could ever observe.
-pub(crate) fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
+pub fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
@@ -231,7 +239,7 @@ pub(crate) fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
 /// Terminates every pid in order and waits for each to release its image,
 /// all bounded by the one `deadline` — never a fresh timeout per process.
 /// Callers pass parents after children when a parent could respawn one.
-pub(crate) fn terminate_and_wait_all(pids: &[u32], deadline: std::time::Instant) {
+pub fn terminate_and_wait_all(pids: &[u32], deadline: std::time::Instant) {
     for &pid in pids {
         terminate(pid);
     }
@@ -246,7 +254,7 @@ pub(crate) fn terminate_and_wait_all(pids: &[u32], deadline: std::time::Instant)
 /// Terminates every descendant of `root` and waits for them to release their
 /// images, bounded by `timeout` overall. Used for daemon/installation teardown;
 /// deepest-first so a parent never respawns a child we already visited.
-pub(crate) fn reap_descendants_of(root: u32, timeout: std::time::Duration) {
+pub fn reap_descendants_of(root: u32, timeout: std::time::Duration) {
     terminate_and_wait_all(
         &descendants(&snapshot(), root),
         std::time::Instant::now() + timeout,
@@ -257,7 +265,7 @@ pub(crate) fn reap_descendants_of(root: u32, timeout: std::time::Duration) {
 /// `dir`. These are the processes that keep Windows from replacing the files
 /// there: a stale daemon, or ConPTY hosts orphaned by a daemon that never got
 /// to shut down.
-pub(crate) fn processes_running_from(dir: &std::path::Path) -> Vec<u32> {
+pub fn processes_running_from(dir: &std::path::Path) -> Vec<u32> {
     let own = std::process::id();
     // Image paths come back in long, resolved form, so a `dir` spelled
     // through a junction, a subst drive, or an 8.3 short name would never
@@ -289,7 +297,7 @@ pub(crate) fn processes_running_from(dir: &std::path::Path) -> Vec<u32> {
 /// Whether `path` names a file inside `dir`, the way the filesystem sees it:
 /// case-insensitive, and only at a component boundary so `...\lyrel-two` is not
 /// inside `...\lyrel`.
-pub(crate) fn path_is_under(path: &std::path::Path, dir: &std::path::Path) -> bool {
+pub fn path_is_under(path: &std::path::Path, dir: &std::path::Path) -> bool {
     let (Some(path), Some(dir)) = (path.to_str(), dir.to_str()) else {
         return false;
     };
@@ -318,7 +326,7 @@ pub(crate) fn path_is_under(path: &std::path::Path, dir: &std::path::Path) -> bo
 /// A `NULL` routine with `FALSE` clears the bit, and it is what descendants
 /// created afterwards inherit. Cheap and idempotent, so the pane spawn path
 /// calls it rather than relying on a single well-placed call at startup.
-pub(crate) fn allow_ctrl_c_in_children() {
+pub fn allow_ctrl_c_in_children() {
     // SAFETY: A NULL handler routine is the documented spelling of "stop
     // ignoring Ctrl+C"; there is no handler list entry to keep alive.
     unsafe {

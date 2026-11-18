@@ -99,7 +99,7 @@ pub unsafe fn adopt(fd: std::os::fd::RawFd) -> Singleton {
     // flock as long as it lives — an ssh transport that outlives a killed
     // daemon would then keep every future daemon standing down in favour of a
     // process that is not serving anyone.
-    if let Err(e) = crate::daemon::handoff::close_on_exec_again(fd) {
+    if let Err(e) = close_on_exec_again(fd) {
         log::warn!("could not restore close-on-exec on the seat descriptor {fd}: {e}");
     }
     let file = unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
@@ -128,6 +128,41 @@ pub fn claim() -> Claim {
         Ok(None) => Claim::Taken,
         Err(e) => Claim::Unavailable(format!("{} could not be locked: {e}", path.display())),
     }
+}
+
+/// Put close-on-exec back on a descriptor a handoff had cleared it from.
+///
+/// Lives here rather than beside the execve machinery because both sides of
+/// the handoff seam need it: the new image restoring the flag on the seat it
+/// inherited, and the old image cleaning up after a failed one.
+#[cfg(unix)]
+pub fn close_on_exec_again(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    set_cloexec(fd, true)
+}
+
+/// Strip close-on-exec so a descriptor survives the `execve` a Unix handoff
+/// performs. The execve side lives in core; this flag half is the singleton
+/// seat's concern, so both flag operations sit next to the seat.
+#[cfg(unix)]
+pub fn clear_close_on_exec(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    set_cloexec(fd, false)
+}
+
+#[cfg(unix)]
+fn set_cloexec(fd: std::os::fd::RawFd, on: bool) -> std::io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let flags = if on {
+        flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
+    };
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Writes this process's pid into the lock file it holds.

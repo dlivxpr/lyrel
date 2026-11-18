@@ -1,6 +1,5 @@
 #[cfg(windows)]
 pub(crate) mod conpty;
-pub mod control;
 pub mod duplex;
 /// Upgrading the daemon in place, keeping the ptys and the shells on them.
 ///
@@ -13,10 +12,8 @@ pub mod history;
 pub mod install;
 mod kimi;
 pub mod pane;
-pub mod pidfile;
 pub mod procinfo;
 pub mod procstat;
-pub mod protocol;
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub(crate) mod remote;
 pub mod remote_link;
@@ -26,23 +23,9 @@ pub mod responsibility;
 pub mod router;
 pub mod scrollback;
 pub mod server;
-pub mod singleton;
-pub mod spawn;
 pub mod ssh;
-pub mod transport;
-
-pub(crate) const DETECTED_SHELL_ENV: &str = "LYREL_DETECTED_SHELL";
 
 pub(crate) mod shell_integration;
-
-#[cfg(windows)]
-pub(crate) mod winproc;
-
-/// Windows-only like the updater flow that holds it: the macOS updater swaps
-/// the bundle by rename and never stops the daemon, so it has no window in
-/// which a fresh daemon could relock anything.
-#[cfg(windows)]
-pub mod update_guard;
 
 /// The Windows environment refresh new panes get (#333). Only the registry
 /// reader and the spawn wiring are Windows-only; the merge itself is a pure
@@ -50,3 +33,14 @@ pub mod update_guard;
 /// semantics tested on every platform's CI runner rather than only on Windows.
 #[cfg(any(windows, test))]
 pub(crate) mod windows_env;
+
+// The wire protocols, client drivers, transports, endpoint discovery, and the
+// spawn/singleton probes live in `lyrel-protocol`; these re-exports keep every
+// existing `lyrel_core::daemon::*` path working for the GUI, the CLI, and the
+// server tests.
+pub(crate) use lyrel_protocol::daemon::DETECTED_SHELL_ENV;
+#[cfg(windows)]
+pub use lyrel_protocol::daemon::update_guard;
+#[cfg(windows)]
+pub(crate) use lyrel_protocol::daemon::winproc;
+pub use lyrel_protocol::daemon::{control, pidfile, protocol, singleton, spawn, transport};

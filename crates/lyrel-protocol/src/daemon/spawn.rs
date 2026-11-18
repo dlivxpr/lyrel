@@ -582,7 +582,7 @@ pub fn reap_stranded() {
     // predecessor before binding; a stale file would cost it the same
     // refused-connect delay the reap above just made unnecessary.
     #[cfg(windows)]
-    crate::host::server::remove_control_endpoint();
+    crate::daemon::control_endpoint::remove_control_endpoint();
 }
 
 /// How long a seat holder that is not answering yet gets to be a daemon
@@ -694,7 +694,7 @@ enum DialectAnswer {
 /// control socket is unreachable, answers nothing and is left alone.
 fn control_dialect_answer() -> DialectAnswer {
     #[cfg(unix)]
-    let sock = match crate::host::server::control_socket_path()
+    let sock = match crate::daemon::control_endpoint::control_socket_path()
         .ok()
         .and_then(|path| std::os::unix::net::UnixStream::connect(path).ok())
     {
@@ -702,7 +702,7 @@ fn control_dialect_answer() -> DialectAnswer {
         None => return DialectAnswer::Silent,
     };
     #[cfg(windows)]
-    let sock = match crate::host::server::connect_control() {
+    let sock = match crate::daemon::control_endpoint::connect_control() {
         Ok(sock) => sock,
         Err(_) => return DialectAnswer::Silent,
     };

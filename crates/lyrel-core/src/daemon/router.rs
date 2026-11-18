@@ -1,325 +1,78 @@
+//! Route execution: the daemon-side bridge that takes a routed connection,
+//! opens the remote link it asks for (SSH, WSL, local stdio), performs server
+//! install/restart actions, and relays bytes both ways. The route dialect it
+//! speaks — header, ack, prompts, negotiation loop — is wire and lives in
+//! `lyrel-protocol`; it is re-exported here so existing
+//! `lyrel_core::daemon::router::*` paths keep working. The thin client's
+//! default negotiation (auth responder, no install policy) lives there too;
+//! [`negotiate`] below additionally answers install prompts through this
+//! process's installer policies, which is the behavior a GUI needs.
+
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
-use crate::daemon::install::{
-    InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
-    MismatchedRemoteDaemon,
+pub use lyrel_protocol::daemon::router::*;
+use lyrel_protocol::daemon::router::{
+    self as wire, InstallRequestWire, MismatchedRemoteDaemon, ROUTE_PROMPT_KIND, ROUTE_REPLY_KIND,
+    RouteAck, RouteChannel, RoutePrompt, RouteReply, RouteTarget,
 };
-use crate::daemon::protocol::{self, AuthPromptKind, AuthResponse, DaemonMsg, NativeSshSpec};
+
+use crate::daemon::install::{InstallConfirm, InstallDecision, InstallProgress, InstallRequest};
+use crate::daemon::protocol::{self, AuthPromptKind, AuthResponse, DaemonMsg};
 use crate::daemon::remote_link::RemoteLink;
 use crate::daemon::ssh::{ConnectionKey, PromptBroker, SshConnection, SshManager};
 use crate::daemon::transport::Stream;
 
-pub const ROUTE_KIND: u8 = 51;
-
-pub const ROUTE_PROMPT_KIND: u8 = 52;
-
-pub const ROUTE_REPLY_KIND: u8 = 53;
-
 const REPLY_TIMEOUT: Duration = Duration::from_secs(240);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteChannel {
-    #[default]
-    Control,
-    Pane,
-}
-
-impl RouteChannel {
-    pub(crate) fn bridge_command(self, base: &str) -> String {
-        match self {
-            RouteChannel::Control => base.to_string(),
-            RouteChannel::Pane => format!("{base} --pane"),
-        }
+/// The connection-key spelling of a target's origin — the one SSH note the
+/// connection cache keeps for it. Route-target shaping is wire and lives in
+/// `lyrel-protocol`; this is its execution-side key.
+fn origin_key(target: &RouteTarget) -> String {
+    match target {
+        RouteTarget::Ssh(spec) => ConnectionKey::from_spec(spec).as_str().to_string(),
+        RouteTarget::Wsl { distro } => format!("wsl:{distro}"),
+        RouteTarget::LocalStdio { program, .. } => format!("local-stdio:{program}"),
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteTarget {
-    Ssh(Box<NativeSshSpec>),
-    Wsl { distro: String },
-    LocalStdio { program: String, args: Vec<String> },
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteAction {
-    #[default]
-    Forward,
-    RestartServer,
-    ReplaceServer,
-    /// [`RouteAction::ReplaceServer`] that uploads even over a server already
-    /// speaking our dialect. A daemon that predates it fails to decode the
-    /// header, so a client asks for it only where the local daemon advertises
-    /// [`crate::daemon::protocol::FEATURE_UPDATE_SERVER`].
-    UpdateServer,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RouteHeader {
-    pub target: RouteTarget,
-    #[serde(default)]
-    pub server_command: Option<String>,
-    #[serde(default)]
-    pub channel: RouteChannel,
-    #[serde(default)]
-    pub action: RouteAction,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RouteAck {
-    pub ok: bool,
-    #[serde(default)]
-    pub link: Option<String>,
-    #[serde(default)]
-    pub action: Option<RouteAction>,
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
-impl RouteHeader {
-    pub fn ssh(spec: NativeSshSpec) -> RouteHeader {
-        RouteHeader {
-            target: RouteTarget::Ssh(Box::new(spec)),
-            server_command: None,
-            channel: RouteChannel::Control,
-            action: RouteAction::Forward,
-        }
-    }
-
-    pub fn for_pane(mut self) -> RouteHeader {
-        self.channel = RouteChannel::Pane;
-        self
-    }
-
-    pub fn restart_server(mut self) -> RouteHeader {
-        self.action = RouteAction::RestartServer;
-        self
-    }
-
-    pub fn replace_server(mut self) -> RouteHeader {
-        self.action = RouteAction::ReplaceServer;
-        self
-    }
-
-    pub fn update_server(mut self) -> RouteHeader {
-        self.action = RouteAction::UpdateServer;
-        self
-    }
-
-    pub fn wsl(distro: impl Into<String>) -> RouteHeader {
-        RouteHeader {
-            target: RouteTarget::Wsl {
-                distro: distro.into(),
-            },
-            server_command: None,
-            channel: RouteChannel::Control,
-            action: RouteAction::Forward,
-        }
-    }
-
-    pub fn local_stdio(program: impl Into<String>, args: &[&str]) -> RouteHeader {
-        RouteHeader {
-            target: RouteTarget::LocalStdio {
-                program: program.into(),
-                args: args.iter().map(|a| (*a).to_string()).collect(),
-            },
-            server_command: None,
-            channel: RouteChannel::Control,
-            action: RouteAction::Forward,
-        }
-    }
-
-    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let payload =
-            serde_json::to_vec(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        protocol::write_frame(w, ROUTE_KIND, &payload)?;
-        w.flush()
-    }
-
-    pub fn decode(payload: &[u8]) -> io::Result<RouteHeader> {
-        serde_json::from_slice(payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    }
-
-    pub fn describe(&self) -> String {
-        match &self.target {
-            RouteTarget::Ssh(spec) => format!("ssh {}@{}:{}", spec.user, spec.host, spec.port),
-            RouteTarget::Wsl { distro } => format!("wsl {distro}"),
-            RouteTarget::LocalStdio { program, .. } => format!("local {program}"),
-        }
+fn install_request_to_wire(request: &InstallRequest) -> InstallRequestWire {
+    InstallRequestWire {
+        host: request.host.clone(),
+        version: request.version.clone(),
+        asset: request.asset.to_string(),
+        source_url: request.source_url.clone(),
+        remote_path: request.remote_path.clone(),
+        size_bytes: request.size_bytes,
+        sha256: request.sha256.clone(),
     }
 }
 
-impl RouteTarget {
-    pub fn origin_key(&self) -> String {
-        match self {
-            RouteTarget::Ssh(spec) => ConnectionKey::from_spec(spec).as_str().to_string(),
-            RouteTarget::Wsl { distro } => format!("wsl:{distro}"),
-            RouteTarget::LocalStdio { program, .. } => format!("local-stdio:{program}"),
-        }
+fn install_wire_to_request(wire: InstallRequestWire) -> InstallRequest {
+    InstallRequest {
+        host: wire.host,
+        version: wire.version,
+        asset: crate::daemon::install::asset::interned(&wire.asset),
+        source_url: wire.source_url,
+        remote_path: wire.remote_path,
+        size_bytes: wire.size_bytes,
+        sha256: wire.sha256,
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstallRequestWire {
-    pub host: String,
-    pub version: String,
-    pub asset: String,
-    pub source_url: String,
-    pub remote_path: String,
-    pub size_bytes: u64,
-    pub sha256: String,
-}
-
-impl InstallRequestWire {
-    fn from_request(request: &InstallRequest) -> InstallRequestWire {
-        InstallRequestWire {
-            host: request.host.clone(),
-            version: request.version.clone(),
-            asset: request.asset.to_string(),
-            source_url: request.source_url.clone(),
-            remote_path: request.remote_path.clone(),
-            size_bytes: request.size_bytes,
-            sha256: request.sha256.clone(),
-        }
-    }
-
-    pub fn into_request(self) -> InstallRequest {
-        InstallRequest {
-            host: self.host,
-            version: self.version,
-            asset: crate::daemon::install::asset::interned(&self.asset),
-            source_url: self.source_url,
-            remote_path: self.remote_path,
-            size_bytes: self.size_bytes,
-            sha256: self.sha256,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoutePrompt {
-    Auth {
-        request_id: u64,
-        prompt: AuthPromptKind,
-    },
-    Install {
-        request_id: u64,
-        request: Box<InstallRequestWire>,
-    },
-    Mismatch {
-        daemons: Vec<MismatchedRemoteDaemon>,
-    },
-    InstallProgress {
-        host: String,
-        phase: InstallPhase,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteReply {
-    Auth {
-        request_id: u64,
-        response: AuthResponse,
-    },
-    Install {
-        request_id: u64,
-        approve: bool,
-    },
-}
-
-impl RoutePrompt {
-    #[cfg(test)]
-    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let payload =
-            serde_json::to_vec(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        protocol::write_frame(w, ROUTE_PROMPT_KIND, &payload)?;
-        w.flush()
-    }
-
-    fn decode(payload: &[u8]) -> io::Result<RoutePrompt> {
-        serde_json::from_slice(payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    }
-}
-
-impl RouteReply {
-    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let payload =
-            serde_json::to_vec(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        protocol::write_frame(w, ROUTE_REPLY_KIND, &payload)?;
-        w.flush()
-    }
-
-    fn decode(payload: &[u8]) -> io::Result<RouteReply> {
-        serde_json::from_slice(payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    }
-}
-
-pub trait RouteAuthResponder: Send + Sync {
-    fn respond(&self, machine: &RouteTarget, prompt: &AuthPromptKind) -> AuthResponse;
-}
-
-pub struct CancelAuth;
-
-impl RouteAuthResponder for CancelAuth {
-    fn respond(&self, _machine: &RouteTarget, _prompt: &AuthPromptKind) -> AuthResponse {
-        AuthResponse::Cancelled
-    }
-}
-
-static AUTH_RESPONDER: OnceLock<Mutex<Arc<dyn RouteAuthResponder>>> = OnceLock::new();
-
-fn auth_responder_slot() -> &'static Mutex<Arc<dyn RouteAuthResponder>> {
-    AUTH_RESPONDER.get_or_init(|| Mutex::new(Arc::new(CancelAuth)))
-}
-
-pub fn set_route_auth_responder(responder: Arc<dyn RouteAuthResponder>) {
-    if let Ok(mut slot) = auth_responder_slot().lock() {
-        *slot = responder;
-    }
-}
-
-pub fn route_auth_responder() -> Arc<dyn RouteAuthResponder> {
-    auth_responder_slot()
-        .lock()
-        .map(|slot| slot.clone())
-        .unwrap_or_else(|_| Arc::new(CancelAuth))
-}
-
+/// Negotiate a route with this process's installer policies answering the
+/// prompts a thin client cannot: install approvals through `install_confirm`,
+/// mismatch rosters to the mismatch recorder, progress to the progress
+/// reporter. Auth prompts go to the same registered responder the wire
+/// dialect uses everywhere.
 pub fn negotiate<S>(stream: &mut S, header: &RouteHeader) -> io::Result<RouteAck>
 where
     for<'a> &'a mut S: Read + Write,
 {
-    header.write(&mut &mut *stream)?;
-    loop {
-        let (kind, payload) = protocol::read_frame(&mut &mut *stream)?;
-        match kind {
-            ROUTE_KIND => return RouteAck::from_payload(&payload),
-            ROUTE_PROMPT_KIND => {
-                if let Some(reply) = answer(&header.target, RoutePrompt::decode(&payload)?) {
-                    reply.write(&mut &mut *stream)?;
-                }
-            }
-            other => {
-                if let Ok(DaemonMsg::Error(e)) = DaemonMsg::from_frame(other, payload) {
-                    return Err(io::Error::other(e));
-                }
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("expected a route ack, got kind {other}"),
-                ));
-            }
-        }
-    }
+    wire::negotiate_with(stream, header, answer)
 }
 
 fn answer(machine: &RouteTarget, prompt: RoutePrompt) -> Option<RouteReply> {
@@ -335,8 +88,8 @@ fn answer(machine: &RouteTarget, prompt: RoutePrompt) -> Option<RouteReply> {
             request_id,
             request,
         } => {
-            let decision =
-                crate::daemon::install::install_confirm().confirm(&request.into_request());
+            let decision = crate::daemon::install::install_confirm()
+                .confirm(&install_wire_to_request(*request));
             Some(RouteReply::Install {
                 request_id,
                 approve: decision == InstallDecision::Approve,
@@ -350,72 +103,6 @@ fn answer(machine: &RouteTarget, prompt: RoutePrompt) -> Option<RouteReply> {
             crate::daemon::install::install_progress().report(&host, phase);
             None
         }
-    }
-}
-
-impl RouteAck {
-    fn ok(link: &RemoteLink) -> RouteAck {
-        RouteAck {
-            ok: true,
-            link: Some(link.kind_label().to_string()),
-            action: Some(RouteAction::Forward),
-            error: None,
-        }
-    }
-
-    fn acted(action: RouteAction) -> RouteAck {
-        RouteAck {
-            ok: true,
-            link: None,
-            action: Some(action),
-            error: None,
-        }
-    }
-
-    fn failed(error: String) -> RouteAck {
-        RouteAck {
-            ok: false,
-            link: None,
-            action: None,
-            error: Some(error),
-        }
-    }
-
-    pub fn performed(&self, action: RouteAction) -> bool {
-        self.ok && self.action == Some(action)
-    }
-
-    pub fn read<R: io::Read>(r: &mut R) -> io::Result<RouteAck> {
-        let (kind, payload) = protocol::read_frame(r)?;
-        if kind != ROUTE_KIND {
-            if let Ok(DaemonMsg::Error(e)) = DaemonMsg::from_frame(kind, payload) {
-                return Err(io::Error::other(e));
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected a route ack, got kind {kind}"),
-            ));
-        }
-        RouteAck::from_payload(&payload)
-    }
-
-    fn from_payload(payload: &[u8]) -> io::Result<RouteAck> {
-        let ack: RouteAck = serde_json::from_slice(payload)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        if !ack.ok {
-            return Err(io::Error::other(
-                ack.error.unwrap_or_else(|| "route refused".into()),
-            ));
-        }
-        Ok(ack)
-    }
-
-    #[cfg(test)]
-    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let payload =
-            serde_json::to_vec(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        protocol::write_frame(w, ROUTE_KIND, &payload)?;
-        w.flush()
     }
 }
 
@@ -492,7 +179,7 @@ impl InstallConfirm for Relay {
 
         let prompt = RoutePrompt::Install {
             request_id,
-            request: Box::new(InstallRequestWire::from_request(request)),
+            request: Box::new(install_request_to_wire(request)),
         };
         let sent = serde_json::to_vec(&prompt)
             .ok()
@@ -590,7 +277,7 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
                     header.describe(),
                     link.kind_label()
                 );
-                let payload = ack_payload(&RouteAck::ok(&link))?;
+                let payload = ack_payload(&RouteAck::forward_link(link.kind_label()))?;
                 write_frame(&mut write_half, ROUTE_KIND, &payload).await?;
                 Some((link, conn, frames.into_buffer()))
             }
@@ -877,6 +564,8 @@ fn into_async(local: Stream) -> io::Result<tokio::net::TcpStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::daemon::protocol::NativeSshSpec;
 
     #[test]
     fn a_header_round_trips_through_a_frame() {
@@ -952,7 +641,9 @@ mod tests {
     async fn a_successful_ack_names_the_transport() {
         let link = super::super::remote_link::test_stdio_echo_link();
         let mut buf = Vec::new();
-        RouteAck::ok(&link).write(&mut buf).unwrap();
+        RouteAck::forward_link(link.kind_label())
+            .write(&mut buf)
+            .unwrap();
         let ack = RouteAck::read(&mut buf.as_slice()).unwrap();
         assert_eq!(ack.link.as_deref(), Some("local-stdio"));
     }
@@ -1041,7 +732,7 @@ mod tests {
         let original = a_request();
         let prompt = RoutePrompt::Install {
             request_id: 7,
-            request: Box::new(InstallRequestWire::from_request(&original)),
+            request: Box::new(install_request_to_wire(&original)),
         };
         let mut buf = Vec::new();
         prompt.write(&mut buf).unwrap();
@@ -1054,7 +745,7 @@ mod tests {
                 request,
             } => {
                 assert_eq!(request_id, 7);
-                assert_eq!(request.into_request(), original);
+                assert_eq!(install_wire_to_request(*request), original);
             }
             other => panic!("wrong prompt: {other:?}"),
         }
@@ -1126,7 +817,7 @@ mod tests {
 
             RoutePrompt::Install {
                 request_id: 3,
-                request: Box::new(InstallRequestWire::from_request(&a_request())),
+                request: Box::new(install_request_to_wire(&a_request())),
             }
             .write(&mut daemon)
             .unwrap();
@@ -1169,7 +860,7 @@ mod tests {
         struct Typed;
         impl RouteAuthResponder for Typed {
             fn respond(&self, machine: &RouteTarget, prompt: &AuthPromptKind) -> AuthResponse {
-                assert_eq!(machine.origin_key(), "local-stdio:x");
+                assert_eq!(origin_key(&machine), "local-stdio:x");
                 assert!(matches!(prompt, AuthPromptKind::Password { .. }));
                 AuthResponse::Secret("hunter2".into())
             }
@@ -1419,7 +1110,7 @@ mod tests {
         .expect("a minimal spec");
         let target = RouteTarget::Ssh(Box::new(spec.clone()));
         assert_eq!(
-            target.origin_key(),
+            origin_key(&target),
             crate::daemon::ssh::ConnectionKey::from_spec(&spec)
                 .as_str()
                 .to_string()
@@ -1433,13 +1124,12 @@ mod tests {
             program: "/opt/lyrel-server".into(),
             args: vec!["--stdio".into(), "--pane".into()],
         };
-        assert_eq!(control.origin_key(), pane.origin_key());
+        assert_eq!(origin_key(&control), origin_key(&pane));
         assert_ne!(
-            control.origin_key(),
-            RouteTarget::Wsl {
+            origin_key(&control),
+            origin_key(&RouteTarget::Wsl {
                 distro: "Ubuntu".into()
-            }
-            .origin_key()
+            })
         );
     }
 
@@ -1452,7 +1142,7 @@ mod tests {
         struct Recorder(Mutex<Vec<String>>);
         impl RouteAuthResponder for Recorder {
             fn respond(&self, machine: &RouteTarget, _: &AuthPromptKind) -> AuthResponse {
-                self.0.lock().unwrap().push(machine.origin_key());
+                self.0.lock().unwrap().push(origin_key(machine));
                 AuthResponse::Cancelled
             }
         }

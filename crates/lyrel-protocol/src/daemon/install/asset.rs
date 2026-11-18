@@ -20,7 +20,8 @@ pub const ASSET_WINDOWS_X86_64: &str = "lyrel-server-windows-x86_64.zip";
 
 /// The server's own name inside the Windows ZIP. On the far end it is renamed
 /// to the dialect-named `lyrel-server-c{control}p{protocol}.exe`; the ZIP name
-/// only has to be stable between the release workflow and [`crate::daemon::install::package`].
+/// only has to be stable between the release workflow and `install::package`'s
+/// reader, which lives in `lyrel-core` beside the rest of the installer.
 pub const WINDOWS_PACKAGE_EXE: &str = "lyrel-server.exe";
 
 /// Everything the Windows ZIP carries beside the server, in the order the
@@ -734,7 +735,7 @@ mod tests {
     }
 
     /// The ZIP payload names are the contract the release workflow writes and
-    /// [`crate::daemon::install::package`] reads: flat files only, and no two
+    /// `install::package` (in `lyrel-core`) reads: flat files only, and no two
     /// alike, or staging would be ambiguous.
     #[test]
     fn windows_package_layout_is_flat_and_unique() {

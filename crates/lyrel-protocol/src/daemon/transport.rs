@@ -56,7 +56,9 @@ mod imp_unix {
 
     pub(super) const MAX_SOCKET_PATH_BYTES: usize = 100;
 
-    fn fnv1a64(bytes: &[u8]) -> u64 {
+    /// The same FNV-1a the control endpoint's hashed fallback name uses, so
+    /// both endpoints hash a directory to the identical 64-bit name.
+    pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in bytes {
             h ^= u64::from(b);
@@ -65,7 +67,9 @@ mod imp_unix {
         h
     }
 
-    pub(crate) fn socket_path_for(config_dir: &Path) -> PathBuf {
+    /// The pane endpoint's socket path for `config_dir` — also consumed by the
+    /// core daemon when it publishes the endpoint to panes.
+    pub fn socket_path_for(config_dir: &Path) -> PathBuf {
         use std::os::unix::ffi::OsStrExt as _;
         let inline = config_dir.join("daemon.sock");
         if inline.as_os_str().as_bytes().len() <= MAX_SOCKET_PATH_BYTES {

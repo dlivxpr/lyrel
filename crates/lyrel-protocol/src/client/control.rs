@@ -122,12 +122,12 @@ impl Iterator for ControlEvents<'_> {
 fn connect_local_control() -> io::Result<transport::Stream> {
     #[cfg(unix)]
     {
-        let path = crate::host::server::control_socket_path()?;
+        let path = crate::daemon::control_endpoint::control_socket_path()?;
         transport::connect_endpoint_at(&path)
     }
     #[cfg(windows)]
     {
-        crate::host::server::connect_control()
+        crate::daemon::control_endpoint::connect_control()
     }
 }
 
