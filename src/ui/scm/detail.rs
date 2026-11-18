@@ -41,7 +41,7 @@ use lyrel_core::core::git::diff::CommitLabel;
 use lyrel_core::core::git::log::{Commit, CommitFile, RefKind};
 use lyrel_core::core::git::status::DecoStatus;
 
-use crate::terminal::git_diff::DiffSource;
+use crate::ui::scm::diff::DiffSource;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_plural};
 use crate::ui::right_panel::{

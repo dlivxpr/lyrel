@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use crate::core::config::{Config, DiffViewMode};
 use crate::core::git::status::DecoStatus;
-use crate::terminal::git_diff::{
+use crate::ui::scm::diff::{
     self, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus, LineKind,
     Truncation,
 };
@@ -77,7 +77,7 @@ pub(crate) struct DiffOverlayState {
     pub(crate) rows: Rc<Vec<DiffRow>>,
     rows_key: Option<RowsKey>,
     measurement: Option<DiffMeasurement>,
-    /// The [`ScmData`](crate::terminal::git_data::ScmData) epoch this patch was
+    /// The [`ScmData`](crate::ui::scm::data::ScmData) epoch this patch was
     /// read at, for the two sources that can go stale.
     ///
     /// Recorded when a probe *starts*, so a `git add` that lands while one is
@@ -247,7 +247,7 @@ impl LyrelApp {
         &self,
         host: crate::ui::host_ops::HostId,
         cwd: &std::path::Path,
-        source: &crate::terminal::git_diff::DiffSource,
+        source: &crate::ui::scm::diff::DiffSource,
     ) -> Option<&str> {
         let overlay = self
             .tabs
@@ -485,8 +485,8 @@ impl LyrelApp {
             let counts = matches!(snap.source, DiffSource::Head).then(|| snap.totals());
             let root = snap.root.clone();
             let branch = snap.branch.clone();
-            cx.default_global::<crate::terminal::git_status::GitStatusCache>();
-            cx.update_global::<crate::terminal::git_status::GitStatusCache, _>(|cache, _| {
+            cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
+            cx.update_global::<crate::ui::scm::status_cache::GitStatusCache, _>(|cache, _| {
                 cache.note_diff_read(host, &root, &branch, counts)
             })
         } else {
@@ -547,7 +547,7 @@ impl LyrelApp {
             // HEAD snapshot is comparable to them.
             DiffSource::Head => {
                 let Some(status) = cx
-                    .try_global::<crate::terminal::git_status::GitStatusCache>()
+                    .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
                     .and_then(|cache| cache.status_for(overlay.host_id, &overlay.cwd))
                 else {
                     return;
@@ -1993,7 +1993,7 @@ pub(crate) fn deco_status(status: FileStatus) -> DecoStatus {
 /// Zero is the same value a never-touched repository reports, so an overlay
 /// that reads it before the global exists simply never looks stale.
 fn scm_epoch(cx: &gpui_kit::App, host: crate::ui::host_ops::HostId, root: &Path) -> u64 {
-    cx.try_global::<crate::terminal::git_data::ScmData>()
+    cx.try_global::<crate::ui::scm::data::ScmData>()
         .map(|data| data.epoch(host, root))
         .unwrap_or(0)
 }
@@ -2178,7 +2178,7 @@ fn probe_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::git_diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
+    use crate::ui::scm::diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
     use crate::ui::diff_list::{build_rows, file_expanded};
     use crate::ui::diff_rows::split_hunk;
     use crate::ui::i18n::set_locale;
@@ -3035,7 +3035,7 @@ mod overlay_gpui_tests {
     }
 
     fn one_file_snapshot(source: DiffSource) -> DiffSnapshot {
-        use crate::terminal::git_diff::{DiffLine, Hunk, LineKind};
+        use crate::ui::scm::diff::{DiffLine, Hunk, LineKind};
         DiffSnapshot {
             root: std::path::PathBuf::from("/no/such/lyrel/repo"),
             source,
@@ -3431,7 +3431,7 @@ mod overlay_gpui_tests {
 #[cfg(all(test, unix))]
 mod render_idle_gpui_tests {
     use super::*;
-    use crate::terminal::git_status::{GitStatusCache, RepoSnapshot};
+    use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
     use crate::ui::app::{render_probe, test_window};
     use crate::ui::host_ops::HostId;
     use gpui_kit::TestAppContext;
@@ -3665,7 +3665,7 @@ mod render_idle_gpui_tests {
 #[cfg(test)]
 mod selection_gpui_tests {
     use super::*;
-    use crate::terminal::git_diff::{DiffLine, LineKind};
+    use crate::ui::scm::diff::{DiffLine, LineKind};
     use crate::ui::app::test_window;
     use crate::ui::diff_rows::RowId;
     use crate::ui::pane::{Pane, PaneSlot};

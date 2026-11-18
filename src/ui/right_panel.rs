@@ -955,7 +955,7 @@ impl LyrelApp {
         let mut pane_id: Option<u64> = None;
         // Where the `changes` row's counts lead. Same source as the sidebar's.
         let mut diff_target: Option<(crate::ui::host_ops::HostId, PathBuf)> = None;
-        let mut git: Option<crate::terminal::git_status::GitStatus> = None;
+        let mut git: Option<crate::ui::scm::status_cache::GitStatus> = None;
 
         if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             if let Some(leaf) = tab.detail_pane(window, cx) {

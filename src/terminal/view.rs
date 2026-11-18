@@ -135,6 +135,41 @@ pub struct OpenFileRequested {
 
 impl gpui_kit::EventEmitter<OpenFileRequested> for TerminalView {}
 
+/// The pane's command boundary may have changed its repository's content.
+/// Carries only the identity of the claim; the shell resolves the repo root
+/// and bumps the SCM epoch. Emitting never repaints by itself — the panel's
+/// next scheduled read is what notices the epoch moved.
+pub struct ScmRepoChanged {
+    pub host_id: crate::ui::host_ops::HostId,
+    pub cwd: std::path::PathBuf,
+}
+
+impl gpui_kit::EventEmitter<ScmRepoChanged> for TerminalView {}
+
+/// A request for the cheap repository-badge probe (branch, `+N −M`) for the
+/// pane's cwd. The pane keeps its own `git_status_cwd` bookkeeping; the claim
+/// against the cache and the `HostOps` dispatch live with the shell wiring,
+/// which lands the answer where the tab badge renders from.
+pub struct ScmStatusRefreshRequested {
+    pub host_id: crate::ui::host_ops::HostId,
+    pub cwd: std::path::PathBuf,
+    pub trigger: GitRefresh,
+}
+
+impl gpui_kit::EventEmitter<ScmStatusRefreshRequested> for TerminalView {}
+
+/// A steady-state request to revalidate which repository owns the pane's cwd
+/// — a nested worktree can appear without a prompt or a write. The pane emits
+/// this only while displayed, connected and due; the shell claims the check,
+/// dispatches discovery, and follows a changed answer with a
+/// [`GitRefresh::Edge`] probe.
+pub struct ScmRootRecheckRequested {
+    pub host_id: crate::ui::host_ops::HostId,
+    pub cwd: std::path::PathBuf,
+}
+
+impl gpui_kit::EventEmitter<ScmRootRecheckRequested> for TerminalView {}
+
 pub struct NativeSshParts {
     terminal: RemoteTerminal,
     pane_id: u64,
@@ -464,19 +499,18 @@ enum CmdKey {
     FallThrough,
 }
 
-const OPPORTUNISTIC_GIT_GAP: std::time::Duration = std::time::Duration::from_millis(1500);
-
-/// How long a pane with an unknown or negative repository answer waits
-/// before asking again. Discovery can miss temporarily unavailable metadata;
-/// retry without issuing a request on every poll tick.
-const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
-
+/// What made a pane ask for a badge probe — the trigger half of the
+/// edge/opportunistic/retry transitions in `poll_foreground`. Carried by
+/// [`ScmStatusRefreshRequested`] to the shell wiring, which maps it onto the
+/// cache's budgets ([`crate::ui::scm_snapshot::OPPORTUNISTIC_GIT_GAP`] and
+/// [`crate::ui::scm_snapshot::GIT_RETRY_GAP`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum GitRefresh {
+pub enum GitRefresh {
     Edge,
     Opportunistic,
     /// Nothing happened; the cache just has no answer for this pane's cwd
-    /// yet, or the last probe found no repository. Throttled by [`GIT_RETRY_GAP`].
+    /// yet, or the last probe found no repository. Throttled by
+    /// [`crate::ui::scm_snapshot::GIT_RETRY_GAP`].
     Retry,
 }
 
@@ -1137,14 +1171,20 @@ impl TerminalView {
             .mark_unread((self.host_id, self.pane_id), refocus_incoming, cx);
     }
 
-    pub fn git_status(&self, cx: &App) -> Option<crate::terminal::git_status::GitStatus> {
+    pub fn git_status(&self, cx: &App) -> Option<crate::core::git::GitStatus> {
         let cwd = self.git_status_cwd.as_ref()?;
-        cx.try_global::<crate::terminal::git_status::GitStatusCache>()?
-            .status_for(self.host_id, cwd)
+        crate::ui::scm_snapshot::badge_status(cx, self.host_id, cwd)
     }
 
     pub fn git_status_cwd(&self) -> Option<&std::path::Path> {
         self.git_status_cwd.as_deref()
+    }
+
+    /// Whether the pane is on screen. The SCM root-recheck landing asks this
+    /// before it follows a changed answer with a badge probe, matching the
+    /// pane-side gate that only emits the recheck while displayed.
+    pub(crate) fn scm_displayed(&self) -> bool {
+        self.lifecycle.is_displayed()
     }
 
     /// Retry unknown and negative repo answers. A transient discovery failure
@@ -1157,12 +1197,14 @@ impl TerminalView {
         let Some(cwd) = self.git_status_cwd.as_deref() else {
             return false;
         };
-        let Some(cache) = cx.try_global::<crate::terminal::git_status::GitStatusCache>() else {
-            return false;
-        };
-        cache.retry_due(self.host_id, cwd, GIT_RETRY_GAP)
+        crate::ui::scm_snapshot::retry_due(cx, self.host_id, cwd)
     }
 
+    /// Ask the shell to revalidate which repository owns this cwd — see
+    /// [`ScmRootRecheckRequested`]. Emission is gated exactly the way the
+    /// in-place claim used to gate: displayed panes only, a host that
+    /// answers, and the cache's own due check first, so a quiet pane pays
+    /// nothing and the controller claims at most one check per gap.
     fn recheck_git_root(&self, cx: &mut Context<Self>) {
         if !self.lifecycle.is_displayed() {
             return;
@@ -1170,39 +1212,17 @@ impl TerminalView {
         let Some(cwd) = self.git_status_cwd.as_deref() else {
             return;
         };
-        let Some(host) = self.host(cx).filter(|host| host.is_connected()) else {
+        if self.host(cx).is_none_or(|host| !host.is_connected()) {
             return;
-        };
+        }
         let id = self.host_id;
-        let Some(request) = cx
-            .global::<crate::terminal::git_status::GitStatusCache>()
-            .begin_root_check(id, cwd, GIT_RETRY_GAP)
-        else {
+        if !crate::ui::scm_snapshot::root_recheck_due(cx, id, cwd) {
             return;
-        };
-        let cwd = cwd.to_path_buf();
-        let probe_cwd = cwd.clone();
-        let pane = cx.weak_entity();
-        crate::ui::host_ops::HostOps::run_detached(
-            host,
-            cx,
-            move |host| crate::terminal::git_status::discover_root(host, &probe_cwd),
-            move |cx, result| {
-                let changed = cx
-                    .global::<crate::terminal::git_status::GitStatusCache>()
-                    .finish_root_check(id, &cwd, request, result);
-                if changed {
-                    let _ = pane.update(cx, |view, cx| {
-                        if view.host_id == id
-                            && view.git_status_cwd.as_deref() == Some(&cwd)
-                            && view.lifecycle.is_displayed()
-                        {
-                            view.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
-                        }
-                    });
-                }
-            },
-        );
+        }
+        cx.emit(ScmRootRecheckRequested {
+            host_id: id,
+            cwd: cwd.to_path_buf(),
+        });
     }
 
     /// Plant the cwd the git-status poll would have found. For tests that
@@ -1807,33 +1827,30 @@ impl TerminalView {
     /// the tree is not looking. A command boundary is the cheapest honest
     /// signal that that may have happened.
     ///
-    /// Only the epoch moves. Scheduling the debounced re-read needs the app
-    /// entity, which a pane does not hold — but `refresh_git_status` below
-    /// writes `GitStatusCache`, the app observes that global, and the panel's
-    /// next render finds the repository stale and asks. One notify, not two.
+    /// Only the claim leaves the pane, as [`ScmRepoChanged`]: the shell
+    /// resolves the repo root and moves the epoch. No notify here — the
+    /// badge probe this edge also requests writes the cheap cache, the app
+    /// observes that global, and the panel's next render finds the repository
+    /// stale and asks. One notify, not two.
     fn mark_repo_changed(&self, cwd: Option<&std::path::Path>, cx: &mut Context<Self>) {
-        use crate::terminal::git_data::ScmData;
-        use crate::terminal::git_status::GitStatusCache;
-
         let Some(cwd) = cwd else { return };
-        let Some(root) = cx
-            .try_global::<GitStatusCache>()
-            .and_then(|cache| cache.repo_root_for(self.host_id, cwd))
-            .map(std::path::Path::to_path_buf)
-        else {
-            return;
-        };
-        cx.default_global::<ScmData>().bump(self.host_id, &root);
+        cx.emit(ScmRepoChanged {
+            host_id: self.host_id,
+            cwd: cwd.to_path_buf(),
+        });
     }
 
+    /// Record where this pane's badge probe should look, then ask the shell
+    /// to run it ([`ScmStatusRefreshRequested`]). The view keeps the cwd
+    /// bookkeeping — geometry that depends on it invalidates here — and the
+    /// shell keeps the claim and the dispatch, which is where the budgets
+    /// (`Edge` immediate, opportunistic and retry throttled) are enforced.
     fn refresh_git_status(
         &mut self,
         cwd: Option<std::path::PathBuf>,
         trigger: GitRefresh,
         cx: &mut Context<Self>,
     ) {
-        use crate::terminal::git_status::GitStatusCache;
-
         let changed = self.git_status_cwd != cwd;
         self.git_status_cwd = cwd.clone();
         if changed {
@@ -1845,7 +1862,6 @@ impl TerminalView {
             }
             return;
         };
-        let id = self.host_id;
         let Some(host) = self.host(cx) else {
             if changed {
                 cx.notify();
@@ -1858,39 +1874,11 @@ impl TerminalView {
             }
             return;
         }
-        cx.default_global::<GitStatusCache>();
-        let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
-            GitRefresh::Edge => cache.begin_probe(id, &cwd),
-            GitRefresh::Opportunistic => {
-                cache.begin_probe_throttled(id, &cwd, OPPORTUNISTIC_GIT_GAP)
-            }
-            GitRefresh::Retry => cache.begin_probe_throttled(id, &cwd, GIT_RETRY_GAP),
+        cx.emit(ScmStatusRefreshRequested {
+            host_id: self.host_id,
+            cwd,
+            trigger,
         });
-        if !claimed {
-            return;
-        }
-        let probe_cwd = cwd.clone();
-        let pane = cx.weak_entity();
-        crate::ui::host_ops::HostOps::run_detached(
-            host,
-            cx,
-            move |h| crate::terminal::git_status::probe_repo(h, &probe_cwd),
-            move |cx, result| {
-                use crate::terminal::git_status::RepoProbe;
-                let rerun = cx.update_global::<GitStatusCache, _>(|cache, _| match result {
-                    RepoProbe::Repo(snap) => cache.finish_probe(id, &cwd, Some(snap)),
-                    RepoProbe::NotARepo => cache.finish_probe(id, &cwd, None),
-                    RepoProbe::Failed => cache.fail_probe(id, &cwd),
-                });
-                if rerun {
-                    let _ = pane.update(cx, |view, cx| {
-                        if view.git_status_cwd.as_deref() == Some(&cwd) {
-                            view.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
-                        }
-                    });
-                }
-            },
-        );
     }
 
     pub fn on_select_start(

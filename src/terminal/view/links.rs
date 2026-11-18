@@ -11,6 +11,7 @@ use crate::terminal::link::{LinkAt, LinkInteraction};
 use crate::terminal::search::LinkTarget;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::notification_history::NotificationWindowExt as _;
+use crate::ui::scm_snapshot;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, ClipboardItem, Context, Window, prelude::*, px};
 
@@ -364,11 +365,7 @@ impl TerminalView {
             row,
             armed,
             include_loopback,
-            |host, cwd| {
-                cx.try_global::<crate::terminal::git_status::GitStatusCache>()
-                    .and_then(|cache| cache.repo_root_for(host, cwd))
-                    .map(std::path::Path::to_path_buf)
-            },
+            |host, cwd| scm_snapshot::repo_root_for(cx, host, cwd),
         );
         self.request_link_work(cx);
         self.flush_link_probes(cx);
@@ -429,11 +426,7 @@ impl TerminalView {
                 grid.link_line(col, row),
                 include_files,
                 include_loopback,
-                |host, cwd| {
-                    cx.try_global::<crate::terminal::git_status::GitStatusCache>()
-                        .and_then(|cache| cache.repo_root_for(host, cwd))
-                        .map(std::path::Path::to_path_buf)
-                },
+                |host, cwd| scm_snapshot::repo_root_for(cx, host, cwd),
                 |points| grid.row_runs(points),
             )
         } else {
@@ -443,11 +436,7 @@ impl TerminalView {
                 row,
                 include_files,
                 include_loopback,
-                |host, cwd| {
-                    cx.try_global::<crate::terminal::git_status::GitStatusCache>()
-                        .and_then(|cache| cache.repo_root_for(host, cwd))
-                        .map(std::path::Path::to_path_buf)
-                },
+                |host, cwd| scm_snapshot::repo_root_for(cx, host, cwd),
             )
         };
         self.request_link_work(cx);

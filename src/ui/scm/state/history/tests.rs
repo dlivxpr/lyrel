@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::git_data::ScmData;
+use crate::ui::scm::data::ScmData;
 use crate::ui::app::test_window::harness;
 use gpui_kit::TestAppContext;
 
@@ -222,7 +222,7 @@ fn a_detail_refresh_cannot_land_after_its_repository_epoch_changes(cx: &mut Test
 
 #[gpui_kit::test]
 fn reopening_a_repository_rejects_retired_graph_and_detail_results(cx: &mut TestAppContext) {
-    use crate::terminal::git_data::ScmWatcher;
+    use crate::ui::scm::data::ScmWatcher;
     let (app, mut vcx) = harness(cx);
     for clear_host in [false, true] {
         app.update(&mut vcx, |app, cx| {

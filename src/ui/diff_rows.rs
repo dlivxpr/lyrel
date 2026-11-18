@@ -5,7 +5,7 @@
 //! without a window.
 
 use crate::core::config::DiffViewMode;
-use crate::terminal::git_diff::{DiffLine, Hunk, LineKind};
+use crate::ui::scm::diff::{DiffLine, Hunk, LineKind};
 
 /// A tab is worth this many columns. Not configurable: a diff is read next to
 /// the file's other lines, not on its own, and the grid has to line up.

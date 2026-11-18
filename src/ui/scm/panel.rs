@@ -26,8 +26,8 @@ use lyrel_core::core::git::status::{
     ChangeCode, DecoStatus, HeadState, RepoOperation, RepoPath, StatusEntry, WorkingTreeStatus,
 };
 
-use crate::terminal::git_data::status_of;
-use crate::terminal::git_diff::DiffSource;
+use crate::ui::scm::data::status_of;
+use crate::ui::scm::diff::DiffSource;
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
@@ -491,7 +491,7 @@ impl LyrelApp {
     /// `render`, and taking the global mutably there queues a global-observer
     /// effect on every frame.
     fn scm_network_busy(&self, repo: &RepoKey, cx: &gpui_kit::App) -> bool {
-        cx.try_global::<crate::terminal::git_data::ScmData>()
+        cx.try_global::<crate::ui::scm::data::ScmData>()
             .is_some_and(|data| data.network_slots(repo.host, &repo.root) > 0)
     }
 
@@ -1037,12 +1037,12 @@ impl LyrelApp {
     ) -> RepoLookup {
         let id = host.id();
         if let Some(root) = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .and_then(|cache| cache.repo_root_for(id, cwd))
         {
             return RepoLookup::Root(root.to_path_buf());
         } else if cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .is_some_and(|cache| cache.known_repo_for(id, cwd) == Some(None))
         {
             return RepoLookup::NotARepo;
@@ -1136,7 +1136,7 @@ impl LyrelApp {
         if self.scm.watch.is_some() {
             return;
         }
-        self.scm.watch = Some(cx.observe_global::<crate::terminal::git_data::ScmData>(
+        self.scm.watch = Some(cx.observe_global::<crate::ui::scm::data::ScmData>(
             |this, cx| {
                 let Some((key, seen)) = this.scm.seen.clone() else {
                     return;
@@ -1856,7 +1856,7 @@ impl LyrelApp {
             return;
         };
         let Some(seen) = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .and_then(|cache| cache.status_for(repo.host, &repo.root))
         else {
             return;
@@ -3201,11 +3201,11 @@ mod render_idle_gpui_tests {
         let want = root.clone();
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, cx| {
             app.scm.pane_repo().is_some_and(|r| r.root == want)
-                && crate::terminal::git_data::status_of(cx, HostId::LOCAL, &want).is_some()
+                && crate::ui::scm::data::status_of(cx, HostId::LOCAL, &want).is_some()
         });
 
         let status = app.update_in(&mut vcx, |app, _, cx| {
-            crate::terminal::git_data::status_of(
+            crate::ui::scm::data::status_of(
                 cx,
                 HostId::LOCAL,
                 &app.scm.pane_repo().cloned().unwrap().root,
@@ -3250,7 +3250,7 @@ mod render_idle_gpui_tests {
             vcx.executor().advance_clock(Duration::from_millis(300));
             vcx.run_until_parked();
             let fresh = vcx.update(|_, cx| {
-                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                let data = cx.global::<crate::ui::scm::data::ScmData>();
                 !data.is_stale(repo.host, &repo.root)
                     && !data.is_change_pending(repo.host, &repo.root)
             });
@@ -3272,7 +3272,7 @@ mod render_idle_gpui_tests {
         for _ in 0..3 {
             render_probe::arm(BUDGET);
             let requested_epoch = app.update_in(&mut vcx, |app, _, cx| {
-                let data = cx.global_mut::<crate::terminal::git_data::ScmData>();
+                let data = cx.global_mut::<crate::ui::scm::data::ScmData>();
                 data.bump(repo.host, &repo.root);
                 let epoch = data.epoch(repo.host, &repo.root);
                 app.scm_refresh(host.clone(), repo.root.clone(), cx);
@@ -3282,7 +3282,7 @@ mod render_idle_gpui_tests {
             loop {
                 vcx.run_until_parked();
                 if vcx.update(|_, cx| {
-                    !cx.global::<crate::terminal::git_data::ScmData>()
+                    !cx.global::<crate::ui::scm::data::ScmData>()
                         .is_stale(repo.host, &repo.root)
                 }) {
                     break;
@@ -3291,7 +3291,7 @@ mod render_idle_gpui_tests {
                     Instant::now() < deadline,
                     "the refresh never completed: requested epoch={requested_epoch}, current={:?}",
                     vcx.update(|_, cx| {
-                        let data = cx.global::<crate::terminal::git_data::ScmData>();
+                        let data = cx.global::<crate::ui::scm::data::ScmData>();
                         (
                             data.epoch(repo.host, &repo.root),
                             data.is_stale(repo.host, &repo.root),
@@ -3310,7 +3310,7 @@ mod render_idle_gpui_tests {
         // including the decoration index consumed by the Files panel.
         std::fs::write(root.join("after.txt"), "after\n").unwrap();
         app.update_in(&mut vcx, |app, _, cx| {
-            cx.global_mut::<crate::terminal::git_data::ScmData>()
+            cx.global_mut::<crate::ui::scm::data::ScmData>()
                 .bump(repo.host, &repo.root);
             app.scm_refresh(host.clone(), repo.root.clone(), cx);
         });
@@ -3326,7 +3326,7 @@ mod render_idle_gpui_tests {
         vcx.update(|_, cx| {
             let status = status_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(status.total_entries, 2);
-            let index = crate::terminal::git_data::index_of(cx, repo.host, &repo.root).unwrap();
+            let index = crate::ui::scm::data::index_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(index.file("after.txt"), Some(DecoStatus::Untracked));
         });
     }
@@ -3390,7 +3390,7 @@ mod render_idle_gpui_tests {
                 root.display(),
                 app.read_with(vcx, |app, cx| format!(
                     "pane root={:?}, panel root={:?}, remote counts={:?}",
-                    cx.global::<crate::terminal::git_status::GitStatusCache>()
+                    cx.global::<crate::ui::scm::status_cache::GitStatusCache>()
                         .repo_root_for(HostId::LOCAL, root),
                     app.scm.pane_repo().map(|repo| &repo.root),
                     app.github
@@ -3561,7 +3561,7 @@ mod render_idle_gpui_tests {
         // `a_settled_source_control_panel_reaches_render_idle`.
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, |app, cx| {
             app.scm.pane_repo().is_some_and(|r| {
-                crate::terminal::git_data::status_of(cx, r.host, &r.root)
+                crate::ui::scm::data::status_of(cx, r.host, &r.root)
                     .is_some_and(|s| s.untracked().count() == 3)
             })
         });

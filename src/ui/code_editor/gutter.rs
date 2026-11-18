@@ -9,7 +9,7 @@
 //! The base is fetched through the buffer's own host, so a file on a remote
 //! workspace is compared with *that* machine's repository. It is re-read when
 //! the repository's SCM epoch moves (a `.git` watch event, a stage, a commit,
-//! a checkout — see `ScmData::bump`), when the file is saved, and when the
+//! a checkout — see `crate::ui::scm::data::ScmData::bump`), when the file is saved, and when the
 //! buffer's path changes. The diff itself is recomputed off the UI thread a
 //! moment after each edit. The application paints the resulting hunks in the
 //! line-number gutter through the editor's public geometry API.
@@ -386,12 +386,6 @@ fn enabled(cx: &gpui_kit::App) -> bool {
     cx.global::<crate::core::config::Config>().editor_git_gutter
 }
 
-fn scm_epoch(cx: &gpui_kit::App, host: crate::ui::host_ops::HostId, root: &Path) -> u64 {
-    cx.try_global::<crate::terminal::git_data::ScmData>()
-        .map(|data| data.epoch(host, root))
-        .unwrap_or(0)
-}
-
 impl LyrelApp {
     pub(crate) fn render_editor_gutter(
         &self,
@@ -547,7 +541,7 @@ impl LyrelApp {
                 .gutter
                 .root
                 .as_deref()
-                .map_or(0, |root| scm_epoch(cx, host.id(), root)),
+                .map_or(0, |root| crate::ui::scm_snapshot::epoch(cx, host.id(), root)),
         };
         if f.gutter.fetched.as_ref() == Some(&wanted) {
             return;

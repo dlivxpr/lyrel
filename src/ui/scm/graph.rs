@@ -2067,7 +2067,7 @@ mod render_idle_gpui_tests {
                 }
                 let (repo, epoch, _) = graph.page_key.as_ref()?;
                 let current_epoch = cx
-                    .try_global::<crate::terminal::git_data::ScmData>()
+                    .try_global::<crate::ui::scm::data::ScmData>()
                     .map_or(0, |data| data.epoch(repo.host, &repo.root));
                 if *epoch != current_epoch {
                     return None;

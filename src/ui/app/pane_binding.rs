@@ -274,6 +274,34 @@ impl LyrelApp {
             },
         )
         .detach();
+        cx.subscribe_in(
+            view,
+            window,
+            |app, _view, ev: &crate::terminal::view::ScmRepoChanged, _window, cx| {
+                // Only the epoch moves here — no notify, on purpose: the
+                // badge probe the same boundary requests writes the cheap
+                // cache, and the app's observer of that global is what
+                // repaints.
+                app.scm_invalidate_cwd(ev.host_id, &ev.cwd, cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &crate::terminal::view::ScmStatusRefreshRequested, _window, cx| {
+                app.scm_badge_probe(ev.host_id, ev.cwd.clone(), ev.trigger, view.downgrade(), cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &crate::terminal::view::ScmRootRecheckRequested, _window, cx| {
+                app.scm_recheck_root(ev.host_id, ev.cwd.clone(), view.downgrade(), cx);
+            },
+        )
+        .detach();
         Self::watch_open_file_requests(&view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);

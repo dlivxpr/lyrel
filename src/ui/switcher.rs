@@ -1052,7 +1052,7 @@ impl LyrelApp {
         let host = WorkspaceStore::all(cx).get(id).map(|w| w.host_id());
         let git = |cwd: Option<&str>| -> Option<lyrel_core::core::git::GitStatus> {
             let (host, cwd) = (host?, cwd?);
-            cx.try_global::<crate::terminal::git_status::GitStatusCache>()?
+            cx.try_global::<crate::ui::scm::status_cache::GitStatusCache>()?
                 .status_for(host, std::path::Path::new(cwd))
         };
         // These rows describe a workspace on `host`, and the cwds they carry

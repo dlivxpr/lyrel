@@ -173,7 +173,7 @@ impl LyrelApp {
         {
             return;
         }
-        if let Some(status) = crate::terminal::git_data::status_of(cx, host.id(), &root) {
+        if let Some(status) = crate::ui::scm::data::status_of(cx, host.id(), &root) {
             ready(self, &status, window, cx);
             return;
         }

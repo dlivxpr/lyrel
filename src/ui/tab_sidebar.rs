@@ -19,7 +19,7 @@ use crate::core::group_key::{
     AutoKey, GroupId, GroupKey, PinnedGroup, WorkspaceGroups, auto_key, auto_names, pinned_names,
     place,
 };
-use crate::terminal::git_status::GitStatusCache;
+use crate::ui::scm::status_cache::GitStatusCache;
 use crate::ui::app::LyrelApp;
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -165,7 +165,7 @@ fn counts_width(
     ts: &gpui_kit::WindowTextSystem,
     font: &gpui_kit::Font,
     size: f32,
-    status: &crate::terminal::git_status::GitStatus,
+    status: &crate::ui::scm::status_cache::GitStatus,
 ) -> f32 {
     let mut w = 0.;
     if status.added > 0 {
@@ -185,7 +185,7 @@ fn counts_width(
 
 /// The branch a whole group shares, lifted off its rows and onto its header.
 struct SharedGit {
-    status: crate::terminal::git_status::GitStatus,
+    status: crate::ui::scm::status_cache::GitStatus,
     /// Where a click on the counts opens the diff overlay, if the setting
     /// allows one.
     click: Option<(crate::ui::host_ops::HostId, PathBuf)>,
@@ -3627,7 +3627,7 @@ mod fold_tests {
     /// missing makes it return "no decision", which would leave every group
     /// below untouched and every assertion about moving vacuous.
     fn plant(app: &LyrelApp, i: usize, cwd: &str, root: &str, home: &str, cx: &mut gpui_kit::App) {
-        use crate::terminal::git_status::{GitStatusCache, RepoSnapshot};
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use crate::ui::host_ops::HostId;
 
         let cwd = PathBuf::from(cwd);
@@ -3657,7 +3657,7 @@ mod fold_tests {
 
     /// Put tab `i` somewhere the cache knows is in no repo at all.
     fn plant_plain(app: &LyrelApp, i: usize, cwd: &str, cx: &mut gpui_kit::App) {
-        use crate::terminal::git_status::GitStatusCache;
+        use crate::ui::scm::status_cache::GitStatusCache;
         use crate::ui::host_ops::HostId;
 
         let cwd = PathBuf::from(cwd);

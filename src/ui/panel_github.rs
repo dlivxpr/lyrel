@@ -1169,7 +1169,7 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert!(app.scm.pane_repo().is_none(), "Changes was never opened");
             assert!(
-                cx.global::<crate::terminal::git_data::ScmData>()
+                cx.global::<crate::ui::scm::data::ScmData>()
                     .status_for(crate::ui::host_ops::HostId::LOCAL, &root)
                     .is_none(),
                 "GitHub metadata must not trigger a full working-tree status read"

@@ -309,7 +309,7 @@ impl LyrelApp {
         let host = view.host_id();
         let cwd = view.effective_host_cwd()?;
         let root = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()?
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()?
             .repo_root_for(host, &cwd)?;
         Some((host, root.to_path_buf()))
     }
@@ -322,7 +322,7 @@ impl LyrelApp {
         if self.github.metadata_watch.is_some() {
             return;
         }
-        self.github.metadata_watch = Some(cx.observe_global::<crate::terminal::git_data::ScmData>(
+        self.github.metadata_watch = Some(cx.observe_global::<crate::ui::scm::data::ScmData>(
             |this, cx| {
                 if !this.right_panel_visible || this.right_panel_tab != RightPanelTab::GitHub {
                     return;
@@ -330,7 +330,7 @@ impl LyrelApp {
                 let Some((repo, seen)) = this.github.metadata_seen.as_mut() else {
                     return;
                 };
-                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                let data = cx.global::<crate::ui::scm::data::ScmData>();
                 let epoch = data.epoch(repo.host, &repo.root);
                 if epoch != *seen && !data.is_change_pending(repo.host, &repo.root) {
                     *seen = epoch;
@@ -377,7 +377,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> GhTarget {
         let epoch = cx
-            .default_global::<crate::terminal::git_data::ScmData>()
+            .default_global::<crate::ui::scm::data::ScmData>()
             .epoch(repo.host, &repo.root);
         self.github_watch_metadata(&repo, epoch, cx);
         let remotes = match self.github.remotes.get(&repo) {
@@ -430,7 +430,7 @@ impl LyrelApp {
                     return;
                 }
                 if cx
-                    .global::<crate::terminal::git_data::ScmData>()
+                    .global::<crate::ui::scm::data::ScmData>()
                     .epoch(repo.host, &repo.root)
                     != epoch
                 {

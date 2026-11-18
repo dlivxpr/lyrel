@@ -56,6 +56,7 @@ pub mod reorder;
 pub mod right_panel;
 pub mod rounding;
 pub mod scm;
+pub mod scm_snapshot;
 pub mod scrollbar;
 pub mod search;
 pub(crate) mod session_lifecycle;

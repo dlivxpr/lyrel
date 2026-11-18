@@ -194,9 +194,9 @@ impl LyrelApp {
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {
             this.reload_from_config(window, cx)
         });
-        cx.default_global::<crate::terminal::git_status::GitStatusCache>();
+        cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
         let git_status_watch =
-            cx.observe_global::<crate::terminal::git_status::GitStatusCache>(|this, cx| {
+            cx.observe_global::<crate::ui::scm::status_cache::GitStatusCache>(|this, cx| {
                 this.maybe_refresh_diff_overlay(cx);
                 this.right_panel_refresh_changes(cx);
                 cx.notify();
@@ -426,8 +426,8 @@ impl LyrelApp {
         cx.on_release(move |_, cx| crate::ui::lsp::LspStore::sync_window(app_id, Vec::new(), cx))
             .detach();
         cx.on_release(move |_, cx| {
-            if cx.has_global::<crate::terminal::git_data::ScmData>() {
-                cx.global_mut::<crate::terminal::git_data::ScmData>()
+            if cx.has_global::<crate::ui::scm::data::ScmData>() {
+                cx.global_mut::<crate::ui::scm::data::ScmData>()
                     .release_window(app_id.as_u64());
             }
         })

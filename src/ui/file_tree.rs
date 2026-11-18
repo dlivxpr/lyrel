@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
-use crate::terminal::git_data::index_of;
+use crate::ui::scm_snapshot::index_of;
 use crate::ui::app::LyrelApp;
 use crate::ui::file_copy;
 use crate::ui::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};

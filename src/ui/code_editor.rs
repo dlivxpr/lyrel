@@ -5453,7 +5453,7 @@ mod close_gpui_tests {
     #[gpui_kit::test]
     fn diff_status_uses_its_host_path_not_the_covered_document(cx: &mut TestAppContext) {
         use crate::core::actions::{EditorNewFile, ToggleCodePanel};
-        use crate::terminal::git_diff::{DiffSnapshot, DiffSource};
+        use crate::ui::scm::diff::{DiffSnapshot, DiffSource};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
         vcx.dispatch_action(EditorNewFile);

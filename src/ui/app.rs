@@ -1744,7 +1744,7 @@ impl LyrelApp {
             // only reachable by typing the same command again, from the
             // directory it was typed in.
             Some((None, Some(remote), cwd)) if remote.kind == RemoteKind::Ssh => {
-                let line = crate::terminal::git_data::shell_quote(&remote.argv);
+                let line = crate::ui::scm::data::shell_quote(&remote.argv);
                 let place = self.spawn_group(None, cx).on_host(Some(remote.target));
                 if let Some(slot) = self.new_tab_slot(cwd, None, window, cx) {
                     if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
@@ -3954,7 +3954,7 @@ impl LyrelApp {
         let Some(cwd) = view.git_status_cwd() else {
             return false;
         };
-        cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+        cx.try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .and_then(|cache| cache.known_repo_for(view.host_id(), cwd))
             .flatten()
             .is_some()
@@ -5388,8 +5388,8 @@ pub(crate) mod test_window {
     /// a round that drew nothing is not on its own enough to stop on — a burst
     /// still open is a frame already owed.
     pub(crate) fn quiesce(vcx: &mut VisualTestContext, cwd: Option<&std::path::Path>) {
-        use crate::terminal::git_data::ScmData;
-        use crate::terminal::git_status::GitStatusCache;
+        use crate::ui::scm::data::ScmData;
+        use crate::ui::scm::status_cache::GitStatusCache;
         use crate::ui::app::render_probe;
         use crate::ui::host_ops::HostId;
 

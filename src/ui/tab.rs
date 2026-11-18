@@ -656,7 +656,7 @@ impl Tab {
         &self,
         window: Option<&Window>,
         cx: &App,
-    ) -> Option<crate::terminal::git_status::GitStatus> {
+    ) -> Option<crate::ui::scm::status_cache::GitStatus> {
         let leaf = match window {
             Some(window) => self.pane.focused_or_first(window, cx),
             None => self.pane.first_leaf().and_then(|s| s.terminal().cloned()),
