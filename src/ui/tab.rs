@@ -73,6 +73,11 @@ pub(crate) struct Tab {
     /// is `Pane::Empty`. What is kept instead is what it takes to bring them
     /// back — see [`Asleep`].
     asleep: Option<Asleep>,
+    /// The program states this tab currently presents, summarized from every
+    /// logical leaf (parked and hidden included) and rebuilt only when those
+    /// projections move. See [`crate::ui::program_summary`].
+    pub(crate) program_summary_cache:
+        std::cell::RefCell<crate::ui::program_summary::ProgramSummaryCache>,
     pub(crate) pip_interaction: Rc<crate::ui::pip_geometry::PipInteraction>,
 }
 
@@ -122,6 +127,7 @@ impl Tab {
             last_used: std::cell::Cell::new(0),
             focus_origin: Default::default(),
             asleep: None,
+            program_summary_cache: Default::default(),
             pip_interaction: Default::default(),
         }
     }
@@ -149,6 +155,7 @@ impl Tab {
             last_used: std::cell::Cell::new(0),
             focus_origin: Default::default(),
             asleep: None,
+            program_summary_cache: Default::default(),
             pip_interaction: Default::default(),
         }
     }
@@ -174,6 +181,21 @@ impl Tab {
     }
     pub(crate) fn name(&self) -> &Option<String> {
         &self.name
+    }
+
+    /// Whether this tab's logical pane tree holds `leaf`, drawn or not.
+    ///
+    /// Membership is the tree, not the visible split projection: a parked
+    /// leaf still belongs to the tab and its program state still counts.
+    pub(crate) fn contains_leaf(&self, leaf: gpui_kit::EntityId) -> bool {
+        fn holds(pane: &Pane, leaf: gpui_kit::EntityId) -> bool {
+            match pane {
+                Pane::Leaf(slot) => slot.entity_id() == leaf,
+                Pane::Split { a, b, .. } => holds(a, leaf) || holds(b, leaf),
+                Pane::Empty => false,
+            }
+        }
+        holds(&self.pane, leaf)
     }
 
     pub(crate) fn from_session(

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::core::osc::OscTokenizer;
+use crate::core::osc::{OscTokenizer, TitleEffect};
 use crate::daemon::protocol::{PaneProgress, ProgressKind};
 
 /// A bounded composition of all progress marks in one read. Command completion
@@ -87,9 +87,10 @@ pub(super) struct ShellState {
 #[derive(Default)]
 pub(super) struct SniffSignals {
     pub(super) cwd: Option<PathBuf>,
-    /// The last title the pane set in this read, already capped. `Some("")` is
-    /// a reset — an empty OSC 0/2 clears the title rather than setting a blank
-    /// one, the same way the GUI's terminal treats it.
+    /// The last title the pane set in this read, validated whole. `Some("")`
+    /// is a reset — an empty OSC 0/2 clears the title rather than setting a
+    /// blank one, the same way the GUI's terminal treats it. A rejected report
+    /// never reaches this field, so the previously standing title is kept.
     pub(super) title: Option<String>,
     pub(super) shell: Vec<ShellState>,
     pub(super) agent_events: Vec<crate::core::cli_agent::AgentEvent>,
@@ -134,13 +135,18 @@ impl OscSniffer {
                 signals.progress.saw(payload);
                 // In stream order, so that a shell which re-titles itself right
                 // after the `D` mark gets the last word over the retirement.
-                if title_life.saw(payload) == crate::core::osc::TitleEffect::Retire {
-                    signals.title = Some(String::new());
+                match title_life.saw(payload) {
+                    // Validated before the lifetime moved; the payload is the
+                    // same one the GUI's Rio parser accepts.
+                    TitleEffect::Set(title) => {
+                        signals.title = Some(title);
+                        return;
+                    }
+                    TitleEffect::Retire => signals.title = Some(String::new()),
+                    TitleEffect::None => {}
                 }
                 if let Some(path) = parse_osc7(payload) {
                     signals.cwd = Some(path);
-                } else if let Some(title) = parse_osc_title(payload) {
-                    signals.title = Some(title);
                 } else if let Some(rest) = payload.strip_prefix(b"133;") {
                     if handle_osc133(shell, rest) {
                         match signals.shell.last_mut() {
@@ -236,31 +242,6 @@ pub(crate) fn parse_osc7(payload: &[u8]) -> Option<PathBuf> {
         return None;
     }
     Some(path_from_bytes(&decoded))
-}
-
-/// Longest title the tree will keep. The window that owns the pane shows about
-/// forty columns of it; the rest is only ever paid for — in `machine.json`, and
-/// in a `PaneFacts` delta to every attached client — so it is cut here rather
-/// than at each place that renders one.
-pub(super) const MAX_OSC_TITLE: usize = 256;
-
-/// The title from an OSC 0 (icon *and* window) or OSC 2 (window) payload,
-/// capped. An empty payload comes back as `Some("")`: that is a reset, which
-/// the caller has to tell apart from "no title in this read".
-///
-/// OSC 1 is deliberately not read. It sets the icon name alone, which the GUI's
-/// terminal ignores — and the point of recording a title at all is to agree
-/// with what the GUI shows.
-pub(crate) fn parse_osc_title(payload: &[u8]) -> Option<String> {
-    let rest = payload
-        .strip_prefix(b"0;")
-        .or_else(|| payload.strip_prefix(b"2;"))?;
-    let title = String::from_utf8_lossy(rest);
-    let title = title.trim();
-    Some(match title.chars().count() > MAX_OSC_TITLE {
-        true => title.chars().take(MAX_OSC_TITLE).collect(),
-        false => title.to_string(),
-    })
 }
 
 pub(super) fn percent_decode(input: &[u8]) -> Vec<u8> {

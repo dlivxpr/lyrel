@@ -12,6 +12,8 @@
 
 use std::sync::Arc;
 
+use lyrel_code_editor::drawio::MAX_DOCUMENT_BYTES;
+
 use super::session::SessionId;
 
 /// A reserved origin (RFC 2606 `.invalid`) that can never resolve. WebView2
@@ -40,9 +42,7 @@ pub(crate) const MAC_SHELL_URL: &str = "lyrel://app/drawio/shell.html";
 #[cfg(all(target_os = "macos", not(test)))]
 pub(crate) const MAC_ENGINE_URL: &str = "lyrel://app/drawio/engine.html";
 
-pub(crate) const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
-
-const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; \
 img-src 'none'; font-src 'none'; connect-src 'self'; media-src 'none'; \
 object-src 'none'; frame-src 'self'; child-src 'self'; worker-src 'none'; \
 manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";

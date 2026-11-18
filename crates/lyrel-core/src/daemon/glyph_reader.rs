@@ -113,6 +113,7 @@ mod tests {
             // attach through `pane_with_renderer`; this fixture stays silent.
             true,
             false,
+            false,
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -132,6 +133,7 @@ mod tests {
             false,
             true,
             true,
+            false,
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -266,6 +268,7 @@ mod pipeline_tests {
             // Both credentials: `q` only reaches a controller that declared
             // the monochrome-render opt-in, so the pipeline fixture renders.
             true,
+            false,
         );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();

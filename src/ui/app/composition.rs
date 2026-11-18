@@ -376,6 +376,7 @@ impl LyrelApp {
         self.settle_sidebar_groups(cx);
         self.tabs.touch_active();
         self.declare_displayed_panes(cx);
+        self.acknowledge_viewed_program(window, cx);
         self.scm_sync_watchers(window, cx);
         self.editor_sync(window, cx);
         // Keeps looking for new listening ports on the pane in front, panel

@@ -8,11 +8,13 @@
 //! The pieces are:
 //!
 //! - `assets`: the exact bytes the WebView may load, their CSP and hashes;
-//! - `document`: the page/page-count facts Lyrel reads before rendering;
 //! - `bridge`: the session token and message state machine;
 //! - `surface`: the native child surface — WebView2 on Windows, WKWebView on
 //!   macOS — behind the same allowlist contract;
 //! - `session`: session/token identities and the preview theme.
+//!
+//! The page/page-count facts Lyrel reads before rendering live in the
+//! GUI-free `lyrel_code_editor::drawio` engine.
 //!
 //! The engine is the official draw.io viewer bundle: it renders the graph
 //! with draw.io's own shapes, stencils and layout, and its own Graph/Editor
@@ -23,11 +25,8 @@
 
 pub(crate) mod assets;
 pub(crate) mod bridge;
-pub(crate) mod document;
 pub(crate) mod session;
 pub(crate) mod surface;
-
-pub(crate) use document::{DrawioError, DrawioSource, looks_like_drawio, parse};
 
 #[cfg(test)]
 #[path = "drawio_engine/tests.rs"]

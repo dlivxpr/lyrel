@@ -5,6 +5,45 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+### 开发与 CI
+
+- 结构化 JSON／JSONL、TOML、YAML、XML、CSV／TSV、GIF／TIFF 与 draw.io 的纯模型迁入无 GPUI 的内部 `lyrel-code-editor`；工作台继续持有 Document、Host、history、保存与本地化，现有模型和真实消费者回归保留。
+- core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
+- 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
+- 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。
+- program-status 公共传输回归的执行 barrier 改由 shell 运行时拼接标记，避免 macOS bash 的输入回显／readline 重绘被误判为命令执行完成；保留记录数量、流顺序、prompt 归属及生命周期断言。
+- Unix 前景进程探针未识别到 agent 时，不再抹除尚未返回 shell prompt 的 rich-hook 会话；正向识别到其他 agent、权威 shell mark 与显式退出仍沿用原清理路径。TITLE 测试 producer 在消费 daemon 回复后才发完成凭据，避免下一请求被误读为上一请求的回复。
+- Draft PR 使用快速平台层，Ready／`ci:full` 恢复完整门禁；PR 检查生产图，主线保留生产构建与静态 CRT 断言。缓存禁止失败写回，POSIX CI 启用 sccache，nextest 保留零默认重试、逐例超时与单独的 native／CLI／doctest 入口；手动发行验证显式选择 `scope=full`，Dependabot 改为月度单组。相同 tree 的主线测试仅在完整 PR 门禁证据可验证时晋升。
+- 手动 `scope=ci` 与 PR 共用生产图检查和测试图 CRT 门禁，不再误走主线额外的生产构建；main／`scope=full` 保留生产构建。根据两端冷编译在 30 分钟仍持续推进的真实日志，生产构建和 desktop library 编译上限改为 45 分钟、job 为 120 分钟；不改逐例测试超时，不以扩大预算冒充提速。
+- 每个受影响的 Unix 终端消费者测试独立初始化临时配置，避免 nextest 单例进程触碰用户目录；OSC 7501 双观察者回归兼容 BSD `wc` 的空白填充。图形回放容量回归经既有文件型 PTY 夹具批量发送，保留超过 8 MiB 的负载、双图像锚点及重附着绘制断言，不扩大超时。
+
+### 依赖升级
+
+- #303／#304：GPUI Kit 原子升级为正式 registry 的精确 `=0.10.0`，继续经官方 `gpui-fast` facade 解析 Fast `0.1.16` 系列；`rio-vt`／`rio-graphics`／`rio-unicode` 同步固定为 `=0.5.32`，锁定对应的 `rio-grapheme-width 0.5.32`。保留无 GPUI 的共享 core、既有 PTY／daemon／Host／终端绘制与独立 Markdown 编辑器，不引入 Rio 的 PTY、窗口、Sugarloaf、installer 或 librio。
+- #304：daemon 与 GUI 在支持 `validated-titles` 的端点上统一 OSC 0／2 标题规则：严格 UTF-8、最多 255 字节、不裁剪合法空白并保留分号，空字符串继续 reset，无效或超限报告整体拒收且不改变标题及 `TitleLifetime`。旧端点保留现有会话并显示兼容／更新提示，不声称标题一致，不自动替换服务或从原始回放补造事实。
+
+### 新增
+
+- #307：**设置 → 外观 → 动态效果**新增持久化、热应用的三态 `motion_preference`：`system` 跟随系统，`reduce` 减少动态效果，`allow` 允许既有动效；默认跟随系统，切回后移除覆盖并在启动及 Windows／macOS 窗口重新激活时读取系统偏好。减少动态效果保留静态活动反馈，不改写终端字节、TUI 动画或光标协议。
+- #308／#309／#310：右侧面板、设置分区、终端标签侧栏和聚焦编辑器组的共享文档标签支持单一 roving Tab 停靠点、方向键回绕、Home／End、Enter／Space 手动激活及 Escape 返回所属内容。新增可配置的区域入口，保留终端 Tab 输入、指针焦点、侧栏分组展开和文档 `+N` 选择器；不新增逐组文档条、文档条滚动或文档拖拽。
+- #311：用量页的动态浏览器 profile 选择支持真实过滤和主题语义色匹配高亮，保留稳定选项、取消与焦点恢复；较短固定 provider／browser 列表及全局搜索不变。
+- #312：SQLite `DataTable` 局部滚动条改为常显，仅遍历当前加载的行页／列窗；分屏保留独立焦点、选择和本地偏移，查询、筛选、排序、分页、列窗与加载数据仍归共享文档，全局滚动条策略不变。
+- #306：普通命令完成 OS 通知区分退出码 `0` 成功、已知非零失败及退出状态未知，保留既有通知模式、耗时阈值、OSC 133 归属与 rich-hook 去重；不把缺失退出码当成功，不把 OSC 7501 当命令退出事实，也不加入应用收件箱或新增历史。
+- #314／#315／#316：OSC 7501 提供 daemon 所有的有界当前程序记录、层级与整记录替换、256 条 LRU 上限、当前快照和有序更新，以及活动 pane 状态栏和标签页摘要。摘要按 `blocked` > `error` > `working` > `done` > `idle` 和最近更新排序，有界悬停卡保留来源归属；只有进入 `blocked`／`error` 或 `blocked` 原因种类变化才发送 OS 提醒，`done` 不另发完成通知。每个窗口／client 按 daemon result version 独立确认实际查看的结果，隐藏／停放／后台 pane 不算已读，查看 `blocked` 不构成授权或解决状态；旧端点不自动升级或接管，OS 提醒不进入应用收件箱。
+- Windows 安装版通过系统通知中心的 COM 激活把点击交给发出通知的实例；原窗格或实例已关闭时，不会聚焦无关窗口。已安装的按用户版本重建快捷方式时保留激活能力；便携版和开发构建不接管安装版的注册。
+
+### 验证边界
+
+- 本次优化已运行 Windows 全量普通测试、主线程 native Markdown 37 例、native terminal 3 例、CLI E2E 29 例，以及 Linux headless 全量普通测试、CLI E2E 30 例和 doctest。首轮 Windows 的 5 个失败项已逐项修复并定点通过；Linux 的 2 个权限／用户环境前提失败在非 root 且提供 `USER` 后通过。保留首轮失败记录，不把分批修复验证写成一次全量零失败。
+- 提交 `329f8603` 的[三平台 CI](https://github.com/dlivxpr/lyrel/actions/runs/44215219931)已通过。早期 Windows 通知修复在隔离实例中通过系统 COM 接口验证了原窗格键盘输入和旧通知无副作用；该证据不代替最终修复的真实通知中心点击和匹配提交的 CI。实体 Mac、真实 SSH、正式安装和在线更新未验收。
+
+### 修复
+
+- #305：Linux Kitty `t=s` 共享内存在 opened-object 校验前以 `O_NONBLOCK` 打开，FIFO 等非 regular 对象立即拒收并执行既有一次性清理，不再阻塞 pane reader；保留正常 offset／length、有界读取与图片校验，macOS 和 Windows 路径不变。
+
+
 ## [0.3.5] - 2026-11-16
 
 ### 新增

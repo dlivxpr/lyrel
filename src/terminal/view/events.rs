@@ -40,7 +40,16 @@ impl TerminalView {
                 self.lifecycle.notify_output(cx);
             }
             PaneEvent::ProgressChanged => cx.emit(ProgressChanged),
-            PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
+            PaneEvent::ProgramStatusChanged => {
+                let frames = self.terminal.take_program_status_updates();
+                if !frames.is_empty() {
+                    cx.emit(ProgramStatusChanged(frames));
+                }
+            }
+            PaneEvent::Title(title) => {
+                self.set_title_when_settled(title, cx);
+                self.note_title_contract(cx);
+            }
             PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
             PaneEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
             PaneEvent::Exit => {
@@ -128,6 +137,21 @@ impl TerminalView {
         }
     }
 
+    /// Say once, when a title first arrives, that the pane's endpoint predates
+    /// the validated-title contract. An unknown (never negotiated) stream
+    /// makes no claim either way; only an actual older endpoint is reported,
+    /// and its session is left running exactly as it was.
+    fn note_title_contract(&mut self, cx: &mut Context<Self>) {
+        if self.title_contract_reported {
+            return;
+        }
+        if self.terminal.endpoint_validated_titles() != Some(false) {
+            return;
+        }
+        self.title_contract_reported = true;
+        cx.emit(TitleContractUnsupported);
+    }
+
     pub(super) fn poll_foreground(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.completion.has_work() {
             let context = self.completion_context();
@@ -189,7 +213,12 @@ impl TerminalView {
                                 cx.global::<Config>().notify_threshold_secs,
                             );
                             if elapsed >= threshold {
-                                self.notify_command_finished(&title, elapsed, cx);
+                                self.notify_command_finished(
+                                    &title,
+                                    self.terminal.last_exit_code(),
+                                    elapsed,
+                                    cx,
+                                );
                             }
                         }
                     }

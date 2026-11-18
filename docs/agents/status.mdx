@@ -1,6 +1,6 @@
 ---
 title: "状态与通知"
-description: "安装钩子、识别状态圆点，以及在智能体需要你时收到通知。"
+description: "安装钩子、识别智能体与一般程序状态，以及在需要处理时收到通知。"
 ---
 
 一个已工作两分钟的智能体，与一个九十秒前就已停下、正在等待权限的智能体，
@@ -181,6 +181,8 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 `done`，并且是 [`lyrel wait`](/agents/orchestration) 阻塞等待时依据的状态。
 第四种状态 `idle` 不显示圆点——它表示智能体尚未开始一个轮次。
 
+Unix 前景进程名探针只是识别线索：已由 rich hooks 建立的会话，不会仅因包装器或启动时序使探针暂未识别到 agent 而消失。shell 返回提示符或正向识别到其他 agent 时仍更新原会话归属；轮次结果继续以 hooks 为准，不从进程名或静默时间推断。
+
 状态事件的可选 `request` 为单个增量更新：
 `{"id":"上游稳定身份","kind":"permission|question|plan-review","resolved":false}`；
 `resolved: true` 只解决同类型与同 ID 的请求。可选 `requests` 数组为当前会话的权威
@@ -188,6 +190,29 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 `AgentSessionState.pending_requests`；OpenCode 的客户端权威聚合也同步这一集合。
 可选 `result` 为 `{"outcome":"succeeded|failed|interrupted|rejected","reason":"实际原因"}`。
 
+
+<a id="program-status"></a>
+## 一般程序状态（OSC 7501）
+
+没有 Lyrel 专属钩子的程序可以通过 OSC 7501 报告 `idle`、`working`、`done`、`blocked`、`error` 或 `clear`。这些记录与一般 shell 命令结果、编程智能体会话分开；现有 rich hooks 仍是智能体身份、请求和轮次结果的权威。
+
+### 当前记录与生命周期
+
+pane 所属 daemon 是唯一记录所有者和实时能力查询应答者，GUI／CLI 镜像、observer 与历史回放都不应答。支持 `program-status` 能力的端点在附着时提供当前快照，再提供有序更新；没有 GUI 时仍保留存活 pane 的当前记录。受支持的同会话 handoff 保留记录、生命周期身份和版本，新 shell 不继承旧记录；记录不写入配置、机器树、磁盘回滚或新的历史存储。旧端点不提供该能力，既有会话继续运行，不自动替换、重启或终止。
+
+每个 pane 最多保留 256 条记录，超出时淘汰最久未更新的记录。根记录与层级子记录相互独立；每份报告整体替换所寻址记录，省略字段会移除旧值，`app` 可从最近的当前祖先继承。`clear` 清除指定子树，不带 `id` 时清空全部记录；新提示符或附着进程退出会移除 `idle`、`working`、`blocked`，保留 `done`／`error`，主备屏切换和 DECSTR 保留记录，RIS 清空记录。
+
+状态摘要使用 daemon 的当前记录，不从输出文字、标题、进程名或静默时间猜测。标签页汇总覆盖其全部逻辑 pane，包括隐藏和停放叶子，优先级为 `blocked` > `error` > `working` > `done` > `idle`，同级取最近更新记录；活动 pane 的当前消息显示在既有状态栏。悬停卡显示代表记录及最多 6 条其他记录，并标注来源 pane／program 和剩余数量，不新增任务树窗口，也不覆盖 OSC 9;4 或智能体信息。
+
+`blocked` 可说明 `permission`、`question` 或 `auth`，`working`／`blocked` 可携带百分比或未定量进度。所有 program 文本都按来源归属显示为不可信纯文本，方向覆盖和不可见格式不会变成界面标记、命令或凭据提示。**`blocked` 只表示程序报告等待，不代表你已授予权限、回答问题、批准认证或允许 Lyrel 接管会话。**
+
+### 程序提醒与每窗口已读
+
+只有进入 `blocked`／`error`，或 `blocked` 原因种类发生变化，才可能触发 OSC 7501 的 OS 提醒。既有通知策略、按来源限流和重复抑制继续适用；相同报告及普通文本／进度刷新不产生新结果或提醒，`done` 只保留视觉结果，不另发完成通知。没有可信关联证明同一事件时，不会仅凭同 pane、时间接近或文本相同吞掉 program／shell／agent 的独立通知。上述 OS 提醒不进入应用通知收件箱，也不新增历史持久化。
+
+未读提醒按每个查看窗口／client 分别跟踪，依据 session／pane／record 身份和 daemon 的 result version，而不是进程级已读开关。只有 pane 在前台窗口中实际活动、可见且持有焦点时，才把该窗口已观察到的 `done`／`error`／`blocked` 版本标为已读；隐藏、停放和后台窗口不算查看。此操作不清除 daemon 记录，不影响其他窗口，也不会解决 `blocked` 状态。
+
+冷附着快照只建立静默观察基线，不重放历史通知或伪造未读。重连保留该 client 的版本游标，普通消息刷新不会让同一结果重新未读；断线后的 `working` → 同内容 `done` 仍有新版本，会重新未读但不重放 OS 通知。同会话 handoff 保留已读身份，新 shell 生命周期不继承。
 
 <a id="notifications"></a>
 ## 通知
@@ -200,9 +225,13 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 这意味着，在默认的*未聚焦时*策略下，一旦你成为流程瓶颈，就会立即收到通知；
 而当你正在查看时，则不会受到打扰。
 
+普通命令完成通知使用 shell 上报的权威退出事实：退出码 `0` 表示成功，已知非零退出码表示失败并显示该代码，缺失退出码则明确显示「退出状态未知」。缺少数据不会被推断为成功，也不会从 OSC 7501 生成命令退出结果。
+
+这条通知保留**设置 → 常规 → 通知**中的模式、耗时阈值、OSC 133 归属过滤、嵌套 shell／SSH relay 过滤及 rich-hook 去重。普通命令结果只走既有 OS 通知路由，不进入应用通知收件箱，不新增历史、开关或第二条完成生命周期。
+
 程序也可以使用 OSC 9、OSC 777（`notify;title;body`）或 kitty 的 OSC 99
-发送自己的通知。lyrel 按照相同的策略显示这些通知，仅在你正在查看该窗格时
-暂不显示；点击通知即可显示对应窗格。该通用终端能力不受内置智能体名单限制；如果窗格中的受支持智能体已通过 lyrel 的 hooks 报告状态，则会跳过重复通知。
+发送自己的通知。lyrel 按照相同的策略显示这些通知，仅在你正在查看该窗格时暂不显示。
+平台支持通知点击激活时，点击通知会返回对应窗格。该通用终端能力不受内置智能体名单限制；如果窗格中的受支持智能体已通过 lyrel 的 hooks 报告状态，则会跳过重复通知。
 
 首次重新附加到 daemon 保留的窗格时，应用把既有完成状态作为基线，不会将历史结果
 重新标为未读。当前应用已经看过的窗格则使用按 Host 与 daemon pane 身份保存的
@@ -214,9 +243,9 @@ read mark：切换工作区或重建视图不等于读过结果，断线期间�
 `AgentActivity` 持有检测、会话转换、read mark、未读及取消状态；`TerminalView`
 只适配 GPUI 事件、计时任务和保留的实体身份。`src/terminal/desktop_notification.rs`
 独立负责平台投递、文本清理、通知标识和点击路由，不依赖终端连接或 reader。
-点击路由使用 GPUI entity 身份而非 daemon pane 编号；macOS 的进程标识继续阻止旧进程
-通知误定位到新进程中的窗格。Windows 与 macOS 的原生投递和点击激活须分别实跑，
-确定性回归不能代替平台验收。
+点击路由使用 GPUI entity 身份而非 daemon pane 编号；旧通知不会跳到新进程复用的同编号窗格。
+Windows 安装包注册通知中心的点击处理器。即使 Windows 将点击交给另一个进程，也只会将其转发给发出通知且仍运行的实例；原窗格已关闭时不会切换焦点。
+便携版和开发构建仍可投递通知，并保留 Windows 提供即时横幅回调时的点击处理；不借用另一份安装的点击处理器，也不保证能从通知中心回到窗格。Windows 与 macOS 的系统点击激活需分别实测。
 
 <a id="the-tray-icon"></a>
 ## 托盘图标

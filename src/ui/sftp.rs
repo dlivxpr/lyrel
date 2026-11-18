@@ -430,13 +430,13 @@ pub(crate) fn free_local_path(
 }
 
 impl LyrelApp {
-    pub(crate) fn toggle_sftp(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_sftp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::core::config::RightPanelTab;
         if self.right_panel_visible && self.right_panel_tab == RightPanelTab::Files {
             self.toggle_right_panel(cx);
             return;
         }
-        self.set_right_panel_tab(RightPanelTab::Files, cx);
+        self.set_right_panel_tab(RightPanelTab::Files, window, cx);
     }
 
     pub(crate) fn sftp_sync_pane(
@@ -2769,7 +2769,7 @@ mod gpui_tests {
     fn toggle_sftp_switches_tabs_before_it_closes(cx: &mut TestAppContext) {
         let (app, mut vcx) = harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
-            app.set_right_panel_tab(RightPanelTab::Info, cx);
+            app.set_right_panel_tab(RightPanelTab::Info, window, cx);
             app.toggle_sftp(window, cx);
         });
         assert_eq!(panel(&app, &mut vcx), (true, RightPanelTab::Files));

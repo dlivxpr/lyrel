@@ -220,6 +220,8 @@ fn previously_unsearchable_settings_are_findable() {
         ("background image", Appearance),
         ("wallpaper", Appearance),
         ("image opacity", Appearance),
+        ("motion", Appearance),
+        ("reduce motion", Appearance),
         #[cfg(target_os = "windows")]
         ("material", Appearance),
         #[cfg(target_os = "windows")]

@@ -516,14 +516,131 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(crate) fn set_right_panel_tab(&mut self, tab: RightPanelTab, cx: &mut Context<Self>) {
-        // Every way to find in files ends here, and none of them has a
-        // `Window` to move focus with; the Files field takes it on its next
-        // frame.
+    /// Enter the panel's tab list from terminal or editor content, landing on
+    /// the selected tab without activating a different page. The panel opens
+    /// first when it was closed; the tab list is `Tabs`, so the selected tab
+    /// is the group's one roving stop.
+    pub(crate) fn focus_right_panel_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tabs.is_empty()
+            || self.right_panel_nav_focus.within_focused(window, cx)
+            || self.sidebar_nav_overlay_open(window)
+        {
+            return;
+        }
+        self.right_panel_nav_return = window.focused(cx);
+        self.right_panel_nav_wait.set(0);
+        let was_open = self.right_panel_open(cx);
+        if !self.right_panel_visible {
+            self.right_panel_visible = true;
+            self.update_config(cx, |cfg| cfg.right_panel_visible = true);
+        }
+        if was_open && self.right_panel_nav_renders.get() >= 2 {
+            self.focus_right_panel_selected_tab(window, cx);
+        } else {
+            // The tab list has to lay out twice before the framework has
+            // settled its roving stop into the window's tab order.
+            self.right_panel_nav_wait.set(3);
+        }
+        cx.notify();
+    }
+
+    /// Put focus back on whatever content owned it before the panel's tab
+    /// list was entered. Called by Escape and by pointer activation.
+    pub(crate) fn leave_right_panel_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.right_panel_nav_wait.set(0);
+        let target = self
+            .right_panel_nav_return
+            .take()
+            .filter(|handle| handle.is_rendered(window));
+        match target {
+            Some(handle) => window.focus(&handle, cx),
+            None => self.focus_active(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// A pointer press on a tab is the established content-focus route: the
+    /// list must not keep or take the keyboard. A press during entry cancels
+    /// the pending hand-off to the selected item.
+    pub(crate) fn right_panel_navigation_pointer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_panel_nav_focus.contains_focused(window, cx) {
+            self.leave_right_panel_navigation(window, cx);
+        } else {
+            self.right_panel_nav_wait.set(0);
+            self.right_panel_nav_return = None;
+        }
+    }
+
+    fn focus_right_panel_selected_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.right_panel_nav_focus, cx);
+        window.focus_next(cx);
+        if window
+            .focused(cx)
+            .is_some_and(|focused| focused == self.right_panel_nav_focus)
+        {
+            // The stop was not in the map yet; one more render will settle it.
+            self.right_panel_nav_wait.set(1);
+        }
+    }
+
+    /// Consumed at the top of each panel render while an entry is pending.
+    /// Cancels if anything else took focus first, so a slow hand-off never
+    /// steals focus back from a pointer or shortcut.
+    fn poll_right_panel_navigation_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wait = self.right_panel_nav_wait.get();
+        if wait == 0 {
+            return;
+        }
+        // A failed focus_next leaves our own non-stop scope focused. That is
+        // the retry's intermediate state, not an external focus change.
+        let own_scope = self.right_panel_nav_focus.is_focused(window);
+        if window.focused(cx) != self.right_panel_nav_return && !own_scope {
+            self.right_panel_nav_wait.set(0);
+            self.right_panel_nav_return = None;
+            return;
+        }
+        if wait > 1 {
+            self.right_panel_nav_wait.set(wait - 1);
+            cx.notify();
+            return;
+        }
+        self.right_panel_nav_wait.set(0);
+        self.focus_right_panel_selected_tab(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_right_panel_tab(
+        &mut self,
+        tab: RightPanelTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The Files field still takes focus on its next frame rather than
+        // here: a tab switch does not preempt the entry-cancel below.
         if tab == RightPanelTab::Search {
             self.panel_search.focus_pending = true;
         }
         let tab = shown_tab(tab);
+        if self.right_panel_nav_wait.get() != 0 {
+            // An explicit show command retires a pending keyboard entry even
+            // when it names the tab already selected: the user asked for the
+            // page, not for the roving stop, so the entry's origin keeps the
+            // keyboard rather than staying inside a scope the entry
+            // abandoned mid-flight.
+            self.leave_right_panel_navigation(window, cx);
+        }
         if self.right_panel_tab != tab {
             self.sftp_retire_revalidation();
         }
@@ -542,6 +659,22 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let panel_open = self.right_panel_open(cx);
+        if panel_open {
+            self.right_panel_nav_renders
+                .set(self.right_panel_nav_renders.get().saturating_add(1));
+            if self.right_panel_nav_wait.get() == 0 && self.right_panel_nav_focus.is_focused(window)
+            {
+                self.leave_right_panel_navigation(window, cx);
+            } else {
+                self.poll_right_panel_navigation_focus(window, cx);
+            }
+        } else {
+            self.right_panel_nav_renders.set(0);
+            if self.right_panel_nav_wait.get() != 0 {
+                self.right_panel_nav_wait.set(0);
+                self.right_panel_nav_return = None;
+            }
+        }
         if let Some(open) = self.sftp_panel.open_pane_id
             && (!panel_open || self.remote_files_pane(window, cx).map(|(id, _)| id) != Some(open))
         {
@@ -705,7 +838,7 @@ impl LyrelApp {
             .items_center()
             .pl(rems(TAB_ROW_LEAD / 16.))
             .pr(rems(tile_trailing_inset() / 16.))
-            .child(h_flex().flex_shrink_0().h_full().children(tabs))
+            .child(tabs)
             .child(div().flex_1().min_w_0())
             .when_some(trailing, |row, trailing| row.child(trailing))
             .into_any_element()

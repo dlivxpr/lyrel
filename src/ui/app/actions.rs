@@ -158,6 +158,11 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &NextTab, window, cx| this.tab_switch(true, window, cx)))
         .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.tab_switch(false, window, cx)))
         .on_action(
+            cx.listener(|this, _: &FocusTerminalTabNavigation, window, cx| {
+                this.focus_terminal_tab_navigation(window, cx)
+            }),
+        )
+        .on_action(
             cx.listener(|this, _: &SelectNextTab, window, cx| this.cycle_tab(true, window, cx)),
         )
         .on_action(
@@ -228,20 +233,25 @@ impl LyrelApp {
         .on_action(
             cx.listener(|this, _: &ToggleRightPanel, _window, cx| this.toggle_right_panel(cx)),
         )
-        .on_action(cx.listener(|this, _: &ShowRightPanelInfo, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx)
+        .on_action(
+            cx.listener(|this, _: &FocusRightPanelNavigation, window, cx| {
+                this.focus_right_panel_navigation(window, cx)
+            }),
+        )
+        .on_action(cx.listener(|this, _: &ShowRightPanelInfo, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelChanges, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Scm, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelChanges, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Scm, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelFiles, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Files, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelFiles, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelSearch, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Search, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelSearch, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::Search, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, _window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, cx)
+        .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, window, cx| {
+            this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(
@@ -313,6 +323,13 @@ impl LyrelApp {
             cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)),
         )
         .on_action(
+            cx.listener(|this, _: &FocusSettingsNavigation, window, cx| {
+                this.open_settings_then(window, cx, |view, window, cx| {
+                    view.focus_settings_navigation(window, cx)
+                })
+            }),
+        )
+        .on_action(
             cx.listener(|this, _: &RestartDaemon, window, cx| {
                 this.restart_window_daemon(window, cx)
             }),
@@ -324,6 +341,18 @@ impl LyrelApp {
         .on_action(
             cx.listener(|this, _: &ToggleCodePanel, window, cx| this.toggle_code_panel(window, cx)),
         )
+        .on_action(
+            cx.listener(|this, _: &FocusDocumentTabNavigation, window, cx| {
+                if !this.focus_document_tab_navigation(window, cx) {
+                    cx.propagate();
+                }
+            }),
+        )
+        .on_action(cx.listener(|this, _: &EditorDocumentOverflow, window, cx| {
+            if !this.editor_document_overflow(window, cx) {
+                cx.propagate();
+            }
+        }))
         .on_action(cx.listener(|this, _: &EditorSave, window, cx| {
             if !this.editor_panel_has_focus(window, cx) {
                 cx.propagate();

@@ -9,7 +9,7 @@ const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::book_document::{self, BookDocument, BookOpen, LoadedBook};
 use super::book_view::BookView;
 use super::drawio_document::{DrawioDocument, DrawioView};
-use super::drawio_engine;
+use lyrel_code_editor::drawio;
 use std::sync::Arc;
 /// PDFs share the owning Host's bounded versioned read and the same 32 MiB
 /// input ceiling; parsing never raises the text or control-frame limits.
@@ -18,6 +18,7 @@ use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use super::toml_document::{TomlDocument, TomlMode, TomlView};
 use super::xml_document::{XmlDocument, XmlMode, XmlView};
 use super::yaml_document::{YamlDocument, YamlMode, YamlView};
+use lyrel_code_editor::json::projection::JsonFormat;
 use markdown::images;
 use markdown::images::ImageFormat;
 
@@ -906,7 +907,7 @@ impl EditorBuffers {
         let native_json = untitled.is_none()
             && !native_svg
             && is_json_path(&path)
-            && super::json_document::JsonFormat::from_path(&path).is_some();
+            && JsonFormat::from_path(&path).is_some();
         let native_yaml = untitled.is_none() && !native_svg && !native_json && is_yaml_path(&path);
         let native_toml = untitled.is_none() && !native_svg && !native_json && is_toml_path(&path);
         let native_csv = untitled.is_none() && is_csv_path(&path);
@@ -946,8 +947,8 @@ impl EditorBuffers {
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Svg(presentation), None, sub, observe)
         } else if native_json {
-            let json_format = super::json_document::JsonFormat::from_path(&path)
-                .expect("native JSON path has a JSON-family format");
+            let json_format =
+                JsonFormat::from_path(&path).expect("native JSON path has a JSON-family format");
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(
                 &document,
@@ -1425,17 +1426,16 @@ impl EditorBuffers {
             move |h| {
                 if drawio_reload {
                     let meta = h.stat(&target)?;
-                    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+                    if meta.len > drawio::MAX_DOCUMENT_BYTES as u64 {
                         return Ok(Reloaded::Drawio(LoadedDrawio {
                             path: target,
                             bytes: Arc::from([]),
-                            source: Err(drawio_engine::DrawioError::TooLarge),
+                            source: Err(drawio::DrawioError::TooLarge),
                             mtime: meta.mtime,
                         }));
                     }
-                    let bytes =
-                        h.read_file(&target, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)?;
-                    let source = drawio_engine::parse(&bytes);
+                    let bytes = h.read_file(&target, drawio::MAX_DOCUMENT_BYTES as u64)?;
+                    let source = drawio::parse(&bytes);
                     return Ok(Reloaded::Drawio(LoadedDrawio {
                         path: target,
                         bytes: Arc::from(bytes),
@@ -1718,7 +1718,7 @@ pub(super) enum Loaded {
 pub(super) struct LoadedDrawio {
     path: PathBuf,
     bytes: Arc<[u8]>,
-    source: Result<drawio_engine::DrawioSource, drawio_engine::DrawioError>,
+    source: Result<drawio::DrawioSource, drawio::DrawioError>,
     mtime: Option<MTime>,
 }
 
@@ -1812,7 +1812,7 @@ fn load_file(
     // A draw.io document saved with a generic name still has its own root.
     // This is a bounded probe, and it wins over the text and image fallbacks:
     // rendering it as source would hide the diagram the file declares.
-    if drawio_engine::looks_like_drawio(&bytes) {
+    if drawio::looks_like_drawio(&bytes) {
         return Ok(loaded_drawio(path, meta.mtime, bytes));
     }
     // A name that claims nothing can still hold a picture. Only magic the
@@ -1957,16 +1957,16 @@ fn load_drawio(
     meta: lyrel_core::host::Meta,
 ) -> Result<Loaded, EditorOpenError> {
     let requested = path.clone();
-    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+    if meta.len > drawio::MAX_DOCUMENT_BYTES as u64 {
         return Ok(Loaded::Drawio(LoadedDrawio {
             path,
             bytes: Arc::from([]),
-            source: Err(drawio_engine::DrawioError::TooLarge),
+            source: Err(drawio::DrawioError::TooLarge),
             mtime: meta.mtime,
         }));
     }
     let bytes = h
-        .read_file(&path, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)
+        .read_file(&path, drawio::MAX_DOCUMENT_BYTES as u64)
         .map_err(|error| {
             EditorOpenError::Message(t_fmt(
                 L10nKey::EditorCantRead,
@@ -1980,7 +1980,7 @@ fn load_drawio(
 }
 
 fn loaded_drawio(path: PathBuf, mtime: Option<MTime>, bytes: Vec<u8>) -> Loaded {
-    let source = drawio_engine::parse(&bytes);
+    let source = drawio::parse(&bytes);
     Loaded::Drawio(LoadedDrawio {
         path,
         bytes: Arc::from(bytes),

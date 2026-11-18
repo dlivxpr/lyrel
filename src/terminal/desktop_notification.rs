@@ -24,11 +24,26 @@ pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Opt
     let summary = sanitize_notification_text(title.unwrap_or("lyrel"), NOTIFY_TITLE_MAX);
     let body = sanitize_notification_text(body, NOTIFY_BODY_MAX);
 
+    #[cfg(test)]
+    if TEST_NOTIFICATIONS.with(|slot| slot.borrow().is_some()) {
+        TEST_NOTIFICATIONS.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("the current test opted in")
+                .push(DeliveredNotification {
+                    pane,
+                    title: summary,
+                    body,
+                });
+        });
+        return;
+    }
+
     #[cfg(target_os = "macos")]
     {
         macos_notify::deliver(summary, body, pane.map(|p| p.as_u64()));
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(test)))]
     {
         if let Some(pane) = pane
             && try_clickable_notification(&summary, &body, pane.as_u64())
@@ -36,21 +51,66 @@ pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Opt
             return;
         }
 
-        std::thread::spawn(move || {
-            let mut notif = notify_rust::Notification::new();
-            notif.summary(&summary).body(&body);
-            // Without our own AUMID, the Windows backend falls back to
-            // PowerShell's — icon and name included. Only set ours once the
-            // shell has indexed a shortcut carrying it: for an AUMID it does
-            // not know, `show()` reports success and drops the toast, so the
-            // ugly fallback beats the branded one every time we are not sure.
-            #[cfg(target_os = "windows")]
-            if let Some(app_id) = crate::core::aumid::toast_app_id() {
-                notif.app_id(app_id);
-            }
-            let _ = notif.show();
+        show_plain_notification(summary, body);
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(test)))]
+fn show_plain_notification(summary: String, body: String) {
+    std::thread::spawn(move || {
+        let mut notif = notify_rust::Notification::new();
+        notif.summary(&summary).body(&body);
+        // Use the backend's default identity until Windows has indexed ours.
+        #[cfg(target_os = "windows")]
+        if let Some(app_id) = crate::core::aumid::toast_app_id() {
+            notif.app_id(app_id);
+        }
+        let _ = notif.show();
+    });
+}
+
+/// The sanitized payload handed to the OS delivery boundary.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub(crate) struct DeliveredNotification {
+    pub(crate) pane: Option<EntityId>,
+    pub(crate) title: String,
+    pub(crate) body: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_NOTIFICATIONS: std::cell::RefCell<Option<Vec<DeliveredNotification>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Scoped to one test thread; dropping it restores any previous capture.
+#[cfg(test)]
+pub(crate) struct TestNotificationCapture(Option<Vec<DeliveredNotification>>);
+
+#[cfg(test)]
+impl Drop for TestNotificationCapture {
+    fn drop(&mut self) {
+        TEST_NOTIFICATIONS.with(|slot| {
+            slot.replace(self.0.take());
         });
     }
+}
+
+#[cfg(test)]
+pub(crate) fn capture_test_notifications() -> TestNotificationCapture {
+    TestNotificationCapture(TEST_NOTIFICATIONS.with(|slot| slot.replace(Some(Vec::new()))))
+}
+
+#[cfg(test)]
+pub(crate) fn take_test_notifications() -> Vec<DeliveredNotification> {
+    TEST_NOTIFICATIONS.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    })
 }
 
 /// Longest title / body we hand to a notification backend.
@@ -230,173 +290,29 @@ mod macos_notify {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[path = "desktop_notification/windows.rs"]
+pub(crate) mod windows_toast;
+
 #[cfg(all(target_os = "windows", not(test)))]
 fn try_clickable_notification(title: &str, body: &str, leaf_id: u64) -> bool {
-    // An AUMID the shell has not indexed makes `Show` report success and drops
-    // the toast on the floor, so without one the notify-rust path — which
-    // deliberately keeps PowerShell's identity rather than lose the toast — is
-    // the only one that shows anything at all.
-    if crate::core::aumid::toast_app_id().is_none() {
-        return false;
-    }
-    let Some(tx) = toast_thread() else {
-        return false;
-    };
-    tx.try_send((title.to_string(), body.to_string(), leaf_id))
-        .is_ok()
-}
-
-#[cfg(all(target_os = "windows", not(test)))]
-type ToastRequest = (String, String, u64);
-
-/// Toasts are built, shown and *kept* on one dedicated thread.
-///
-/// A `ToastNotification` has to stay alive for its `Activated` event to reach
-/// us, and Windows parks toasts in Action Center long after they leave the
-/// screen — a thread per toast sleeping out a fixed window would both leak
-/// threads and stop working the moment the timer expired. Keeping them on a
-/// single thread also means the WinRT objects never cross a thread boundary.
-#[cfg(all(target_os = "windows", not(test)))]
-fn toast_thread() -> Option<&'static std::sync::mpsc::SyncSender<ToastRequest>> {
-    use std::sync::OnceLock;
-    use std::sync::mpsc::sync_channel;
-
-    static TX: OnceLock<Option<std::sync::mpsc::SyncSender<ToastRequest>>> = OnceLock::new();
-    TX.get_or_init(|| {
-        let (tx, rx) = sync_channel::<ToastRequest>(32);
-        std::thread::Builder::new()
-            .name("lyrel-toasts".into())
-            .spawn(move || toast_loop(rx))
-            .map_err(|e| log::warn!("failed to start the toast thread: {e}"))
-            .ok()
-            .map(|_| tx)
-    })
-    .as_ref()
-}
-
-#[cfg(all(target_os = "windows", not(test)))]
-fn toast_loop(rx: std::sync::mpsc::Receiver<ToastRequest>) {
-    use std::collections::VecDeque;
-    use windows::UI::Notifications::ToastNotification;
-    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-
-    // MTA lets the Activated callback run on a thread-pool thread without a
-    // message loop of our own.
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    }
-
-    // How many past toasts stay clickable. Dropping the oldest is what bounds
-    // the memory here; there is no useful deadline to expire them on.
-    const MAX_LIVE_TOASTS: usize = 32;
-    let mut live: VecDeque<ToastNotification> = VecDeque::new();
-
-    while let Ok((title, body, leaf_id)) = rx.recv() {
-        if let Some(toast) = show_windows_toast(&title, &body, leaf_id) {
-            if live.len() == MAX_LIVE_TOASTS {
-                live.pop_front();
-            }
-            live.push_back(toast);
-        }
-    }
-}
-
-#[cfg(all(target_os = "windows", not(test)))]
-fn show_windows_toast(
-    title: &str,
-    body: &str,
-    leaf_id: u64,
-) -> Option<windows::UI::Notifications::ToastNotification> {
-    use windows::Data::Xml::Dom::XmlDocument;
-    use windows::Foundation::TypedEventHandler;
-    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-    use windows::core::{IInspectable, Ref};
-
-    let app_id = crate::core::aumid::toast_app_id()?;
-
-    let xml = format!(
-        r#"<toast>
-  <visual>
-    <binding template="ToastText02">
-      <text id="1">{}</text>
-      <text id="2">{}</text>
-    </binding>
-  </visual>
-</toast>"#,
-        xml_escape(title),
-        xml_escape(body)
-    );
-
-    let doc = match XmlDocument::new() {
-        Ok(d) => {
-            if let Err(e) = d.LoadXml(&xml.into()) {
-                log::warn!("failed to load toast xml: {e}");
-                return None;
-            }
-            d
-        }
-        Err(e) => {
-            log::warn!("failed to create toast xml document: {e}");
-            return None;
-        }
-    };
-
-    let toast = match ToastNotification::CreateToastNotification(&doc) {
-        Ok(t) => t,
-        Err(e) => {
-            log::warn!("failed to create toast notification: {e}");
-            return None;
-        }
-    };
-
-    if let Err(e) = toast.Activated(&TypedEventHandler::new(
-        move |_sender: Ref<ToastNotification>, _args: Ref<IInspectable>| {
-            reveal_pane(leaf_id);
-            Ok(())
-        },
-    )) {
-        log::warn!("failed to register toast activated handler: {e}");
-    }
-
-    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&app_id.into()) {
-        Ok(n) => n,
-        Err(e) => {
-            log::warn!("failed to create toast notifier: {e}");
-            return None;
-        }
-    };
-
-    if let Err(e) = notifier.Show(&toast) {
-        log::warn!("failed to show toast: {e}");
-        return None;
-    }
-
-    Some(toast)
+    windows_toast::enqueue(title, body, leaf_id)
 }
 
 /// Ask the tray dispatch loop to bring `leaf_id` to the front. Runs on whatever
 /// thread the platform hands the activation to, so it only touches the channel.
-#[cfg(any(target_os = "macos", all(target_os = "windows", not(test))))]
+#[cfg(target_os = "macos")]
 fn reveal_pane(leaf_id: u64) {
     if let Some(tx) = crate::ui::tray::sender() {
         let _ = tx.try_send(crate::ui::tray::TrayAction::RevealPane { leaf_id });
     }
 }
 
-#[cfg(not(any(target_os = "macos", all(target_os = "windows", not(test)))))]
+#[cfg(all(not(target_os = "macos"), not(test), not(target_os = "windows")))]
 fn try_clickable_notification(_title: &str, _body: &str, _leaf_id: u64) -> bool {
     // Linux notifications go through notify-rust; click-to-reveal would need a
     // D-Bus action listener of its own.
     false
-}
-
-#[cfg(target_os = "windows")]
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
@@ -456,14 +372,5 @@ mod notification_tests {
         let out = sanitize_notification_text(&"账".repeat(200), 8);
         assert_eq!(out, format!("{}…", "账".repeat(8)));
         assert_eq!(sanitize_notification_text("short", 8), "short");
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn xml_escaping_covers_every_entity_once() {
-        assert_eq!(
-            xml_escape(r#"a & b < c > "d" 'e'"#),
-            "a &amp; b &lt; c &gt; &quot;d&quot; &apos;e&apos;"
-        );
     }
 }

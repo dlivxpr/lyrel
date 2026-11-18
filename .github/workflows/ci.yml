@@ -5,8 +5,19 @@ name: CI
 on:
   push:
     branches: [main]
+  # 分层验证按事件与 Draft 状态选矩阵：Draft 只跑 Windows + Linux 快速层，
+  # Ready for Review 或 ci:full 标签才跑完整三平台门禁。显式列出 types
+  # 是为了在 Draft 转 Ready、以及补打 ci:full 时重新触发；无关标签由
+  # ci-changes.cjs 判定为「只跑 preflight」。
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'ci validates like a pull request; full also builds and verifies release packages'
+        type: choice
+        options: [ci, full]
+        default: ci
 
 # Every job here checks out, builds, tests and greps — none of them write
 # anything back to the repo, so the token needs nothing but read. The repository
@@ -24,9 +35,11 @@ permissions:
 #
 # Pushes to main are exempt: each commit's own run is the record of whether that
 # commit was green, and cancelling one to start the next would erase it.
+# 无关标签不改变代码，取消正在跑的完整门禁只会丢掉已付过费的证据，因此这类
+# 事件既不取消在跑运行，也不启动重型 job（ci-changes.cjs 只留 preflight）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'ci:full') }}
 
 jobs:
   # 分类、格式、Host 边界与自动化回归共用一个前置 job；失败不启动重型验证。
@@ -34,12 +47,20 @@ jobs:
     name: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # 只在 main push 上多要一项 actions: read，用于核对 PR 运行与 job 结论；
+    # 不读 artifact，也不下载 PR 侧任何内容。
+    permissions:
+      contents: read
+      actions: read
     outputs:
       desktop: ${{ steps.diff.outputs.desktop }}
       linux: ${{ steps.diff.outputs.linux }}
       server: ${{ steps.diff.outputs.server }}
       release: ${{ steps.diff.outputs.release }}
+      tier: ${{ steps.diff.outputs.tier }}
+      production: ${{ steps.diff.outputs.production }}
       matrix: ${{ steps.diff.outputs.matrix }}
+      reuse: ${{ steps.reuse.outputs.reuse }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,6 +73,36 @@ jobs:
           package-manager-cache: false
       - id: diff
         run: node .github/scripts/ci-changes.cjs
+      # squash 后只复用 GitHub 记录的完整成功门禁：commit-associated PR 恢复
+      # 合并后关系，referenced_workflows 定位不可变测试 merge SHA，REST 核对
+      # 双 parents、main 祖先、相同 tree 与门禁定义。临时 merge ref 被删或
+      # run.pull_requests 变空不影响证据；缺解析 SHA 等任何信息时仍全量。
+      # 仅跳过重复测试，main 的生产构建与 CRT 断言照常执行。
+      - name: Reuse an identical pull request gate
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        with:
+          script: |
+            let reuse = false;
+            try {
+              const fs = require('node:fs');
+              const helper = `${process.env.GITHUB_WORKSPACE}/.github/scripts/ci-main-reuse.cjs`;
+              if (fs.existsSync(helper)) {
+                const { discoverComparableRun } = require(helper);
+                const result = await discoverComparableRun({
+                  github, repo: context.repo, sourceSha: process.env.SOURCE_SHA, log: core.info,
+                });
+                reuse = result.reuse === true;
+              } else {
+                core.info('Source predates tree reuse; running the full suite');
+              }
+            } catch (error) {
+              core.warning(`tree reuse unavailable; running the full suite: ${error.message}`);
+            }
+            core.setOutput('reuse', String(reuse));
       - name: Check automation behavior
         run: node --test .github/scripts/*.test.cjs
       - name: Validate workflow syntax
@@ -65,7 +116,7 @@ jobs:
         shell: pwsh
         run: |
           $Failed = $false
-          Get-ChildItem .github/scripts/*.ps1, scripts/prepare-conpty.ps1, scripts/cargo-windows.ps1 | ForEach-Object {
+          Get-ChildItem .github/scripts/*.ps1, scripts/*.ps1 | ForEach-Object {
             $Tokens = $null
             $Errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$Tokens, [ref]$Errors)
@@ -90,10 +141,13 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       RUST_BACKTRACE: 1
-    # Backstop under the per-step timeouts below. Without any timeout at all a
-    # hung test runs to GitHub's six-hour job limit, which is how a 90-second
-    # step turned into a six-hour one three times in a day.
-    timeout-minutes: 90
+      # CI 没有可复用的增量目录：关掉它让 rust-cache 的 target 归档更小、
+      # 跨机器复用更稳。sccache 只缓存非增量产物，这个值也不影响其正确性。
+      CARGO_INCREMENTAL: '0'
+      LYREL_GRAPHICS_FIXTURE_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/debug/lyrel-graphics-fixture${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}
+    # 冷缓存需先编译完整依赖图，再链接大型 libtest；编译预算与逐例测试超时
+    # 分开。仍保留有限 job backstop，不回到 GitHub 默认六小时。
+    timeout-minutes: 120
     steps:
       - name: Checkout lyrel
         uses: actions/checkout@v7
@@ -124,11 +178,36 @@ jobs:
 
       # 仅 main 写入缓存（含 main 上的手动运行）；其他 ref 只恢复。
       # 按 target 稳定共享 cache key，避免 job 名称变化产生重复缓存。
+      #
+      # 编译失败不再写回缓存：11-16 的 --locked 秒败运行就是这样让残缺缓存被
+      # 存成新 key，此后每次运行都命中它、却仍要 17~22 分钟从头重编。
+      # ci-v3 让那批以 ci-v2-* 保存的坏缓存立即失效（旧条目由仓库管理员清理）。
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-v2-${{ matrix.target }}
+          shared-key: ci-v3-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          cache-on-failure: false
+
+      # sccache 只在 POSIX runner 启用。Windows 上把 rustc 包进 sccache 已经实测
+      # 触发 os error 206（文件名/扩展名太长，cargo 1.100 的
+      # build/<pkg>/<hash>/out 布局进一步加长命令），会在编译真正的 crate 时失败；
+      # 该路径尚未证明可用，因此 Windows 继续走已经验证过的 rust-cache + 包装器。
+      # action 安装二进制并导出 ACTIONS_RUNTIME_TOKEN/ACTIONS_RESULTS_URL
+      # （runner 掩码）；wrapper 变量只通过 $GITHUB_ENV 注入后续步骤，
+      # 不写自定义 token、凭据或本地缓存路径。
+      - name: Install sccache (POSIX)
+        if: runner.os != 'Windows'
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Enable sccache (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
+      # nextest 提供每个用例的超时与更快的调度；只跑 libtest 目标，见下方 -E。
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       # Windows build.rs fails closed without the prepared ConPTY pair — the
       # same prepare entry developers run, so a broken prepare fails the build
@@ -138,6 +217,12 @@ jobs:
         shell: pwsh
         run: '& ./scripts/prepare-conpty.ps1'
 
+      # 包装器保证每个测试进程启动前 ConPTY 三件套就位，这段保真行为只能在真实
+      # Windows runner 上验证；Ubuntu preflight 里被 skip 的用例不算 Windows 证据。
+      - name: Check the Windows Cargo wrapper
+        if: runner.os == 'Windows'
+        run: node --test .github/scripts/cargo-windows.test.cjs
+
       # `--locked` on the build so a Cargo.lock that disagrees with Cargo.toml
       # fails here instead of being silently rewritten. Without it the drift is
       # invisible to CI and lands on contributors instead: every local `cargo`
@@ -145,22 +230,24 @@ jobs:
       # to be re-discarded before every commit. The release workflow locks its
       # build too.
 
-      # 单独检查未启用测试支持的生产图；不设置 RUSTFLAGS，保留 Windows +crt-static。
-      - name: Check desktop and headless
-        if: runner.os != 'Linux'
+      # PR 与默认 scope=ci 只检查生产图，测试图仍编译全部真实 binaries；
+      # main / scope=full 保留完整生产构建，紧接着检查 CRT，防止测试图覆盖证据。
+      - name: Check desktop production graph
+        if: runner.os != 'Linux' && needs.preflight.outputs.production != 'true'
         timeout-minutes: 30
         run: cargo check --locked --features updater --target ${{ matrix.target }}
 
-      - name: Build desktop and headless
-        if: runner.os != 'Linux'
-        # Cold-cache builds have been observed at ~10 min; warm ones at ~90s.
-        timeout-minutes: 30
+      - name: Build desktop production binaries
+        if: runner.os != 'Linux' && needs.preflight.outputs.production == 'true'
+        # 44152373197 的三平台冷启动中，两端仍持续编译却在 30 分钟被终止；
+        # 不把旧的十分钟估计当作冷构建上限。测试与缓存失败策略不变。
+        timeout-minutes: 45
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --features updater --target ${{ matrix.target }}
 
       - name: Build Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 30
-        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
+        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --all-features --target ${{ matrix.target }}
 
       # A binary that imports VCRUNTIME140.dll cannot start on a Windows
       # machine that has never installed the Visual C++ Redistributable — the
@@ -176,8 +263,8 @@ jobs:
       # Named files rather than the target directory — build scripts and
       # proc-macro artifacts under it are host units, which are built without
       # the target's rustflags and legitimately import the CRT dynamically.
-      - name: Assert the Windows binaries need no VC++ redistributable
-        if: runner.os == 'Windows'
+      - name: Assert the production binaries need no VC++ redistributable
+        if: runner.os == 'Windows' && needs.preflight.outputs.production == 'true'
         shell: pwsh
         run: |
           & ./.github/scripts/assert-no-vcruntime.ps1 `
@@ -186,56 +273,98 @@ jobs:
             "target/${{ matrix.target }}/debug/lyrel-server.exe" `
             "target/${{ matrix.target }}/debug/lyrel-updater.exe"
 
-      # 1acd9477 的 macOS 日志中，测试图的普通 library 编译耗时约 21 分钟，
-      # 同一步的全部测试编译达到 30 分钟上限，尚未执行测试。
-      # 先完成 library 单元测试，避免同包的普通 library 与大型 libtest 并发争用；
-      # 后续完整目标选择复用产物，仍包含所有 binaries、integration tests 和 doctests。
-      # 覆盖当前全部 default-members，不改变 profile 或时间上限；原生目标仍由后续 feature 执行。
+      # 测试图统一 updater,native-markdown-tests,test-support，并且所有编译/执行
+      # 步骤共用同一 --workspace 选择：windows-sys 与 tokio 的 dev-dependency
+      # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
+      # （含 GUI-free 的 lyrel-code-editor），新增成员自动进入门禁。
+      #
+      # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
+      # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；
+      # 给这一编译阶段 45 分钟，第二步复用同图，逐例测试超时不变。
       - name: Compile desktop library unit tests
-        if: runner.os != 'Linux'
-        timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --lib --no-run
+        if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
+        timeout-minutes: 45
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
-        if: runner.os != 'Linux'
+        if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
         timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
-      - name: Test desktop library and headless
-        if: runner.os != 'Linux'
-        timeout-minutes: 20
-        # SIGABRT 会丢失 libtest 捕获缓冲；保留原始 panic，并继续收集其他目标结果。
-        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --lib --bins --tests --no-run
 
-      # 显式 feature 只编译当前注册的 replacement native 消费者支持代码。
-      # baseline 消费者迁移边界见 editor HOST_CAPABILITIES；编译与执行独立计时。
-      # 普通测试断言失败后仍执行原生目标，但编译失败或取消时不启动它。
-      - name: Compile native Markdown tests
-        id: native_markdown_compile
-        if: ${{ !cancelled() && runner.os != 'Linux' && steps.desktop_tests_compile.outcome == 'success' }}
-        timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} --no-run
+      - name: Build lightweight graphics fixture
+        id: graphics_fixture_build
+        if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success'
+        timeout-minutes: 15
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --workspace --features updater,native-markdown-tests,test-support --bin lyrel-graphics-fixture --target ${{ matrix.target }}
+
+      # PR / scope=ci 没有生产 cargo build；测试图为四个 bin 生成的真实
+      # 可执行文件仍必须通过 CRT 门禁，不能因事件不是 PR 就漏掉它。
+      - name: Assert the test-built binaries need no VC++ redistributable
+        if: runner.os == 'Windows' && needs.preflight.outputs.production != 'true' && needs.preflight.outputs.reuse != 'true'
+        shell: pwsh
+        run: |
+          & ./.github/scripts/assert-no-vcruntime.ps1 `
+            "target/${{ matrix.target }}/debug/lyrel-app.exe" `
+            "target/${{ matrix.target }}/debug/lyrel.exe" `
+            "target/${{ matrix.target }}/debug/lyrel-server.exe" `
+            "target/${{ matrix.target }}/debug/lyrel-updater.exe"
+
+      # nextest 只跑 libtest 目标：harness=false 的 native_markdown、native_terminal
+      # 与 cli_e2e 由 -E 排除（被排除的二进制不会被 list，也就不会被误跑），随后用
+      # cargo test 单独执行。--no-tests=fail 让「筛空」成为失败而不是假通过；
+      # 超时与 fail-fast 在 .config/nextest.toml 的 ci profile，默认重试 0。
+      # 每个用例独立进程，单个 SIGABRT 不再丢掉整份 libtest 结果。
+      - name: Test desktop library and headless
+        if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
+        timeout-minutes: 25
+        run: cargo nextest run --locked --workspace --lib --bins --tests --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
+
+      # nextest 不跑 doctest；单独保留，避免文档示例随迁移悄悄变成 0 用例。
+      - name: Test desktop doctests
+        if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
+        timeout-minutes: 20
+        run: cargo test --doc --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }}
+
+      # native_* 与 cli_e2e 都是 harness=false：进程 main 自己持有原生平台、驱动
+      # 真实 daemon，不经过 libtest，所以既不进 nextest，也不做名称筛选。
+      # 它们已在统一测试图里编译完成，这里只执行；一个目标断言失败不影响后面的目标，
+      # 但编译失败或取消时不启动它们。
       - name: Test native Markdown
-        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
+        if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
         # harness=false 的进程 main 持有原生字体平台；不使用 libtest worker 或名称筛选。
-        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} -- --nocapture
+        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_markdown -- --nocapture
 
       # 与 native Markdown 相同：harness=false 的进程 main 持有原生字体平台。
-      # 复用已编译的 feature 库，但仍单独编译和执行，避免一个目标失败吞掉另一个。
-      - name: Compile native terminal tests
-        id: native_terminal_compile
-        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
-        timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} --no-run
+      # 复用同一个已编译目标图，单独执行，避免一个目标失败吞掉另一个。
       - name: Test native terminal
-        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_terminal_compile.outcome == 'success' }}
+        if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
-        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} -- --nocapture
+        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_terminal -- --nocapture
 
+      # cli_e2e 的 main 自己并行驱动相互隔离的 daemon/TempDir，并直接打印结果；
+      # 输出本来就未捕获，不需要再追加 -- --nocapture。
+      - name: Test CLI end-to-end harness
+        if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
+        timeout-minutes: 15
+        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
+
+      # Linux headless 只有 GUI-free 成员，生产图本身就是 --all-features；
+      # 测试沿用同一选择，同样只把 harness=false 的 cli_e2e 排除在 nextest 之外。
       - name: Test Linux headless
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 20
-        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
+        run: cargo nextest run --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --lib --bins --tests --all-features --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(cli_e2e)'
+
+      - name: Test Linux headless doctests
+        if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
+        timeout-minutes: 15
+        run: cargo test --doc --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --all-features --target ${{ matrix.target }}
+
+      - name: Test Linux CLI end-to-end harness
+        if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
+        timeout-minutes: 15
+        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-graphics-fixture --all-features --target ${{ matrix.target }} --test cli_e2e
 
       # There is deliberately no post-mortem step here, and that is worth
       # recording, because an earlier version of this file had one: on failure it
@@ -261,7 +390,7 @@ jobs:
   # distro. 可信 main push 上传已验证产物，供同 SHA 的 Release 复用；PR 只验证。
   server-musl:
     needs: preflight
-    if: needs.preflight.outputs.server == 'true'
+    if: needs.preflight.outputs.server == 'true' && needs.preflight.outputs.tier == 'full'
     name: lyrel-server musl (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -307,7 +436,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-v2-${{ matrix.target }}
+          shared-key: ci-v3-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # 单独构建 server，避免 GUI 的 feature 统一启用 GSSAPI；musl 无法
@@ -344,7 +473,7 @@ jobs:
   # 与 musl 一样只允许可信 main push 上传已签名、已验证的 CI 产物。
   server-macos:
     needs: preflight
-    if: needs.preflight.outputs.server == 'true'
+    if: needs.preflight.outputs.server == 'true' && needs.preflight.outputs.tier == 'full'
     name: lyrel-server macOS (${{ matrix.target }})
     runs-on: macos-15
     timeout-minutes: 45
@@ -365,7 +494,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-v2-${{ matrix.target }}
+          shared-key: ci-v3-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # 独立 server 不统一 GUI 的 GSSAPI feature；assert-macho.sh 会拒绝
@@ -397,9 +526,10 @@ jobs:
           if-no-files-found: error
 
   # 仅发布流程变更仍实际编译、打包并校验，但此 reusable workflow 没有发布权限。
+  # 手动 dispatch 默认 scope=ci 不跑这里；选 full 才补上发行打包。
   release-validation:
     needs: preflight
-    if: needs.preflight.outputs.release == 'true'
+    if: needs.preflight.outputs.release == 'true' && needs.preflight.outputs.tier == 'full'
     permissions:
       contents: read
       actions: read

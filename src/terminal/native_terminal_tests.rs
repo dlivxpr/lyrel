@@ -15,8 +15,10 @@ mod graphics_pty_fixture {
 
 include!("graphics_pty_consumer_support.rs");
 
-// Child processes use the same real daemon and raw PTY sender as libtest.
-// Match the exact fixture selector before interpreting inherited environment.
+// Manual escape hatch only: normal consumer tests spawn the lightweight
+// `lyrel-graphics-fixture` process. Running this binary directly with one of
+// the selector arguments still starts the real daemon/sender in-process for
+// debugging that predates the fixture binary.
 pub(crate) fn run_fixture() -> Option<std::process::ExitCode> {
     let scope = module_path!().split_once("::").unwrap().1;
     let arguments: Vec<_> = std::env::args().collect();

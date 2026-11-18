@@ -94,7 +94,7 @@ fn other_target() -> RemoteTarget {
 }
 
 fn activate(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, host: SharedHost) {
-    app.update_in(vcx, |app, _, cx| {
+    app.update_in(vcx, |app, window, cx| {
         let pane = app.tabs[0]
             .pane
             .first_leaf()
@@ -125,7 +125,7 @@ fn activate(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, host: SharedHos
         pane.update(cx, |pane, _| {
             pane.set_git_status_cwd_for_test(Some(PathBuf::from("/repo")))
         });
-        app.set_right_panel_tab(RightPanelTab::Files, cx);
+        app.set_right_panel_tab(RightPanelTab::Files, window, cx);
         cx.notify();
     });
 }

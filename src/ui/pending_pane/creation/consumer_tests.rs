@@ -548,3 +548,53 @@ fn a_prepared_hermes_command_is_typed_verbatim_and_keeps_its_marker(cx: &mut Tes
         );
     }
 }
+
+#[gpui_kit::test]
+fn reduced_motion_keeps_connecting_legible_without_animation_frames(cx: &mut TestAppContext) {
+    let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
+    vcx.update(|_, cx| {
+        cx.global_mut::<crate::core::config::Config>()
+            .motion_preference = crate::core::config::MotionPreference::Reduce;
+        crate::ui::motion::apply(cx);
+    });
+    let waiting = app.update_in(&mut vcx, |app, window, cx| pending(app, window, cx));
+    let pane = waiting.entity_id().as_u64() as usize;
+    vcx.run_until_parked();
+
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // Drop a callback the initial default-policy frame may have queued
+        // before the reduction took effect.
+        let _ = window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert!(window.find(("pending-pane-connecting", pane)).visible());
+        assert!(
+            window
+                .find(("pending-pane-connecting-label", pane))
+                .label()
+                .is_some_and(|label| label.contains("local")),
+            "the static status text still names the machine"
+        );
+        assert!(cx.reduce_motion());
+        assert_eq!(
+            window.simulate_next_frame(cx),
+            0,
+            "a static connecting state must not request animation-only frames"
+        );
+    });
+
+    vcx.update(|_, cx| {
+        cx.global_mut::<crate::core::config::Config>()
+            .motion_preference = crate::core::config::MotionPreference::Allow;
+        crate::ui::motion::apply(cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(!cx.reduce_motion());
+        assert!(
+            window.simulate_next_frame(cx) > 0,
+            "Allow keeps the existing looping indicator"
+        );
+    });
+}

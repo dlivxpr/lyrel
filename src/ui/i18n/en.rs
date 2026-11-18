@@ -6,6 +6,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::TerminalGlyphNeedsDaemonUpdate => {
             "Glyph Protocol needs an updated lyrel daemon; this pane was not changed"
         }
+        L10nKey::TerminalTitleNeedsDaemonUpdate => {
+            "This machine predates validated terminal titles; its pane titles may be trimmed until lyrel-server is updated"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} lines · Return to live",
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
@@ -740,6 +743,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageProfile => "Browser profile",
         L10nKey::UsageChooseBrowser => "Choose a supported browser",
         L10nKey::UsageChooseProfile => "Choose a profile to verify and import",
+        L10nKey::UsageSearchProfiles => "Search profiles",
         L10nKey::UsageBrowserHelp => {
             "Reads only userToken for https://platform.deepseek.com in the selected profile. Supports Chromium LevelDB and Firefox LocalStorage; Safari and the new Chromium SQLite format are unsupported. Material stays in memory, never in the vault, configuration, logs or temporary files. Refresh never requests system permission or switches profiles. Re-import after a source or token change."
         }
@@ -908,6 +912,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsDimInactivePanesDesc => {
             "Fade unfocused panes so the active one stands out."
         }
+        L10nKey::SettingsMotionGroup => "Motion",
+        L10nKey::SettingsMotionPreference => "Motion preference",
+        L10nKey::SettingsMotionPreferenceDesc => {
+            "Follow the system setting, reduce Lyrel's animations, or allow its existing motion. Terminal programs are never changed."
+        }
+        L10nKey::SettingsMotionFollowSystem => "Follow system",
+        L10nKey::SettingsMotionReduce => "Reduce motion",
+        L10nKey::SettingsMotionAllow => "Allow motion",
         L10nKey::SettingsOpenThemesFolder => "Open themes folder",
         L10nKey::SettingsChangeThemeImage => "Change…",
         L10nKey::SettingsChooseThemeImage => "Choose…",
@@ -1491,6 +1503,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "fade unfocused inactive split pane focus opacity highlight active dimming"
         }
+        L10nKey::SettingsSearchMotionKeywords => {
+            "motion animation animate reduce reduced accessibility vestibular effects system allow"
+        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => "pane hover activate",
         L10nKey::SettingsSearchFontFamilyKeywords => "typeface monospace typography",
         L10nKey::SettingsSearchFontLigaturesKeywords => "typography glyph fira",
@@ -1778,10 +1793,23 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorStripNoMatch => "No open files match",
         L10nKey::EditorStripCloseSaved => "Close saved",
         L10nKey::EditorStripCloseOthers => "Close others",
+        L10nKey::EditorDocumentTabs => "Open documents",
         L10nKey::EditorBackToTerminal => "Back to Terminal (Esc)",
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
         L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
         L10nKey::StatusRemoteHost => "Remote host {id}",
+        L10nKey::ProgramSource => "Program",
+        L10nKey::ProgramIdle => "Idle",
+        L10nKey::ProgramWorking => "Working",
+        L10nKey::ProgramDone => "Done",
+        L10nKey::ProgramBlocked => "Blocked",
+        L10nKey::ProgramError => "Error",
+        L10nKey::ProgramPermission => "Permission needed",
+        L10nKey::ProgramQuestion => "Answer needed",
+        L10nKey::ProgramAuth => "Authentication needed",
+        L10nKey::ProgramRecordId => "id {id}",
+        L10nKey::ProgramMoreRecords => "{count} more",
+        L10nKey::ProgramNewResults => "New results · {count}",
         L10nKey::EditorMarkdownLive => "Live editing",
         L10nKey::EditorMarkdownSource => "Source",
         L10nKey::EditorFormulaEditing => "Edit formula",
@@ -2474,6 +2502,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSplitRight => "Split Editor Right",
         L10nKey::EditorFocusLeftGroup => "Focus Left Editor Group",
         L10nKey::EditorFocusRightGroup => "Focus Right Editor Group",
+        L10nKey::FocusDocumentTabNavigation => "Focus Document Tabs",
+        L10nKey::EditorDocumentOverflow => "Show All Open Documents",
         L10nKey::EditorSplitSameFile => "Open in the other group — click to edit it here",
         L10nKey::CmdEditorGoToSymbol => "Editor: Go to Symbol…",
         L10nKey::SearchHeadingReferences => "References",
@@ -2929,6 +2959,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdSwapPanePrevious => "Swap Pane Previous",
         L10nKey::CmdNextTab => "Next Tab",
         L10nKey::CmdPreviousTab => "Previous Tab",
+        L10nKey::CmdFocusTerminalTabs => "Focus Terminal Tab Sidebar",
         L10nKey::CmdMoveTabLeft => "Move Tab Left",
         L10nKey::CmdMoveTabRight => "Move Tab Right",
         L10nKey::CmdRecentTabSwitcher => "Recent Tab Switcher",
@@ -2978,6 +3009,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelFiles => "Right Panel: Files",
         L10nKey::CmdRightPanelSearch => "Right Panel: Search",
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
+        L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme…",
         L10nKey::CmdResetFontSize => "Reset Font Size",
         L10nKey::CmdEnterFullScreen => "Enter Full Screen",
@@ -3044,6 +3076,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdAgentSendGitDiffForReview => "Agent: Send Git Diff for Review",
         L10nKey::CmdAgentSendGitDiffSubtitle => "git diff → running coding agent",
         L10nKey::CmdSettings => "Settings…",
+        L10nKey::CmdFocusSettingsNavigation => "Focus Settings Navigation",
         L10nKey::CmdKeyboardShortcuts => "Keyboard Shortcuts",
         L10nKey::CmdAboutLyrel => "About lyrel",
         L10nKey::CmdCheckForUpdates => "Check for Updates…",
@@ -3391,8 +3424,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AgentStatusWorking => "Working",
         L10nKey::AgentStatusWaiting => "Needs input",
         L10nKey::AgentStatusDone => "Done",
-        L10nKey::NotifyCommandFinished => "Command finished after {secs}s",
-        L10nKey::NotifyCommandFinishedWithCommand => "{command} — finished after {secs}s",
+        L10nKey::NotifyCommandSucceeded => "Command succeeded after {secs}s",
+        L10nKey::NotifyCommandSucceededWithCommand => "{command} — succeeded after {secs}s",
+        L10nKey::NotifyCommandFailed => "Command failed after {secs}s (exit code {code})",
+        L10nKey::NotifyCommandFailedWithCommand => {
+            "{command} — failed after {secs}s (exit code {code})"
+        }
+        L10nKey::NotifyCommandFinishedUnknown => {
+            "Command finished after {secs}s (exit status unknown)"
+        }
+        L10nKey::NotifyCommandFinishedUnknownWithCommand => {
+            "{command} — finished after {secs}s (exit status unknown)"
+        }
         L10nKey::NotifyAgentFinished => "Finished after {secs}s",
         L10nKey::NotifyAgentWaiting => "Waiting for your input",
         L10nKey::NotifyTurnFinished => "Turn finished",
@@ -3411,6 +3454,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::TabUnnamedShell => "Shell {n}",
         L10nKey::ShellDefault => "default",
         L10nKey::SidebarUngroupedGroup => "Ungrouped",
+        L10nKey::SidebarNavigation => "Terminal tabs",
         L10nKey::SidebarMoveToGroup => "Move to Group",
         L10nKey::SidebarNewGroup => "New Group…",
         L10nKey::SidebarRemoveFromGroup => "Remove from Group",

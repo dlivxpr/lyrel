@@ -4,9 +4,9 @@
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
     App, Bounds, ContentMask, Corners, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    HitboxId, Hsla, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Rgba, SharedString, StrikethroughStyle, Style, TextAlign, TextRun,
-    Window, fill, point, px, relative, size,
+    HitboxId, Hsla, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Rgba, SharedString, StrikethroughStyle, Style, TextAlign, TextRun, Window, fill, point,
+    px, relative, size,
 };
 use rio_vt::config::colors::ColorRgb;
 
@@ -365,13 +365,6 @@ impl TerminalElement {
                 v.on_select_end(cx);
             });
         });
-    }
-}
-
-impl IntoElement for TerminalElement {
-    type Element = Self;
-    fn into_element(self) -> Self::Element {
-        self
     }
 }
 

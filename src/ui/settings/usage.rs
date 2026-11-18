@@ -8,7 +8,7 @@ use crate::{
 };
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Context, Entity, Focusable as _, Global, Subscription, Task, Window, div, prelude::*,
@@ -464,6 +464,72 @@ impl SelectItem for ProfileChoice {
     fn value(&self) -> &String {
         &self.id
     }
+    /// The list row with the typed query picked out. The component's default
+    /// highlight only changes the colour, which is invisible when the match
+    /// already sits in the row's own ink (the keyboard row draws in
+    /// `accent_foreground`); the weight carries the emphasis while the colour
+    /// stays an existing foreground role.
+    fn render_highlighted(
+        &self,
+        query: &str,
+        _window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::base::TestTextExt as _;
+        let title = self.title();
+        let style = gpui_kit::HighlightStyle {
+            color: Some(cx.theme().list_highlight_foreground),
+            font_weight: Some(gpui_kit::FontWeight::SEMIBOLD),
+            ..Default::default()
+        };
+        let ranges = if query.is_empty() {
+            Vec::new()
+        } else {
+            profile_match_ranges(&title, query)
+        };
+        gpui_kit::StyledText::new(title.clone())
+            .with_highlights(ranges.into_iter().map(|range| (range, style)))
+            .test_text(title)
+    }
+}
+
+/// Byte ranges of the non-overlapping occurrences of `query` in a profile
+/// label, matched case-insensitively the way `SearchableVec` filters it, so a
+/// highlighted range is always part of a row the filter kept.
+fn profile_match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let query = query
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect::<Vec<_>>();
+    let mut ranges = Vec::new();
+    let mut next_start = 0;
+    for (start, _) in text.char_indices() {
+        if start < next_start {
+            continue;
+        }
+        if let Some(len) = profile_match_len(&text[start..], &query) {
+            ranges.push(start..start + len);
+            next_start = start + len;
+        }
+    }
+    ranges
+}
+
+fn profile_match_len(text: &str, query: &[char]) -> Option<usize> {
+    let mut rest = query;
+    for (offset, ch) in text.char_indices() {
+        for lower in ch.to_lowercase() {
+            let (first, tail) = rest.split_first()?;
+            if *first != lower {
+                return None;
+            }
+            rest = tail;
+        }
+        if rest.is_empty() {
+            return Some(offset + ch.len_utf8());
+        }
+    }
+    None
 }
 pub(crate) struct UsagePage {
     data: Entity<UsageData>,
@@ -474,7 +540,7 @@ pub(crate) struct UsagePage {
     cadence: Entity<SelectState<Vec<Cadence>>>,
     source: Entity<SelectState<Vec<Source>>>,
     browsers: Entity<SelectState<Vec<BrowserChoice>>>,
-    profiles: Entity<SelectState<Vec<ProfileChoice>>>,
+    profiles: Entity<SelectState<SearchableVec<ProfileChoice>>>,
     provider: Entity<SelectState<Vec<Provider>>>,
     profile_items: Vec<ProfileChoice>,
     discovering: bool,
@@ -577,7 +643,15 @@ impl UsagePage {
         let browsers = cx.new(|cx| {
             SelectState::new(browser_choices(Provider::DeepSeek, false), None, window, cx)
         });
-        let profiles = cx.new(|cx| SelectState::new(Vec::<ProfileChoice>::new(), None, window, cx));
+        let profiles = cx.new(|cx| {
+            SelectState::<SearchableVec<ProfileChoice>>::new(
+                SearchableVec::new(Vec::<ProfileChoice>::new()),
+                None,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let secs = data.read(cx).stored.interval_secs;
         cadence.update(cx, |state, cx| state.set_selected_value(&secs, window, cx));
         let mut subs = vec![cx.observe_in(&data, window, |page, _, window, cx| {
@@ -725,8 +799,9 @@ impl UsagePage {
         self.discovery_version += 1;
         let version = self.discovery_version;
         self.profile_items.clear();
-        self.profiles
-            .update(cx, |s, cx| s.set_items(Vec::new(), window, cx));
+        self.profiles.update(cx, |s, cx| {
+            s.set_items(SearchableVec::<ProfileChoice>::new(Vec::new()), window, cx)
+        });
         self.discovering = true;
         self.error = None;
         let reader = self.data.read(cx).shared.browser.clone();
@@ -747,7 +822,7 @@ impl UsagePage {
                             })
                             .collect();
                         page.profiles.update(cx, |s, cx| {
-                            s.set_items(page.profile_items.clone(), window, cx)
+                            s.set_items(SearchableVec::from(page.profile_items.clone()), window, cx)
                         });
                         if page.profile_items.is_empty() {
                             page.error = Some(UsageError::BrowserMissing);
@@ -833,8 +908,9 @@ impl UsagePage {
             );
             s.set_selected_index(None, window, cx);
         });
-        self.profiles
-            .update(cx, |s, cx| s.set_items(Vec::new(), window, cx));
+        self.profiles.update(cx, |s, cx| {
+            s.set_items(SearchableVec::<ProfileChoice>::new(Vec::new()), window, cx)
+        });
         self.name
             .update(cx, |input, cx| input.set_value(name, window, cx));
         self.key

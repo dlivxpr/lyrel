@@ -123,6 +123,7 @@ impl PaneConnection {
         self.viewport_reporter.clone()
     }
 
+    /// The owner retires the old reader before resetting shared projections.
     pub(super) fn adopt_relink(
         &mut self,
         stream: Stream,
@@ -134,7 +135,6 @@ impl PaneConnection {
         buffered: Vec<u8>,
         route: &PaneRoute,
     ) -> anyhow::Result<()> {
-        self.retire(&signals.images);
         while events.try_recv().is_ok() {}
         if let Ok(mut pending) = signals.clipboard_writes.lock() {
             pending.clear();
@@ -152,6 +152,19 @@ impl PaneConnection {
         // rather than left to swallow that edge.
         if let Ok(mut guard) = signals.agent_session.lock() {
             guard.replayed = false;
+        }
+
+        // The event drain above can eat the only wakeup the queued program
+        // frames had: the reader only sends `ProgramStatusChanged` when the
+        // pending queue goes empty -> non-empty. Re-arm it or program
+        // attention stays stale until the pane is reopened.
+        if !signals
+            .program_updates
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .is_empty()
+        {
+            proxy.send(PaneEvent::ProgramStatusChanged);
         }
 
         signals.exited.store(false, Ordering::SeqCst);

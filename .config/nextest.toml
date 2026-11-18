@@ -1,0 +1,22 @@
+# cargo-nextest 只跑 libtest 目标：harness=false 的 native_markdown、
+# native_terminal 与 cli_e2e 由 CI 的 -E 'not binary(...)' 排除，并用
+# `cargo test --test <name>` 单独执行。新增 harness=false 目标时必须同步
+# 加入那条 -E，否则 nextest 会因为该二进制不支持 --list 而失败（fail closed）。
+#
+# 这里只定义调度与超时策略；测试集合、特性和目标选择由 CI 命令行决定，
+# 本地与 CI 共用同一份 profile。
+
+[profile.default]
+# 没有已证明 flaky 的用例：默认不重试。个别用例确有证据后再用
+# [[profile.default.overrides]] 精确加 retries，不整体放宽。
+retries = 0
+# 跑完全部用例再汇总，和原来的 --no-fail-fast 一致。
+fail-fast = false
+# 慢用例先告警，再等两倍周期后硬性终止；libtest 原本没有任何单用例超时，
+# 一个挂住的用例会把整个 job 拖到 GitHub 的六小时上限。
+slow-timeout = { period = "120s", terminate-after = 3, grace-period = "10s" }
+
+[profile.ci]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "120s", terminate-after = 3, grace-period = "10s" }

@@ -164,9 +164,10 @@ pub fn strip_status_mark(title: &str) -> &str {
 /// Claude Code rewrites its title every few hundred milliseconds while it
 /// works, one quadrant of the circle at a time, and a tab never draws the mark
 /// ([`TabView::label`]). A repaint for such a title would paint the same label
-/// again. Trimmed the way `label` trims, so the two agree on what a tab shows.
+/// again. Compared exactly, without trimming, because the validated payload's
+/// spaces are content — the same way `label` shows them.
 pub fn same_title_ignoring_status_mark(a: &str, b: &str) -> bool {
-    strip_status_mark(a.trim()) == strip_status_mark(b.trim())
+    strip_status_mark(a) == strip_status_mark(b)
 }
 
 pub fn is_shell_program_title(title: &str) -> bool {
@@ -204,7 +205,6 @@ impl TabView {
         if let Some(title) = self
             .osc_title
             .as_deref()
-            .map(str::trim)
             .map(strip_status_mark)
             .filter(|t| !t.is_empty())
         {
@@ -272,7 +272,6 @@ mod tests {
             ),
             ("\u{2733} fixing the switcher", "fixing the switcher"),
             ("\u{280B} building", "\u{2819} building"),
-            ("  \u{25D0} fixing the switcher ", "fixing the switcher"),
         ] {
             assert!(same_title_ignoring_status_mark(a, b), "on {a:?} / {b:?}");
         }
@@ -280,6 +279,7 @@ mod tests {
             ("\u{25D0} fixing the switcher", "\u{25D1} fixing the parser"),
             ("vim", "vim \u{2014} main.rs"),
             ("", "vim"),
+            ("  \u{25D0} fixing the switcher ", "fixing the switcher"),
         ] {
             assert!(!same_title_ignoring_status_mark(a, b), "on {a:?} / {b:?}");
         }
@@ -382,19 +382,32 @@ mod tests {
         // switcher listing the same tab has to show it too — naming it after
         // the agent is what made every tab of a workspace read "Oh My Pi".
         let titled = TabView {
-            osc_title: Some("  ✳ fixing the switcher  ".into()),
+            osc_title: Some("\u{2733} fixing the switcher".into()),
             agent: Some(CLIAgent::OhMyPi),
             cwd: Some("/work".into()),
             ..view()
         };
         assert_eq!(titled.label(), TabLabel::Osc("fixing the switcher"));
 
-        let blank_title = TabView {
+        // Spaces around an accepted payload are content, not padding the
+        // label ladder may take back.
+        let padded = TabView {
+            osc_title: Some("  release notes  ".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            ..view()
+        };
+        assert_eq!(padded.label(), TabLabel::Osc("  release notes  "));
+
+        let whitespace_title = TabView {
             osc_title: Some("   ".into()),
             agent: Some(CLIAgent::OhMyPi),
             ..view()
         };
-        assert_eq!(blank_title.label(), TabLabel::Agent(CLIAgent::OhMyPi));
+        assert_eq!(
+            whitespace_title.label(),
+            TabLabel::Osc("   "),
+            "only the empty payload is the reset"
+        );
 
         let working = TabView {
             agent: Some(CLIAgent::OhMyPi),

@@ -70,9 +70,19 @@ impl DeathReporter {
         let PaneState {
             subscriptions,
             graphics,
+            program,
             ..
         } = &mut *st;
         subscriptions.release_graphics(graphics);
+        // A shell that is gone has no live prompt to clear later: drop the
+        // transient idle/working/blocked records now, while the attached
+        // consumer can still receive the ordered delta before `Exited`.
+        if let Some(delta) = program.exited() {
+            subscriptions.publish_program_status(
+                crate::core::program_status::ProgramStatusFrame::Update(delta),
+                graphics,
+            );
+        }
         let pane = st.id;
         log::info!(
             "pane {pane} exited; exit_code={code:?} shutdown_requested={}",

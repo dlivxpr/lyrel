@@ -302,6 +302,7 @@ impl SettingsWindow {
         let cursor_style = cfg.cursor_style;
         let prompt_cursor_style = cfg.prompt_cursor_style;
         let cursor_blink = cfg.cursor_blink;
+        let motion_preference = cfg.motion_preference;
         let font_thicken = cfg.font_thicken;
         let font_family = cfg.font_family.clone();
         let font_bold = cfg.font_family_bold.clone();
@@ -436,9 +437,47 @@ impl SettingsWindow {
         let blink = self.settings_switch("cursor-blink", cursor_blink, cx, |this, on, _, cx| {
             this.set_cursor_blink(on, cx)
         });
+        let motion_index = match motion_preference {
+            MotionPreference::System => 0,
+            MotionPreference::Reduce => 1,
+            MotionPreference::Allow => 2,
+        };
+        let motion_control = self.settings_choice(
+            "motion-preference",
+            &[
+                t(L10nKey::SettingsMotionFollowSystem),
+                t(L10nKey::SettingsMotionReduce),
+                t(L10nKey::SettingsMotionAllow),
+            ],
+            motion_index,
+            cx,
+            |this, index, _window, cx| {
+                let preference = match index {
+                    0 => MotionPreference::System,
+                    1 => MotionPreference::Reduce,
+                    _ => MotionPreference::Allow,
+                };
+                this.set_motion_preference(preference, cx);
+            },
+        );
 
         let mut groups = vec![self.render_theme_group(cx)];
         groups.extend(self.render_theme_editor_group(cx));
+        groups.push(
+            self.settings_group(
+                Some(t(L10nKey::SettingsMotionGroup)),
+                None,
+                [self
+                    .settings_row(
+                        t(L10nKey::SettingsMotionPreference),
+                        t(L10nKey::SettingsMotionPreferenceDesc),
+                        motion_control,
+                        cx,
+                    )
+                    .into_any_element()],
+                cx,
+            ),
+        );
         groups.push(
             self.settings_group(
                 Some(t(L10nKey::SettingsTerminalFontGroup)),

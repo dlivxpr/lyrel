@@ -36,10 +36,7 @@ pub(crate) fn icon_is_up() -> bool {
 }
 
 /// A sender for the current tray dispatch loop, if one is running.
-// Only the platform notification callbacks call this. The Windows one is
-// compiled out of test builds so unit tests never raise a real toast; the macOS
-// one is not, but no test sends a notification there either.
-#[cfg_attr(test, allow(dead_code))]
+#[cfg(any(target_os = "macos", all(target_os = "windows", not(test))))]
 pub(crate) fn sender() -> Option<smol::channel::Sender<TrayAction>> {
     SENDER.lock().ok()?.clone()
 }
@@ -384,19 +381,22 @@ fn app_snapshot(cx: &mut App) -> TraySnapshot {
 fn dispatch(action: TrayAction, cx: &mut App) {
     use crate::ui::windows::WindowRegistry;
 
-    let target = match action {
-        TrayAction::RevealPane { leaf_id } => WindowRegistry::open_windows(cx)
-            .into_iter()
-            .find(|(_, weak)| {
-                weak.upgrade()
-                    .is_some_and(|app| app.read(cx).owns_leaf(leaf_id))
-            })
-            .map(|(workspace, _)| workspace),
-        _ => None,
+    if let TrayAction::RevealPane { leaf_id } = action {
+        // A stale click cannot reopen or focus an unrelated workspace.
+        if let Some((workspace, _)) =
+            WindowRegistry::open_windows(cx)
+                .into_iter()
+                .find(|(_, weak)| {
+                    weak.upgrade()
+                        .is_some_and(|app| app.read(cx).owns_leaf(leaf_id))
+                })
+        {
+            deliver(action, workspace, cx);
+        }
+        return;
     }
-    .or_else(|| WindowRegistry::most_recent(cx));
 
-    let Some(workspace) = target else {
+    let Some(workspace) = WindowRegistry::most_recent(cx) else {
         // No window on screen. The tray is then the app's only presence, so
         // bring the most recent workspace back the way a pathless launch would
         // and let the action run against it.

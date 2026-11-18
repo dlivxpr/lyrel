@@ -56,6 +56,7 @@ pub(super) fn run(
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     let broker = pane.graphics_admission_broker();
@@ -129,22 +130,24 @@ pub(super) fn run(
                     let _ = session.sender.as_ref().unwrap().send(ready);
                 }
                 if observer {
-                    pane.observe_admitted_with_colors_and_glyphs(
+                    pane.observe_admitted_with_colors_glyphs_and_program(
                         session.sender.as_ref().unwrap().clone(),
                         gate.clone(),
                         admission,
                         pane_colors,
                         glyph_state,
+                        program_status,
                     )?
                     .map(Attached::Observer)
                 } else {
-                    pane.attach_admitted_with_colors_and_glyphs(
+                    pane.attach_admitted_with_colors_glyphs_and_program(
                         session.sender.as_ref().unwrap().clone(),
                         allow_clipboard,
                         admission,
                         pane_colors,
                         glyph_state,
                         glyph_render,
+                        program_status,
                     )?
                     .map(Attached::Controller)
                 }

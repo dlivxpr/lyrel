@@ -65,6 +65,7 @@ actions!(
         SwapPanePrev,
         NextTab,
         PrevTab,
+        FocusTerminalTabNavigation,
         SelectNextTab,
         SelectPrevTab,
         MoveTabLeft,
@@ -88,6 +89,7 @@ actions!(
         ToggleFullscreen,
         ToggleLeftPanel,
         ToggleRightPanel,
+        FocusRightPanelNavigation,
         ShowRightPanelInfo,
         // Keeps its old name even though the panel is now "Source Control":
         // `Config::keybindings` is keyed by action name, so renaming it would
@@ -111,6 +113,7 @@ actions!(
         ScmToggleGraph,
         ToggleDiffViewMode,
         OpenSettings,
+        FocusSettingsNavigation,
         ShowKeyboardShortcuts,
         About,
         CheckForUpdates,
@@ -142,6 +145,8 @@ actions!(
         EditorSplitRight,
         EditorFocusLeftGroup,
         EditorFocusRightGroup,
+        FocusDocumentTabNavigation,
+        EditorDocumentOverflow,
         EditorNewFile,
         EditorNewMarkdownFile,
         EditorGoToDefinition,

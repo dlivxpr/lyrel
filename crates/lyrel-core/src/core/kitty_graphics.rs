@@ -1672,8 +1672,10 @@ impl MediumTransfer {
         Some(usize::try_from(start).ok()?..usize::try_from(start.checked_add(len)?).ok()?)
     }
 
-    /// Read only the requested bounded region. Descriptor reads, unlike mmap,
-    /// fail safely if an untrusted sender truncates an object concurrently.
+    /// Read only the requested bounded region. The opened object is checked
+    /// for regular-file type first, so a FIFO or device that happened to open
+    /// is rejected without being read. Descriptor reads, unlike mmap, fail
+    /// safely if an untrusted sender truncates an object concurrently.
     fn read_region(&self, mut file: std::fs::File) -> Option<Vec<u8>> {
         use std::io::{Read as _, Seek as _, SeekFrom};
         let meta = file.metadata().ok()?;
@@ -1788,11 +1790,24 @@ impl MediumTransfer {
         }
         // The name must be a C string; kitty shm names look like `/px-…`.
         let cname = std::ffi::CString::new(self.name.clone()).ok()?;
+        // Linux resolves a POSIX shm name against the filesystem (`/dev/shm`),
+        // and the C library forwards the open flags to `open(2)`. A sender can
+        // pre-create a FIFO under that name, where a plain `O_RDONLY` open with
+        // no writer would block this reader before the descriptor can be
+        // validated. `O_NONBLOCK` completes a FIFO open immediately; the
+        // opened object is then checked by the bounded read path, which rejects
+        // anything that is not a regular file. Darwin's shm_open is a kernel
+        // allocation rather than a filesystem lookup, so its immutable mapping
+        // route keeps the platform's ordinary flags.
+        #[cfg(target_os = "linux")]
+        let open_flags = libc::O_RDONLY | libc::O_NONBLOCK;
+        #[cfg(not(target_os = "linux"))]
+        let open_flags = libc::O_RDONLY;
         // SAFETY: shm_open returns an owned descriptor, immediately transferred
         // to File. The object name is a validated CString and is unlinked on
         // every path after a successful open.
         unsafe {
-            let fd = libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0);
+            let fd = libc::shm_open(cname.as_ptr(), open_flags, 0);
             if fd < 0 {
                 return None;
             }

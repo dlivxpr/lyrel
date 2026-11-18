@@ -217,6 +217,25 @@ pub const FEATURE_GLYPH_SUPPORT: &str = "glyph-support";
 /// ring-only copy that a trim would silently lose.
 pub const FEATURE_PANE_COLORS: &str = "pane-colors";
 
+/// The daemon validates OSC 7501 program-status reports with the pinned Rio VT
+/// parser, retains the resulting record hierarchy outside the text ring, and
+/// projects it to a consumer that opts in with
+/// `ClientMsg::SubscribeProgramStatus`. Only the live daemon answers the
+/// feature-detection query and publishes `ProgramStatus` frames; a client that
+/// does not see this feature leaves its decoder alone instead of pretending
+/// the endpoint owns the records. The pane protocol version is unchanged:
+/// the opt-in and the frame are additive and mutually gated on this feature.
+pub const FEATURE_PROGRAM_STATUS: &str = "program-status";
+
+/// The daemon keeps pane title facts under the validated-title contract the
+/// pinned Rio VT parser gives the window: OSC 0/2 at most 255 UTF-8 bytes,
+/// strict UTF-8, no trimming, empty payload reset, and a rejected report that
+/// leaves the standing title and its lifetime untouched. A client that does
+/// not see this name must not claim daemon/window title parity: the older
+/// endpoint's facts were produced under its own rules, and the client keeps
+/// using the session while telling the user that endpoint needs updating.
+pub const FEATURE_VALIDATED_TITLES: &str = "validated-titles";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonVersion {
     pub protocol: u32,
@@ -243,8 +262,10 @@ impl DaemonVersion {
             FEATURE_GLYPH_STATE.to_string(),
             FEATURE_GLYPH_SUPPORT.to_string(),
             FEATURE_PANE_COLORS.to_string(),
+            FEATURE_PROGRAM_STATUS.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
+            FEATURE_VALIDATED_TITLES.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -306,6 +327,13 @@ pub fn negotiate_pane_rendering<S: Read + Write>(
             // could never send this message or receive the frame kind.
             if version.has_feature(FEATURE_GLYPH_STATE) {
                 ClientMsg::SubscribeGlyphState.encode(stream)?;
+                stream.flush()?;
+            }
+            // Only ask for the retained record projection when the peer owns
+            // it: an older daemon never advertises the feature, never sees the
+            // opt-in, and therefore never sends a kind this decoder lacks.
+            if version.has_feature(FEATURE_PROGRAM_STATUS) {
+                ClientMsg::SubscribeProgramStatus.encode(stream)?;
                 stream.flush()?;
             }
             // A rendering controller additionally asserts the complete
@@ -1153,6 +1181,12 @@ pub enum ClientMsg {
     /// never sends this keeps its old stream, is never asked for coverage,
     /// and never sees `fmt=glyf` advertised for the pane it controls.
     SubscribeGlyphRender,
+    /// Opt in to the daemon-owned OSC 7501 program-status projection. Sent
+    /// only after the peer advertised `FEATURE_PROGRAM_STATUS`, before
+    /// Spawn/Attach/Observe. The daemon then replays one ordered baseline and
+    /// every later live delta to this consumer; a peer that never sends it is
+    /// never sent a frame kind its decoder cannot read.
+    SubscribeProgramStatus,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
     GraphicsCapacity {
@@ -1378,6 +1412,12 @@ pub enum DaemonMsg {
     /// [`ClientMsg::SubscribeGlyphState`]. The generation distinguishes stale
     /// snapshots; the daemon is the only owner of the registry.
     GlyphState(Vec<u8>),
+    /// The daemon-owned OSC 7501 record projection. A fresh opted-in consumer
+    /// receives exactly one `Baseline` after the replayed text, before live
+    /// output; later frames are `Update` deltas in the same ordered stream.
+    /// Sent only to consumers that opted in with
+    /// [`ClientMsg::SubscribeProgramStatus`].
+    ProgramStatus(crate::core::program_status::ProgramStatusFrame),
     Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
@@ -1445,6 +1485,9 @@ mod kind {
     /// Client -> daemon: the controller's full monochrome-render opt-in; the
     /// only credential that lets the pane answer `s` with `fmt=glyf`.
     pub const SUBSCRIBE_GLYPH_RENDER: u8 = 74;
+    /// Client -> daemon: opt in to the daemon-owned program-status projection.
+    /// The kind spaces are direction-scoped, so 75 is also the daemon frame.
+    pub const SUBSCRIBE_PROGRAM_STATUS: u8 = 75;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1508,6 +1551,8 @@ mod kind {
     pub const COLORS: u8 = 61;
     pub const CLIPBOARD_WRITE: u8 = 62;
     pub const PROGRESS: u8 = 71;
+    /// Daemon -> opted-in consumer: baseline or live program-status frame.
+    pub const PROGRAM_STATUS: u8 = 75;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -1667,6 +1712,9 @@ impl ClientMsg {
             ClientMsg::SubscribePaneColors => write_frame(w, kind::SUBSCRIBE_PANE_COLORS, &[]),
             ClientMsg::SubscribeGlyphState => write_frame(w, kind::SUBSCRIBE_GLYPH_STATE, &[]),
             ClientMsg::SubscribeGlyphRender => write_frame(w, kind::SUBSCRIBE_GLYPH_RENDER, &[]),
+            ClientMsg::SubscribeProgramStatus => {
+                write_frame(w, kind::SUBSCRIBE_PROGRAM_STATUS, &[])
+            }
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1826,6 +1874,7 @@ impl ClientMsg {
             kind::SUBSCRIBE_PANE_COLORS => ClientMsg::SubscribePaneColors,
             kind::SUBSCRIBE_GLYPH_STATE => ClientMsg::SubscribeGlyphState,
             kind::SUBSCRIBE_GLYPH_RENDER => ClientMsg::SubscribeGlyphRender,
+            kind::SUBSCRIBE_PROGRAM_STATUS => ClientMsg::SubscribeProgramStatus,
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {
@@ -2040,6 +2089,9 @@ impl DaemonMsg {
                 write_frame(w, kind::GLYPH_QUERY, &to_json(&(token, cp))?)
             }
             DaemonMsg::GlyphState(frame) => write_frame(w, kind::GLYPH_STATE, frame),
+            DaemonMsg::ProgramStatus(frame) => {
+                write_frame(w, kind::PROGRAM_STATUS, &to_json(frame)?)
+            }
             DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -2122,6 +2174,7 @@ impl DaemonMsg {
                 DaemonMsg::GlyphQuery { token, cp }
             }
             kind::GLYPH_STATE => DaemonMsg::GlyphState(payload),
+            kind::PROGRAM_STATUS => DaemonMsg::ProgramStatus(from_json(&payload)?),
             kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
@@ -3490,6 +3543,21 @@ mod tests {
             !v.has_feature(crate::daemon::control::feature::CONTROL),
             "the session daemon must not advertise a dialect it cannot serve"
         );
+    }
+
+    /// The title contract rides the additive feature list, never a protocol
+    /// bump: a peer that predates it answers and stays usable without the
+    /// name, and a peer that has it can be trusted for daemon/window parity.
+    #[test]
+    fn validated_titles_are_an_additive_endpoint_capability() {
+        assert!(
+            DaemonVersion::current().has_feature(FEATURE_VALIDATED_TITLES),
+            "this build applies the validated title rule to daemon facts"
+        );
+        let legacy: DaemonVersion =
+            serde_json::from_slice(br#"{"protocol":19,"build":"0.3.4","features":[]}"#).unwrap();
+        assert!(!legacy.has_feature(FEATURE_VALIDATED_TITLES));
+        assert_eq!(legacy.protocol, PROTOCOL_VERSION, "no protocol bump");
     }
 
     /// `enabled` crosses the same peers as `rejected` above and gets the same

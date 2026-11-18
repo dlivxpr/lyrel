@@ -31,7 +31,7 @@ use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 
 /// Retained identity follows a group through focus swaps and split collapse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GroupId(u64);
 
 impl Default for GroupId {
@@ -202,6 +202,7 @@ impl TabCode {
             self.active = other.active;
             self.group = other.id;
         }
+        self.retain_strip_nav();
     }
 
     /// Lays a tab's recorded groups back out once their files have loaded.
@@ -266,6 +267,7 @@ impl TabCode {
         if let Some(front) = front {
             self.show(front);
         }
+        self.retain_strip_nav();
         extras.is_empty()
     }
 
@@ -399,6 +401,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The strip is shared: a group switch made while its cells hold the
+        // keyboard moves the strip to the other group and keeps the keyboard
+        // there, on that group's own remembered document, instead of
+        // dropping the user into the text they did not ask to edit.
+        let strip_has_keys = self.editor.strip_keyboard.is_focused(window);
         let Some(code) = self.tab_code_mut() else {
             return false;
         };
@@ -407,7 +414,9 @@ impl LyrelApp {
         }
         code.swap_focus();
         self.editor.dismiss_bar();
-        self.focus_editor(window, cx);
+        if !strip_has_keys {
+            self.focus_editor(window, cx);
+        }
         cx.notify();
         true
     }

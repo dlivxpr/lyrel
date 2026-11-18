@@ -33,6 +33,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::terminal::desktop_notification::windows_toast::ACTIVATOR;
+
 /// The toast/taskbar identity. Keep in sync with the `AppUserModelID` on the
 /// installer shortcuts in `.github/scripts/windows-installer.iss` — a
 /// mismatch silently splits the identity in two.
@@ -59,6 +61,32 @@ pub(crate) fn toast_app_id() -> Option<&'static str> {
         Branding::Ready => Some(AUMID),
         Branding::Pending(written_at) => (written_at.elapsed() >= INDEX_GRACE).then_some(AUMID),
     }
+}
+
+/// Build outputs may borrow branding, but only the installer-registered
+/// executable may publish the toast activator class.
+#[cfg(not(test))]
+pub(crate) fn clickable_app_id() -> Option<&'static str> {
+    let app_id = toast_app_id()?;
+    let exe = std::env::current_exe().ok()?;
+    has_clickable_shortcut(&exe, all_users_shortcut_path(), start_menu_shortcut_path())
+        .then_some(app_id)
+}
+
+fn has_clickable_shortcut(exe: &Path, all: Option<PathBuf>, user: Option<PathBuf>) -> bool {
+    [all, user]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| read_shortcut(&path).ok())
+        .any(|shortcut| shortcut_points_to(&shortcut, exe) && shortcut.activator == Some(ACTIVATOR))
+}
+
+fn shortcut_points_to(shortcut: &Shortcut, exe: &Path) -> bool {
+    shortcut.aumid.as_deref() == Some(AUMID)
+        && shortcut
+            .target
+            .as_deref()
+            .is_some_and(|target| same_path(target, exe))
 }
 
 enum Branding {
@@ -149,6 +177,15 @@ fn decide_with(
     if let Some(lnk) = all_users_lnk
         && lnk.is_file()
     {
+        // Side-by-side installs can each have a legitimate shortcut. Prefer
+        // this executable's per-user entry without rewriting the other one.
+        if per_user_lnk
+            .as_deref()
+            .and_then(|path| read_shortcut(path).ok())
+            .is_some_and(|shortcut| shortcut_points_to(&shortcut, exe))
+        {
+            return Ok(Decision::Branded);
+        }
         let shortcut = read_shortcut(&lnk).map_err(|e| format!("read {}: {e}", lnk.display()))?;
         let stamped = shortcut.aumid.as_deref() == Some(AUMID);
         return Ok(if !stamped {
@@ -177,6 +214,14 @@ fn decide_with(
         .and_then(|s| s.target.as_deref())
         .is_some_and(|t| same_path(t, exe));
     if stamped && on_target {
+        return Ok(Decision::Branded);
+    }
+
+    // A portable copy can borrow branding, but must not replace a live
+    // installer shortcut and strip its Notification Center activator.
+    if existing.as_ref().is_some_and(|shortcut| {
+        stamped && shortcut.activator == Some(ACTIVATOR) && !target_dead(shortcut)
+    }) {
         return Ok(Decision::Branded);
     }
 
@@ -289,6 +334,7 @@ fn all_users_shortcut_path() -> Option<PathBuf> {
 struct Shortcut {
     aumid: Option<String>,
     target: Option<PathBuf>,
+    activator: Option<windows::core::GUID>,
 }
 
 /// Any prior COM init on this thread (`S_FALSE`) or another model
@@ -344,7 +390,14 @@ fn read_shortcut(lnk: &Path) -> Result<Shortcut, String> {
             })
             .filter(|p| !p.as_os_str().is_empty());
 
-        Ok(Shortcut { aumid, target })
+        Ok(Shortcut {
+            aumid,
+            target,
+            activator: store
+                .GetValue(&windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ToastActivatorCLSID)
+                .ok()
+                .and_then(|v| windows::Win32::System::Com::StructuredStorage::PropVariantToGUID(&v).ok()),
+        })
     }
 }
 
@@ -353,7 +406,53 @@ fn read_shortcut(lnk: &Path) -> Result<Shortcut, String> {
 /// header shows.
 fn write_shortcut(lnk: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
-    write_shortcut_for(lnk, Some(&exe), Some(AUMID))
+    let activator = user_installer_registered(&exe).then_some(ACTIVATOR);
+    write_shortcut_for(lnk, Some(&exe), Some(AUMID), activator)
+}
+
+/// Only a per-user installer registration can supply an activator for
+/// a repaired shortcut. Other copies keep delivery without it.
+fn user_installer_registered(exe: &Path) -> bool {
+    use std::os::windows::ffi::OsStringExt;
+    use std::ptr::{null, null_mut};
+    use windows::core::HSTRING;
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+
+    let key = HSTRING::from(format!(
+        r"Software\Classes\CLSID\{{{ACTIVATOR:?}}}\LocalServer32"
+    ));
+    let mut bytes = 0;
+    // SAFETY: A null buffer queries the size; the next call advertises its
+    // actual capacity and fails if the registry value grows between reads.
+    let read = |buffer, size: &mut u32| unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            null(),
+            RRF_RT_REG_SZ,
+            null_mut(),
+            buffer,
+            size,
+        )
+    };
+    if read(null_mut(), &mut bytes) != ERROR_SUCCESS
+        || !(6..=65_536).contains(&bytes)
+        || bytes % 2 != 0
+    {
+        return false;
+    }
+    let mut value = vec![0u16; bytes as usize / 2];
+    if read(value.as_mut_ptr().cast(), &mut bytes) != ERROR_SUCCESS {
+        return false;
+    }
+    let Some(path) = value[..bytes as usize / 2]
+        .strip_prefix(&[u16::from(b'"')])
+        .and_then(|path| path.strip_suffix(&[u16::from(b'"'), 0]))
+    else {
+        return false;
+    };
+    same_path(Path::new(&std::ffi::OsString::from_wide(path)), exe)
 }
 
 /// The actual COM write, with the target and the AUMID stamped onto the
@@ -365,10 +464,14 @@ fn write_shortcut_for(
     lnk: &Path,
     target: Option<&Path>,
     aumid: Option<&str>,
+    activator: Option<windows::core::GUID>,
 ) -> Result<(), String> {
-    use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+    use windows::Win32::Storage::EnhancedStorage::{
+        PKEY_AppUserModel_ID, PKEY_AppUserModel_ToastActivatorCLSID,
+    };
     use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, StructuredStorage::PROPVARIANT,
+        CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile,
+        StructuredStorage::{InitPropVariantFromCLSID, PROPVARIANT},
     };
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -392,6 +495,13 @@ fn write_shortcut_for(
         if let Some(aumid) = aumid {
             store
                 .SetValue(&PKEY_AppUserModel_ID, &PROPVARIANT::from(aumid))
+                .map_err(|e| format!("SetValue: {e}"))?;
+        }
+        if let Some(activator) = activator {
+            let value =
+                InitPropVariantFromCLSID(&activator).map_err(|e| format!("activator: {e}"))?;
+            store
+                .SetValue(&PKEY_AppUserModel_ToastActivatorCLSID, &value)
                 .map_err(|e| format!("SetValue: {e}"))?;
         }
         store.Commit().map_err(|e| format!("Commit: {e}"))?;
@@ -525,8 +635,57 @@ mod tests {
     /// A `.lnk` in a temp dir, stamped and pointed wherever the test needs.
     fn lnk_fixture(dir: &Path, target: Option<&Path>, aumid: Option<&str>) -> std::path::PathBuf {
         let lnk = dir.join("lyrel.lnk");
-        super::write_shortcut_for(&lnk, target, aumid).expect("write shortcut fixture");
+        super::write_shortcut_for(&lnk, target, aumid, None).expect("write shortcut fixture");
         lnk
+    }
+
+    #[test]
+    fn a_matching_per_user_activator_survives_a_different_all_users_shortcut() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let user_exe = dir.path().join("user.exe");
+        let all_exe = dir.path().join("all.exe");
+        std::fs::write(&user_exe, b"").unwrap();
+        std::fs::write(&all_exe, b"").unwrap();
+        let user = dir.path().join("user.lnk");
+        let all = dir.path().join("all.lnk");
+        super::write_shortcut_for(&all, Some(&all_exe), Some(super::AUMID), None).unwrap();
+        super::write_shortcut_for(
+            &user,
+            Some(&user_exe),
+            Some(super::AUMID),
+            Some(super::ACTIVATOR),
+        )
+        .unwrap();
+        assert_eq!(
+            super::decide_with(&user_exe, Some(all.clone()), Some(user.clone())),
+            Ok(super::Decision::Branded)
+        );
+        assert!(super::has_clickable_shortcut(
+            &user_exe,
+            Some(all.clone()),
+            Some(user.clone())
+        ));
+        assert_eq!(
+            super::decide_with(&all_exe, None, Some(user.clone())),
+            Ok(super::Decision::Branded),
+            "a portable copy must not rewrite the installer's shortcut"
+        );
+        assert!(!super::has_clickable_shortcut(
+            &all_exe,
+            Some(all),
+            Some(user)
+        ));
+    }
+
+    #[test]
+    fn an_unregistered_copy_does_not_claim_the_activator_during_shortcut_repair() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let shortcut = dir.path().join("lyrel.lnk");
+        super::write_shortcut(&shortcut).unwrap();
+        assert_ne!(
+            super::read_shortcut(&shortcut).unwrap().activator,
+            Some(super::ACTIVATOR)
+        );
     }
 
     /// The regression behind this module's `ToastOnly`: a stamped shortcut
@@ -636,6 +795,7 @@ mod tests {
             target: Some(std::path::PathBuf::from(
                 r"%LOCALAPPDATA%\Programs\lyrel\lyrel-app.exe",
             )),
+            activator: None,
         };
         assert!(!super::target_dead(&shortcut));
     }

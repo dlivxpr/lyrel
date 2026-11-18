@@ -59,6 +59,16 @@ struct PaneState {
     glyph_reset_epoch: u64,
     subscriptions: Subscriptions,
     facts: PaneFacts,
+    /// Validated OSC 7501 records for this live pane session. Live reports and
+    /// prompt/RIS cleanup mutate it under the same lock that orders output and
+    /// frames; the Unix transient handoff carries it so a same-session `exec`
+    /// keeps the session identity, counters and recency.
+    program: crate::core::program_status::ProgramStatusStore,
+    /// Prompt marks staged while this read's bytes publish. Each one applies
+    /// to `program` only when the post-publish probe says the prompt was the
+    /// local shell's: resolving locality may block on a process query, and it
+    /// must never hold output hostage.
+    pending_prompt_signals: u32,
     /// A native SSH pane's connection phase, as last sent. Status frames go
     /// only to whoever is attached at the time, so a window reattaching to a
     /// live session learned nothing and drew it as an unknown remote — no
@@ -281,6 +291,11 @@ pub struct Carried {
     /// have trimmed the registration bodies, and the new image must not claim
     /// state an old handoff format never carried; this is the explicit carry.
     pub glyphs: Option<Vec<u8>>,
+    /// The validated program-status store for this same live session. It keeps
+    /// the session lifetime id, the monotonic counters, explicit payload and
+    /// per-record recency across `exec`; it is never part of the machine tree,
+    /// config or on-disk scrollback.
+    pub program: Option<crate::core::program_status::ProgramStatusStore>,
 }
 
 /// The screen a restored pane opens with.
@@ -510,6 +525,27 @@ impl DaemonPane {
         glyph_state: bool,
         glyph_render: bool,
     ) -> Result<Option<u64>, String> {
+        self.attach_admitted_with_colors_glyphs_and_program(
+            subscriber,
+            allow_clipboard,
+            admission,
+            pane_colors,
+            glyph_state,
+            glyph_render,
+            false,
+        )
+    }
+
+    pub fn attach_admitted_with_colors_glyphs_and_program(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        allow_clipboard: bool,
+        admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
+        program_status: bool,
+    ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         // A query is bound to the controller that received it; a replacement
@@ -527,6 +563,7 @@ impl DaemonPane {
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         )
     }
 
@@ -541,6 +578,25 @@ impl DaemonPane {
         pane_colors: bool,
         glyph_state: bool,
     ) -> Result<Option<u64>, String> {
+        self.observe_admitted_with_colors_glyphs_and_program(
+            subscriber,
+            gate,
+            admission,
+            pane_colors,
+            glyph_state,
+            false,
+        )
+    }
+
+    pub fn observe_admitted_with_colors_glyphs_and_program(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        gate: Arc<OutputGate>,
+        admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
+        program_status: bool,
+    ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
@@ -554,6 +610,7 @@ impl DaemonPane {
             foreground,
             pane_colors,
             glyph_state,
+            program_status,
         )
     }
 
@@ -590,14 +647,17 @@ impl DaemonPane {
             PaneState {
                 id,
                 ring,
-                graphics: Some(GraphicsState::with_resize_mode(
-                    size,
-                    if cfg!(windows) {
-                        crate::core::terminal_resize::ResizeMode::LocalConpty
-                    } else {
-                        crate::core::terminal_resize::ResizeMode::Raw
-                    },
-                )),
+                graphics: Some(
+                    GraphicsState::with_resize_mode(
+                        size,
+                        if cfg!(windows) {
+                            crate::core::terminal_resize::ResizeMode::LocalConpty
+                        } else {
+                            crate::core::terminal_resize::ResizeMode::Raw
+                        },
+                    )
+                    .with_program_status(),
+                ),
                 glyphs: None,
                 glyph_queries: PendingQueries::default(),
                 next_glyph_token: 0,
@@ -609,6 +669,8 @@ impl DaemonPane {
                     spawn.shell.clone(),
                     spawn.remote.clone(),
                 ),
+                program: crate::core::program_status::ProgramStatusStore::new(),
+                pending_prompt_signals: 0,
                 ssh_phase: None,
                 modes: TerminalModes::default(),
                 alive: true,
@@ -710,6 +772,7 @@ impl DaemonPane {
                     .as_ref()
                     .map(|graphics| graphics.colors().sparse()),
                 glyphs: st.glyphs.as_ref().map(|glyphs| glyphs.frame().encode()),
+                program: Some(st.program.clone()),
             }),
         )
     }
@@ -736,7 +799,7 @@ impl DaemonPane {
         // same shell that wrote them.
         ring.resize(size);
 
-        let mut graphics = GraphicsState::new(size);
+        let mut graphics = GraphicsState::new(size).with_program_status();
         if let Some(colors) = carried.colors.as_deref() {
             graphics.restore_colors(crate::core::pane_colors::PaneColors::from_sparse(
                 colors.iter().copied(),
@@ -744,6 +807,10 @@ impl DaemonPane {
         }
         let glyph_reset_epoch = modes.resets();
         let carried_glyphs = carried.glyphs.is_some();
+        let carried_program = carried.program.take();
+        if let Some(program) = carried_program.as_ref() {
+            graphics.restore_program_status_gate(program);
+        }
         let glyphs = carried.glyphs.take().and_then(|bytes| {
             let frame = crate::core::glyph_protocol::GlyphFrame::decode(&bytes)?;
             GlyphSession::from_frame(frame)
@@ -767,6 +834,8 @@ impl DaemonPane {
                 glyph_reset_epoch,
                 subscriptions: Subscriptions::new(false, None),
                 facts,
+                program: carried_program.unwrap_or_default(),
+                pending_prompt_signals: 0,
                 ssh_phase: None,
                 modes,
                 alive: true,
@@ -813,7 +882,7 @@ impl DaemonPane {
         let state = Arc::new(Mutex::new(PaneState {
             id,
             ring: ReplayRing::new(size),
-            graphics: Some(GraphicsState::new(size)),
+            graphics: Some(GraphicsState::new(size).with_program_status()),
             glyphs: None,
             glyph_queries: PendingQueries::default(),
             next_glyph_token: 0,
@@ -823,6 +892,8 @@ impl DaemonPane {
                 Some(allow_remote_clipboard_write),
             ),
             facts: PaneFacts::new(None, None, None, Some(remote)),
+            program: crate::core::program_status::ProgramStatusStore::new(),
+            pending_prompt_signals: 0,
             ssh_phase: None,
             modes: TerminalModes::default(),
             alive: true,
@@ -1045,6 +1116,18 @@ impl DaemonPane {
                             // output. Only cheap OSC metadata precedes the readiness marker;
                             // shell/agent scope and foreground probes follow publication.
                             let mut observation = facts_reader.parse(extracted.output());
+                            // The foreground probe is evaluated lazily, after
+                            // the read's bytes reach consumers: a blocking
+                            // probe must not hold publication hostage, and
+                            // most reads carry no prompt mark at all.
+                            let has_mark = observation.has_prompt_mark();
+                            let prompt_foreground = {
+                                let probe = std::cell::OnceCell::new();
+                                let foreground_running = &foreground_running;
+                                move || {
+                                    *probe.get_or_init(|| has_mark && foreground_running())
+                                }
+                            };
 
                             let tr1 = trace.then(std::time::Instant::now);
                             // Plain output adds no pre-publication facts lock or apply.
@@ -1056,11 +1139,24 @@ impl DaemonPane {
                             if let Some(tr1) = tr1 {
                                 tr_disp_t += tr1.elapsed();
                             }
-                            graphics_reader::consume(extracted, &state, &gate, &writer, controller, &mut graphics);
+                            graphics_reader::consume(
+                                extracted,
+                                &state,
+                                &gate,
+                                &writer,
+                                controller,
+                                &mut graphics,
+                            );
+                            // With every byte of this read already fanned
+                            // out, the staged prompt marks may resolve their
+                            // locality — the probe can block, so it runs only
+                            // now, never before publication.
+                            graphics_reader::finish_program_output(&state, &prompt_foreground);
                             if let Some((change, pane, alive)) = metadata_change {
                                 change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
                             }
-                            let observation = facts_reader.observe(observation, &foreground_running, before);
+                            let observation =
+                                facts_reader.observe(observation, &prompt_foreground, before);
                             let mut st = state.lock().unwrap();
                             let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
                             graphics.set_local(st.facts.remote().is_none());
@@ -1116,6 +1212,25 @@ impl DaemonPane {
         glyph_state: bool,
         glyph_render: bool,
     ) -> u64 {
+        self.attach_with_permissions_colors_glyphs_and_program(
+            subscriber,
+            allow_remote_clipboard_write,
+            pane_colors,
+            glyph_state,
+            glyph_render,
+            false,
+        )
+    }
+
+    pub fn attach_with_permissions_colors_glyphs_and_program(
+        &self,
+        subscriber: Sender<DaemonMsg>,
+        allow_remote_clipboard_write: bool,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
+        program_status: bool,
+    ) -> u64 {
         // Asked before the state lock, not under it: the probe takes the pty
         // master's lock, and every other caller that holds both takes them in
         // this order.
@@ -1130,6 +1245,7 @@ impl DaemonPane {
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         );
         st.glyph_queries.clear();
         let nudge = redraw_nudge(
@@ -1201,6 +1317,17 @@ impl DaemonPane {
         pane_colors: bool,
         glyph_state: bool,
     ) -> u64 {
+        self.observe_with_colors_glyphs_and_program(observer, gate, pane_colors, glyph_state, false)
+    }
+
+    pub fn observe_with_colors_glyphs_and_program(
+        &self,
+        observer: Sender<DaemonMsg>,
+        gate: Arc<OutputGate>,
+        pane_colors: bool,
+        glyph_state: bool,
+        program_status: bool,
+    ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
         let id = observe_subscriber_with_features(
@@ -1210,6 +1337,7 @@ impl DaemonPane {
             foreground_command,
             pane_colors,
             glyph_state,
+            program_status,
         );
         let nudge = redraw_nudge(
             &mut st,
@@ -1670,6 +1798,7 @@ impl PaneState {
             modes: &self.modes,
             glyphs: self.glyphs.as_ref(),
             facts: &self.facts,
+            program: &self.program,
             ssh_phase: &self.ssh_phase,
             alive: self.alive,
             exit_code: self.exit_code,
@@ -1696,6 +1825,7 @@ fn attach_subscriber_with_permissions(
         pane_colors,
         false,
         false,
+        false,
     )
 }
 
@@ -1708,6 +1838,7 @@ fn attach_subscriber_with_features(
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
+    program_status: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.attach(
@@ -1720,6 +1851,7 @@ fn attach_subscriber_with_features(
         pane_colors,
         glyph_state,
         glyph_render,
+        program_status,
     )
 }
 
@@ -1731,7 +1863,15 @@ fn observe_subscriber(
     foreground_command: bool,
     pane_colors: bool,
 ) -> u64 {
-    observe_subscriber_with_features(st, observer, gate, foreground_command, pane_colors, false)
+    observe_subscriber_with_features(
+        st,
+        observer,
+        gate,
+        foreground_command,
+        pane_colors,
+        false,
+        false,
+    )
 }
 
 fn observe_subscriber_with_features(
@@ -1741,6 +1881,7 @@ fn observe_subscriber_with_features(
     foreground_command: bool,
     pane_colors: bool,
     glyph_state: bool,
+    program_status: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.observe(
@@ -1751,6 +1892,7 @@ fn observe_subscriber_with_features(
         foreground_command,
         pane_colors,
         glyph_state,
+        program_status,
     )
 }
 

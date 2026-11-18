@@ -110,6 +110,11 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: Appearance,
+            title: SettingsMotionPreference,
+            keywords: SettingsSearchMotionKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
             title: SettingsFontSize,
             keywords: SettingsSearchFontSizeKeywords,
         },
@@ -417,6 +422,7 @@ impl SearchEntry {
     pub(super) fn config_key(&self) -> &'static str {
         match self.title {
             L10nKey::SettingsDimInactivePanes => "dim_inactive_panes",
+            L10nKey::SettingsMotionPreference => "motion_preference",
             L10nKey::SettingsCursorBlink => "cursor_blink",
             L10nKey::SettingsCursorShape => "cursor_style",
             L10nKey::SettingsPromptCursorShape => "prompt_cursor_style",
@@ -498,6 +504,7 @@ impl SearchEntry {
             L10nKey::SettingsBlur => t(L10nKey::SettingsBlurDesc),
             L10nKey::SettingsBackdrop => t(L10nKey::SettingsBackdropDesc),
             L10nKey::SettingsDimInactivePanes => t(L10nKey::SettingsDimInactivePanesDesc),
+            L10nKey::SettingsMotionPreference => t(L10nKey::SettingsMotionPreferenceDesc),
             L10nKey::SettingsFontSize => t(L10nKey::SettingsFontSizeDesc),
             L10nKey::SettingsUiFontFamily => t(L10nKey::SettingsUiFontFamilyDesc),
             L10nKey::SettingsLineHeight => t(L10nKey::SettingsLineHeightDesc),
@@ -571,6 +578,9 @@ impl SearchEntry {
         match self.title {
             L10nKey::SettingsDimInactivePanes => {
                 cfg.dim_inactive_panes != defaults.dim_inactive_panes
+            }
+            L10nKey::SettingsMotionPreference => {
+                cfg.motion_preference != defaults.motion_preference
             }
             L10nKey::SettingsCursorBlink => cfg.cursor_blink != defaults.cursor_blink,
             L10nKey::SettingsCursorShape => cfg.cursor_style != defaults.cursor_style,

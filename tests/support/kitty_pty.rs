@@ -1,21 +1,6 @@
 use std::io::{Read, Write};
 
-pub fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(text, "{byte:02x}").unwrap();
-    }
-    text
-}
-
-pub fn unhex(text: &str) -> Vec<u8> {
-    assert_eq!(text.len() % 2, 0);
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
+include!("hex.rs");
 
 pub fn raw_pty() {
     #[cfg(unix)]
@@ -90,10 +75,11 @@ impl OutputStats {
     }
 }
 
-// This is a real PTY child, not a daemon seam. Running the current test
-// binary avoids an external Python/Node/shell dependency on every platform.
-// Each request has a stream barrier; replies are read from the actual PTY
-// input and hex-printed so they cannot be intercepted as graphics again.
+// This is a real PTY child, not a daemon seam. The lightweight
+// `lyrel-graphics-fixture` process embeds this file, so no external
+// Python/Node/shell dependency is needed on every platform. Each request has a
+// stream barrier; replies are read from the actual PTY input and hex-printed
+// so they cannot be intercepted as graphics again.
 pub fn pty_sender() {
     if std::env::var_os("LYREL_PANE").is_none() {
         return;
@@ -151,6 +137,15 @@ pub fn pty_sender() {
                     output.write_all(part).unwrap();
                     output.flush().unwrap();
                 }
+            }
+            "TITLE" => {
+                // Title scenarios end on the title itself: the shared
+                // `KITTY_DONE` marker would overwrite it with its own OSC 2.
+                // The plain-text `TITLE_DONE` certificate is therefore
+                // written further down, after this request's kitty barrier.
+                stats.record(&bytes);
+                output.write_all(&bytes).unwrap();
+                output.flush().unwrap();
             }
             "FILE_SEND" => {
                 // The file contains real APC bytes, not a synthetic daemon
@@ -241,16 +236,30 @@ pub fn pty_sender() {
             barrier,
             b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\"
         );
+        // A TITLE request's certificate must not exist before this barrier is
+        // consumed. The test sends the next request the moment it sees the
+        // certificate, and those bytes would land in the barrier read above
+        // (`while !ends_with(ST)` consumes whatever arrives), failing this
+        // assertion and losing the next request entirely. Every other
+        // operation already writes its marker after the barrier.
+        if operation == "TITLE" {
+            write!(output, "\r\nTITLE_DONE_{serial}\r\n").unwrap();
+            output.flush().unwrap();
+        }
         // A non-digit terminates the serial even when older text remains
         // to its right. Never clear the row: that could delete a placement.
         // GPUI consumers observe the title after the cursor restore, not just
         // visible text that may arrive in an earlier PTY output packet.
-        write!(
-            output,
-            "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8\x1b]2;KITTY_DONE_{serial};\x1b\\"
-        )
-        .unwrap();
-        output.flush().unwrap();
+        // A TITLE request is the exception: its whole point is the title the
+        // test wrote, and this marker's own OSC 2 would replace it.
+        if operation != "TITLE" {
+            write!(
+                output,
+                "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8\x1b]2;KITTY_DONE_{serial};\x1b\\"
+            )
+            .unwrap();
+            output.flush().unwrap();
+        }
         if let Some(gate) = gate {
             std::fs::write(gate.with_extension("done"), []).unwrap();
         }

@@ -210,6 +210,10 @@ pub(super) fn text(
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
     }
+    // Prompt marks only stage here; `finish_program_output` applies them
+    // once this read has fully fanned out and the probe is safe.
+    let (program_frames, program_queries) = collect_program_output(&mut state);
+    publish_program_output(&mut state, program_frames);
     if let Some(frame) = colors {
         let PaneState {
             subscriptions,
@@ -221,6 +225,105 @@ pub(super) fn text(
     let owed = detached_color_scheme_queries(&mut state);
     drop(state);
     answer_color_scheme_queries(writer, owed);
+    answer_program_status_queries(writer, program_queries);
+}
+
+/// Apply validated report/reset signals to the pane's single store and turn
+/// the resulting deltas into ordered frames. Prompt marks only stage here;
+/// `finish_program_output` applies them once this read's bytes have fanned
+/// out and the locality probe is safe to run.
+fn collect_program_output(
+    st: &mut PaneState,
+) -> (
+    Vec<crate::core::program_status::ProgramStatusFrame>,
+    Vec<String>,
+) {
+    let signals = st
+        .graphics
+        .as_mut()
+        .map(GraphicsState::take_program_signals)
+        .unwrap_or_default();
+    let queries = st
+        .graphics
+        .as_mut()
+        .map(GraphicsState::take_program_status_queries)
+        .unwrap_or_default();
+    let mut frames = Vec::new();
+    for signal in signals {
+        let delta = match signal {
+            crate::core::graphics_state::ProgramSignal::Report(report) => st.program.report(report),
+            // Prompt marks stage for the caller's post-publish pass: deciding
+            // whether this prompt is the local shell's can block on a process
+            // probe, and that must wait until this read's bytes have fanned
+            // out to subscribers.
+            crate::core::graphics_state::ProgramSignal::PromptStart => {
+                st.pending_prompt_signals = st.pending_prompt_signals.saturating_add(1);
+                None
+            }
+            crate::core::graphics_state::ProgramSignal::Reset => st.program.reset(),
+        };
+        if let Some(delta) = delta {
+            frames.push(crate::core::program_status::ProgramStatusFrame::Update(
+                delta,
+            ));
+        }
+    }
+    (frames, queries)
+}
+
+/// Resolve the prompt marks a read staged while its bytes published. Called
+/// only after `consume` has fanned the read out: the locality probe may block
+/// on a process query, so it runs once, after subscribers already hold the
+/// output. `prompt_foreground` is the same lazily-evaluated probe the read's
+/// `FactReader` uses to suppress relayed marks: a prompt that is NOT the
+/// foreground process's (i.e. the local shell's own mark) cleans transient
+/// records; a relayed/foreground mark is dropped without a cleanup delta.
+pub(super) fn finish_program_output(
+    state: &Arc<Mutex<PaneState>>,
+    prompt_foreground: &dyn Fn() -> bool,
+) {
+    let mut st = state.lock().unwrap();
+    let pending = std::mem::take(&mut st.pending_prompt_signals);
+    if pending == 0 {
+        return;
+    }
+    let mut frames = Vec::new();
+    if !prompt_foreground() {
+        for _ in 0..pending {
+            if let Some(delta) = st.program.prompt() {
+                frames.push(crate::core::program_status::ProgramStatusFrame::Update(
+                    delta,
+                ));
+            }
+        }
+    }
+    publish_program_output(&mut st, frames);
+}
+
+fn publish_program_output(
+    st: &mut PaneState,
+    frames: Vec<crate::core::program_status::ProgramStatusFrame>,
+) {
+    for frame in frames {
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = st;
+        subscriptions.publish_program_status(frame, graphics);
+    }
+}
+
+fn answer_program_status_queries(writer: &Arc<Mutex<Box<dyn Write + Send>>>, queries: Vec<String>) {
+    if queries.is_empty() {
+        return;
+    }
+    if let Ok(mut writer) = writer.lock() {
+        for reply in queries {
+            let _ = writer.write_all(reply.as_bytes());
+        }
+        let _ = writer.flush();
+    }
 }
 
 fn reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, control: &Control, status: &'static str) {
@@ -531,17 +634,24 @@ pub(super) fn consume(
             for part in parts {
                 match part {
                     Part::Capability(bytes) => {
-                        let mut state = state.lock().unwrap();
-                        let effects = state
-                            .graphics
-                            .as_mut()
-                            .map(|graphics| graphics.output(&bytes))
-                            .unwrap_or_default();
-                        let mut frames = Vec::new();
-                        append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
-                        if !frames.is_empty() {
-                            fan_out_output(&mut state, &[], frames, gate);
-                        }
+                        let program_queries = {
+                            let mut state = state.lock().unwrap();
+                            let effects = state
+                                .graphics
+                                .as_mut()
+                                .map(|graphics| graphics.output(&bytes))
+                                .unwrap_or_default();
+                            let (program_frames, program_queries) =
+                                collect_program_output(&mut state);
+                            let mut frames = Vec::new();
+                            append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
+                            if !frames.is_empty() {
+                                fan_out_output(&mut state, &[], frames, gate);
+                            }
+                            publish_program_output(&mut state, program_frames);
+                            program_queries
+                        };
+                        answer_program_status_queries(writer, program_queries);
                     }
                     Part::Graphics(Segment::Output(bytes)) => {
                         text(state, &bytes, gate, writer);

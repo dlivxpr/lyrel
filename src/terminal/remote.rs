@@ -26,6 +26,7 @@ use crate::daemon::protocol::{
     SshPhase, WinSize, WorkspaceOp, WorkspaceRequest,
 };
 use crate::daemon::transport::Stream;
+use lyrel_core::core::program_status::{ProgramStatusClient, ProgramStatusFrame};
 
 use super::size::TermSize;
 
@@ -80,6 +81,9 @@ pub enum PaneEvent {
     /// The pane's effective colour layer changed; the view re-evaluates the
     /// dark/light report it owes a program that enabled DEC mode 2031.
     ColorChanged,
+    /// Ordered program frames are ready in this link's bounded pending queue.
+    /// A hidden pane is not asked to repaint; its window owns observation.
+    ProgramStatusChanged,
     /// Terminal bell ring.
     Bell,
     /// Request to write the text area size, formatter attached.
@@ -107,6 +111,7 @@ impl std::fmt::Debug for PaneEvent {
             PaneEvent::ClipboardLoad(ty, _) => write!(f, "ClipboardLoad({ty:?})"),
             PaneEvent::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
             PaneEvent::ColorChanged => write!(f, "ColorChanged"),
+            PaneEvent::ProgramStatusChanged => write!(f, "ProgramStatusChanged"),
             PaneEvent::Bell => write!(f, "Bell"),
             PaneEvent::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
             PaneEvent::GlyphQuery { token, cp } => write!(f, "GlyphQuery({token}, {cp:x})"),
@@ -262,6 +267,11 @@ struct AgentSlot {
     replayed: bool,
 }
 
+/// How many program-status frames a consumer may have drained and not yet
+/// read. The client projection itself is authoritative and bounded; a slow UI
+/// only loses intermediate notification frames, never the current state.
+pub(super) const PROGRAM_STATUS_PENDING_LIMIT: usize = 64;
+
 struct ReaderSignals {
     cwd: Arc<Mutex<Option<PathBuf>>>,
     shell: Arc<Mutex<ShellState>>,
@@ -297,6 +307,11 @@ struct ReaderSignals {
     /// The pane's effective colour layer: live output is folded in at its
     /// exact stream position, and daemon projections converge it after replay.
     colors: Arc<Mutex<lyrel_core::core::pane_colors::PaneColors>>,
+    /// Authoritative program-status projection decoded from this link.
+    program: Arc<Mutex<ProgramStatusClient>>,
+    /// Bounded frames since the last consumer drain. Old frames are dropped
+    /// first; the client itself stays authoritative and bounded.
+    program_updates: Arc<Mutex<VecDeque<ProgramStatusFrame>>>,
 }
 
 /// What kind of pty is at the far end of a pane's link, which is what decides
@@ -609,6 +624,13 @@ pub struct RemoteTerminal {
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
     progress: Arc<Mutex<Option<crate::daemon::protocol::PaneProgress>>>,
+    /// Daemon-owned OSC 7501 records for this link. Read through
+    /// [`RemoteTerminal::with_program_status`] under its lock; never a second
+    /// parser or a content hash.
+    program: Arc<Mutex<ProgramStatusClient>>,
+    /// Bounded pending baseline/live frames since the last
+    /// [`RemoteTerminal::take_program_status_updates`].
+    program_updates: Arc<Mutex<VecDeque<ProgramStatusFrame>>>,
     /// Derived decode/render cache for the daemon's authoritative graphics state.
     /// The reader applies ordered out-of-band `Graphics` updates and captures
     /// client-grid placement anchors; protocol identities and resource lifetimes
@@ -661,6 +683,49 @@ impl RemoteTerminal {
         }
     }
 
+    /// The negotiated endpoint's answer to the validated-title contract.
+    ///
+    /// `Some(true)` means its daemon-derived title facts use the same rule as
+    /// this window's Rio parse, so the two can be claimed to agree.
+    /// `Some(false)` means an older endpoint whose sessions stay usable but
+    /// whose facts were produced under its own title rules. `None` is a
+    /// stream that never negotiated (test or embedded): no claim either way.
+    pub(crate) fn endpoint_validated_titles(&self) -> Option<bool> {
+        self.pane_version
+            .as_ref()
+            .map(|version| version.has_feature(crate::daemon::protocol::FEATURE_VALIDATED_TITLES))
+    }
+
+    /// Whether the endpoint that owns this pane can project OSC 7501 program
+    /// status. `None` is a stream that never negotiated: no claim either way.
+    pub fn endpoint_program_status(&self) -> Option<bool> {
+        self.pane_version
+            .as_ref()
+            .map(|version| version.has_feature(crate::daemon::protocol::FEATURE_PROGRAM_STATUS))
+    }
+
+    /// Read the live projection under its existing lock. The closure must not
+    /// perform GPUI mutation or call back into the pane; it is a short read of
+    /// the daemon-owned records and counters.
+    pub fn with_program_status<R>(&self, read: impl FnOnce(&ProgramStatusClient) -> R) -> R {
+        let status = self
+            .program
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        read(&status)
+    }
+
+    /// Drain the bounded baseline/live frames observed since the last call.
+    /// `Baseline` and `Update` stay explicit: a window treats the former as
+    /// cold observation, never as a live notification.
+    pub fn take_program_status_updates(&self) -> Vec<ProgramStatusFrame> {
+        self.program_updates
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain(..)
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
@@ -686,7 +751,23 @@ impl RemoteTerminal {
         cell_h: u16,
         version: Option<DaemonVersion>,
     ) -> anyhow::Result<()> {
+        self.connection.retire(&self.images);
         self.pane_version = version;
+        if !self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_PROGRAM_STATUS)
+        }) {
+            // An endpoint without the authority cannot replace the records it
+            // never sent. Drop the previous link's projection instead of
+            // presenting stale state as this pane's.
+            *self
+                .program
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = ProgramStatusClient::default();
+            self.program_updates
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clear();
+        }
         self.proxy
             .parse_state
             .presentation
@@ -767,6 +848,8 @@ impl RemoteTerminal {
             local_conpty: self.local_conpty.clone(),
             color_scheme_updates: self.color_scheme_updates.clone(),
             colors: self.color_overrides.clone(),
+            program: self.program.clone(),
+            program_updates: self.program_updates.clone(),
         }
     }
 
@@ -881,6 +964,8 @@ impl RemoteTerminal {
         let agent: Arc<Mutex<Option<CLIAgent>>> = Arc::new(Mutex::new(None));
         let agent_session: Arc<Mutex<AgentSlot>> = Arc::new(Mutex::new(AgentSlot::default()));
         let progress = Arc::new(Mutex::new(None));
+        let program = Arc::new(Mutex::new(ProgramStatusClient::default()));
+        let program_updates = Arc::new(Mutex::new(VecDeque::new()));
         let exited_flag = Arc::new(AtomicBool::new(false));
         let child_exited = Arc::new(AtomicBool::new(false));
         let zle_reading = Arc::new(AtomicBool::new(false));
@@ -926,6 +1011,8 @@ impl RemoteTerminal {
                 local_conpty: local_conpty.clone(),
                 color_scheme_updates: color_scheme_updates.clone(),
                 colors: color_overrides.clone(),
+                program: program.clone(),
+                program_updates: program_updates.clone(),
             },
         )?;
 
@@ -953,6 +1040,8 @@ impl RemoteTerminal {
             agent,
             agent_session,
             progress,
+            program,
+            program_updates,
             images,
             clipboard_writes,
             osc_notes,
@@ -1763,6 +1852,7 @@ mod tests {
 
     #[test]
     fn kitty_keyboard_negotiation_reports_the_requested_mode() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1796,6 +1886,7 @@ mod tests {
 
     #[test]
     fn deep_keyboard_mode_pushes_leave_the_reader_alive() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1826,6 +1917,7 @@ mod tests {
 
     #[test]
     fn emoji_presentation_sequences_reserve_two_columns() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1862,6 +1954,7 @@ mod tests {
 
     #[test]
     fn reader_feeds_local_grid() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
 
         let size = TermSize::new(80, 24);
@@ -2047,6 +2140,7 @@ mod tests {
 
     #[test]
     fn reader_surfaces_auth_prompt_and_status() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2083,6 +2177,7 @@ mod tests {
 
     #[test]
     fn child_exit_is_distinguished_from_daemon_disconnect() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         DaemonMsg::Exited { code: Some(0) }
@@ -2127,6 +2222,7 @@ mod tests {
 
     #[test]
     fn attach_replay_runs_at_the_daemon_reported_size() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2170,6 +2266,7 @@ mod tests {
 
     #[test]
     fn at_prompt_stays_false_while_shell_integration_is_inactive() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         assert!(!term.shell_active(), "no report yet → integration inactive");
@@ -2204,6 +2301,7 @@ mod tests {
 
     #[test]
     fn at_prompt_follows_daemon_prompt_reports() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2314,6 +2412,7 @@ mod tests {
 
     #[test]
     fn foreground_agent_follows_daemon_agent_reports() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2464,6 +2563,7 @@ mod tests {
 
     #[test]
     fn agent_session_follows_daemon_status_reports() {
+        crate::core::config::pin_test_config_dir();
         use crate::core::cli_agent::{AgentSessionState, AgentStatus};
 
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
@@ -2573,6 +2673,7 @@ mod tests {
 
     #[test]
     fn zle_reading_follows_live_prompt_end_marks() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |want: bool| {
@@ -2675,6 +2776,7 @@ mod tests {
 
     #[test]
     fn shell_vi_mode_follows_live_prompt_mode_marks_without_disarming_zle() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |vi: bool, zle: bool| {
@@ -2723,6 +2825,7 @@ mod tests {
 
     #[test]
     fn shell_vi_mode_is_restored_from_snapshot_replay() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |vi: bool| {
@@ -2782,6 +2885,7 @@ mod tests {
 
     #[test]
     fn segmented_ring_replay_reproduces_live_rendering() {
+        crate::core::config::pin_test_config_dir();
         const MARK: &str = "DUPMARK";
         let frame_lines = |f: usize| -> Vec<String> {
             (0..10)

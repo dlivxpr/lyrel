@@ -499,6 +499,22 @@ pub(crate) struct PreparedPlacement {
     pub needs_offer: bool,
 }
 
+/// One validated program-status mutation the pinned Rio parser produced, in
+/// the exact stream position that produced it. The pane applies these to its
+/// authoritative store under the same lock that fans the text out; the parser
+/// itself never owns retention or versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramSignal {
+    Report(rio_vt::event::ProgramStatus),
+    /// OSC 133 `A`/`N`: a real shell prompt began. The pane only applies its
+    /// cleanup when the existing `FactReader` shell attribution did not
+    /// suppress the mark as a relayed far prompt.
+    PromptStart,
+    /// RIS (`ESC c`): every record is removed. DECSTR and alternate-screen
+    /// switches are deliberately not resets.
+    Reset,
+}
+
 /// The living pane owns this state. Desktop caches receive ordered mutations,
 /// never decide protocol identities or resource/placement deletion lifetimes.
 pub struct GraphicsState {
@@ -533,6 +549,12 @@ pub struct GraphicsState {
     /// snapshot and live changes are deltas against that.
     colors: PaneColors,
     published_colors: PaneColors,
+    /// Validated OSC 7501 signals produced by the one parser pass, in stream
+    /// order. The pane drains them under the same lock that projects output.
+    program_status_enabled: bool,
+    program_seen: bool,
+    program_signals: Vec<ProgramSignal>,
+    program_queries: Vec<String>,
     screen: u64,
     region: std::ops::Range<i32>,
     dirty: BTreeSet<u64>,
@@ -580,6 +602,10 @@ impl GraphicsState {
             processor: Processor::default(),
             colors: PaneColors::default(),
             published_colors: PaneColors::default(),
+            program_status_enabled: false,
+            program_seen: false,
+            program_signals: Vec::new(),
+            program_queries: Vec::new(),
             screen: 0,
             region: 0..i32::from(size.rows.max(1)),
             dirty: BTreeSet::new(),
@@ -1318,6 +1344,45 @@ impl GraphicsState {
                 || (!self.placements.is_empty()
                     && old != (self.screen, self.history_origin(), self.viewport_epoch)),
         )
+    }
+
+    /// Only the live daemon enables the pinned program-status parser. GUI and
+    /// CLI mirrors keep it off so they neither retain nor answer anything; a
+    /// replayed query must be answered by the daemon that owns the pane.
+    pub fn set_program_status_enabled(&mut self, enabled: bool) {
+        self.program_status_enabled = enabled;
+    }
+
+    /// The live pane's parser: the only owner that validates, retains and
+    /// answers program status. Other `GraphicsState` users keep it off.
+    pub fn with_program_status(mut self) -> Self {
+        self.program_status_enabled = true;
+        self
+    }
+
+    /// Rebuild the parser-side prompt/RIS allocation gate after a handoff.
+    /// The restored store remains the only authority: RIS can clear any
+    /// retained record, and a prompt can clear retained transient records.
+    /// An empty store leaves the gate off, avoiding signals on a pane that
+    /// has never produced a report (or has nothing left to clean).
+    pub fn restore_program_status_gate(
+        &mut self,
+        program: &crate::core::program_status::ProgramStatusStore,
+    ) {
+        self.program_seen = !program.snapshot().records().is_empty();
+    }
+
+    /// Drain the validated signals in the exact order the parser produced
+    /// them. Called under the pane state lock, immediately after `output`.
+    pub fn take_program_signals(&mut self) -> Vec<ProgramSignal> {
+        std::mem::take(&mut self.program_signals)
+    }
+
+    /// Full `OSC 7501 ; ? ST` replies, including the terminator the producer
+    /// used. The live daemon writes them back to the pty after releasing the
+    /// pane lock; a replayed query is not answered again.
+    pub fn take_program_status_queries(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.program_queries)
     }
 
     fn key(&mut self) -> u64 {

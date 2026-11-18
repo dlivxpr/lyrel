@@ -7,7 +7,9 @@ use std::rc::Rc;
 use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
-use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::{Axis, ClickEvent};
 
 /// What a menu row does when picked.
 pub(crate) type PickFn = Rc<dyn Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>)>;
@@ -733,8 +735,13 @@ impl SettingsWindow {
                 s.navigation.section(),
                 s.navigation.search().clone(),
             ),
-            None => return div(),
+            None => {
+                self.reset_settings_navigation_frames();
+                return div();
+            }
         };
+        self.poll_settings_navigation_focus(window, cx);
+        self.note_settings_navigation_render();
         if let Some(s) = self.active_settings() {
             s.focused.replace(window.focused(cx));
         }
@@ -953,6 +960,13 @@ impl SettingsWindow {
                     cx.stop_propagation();
                     return;
                 }
+                // No overlay owns the key any more: the navigation hands the
+                // page back its content focus before Escape can close it.
+                if this.settings_navigation_owns_focus(window, cx) {
+                    this.leave_settings_navigation(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 this.close_settings_checked(window, cx);
             }))
             .children(background_layers)
@@ -1155,53 +1169,67 @@ impl SettingsWindow {
         // Same rail, same rungs as the main window's tab list.
         let rail = cx.global::<presets::Surfaces>().rail;
 
+        let ring = cx.theme().ring;
         let items = counts.into_iter().map(|(target, count)| {
             let active = !searching && section == target;
-            h_flex()
-                .id(SharedString::from(format!(
-                    "settings-nav-{}",
-                    target.profile_label()
-                )))
-                .test_support()
-                .role(gpui_kit::Role::Tab)
-                .aria_label(t(target.title()))
-                .aria_selected(active)
-                .h(px(28.))
-                .px(px(8.))
-                .gap(px(10.))
-                .items_center()
-                .rounded(px(7.))
-                .cursor_pointer()
-                .when(active, |r| r.bg(gpui_kit::rgb(rail.selected)))
-                .when(!active, |r| {
-                    r.hover(move |s| s.bg(gpui_kit::rgb(rail.hover)))
-                })
-                .child(
-                    Icon::empty()
-                        .path(target.icon_path())
-                        .size(px(14.))
-                        .text_color(if active { tk.fg } else { tk.nav }),
-                )
-                .child(
+            NavTab::new(SharedString::from(format!(
+                "settings-nav-{}",
+                target.profile_label()
+            )))
+            .selected(active)
+            .accessibility_label(t(target.title()))
+            .line_height(gpui_kit::relative(1.618_034))
+            // Pointer activation keeps the page content in charge, as the
+            // non-focusable rows did; keyboard entry owns the ring instead.
+            .capture_any_mouse_down(|_, window, _| window.prevent_default())
+            .focus(move |style| {
+                style.shadow(vec![gpui_kit::BoxShadow {
+                    color: ring,
+                    offset: gpui_kit::point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(2.),
+                    inset: true,
+                }])
+            })
+            .h(px(28.))
+            .px(px(8.))
+            .gap(px(10.))
+            .items_center()
+            .rounded(px(7.))
+            .cursor_pointer()
+            .when(active, |r| r.bg(gpui_kit::rgb(rail.selected)))
+            .when(!active, |r| {
+                r.hover(move |s| s.bg(gpui_kit::rgb(rail.hover)))
+            })
+            .child(
+                Icon::empty()
+                    .path(target.icon_path())
+                    .size(px(14.))
+                    .text_color(if active { tk.fg } else { tk.nav }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if active { tk.fg } else { tk.nav })
+                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                    .child(t(target.title())),
+            )
+            .when(count > 0, |r| {
+                r.child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(if active { tk.fg } else { tk.nav })
-                        .when(active, |d| d.font_weight(FontWeight::MEDIUM))
-                        .child(t(target.title())),
+                        .text_size(fs(11.5))
+                        .text_color(tk.k4)
+                        .child(count.to_string()),
                 )
-                .when(count > 0, |r| {
-                    r.child(
-                        div()
-                            .text_size(fs(11.5))
-                            .text_color(tk.k4)
-                            .child(count.to_string()),
-                    )
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.navigate_settings(target, None, window, cx)
-                }))
+            })
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.navigate_settings(target, None, window, cx);
+                if matches!(event, ClickEvent::Mouse(_) | ClickEvent::Touch(_)) {
+                    this.settings_navigation_pointer(window, cx);
+                }
+            }))
         });
 
         v_flex()
@@ -1251,8 +1279,13 @@ impl SettingsWindow {
                     ),
             )
             .child(
-                v_flex()
-                    .id("settings-nav")
+                NavTabs::new("settings-nav")
+                    .axis(Axis::Vertical)
+                    // One roving tab stop for the whole column: Tab enters on
+                    // the selected page, Up/Down move without selecting, and
+                    // the next Tab leaves the group.
+                    .track_focus(self.navigation_focus_handle())
+                    .tab_stop(false)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()

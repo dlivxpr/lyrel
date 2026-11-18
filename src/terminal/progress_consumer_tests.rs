@@ -266,7 +266,7 @@ fn progress_consumer_persisted_text_is_not_authority_and_hidden_duplicates_do_no
 fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replacement_shell(
     cx: &mut TestAppContext,
 ) {
-    use crate::daemon::protocol::{RestoreFrom, ShellSpec, WinSize};
+    use crate::daemon::protocol::{RestoreFrom, WinSize};
     use crate::ui::{
         app::LyrelApp,
         pane::{Pane, PaneSlot},
@@ -336,21 +336,7 @@ fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replac
     ClientMsg::Spawn {
         cwd: None,
         size,
-        shell: Some(ShellSpec {
-            program: std::env::current_exe().unwrap().to_str().unwrap().into(),
-            args: vec![
-                "--ignored".into(),
-                "--exact".into(),
-                format!(
-                    "{}::graphics_fixture_sender",
-                    module_path!().split_once("::").unwrap().1
-                ),
-                "--nocapture".into(),
-                "--color=never".into(),
-                "--test-threads=1".into(),
-            ],
-            args_are_lyrel_defaults: false,
-        }),
+        shell: Some(graphics_fixture_shell("kitty")),
         owner: None,
         workspace: None,
         restore: Some(RestoreFrom {

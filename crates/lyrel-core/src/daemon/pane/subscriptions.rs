@@ -175,6 +175,8 @@ struct Observer {
     gate: Arc<OutputGate>,
     /// This consumer negotiated authoritative colour frames.
     colors: bool,
+    /// This consumer opted in to the daemon-owned program-status projection.
+    program: bool,
 }
 
 pub(super) struct Subscriptions {
@@ -187,6 +189,8 @@ pub(super) struct Subscriptions {
     /// The controller asserted it renders the complete monochrome contract;
     /// the only credential that lets the pane answer `s` with `fmt=glyf`.
     subscriber_glyph_render: bool,
+    /// The controller opted in to the program-status projection.
+    subscriber_program: bool,
     observers: Vec<Observer>,
     observer_seq: u64,
     allow_remote_clipboard_write: bool,
@@ -202,6 +206,8 @@ pub(super) struct ReplayState<'a> {
     /// The pane's accepted glossary, borrowed like the ring and facts.
     pub glyphs: Option<&'a GlyphSession>,
     pub facts: &'a PaneFacts,
+    /// Validated program-status authority for the same live session.
+    pub program: &'a crate::core::program_status::ProgramStatusStore,
     pub ssh_phase: &'a Option<SshPhase>,
     pub alive: bool,
     pub exit_code: Option<i32>,
@@ -215,6 +221,7 @@ impl Subscriptions {
             subscriber_colors: false,
             subscriber_glyphs: false,
             subscriber_glyph_render: false,
+            subscriber_program: false,
             observers: Vec::new(),
             observer_seq: 0,
             allow_remote_clipboard_write: allow_clipboard,
@@ -346,6 +353,26 @@ impl Subscriptions {
         self.prune_viewports(graphics);
     }
 
+    /// Ordered program-status projection. Only a consumer that negotiated the
+    /// machine gate sees it: an old peer never receives a kind its decoder
+    /// cannot read. Status frames are state, not replay bytes, so they keep
+    /// the existing observer budget check without a byte charge.
+    pub(super) fn publish_program_status(
+        &mut self,
+        frame: crate::core::program_status::ProgramStatusFrame,
+        graphics: &mut Option<GraphicsState>,
+    ) {
+        let msg = DaemonMsg::ProgramStatus(frame);
+        if self.subscriber_program
+            && let Some(sub) = &self.subscriber
+        {
+            let _ = sub.send(msg.clone());
+        }
+        self.observers
+            .retain(|observer| !observer.program || send_to_observer(observer, &msg, 0));
+        self.prune_viewports(graphics);
+    }
+
     /// Ordered colour projections go only to consumers that negotiated them.
     /// A consumer that did not opt in must never see the frame kind at all:
     /// it predates this protocol addition and would fail to decode the link.
@@ -387,6 +414,7 @@ impl Subscriptions {
         self.subscriber_colors = false;
         self.subscriber_glyphs = false;
         self.subscriber_glyph_render = false;
+        self.subscriber_program = false;
         self.subscriber_epoch += 1;
         self.observers.clear();
     }
@@ -484,6 +512,7 @@ impl Subscriptions {
         pane_colors: bool,
         glyph_state: bool,
         glyph_render: bool,
+        program_status: bool,
     ) -> u64 {
         let subscriber = subscriber.into();
         self.subscriber_epoch += 1;
@@ -492,6 +521,7 @@ impl Subscriptions {
         self.subscriber_colors = pane_colors;
         self.subscriber_glyphs = glyph_state;
         self.subscriber_glyph_render = glyph_render;
+        self.subscriber_program = program_status;
         gate.reset();
         let epoch = self.subscriber_epoch;
         let (queued, complete) = replay_state(
@@ -501,6 +531,7 @@ impl Subscriptions {
             foreground,
             pane_colors,
             glyph_state,
+            program_status,
         );
         gate.add(queued);
         if complete {
@@ -510,6 +541,7 @@ impl Subscriptions {
             self.subscriber_colors = false;
             self.subscriber_glyphs = false;
             self.subscriber_glyph_render = false;
+            self.subscriber_program = false;
             self.subscriber_epoch += 1;
         }
         self.prune_viewports(graphics);
@@ -525,6 +557,7 @@ impl Subscriptions {
         foreground: bool,
         pane_colors: bool,
         glyph_state: bool,
+        program_status: bool,
     ) -> u64 {
         let observer = observer.into();
         self.observer_seq += 1;
@@ -536,6 +569,7 @@ impl Subscriptions {
             foreground,
             pane_colors,
             glyph_state,
+            program_status,
         );
         gate.add(queued);
         if complete {
@@ -544,6 +578,7 @@ impl Subscriptions {
                 tx: observer,
                 gate,
                 colors: pane_colors,
+                program: program_status,
             });
         }
         self.observer_seq
@@ -561,6 +596,7 @@ impl Subscriptions {
         pane_colors: bool,
         glyph_state: bool,
         glyph_render: bool,
+        program_status: bool,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, gate);
         if !admission.activate(&self.admission, graphics)? {
@@ -576,6 +612,7 @@ impl Subscriptions {
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         );
         if self.controller_epoch() != Some(epoch) {
             return Err("Graphics replay failed".into());
@@ -595,6 +632,7 @@ impl Subscriptions {
         foreground: bool,
         pane_colors: bool,
         glyph_state: bool,
+        program_status: bool,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, controller_gate);
         if !admission.activate(&self.admission, graphics)? {
@@ -608,6 +646,7 @@ impl Subscriptions {
             foreground,
             pane_colors,
             glyph_state,
+            program_status,
         );
         if !self.has_observer(id) {
             return Err("Graphics replay failed".into());
@@ -627,6 +666,7 @@ impl Subscriptions {
             self.subscriber_colors = false;
             self.subscriber_glyphs = false;
             self.subscriber_glyph_render = false;
+            self.subscriber_program = false;
             self.prune_viewports(graphics);
             self.allow_remote_clipboard_write = self.clipboard_write_from_spec.unwrap_or(false);
             gate.reset();
@@ -672,6 +712,7 @@ fn replay_state(
     foreground_command: bool,
     pane_colors: bool,
     glyph_state: bool,
+    program_status: bool,
 ) -> (usize, bool) {
     // What the replay queues is charged to the stream's gate like live output,
     // by the same measure its writer credits back (`gated_len`).
@@ -742,6 +783,15 @@ fn replay_state(
             .map(GlyphSession::frame)
             .unwrap_or_else(|| GlyphFrame::snapshot(0, Vec::new()));
         send(DaemonMsg::GlyphState(frame.encode()));
+    }
+    // One ordered baseline before any live delta, even when the store is
+    // empty: a reattached/reconnected consumer must replace whatever records
+    // it held for the previous link, never mistake a baseline for live news,
+    // and never ask the daemon to replay query answers.
+    if program_status {
+        send(DaemonMsg::ProgramStatus(
+            crate::core::program_status::ProgramStatusFrame::Baseline(st.program.snapshot()),
+        ));
     }
     if let Some(prompt) = st.facts.prompt(foreground_command) {
         send(prompt);

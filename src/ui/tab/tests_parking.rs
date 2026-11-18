@@ -60,6 +60,57 @@ fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
+        window.focus(&current.focus_handle(cx), cx);
+        app.park_pane(parked.entity_id(), window, cx);
+        parked
+    });
+    vcx.run_until_parked();
+    let card = ("parked-card", parked.entity_id().as_u64() as usize);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(card).visible());
+        window.hover(card, cx);
+        window.render_frame(cx);
+        assert!(
+            window.simulate_next_frame(cx) > 0,
+            "Allow keeps the existing hover motion"
+        );
+    });
+
+    vcx.update(|_, cx| {
+        cx.global_mut::<crate::core::config::Config>()
+            .motion_preference = crate::core::config::MotionPreference::Reduce;
+        crate::ui::motion::apply(cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // Drop the callback the in-flight hover fan queued before the policy
+        // changed; the next frame must resolve to the static endpoint.
+        let _ = window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert!(
+            window.find(card).visible(),
+            "the parked card keeps its stable pane identity"
+        );
+        assert!(cx.reduce_motion());
+        assert_eq!(
+            window.simulate_next_frame(cx),
+            0,
+            "the settled deck must not request animation-only frames"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn parking_pip_restores_only_selected_pane_and_preserves_other_tabs(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 3);
     vcx.update(|_, cx| cx.set_reduce_motion(true));

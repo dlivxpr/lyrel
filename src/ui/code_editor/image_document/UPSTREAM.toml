@@ -29,7 +29,7 @@ license_notice = "LICENSE 的 Glim-derived GIF playback appendix"
 
 [[source]]
 upstream = "crates/glim-services/src/media.rs"
-local = "src/ui/code_editor/image_document/gif.rs"
+local = "crates/lyrel-code-editor/src/image/gif.rs"
 sha256 = "43194a2dada2b7d9cf3975eddd89f9d2e130a9a904347b5093d7f126871f39c0"
 scope = "GIF portions only: GifPlayback state machine, compositing, disposal, repeat, incremental row decoding"
 

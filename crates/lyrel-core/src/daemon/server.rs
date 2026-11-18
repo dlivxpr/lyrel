@@ -854,6 +854,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
     let mut pane_colors = false;
     let mut glyph_state = false;
     let mut glyph_render = false;
+    let mut program_status = false;
     loop {
         match first {
             ClientMsg::GraphicsCapacity {
@@ -898,6 +899,17 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Ok(());
                 }
                 glyph_render = true;
+                first = ClientMsg::read(&mut read_stream)?;
+            }
+            ClientMsg::SubscribeProgramStatus => {
+                if !negotiated {
+                    DaemonMsg::Error(
+                        "pane protocol handshake required before program status".into(),
+                    )
+                    .encode(&mut &write_stream)?;
+                    return Ok(());
+                }
+                program_status = true;
                 first = ClientMsg::read(&mut read_stream)?;
             }
             other => {
@@ -1014,6 +1026,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 pane_colors,
                 glyph_state,
                 glyph_render,
+                program_status,
             )
         }
 
@@ -1071,6 +1084,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 pane_colors,
                 glyph_state,
                 glyph_render,
+                program_status,
             )
         }
 
@@ -1099,6 +1113,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     pane_colors,
                     glyph_state,
                     glyph_render,
+                    program_status,
                 )
             }
             None => {
@@ -1131,6 +1146,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     graphics_offers.then_some(_graphics_lease.endpoint()),
                     pane_colors,
                     glyph_state,
+                    program_status,
                 )
             }
             None => {
@@ -1449,6 +1465,7 @@ fn publish_spawn_with_glyphs(
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     let id = pane.id;
     let mut claim = UnclaimedSpawn {
@@ -1477,6 +1494,7 @@ fn publish_spawn_with_glyphs(
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         );
     }
     // Attach the subscriber before publishing. If a short-lived child already
@@ -1484,12 +1502,13 @@ fn publish_spawn_with_glyphs(
     // resurrected in the persistent registry. Unclaimed panes never enter
     // handoff snapshots while their ownership connection is still pending.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions_colors_and_glyphs(
+    let epoch = pane.attach_with_permissions_colors_glyphs_and_program(
         tx,
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
         glyph_render,
+        program_status,
     );
     if pane.alive() {
         registry.insert(pane.clone());
@@ -1525,6 +1544,7 @@ fn publish_spawn(
         pane_colors,
         false,
         false,
+        false,
     )
 }
 
@@ -1539,6 +1559,7 @@ fn stream_pane_with_attach(
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1554,15 +1575,17 @@ fn stream_pane_with_attach(
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions_colors_and_glyphs(
+    let epoch = pane.attach_with_permissions_colors_glyphs_and_program(
         tx,
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
         glyph_render,
+        program_status,
     );
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
@@ -1578,6 +1601,7 @@ fn stream_pane(
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1593,15 +1617,17 @@ fn stream_pane(
             pane_colors,
             glyph_state,
             glyph_render,
+            program_status,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions_colors_and_glyphs(
+    let epoch = pane.attach_with_permissions_colors_glyphs_and_program(
         tx,
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
         glyph_render,
+        program_status,
     );
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
@@ -1649,6 +1675,7 @@ fn stream_observer(
     graphics_endpoint: Option<u64>,
     pane_colors: bool,
     glyph_state: bool,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1666,6 +1693,7 @@ fn stream_observer(
             // A read-only observer never becomes the controller that answers
             // `s`; it keeps no render credential at all.
             false,
+            program_status,
         );
     }
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
@@ -1675,8 +1703,13 @@ fn stream_observer(
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let gate = Arc::new(crate::daemon::pane::subscriptions::OutputGate::new());
-    let observer_id =
-        pane.observe_with_colors_and_glyphs(tx, gate.clone(), pane_colors, glyph_state);
+    let observer_id = pane.observe_with_colors_glyphs_and_program(
+        tx,
+        gate.clone(),
+        pane_colors,
+        glyph_state,
+        program_status,
+    );
     let writer = spawn_writer(rx, write_stream, gate);
 
     observe_loop(

@@ -974,6 +974,178 @@ fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_iden
     daemon.panes().kill(consumer.session.pane_id()).unwrap();
 }
 
+/// Linux resolves `t=s` names under `/dev/shm`, where a sender can pre-create a
+/// FIFO. The blocking open used to happen in the pane reader itself, so this is
+/// driven through the production daemon and a real PTY child: the only processes
+/// that can stall are the subprocesses the harness kills, and the parent bounds
+/// its own wait.
+#[test]
+#[cfg(target_os = "linux")]
+fn retention_daemon_linux_shm_fifo_is_rejected_without_stalling_the_reader() {
+    use base64::Engine as _;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    struct Fifo(std::path::PathBuf);
+    impl Drop for Fifo {
+        fn drop(&mut self) {
+            // The daemon's one-shot cleanup removes an opened handoff; this
+            // guard only settles an attempt that never reached the daemon.
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let path = std::path::PathBuf::from("/dev/shm").join(format!(
+        "lyrel-fifo-{:016x}",
+        uuid::Uuid::new_v4().as_u128() as u64
+    ));
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // Deliberately no writer: a plain O_RDONLY open would block here, which is
+    // the reader stall this regression must catch. The daemon should open with
+    // O_NONBLOCK, reject the non-regular descriptor, and unlink the handoff.
+    assert_eq!(
+        unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) },
+        0,
+        "mkfifo {}: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+    let fifo = Fifo(path.clone());
+    let name = format!("/{}", path.file_name().unwrap().to_str().unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(name.as_bytes());
+    let request = format!("\x1b_Ga=T,i=91,p=9,t=s,f=32,s=1,v=1,C=1,O=0,S=4,q=0;{encoded}\x1b\\");
+
+    // The production daemon and the PTY sender are both finite subprocesses.
+    // This deadline is on the parent's socket read, so a blocking open becomes
+    // one failed test instead of a suite that never returns.
+    const FIFO_REJECT_WITHIN: Duration = Duration::from_secs(10);
+    consumer
+        .session
+        .set_recv_timeout(Some(FIFO_REJECT_WITHIN))
+        .unwrap();
+    let started = Instant::now();
+    let replies = consumer.exchange(request.as_bytes(), 1);
+    assert!(
+        started.elapsed() < FIFO_REJECT_WITHIN,
+        "a FIFO handoff stalled the daemon reader"
+    );
+    assert_eq!(
+        replies,
+        [b"\x1b_Gi=91,p=9;EBADF:Failed to read image file\x1b\\".to_vec()]
+    );
+    assert!(
+        !consumer.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Resource { .. } | GraphicsUpdate::Place(_)
+        )),
+        "a rejected FIFO handoff created an image or placement"
+    );
+    assert!(
+        std::fs::symlink_metadata(&fifo.0).is_err(),
+        "an attempted shm handoff must be unlinked even on rejection"
+    );
+
+    // The same reader keeps serving ordinary output and a later public request.
+    consumer.idle(b"after_fifo_rejection\r\n");
+    assert!(
+        consumer
+            .text
+            .windows(b"after_fifo_rejection".len())
+            .any(|part| part == b"after_fifo_rejection"),
+        "output after a FIFO rejection was dropped: {:?}",
+        String::from_utf8_lossy(&consumer.text)
+    );
+    let replies = consumer.exchange(b"\x1b_Ga=q,i=91,f=32,s=1,v=1,q=0;/wAA/w==\x1b\\", 1);
+    assert_eq!(replies, [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
+    daemon.panes().kill(consumer.session.pane_id()).unwrap();
+}
+
+/// The compatibility control for the Linux nonblocking open: a real regular
+/// POSIX shm object still resolves at a bounded offset and length, and the
+/// daemon still consumes it exactly once.
+#[test]
+#[cfg(target_os = "linux")]
+fn retention_daemon_linux_regular_shm_keeps_bounded_region_and_one_shot_cleanup() {
+    use base64::Engine as _;
+    use std::io::{Seek as _, SeekFrom, Write as _};
+    use std::os::fd::FromRawFd as _;
+
+    struct Shared(std::ffi::CString);
+    impl Drop for Shared {
+        fn drop(&mut self) {
+            unsafe {
+                libc::shm_unlink(self.0.as_ptr());
+            }
+        }
+    }
+
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let name = std::ffi::CString::new(format!(
+        "/lyrel-regular-{:016x}",
+        uuid::Uuid::new_v4().as_u128() as u64
+    ))
+    .unwrap();
+    let named = Shared(name.clone());
+    let fd = unsafe {
+        libc::shm_open(
+            name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+            0o600,
+        )
+    };
+    assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+    let mut object = unsafe { std::fs::File::from_raw_fd(fd) };
+    object.set_len(20).unwrap();
+    // Red at the start and blue at the requested offset: accepting a different
+    // region would produce the wrong pixel, not merely a different length.
+    object.seek(SeekFrom::Start(0)).unwrap();
+    object.write_all(&[255, 0, 0, 255]).unwrap();
+    object.seek(SeekFrom::Start(13)).unwrap();
+    object.write_all(&[0, 0, 255, 255]).unwrap();
+    drop(object);
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(name.as_bytes());
+    let request = format!("\x1b_Ga=T,i=92,p=9,t=s,f=32,s=1,v=1,C=1,O=13,S=4,q=0;{encoded}\x1b\\");
+    let replies = consumer.exchange(request.as_bytes(), 1);
+    assert_eq!(replies, [b"\x1b_Gi=92,p=9;OK\x1b\\".to_vec()]);
+    let image = consumer
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Resource { image, .. } => Some(image),
+            _ => None,
+        })
+        .expect("a valid bounded shm transfer must reach the consumer as pixels");
+    assert_eq!((image.width, image.height), (1, 1));
+    assert_eq!(image.to_rgba8().unwrap(), [0, 0, 255, 255]);
+
+    // One-shot: the sender's shm object is consumed, not left behind.
+    let path =
+        std::path::Path::new("/dev/shm").join(name.to_str().unwrap().trim_start_matches('/'));
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "the consumed regular shm handoff must be unlinked"
+    );
+
+    // The image stays usable for a later public placement request...
+    let replies = consumer.exchange(b"\x1b_Ga=p,i=92,p=10,c=1,r=1,C=1\x1b\\", 1);
+    assert_eq!(replies, [b"\x1b_Gi=92,p=10;OK\x1b\\".to_vec()]);
+    // ...and the reader still delivers ordinary output.
+    consumer.idle(b"after_regular_shm\r\n");
+    assert!(
+        consumer
+            .text
+            .windows(b"after_regular_shm".len())
+            .any(|part| part == b"after_regular_shm"),
+        "output after a valid shm transfer was dropped: {:?}",
+        String::from_utf8_lossy(&consumer.text)
+    );
+    drop(named);
+    daemon.panes().kill(consumer.session.pane_id()).unwrap();
+}
+
 #[test]
 fn retention_daemon_capacity_rejects_inadequate_attach_and_refuses_new_input() {
     let daemon = Daemon::start();

@@ -6,6 +6,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::TerminalGlyphNeedsDaemonUpdate => {
             "Glyph 协议需要更新 lyrel 守护进程；当前窗格未改变"
         }
+        L10nKey::TerminalTitleNeedsDaemonUpdate => {
+            "此机器尚未支持校验后的终端标题；更新 lyrel-server 前，其窗格标题可能被裁剪"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} 行 · 回到实时输出",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
@@ -671,6 +674,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageProfile => "浏览器 profile",
         L10nKey::UsageChooseBrowser => "选择受支持的浏览器",
         L10nKey::UsageChooseProfile => "选择 profile 后主动验证导入",
+        L10nKey::UsageSearchProfiles => "搜索 profile",
         L10nKey::UsageBrowserHelp => {
             "仅读取所选 profile 中 https://platform.deepseek.com 的 userToken。支持 Chromium 系 LevelDB 与 Firefox LocalStorage；Safari 和 Chromium 新 SQLite 格式不支持。材料仅驻留内存，不保存到凭据库、配置、日志或临时文件；刷新不申请系统授权，来源或 token 改变需重新导入，不改用其他 profile。"
         }
@@ -825,6 +829,14 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::FollowTheme => "跟随主题",
         L10nKey::SettingsDimInactivePanes => "调暗非活动窗格",
         L10nKey::SettingsDimInactivePanesDesc => "在分屏中淡化未聚焦的窗格，让活动窗格更突出。",
+        L10nKey::SettingsMotionGroup => "动态效果",
+        L10nKey::SettingsMotionPreference => "动态效果偏好",
+        L10nKey::SettingsMotionPreferenceDesc => {
+            "跟随系统设置、减少 Lyrel 动画，或允许现有动效。不会改变终端程序内容。"
+        }
+        L10nKey::SettingsMotionFollowSystem => "跟随系统",
+        L10nKey::SettingsMotionReduce => "减少动态效果",
+        L10nKey::SettingsMotionAllow => "允许动态效果",
         L10nKey::SettingsOpenThemesFolder => "打开主题文件夹",
         L10nKey::SettingsChangeThemeImage => "更改…",
         L10nKey::SettingsChooseThemeImage => "选择…",
@@ -1330,6 +1342,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "调暗 非活动窗格 淡化 未聚焦 分屏 高亮 active dimming pane focus"
         }
+        L10nKey::SettingsSearchMotionKeywords => {
+            "动态效果 动画 减少 降低 无障碍 跟随系统 允许 motion animation reduce accessibility system allow"
+        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => {
             "焦点跟随鼠标 悬停 激活 窗格 focus follows mouse hover activate pane"
         }
@@ -1624,10 +1639,23 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorStripNoMatch => "没有匹配的打开文件",
         L10nKey::EditorStripCloseSaved => "关闭已保存",
         L10nKey::EditorStripCloseOthers => "关闭其他",
+        L10nKey::EditorDocumentTabs => "打开的文档",
         L10nKey::EditorBackToTerminal => "返回终端 (Esc)",
         L10nKey::EditorLnCol => "行 {line}，列 {column}",
         L10nKey::EditorToggleLineEnding => "在 LF 与 CRLF 换行符之间切换",
         L10nKey::StatusRemoteHost => "远端主机 {id}",
+        L10nKey::ProgramSource => "程序",
+        L10nKey::ProgramIdle => "空闲",
+        L10nKey::ProgramWorking => "工作中",
+        L10nKey::ProgramDone => "已完成",
+        L10nKey::ProgramBlocked => "受阻",
+        L10nKey::ProgramError => "错误",
+        L10nKey::ProgramPermission => "需要权限",
+        L10nKey::ProgramQuestion => "需要回答",
+        L10nKey::ProgramAuth => "需要身份验证",
+        L10nKey::ProgramRecordId => "id {id}",
+        L10nKey::ProgramMoreRecords => "另有 {count} 条",
+        L10nKey::ProgramNewResults => "新结果 · {count}",
         L10nKey::EditorMarkdownLive => "即时编辑",
         L10nKey::EditorMarkdownSource => "源码",
         L10nKey::EditorFormulaEditing => "编辑公式",
@@ -2226,6 +2254,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorSplitRight => "向右拆分编辑器",
         L10nKey::EditorFocusLeftGroup => "聚焦左侧编辑器组",
         L10nKey::EditorFocusRightGroup => "聚焦右侧编辑器组",
+        L10nKey::FocusDocumentTabNavigation => "聚焦文档标签",
+        L10nKey::EditorDocumentOverflow => "显示所有打开的文档",
         L10nKey::EditorSplitSameFile => "已在另一组中打开 — 点击在此编辑",
         L10nKey::CmdEditorGoToSymbol => "编辑器：跳转到符号…",
         L10nKey::SearchHeadingReferences => "引用",
@@ -2640,6 +2670,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdSwapPanePrevious => "与上一窗格交换",
         L10nKey::CmdNextTab => "下一标签页",
         L10nKey::CmdPreviousTab => "上一标签页",
+        L10nKey::CmdFocusTerminalTabs => "聚焦终端标签栏",
         L10nKey::CmdMoveTabLeft => "标签页左移",
         L10nKey::CmdMoveTabRight => "标签页右移",
         L10nKey::CmdRecentTabSwitcher => "最近标签页切换器",
@@ -2687,6 +2718,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdRightPanelFiles => "右侧面板：文件",
         L10nKey::CmdRightPanelSearch => "右侧面板：搜索",
         L10nKey::CmdRightPanelGitHub => "右侧面板：GitHub",
+        L10nKey::CmdFocusRightPanelNavigation => "聚焦右侧面板导航",
         L10nKey::CmdChangeTheme => "更改主题…",
         L10nKey::CmdResetFontSize => "重置字号",
         L10nKey::CmdEnterFullScreen => "进入全屏",
@@ -2749,6 +2781,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdAgentSendGitDiffForReview => "Agent：发送 git diff 以供审查",
         L10nKey::CmdAgentSendGitDiffSubtitle => "git diff → 运行中的编码 agent",
         L10nKey::CmdSettings => "设置…",
+        L10nKey::CmdFocusSettingsNavigation => "聚焦设置导航",
         L10nKey::CmdKeyboardShortcuts => "快捷键",
         L10nKey::CmdAboutLyrel => "关于 lyrel",
         L10nKey::CmdCheckForUpdates => "检查更新…",
@@ -3074,8 +3107,16 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AgentStatusWorking => "运行中",
         L10nKey::AgentStatusWaiting => "需要输入",
         L10nKey::AgentStatusDone => "已结束",
-        L10nKey::NotifyCommandFinished => "命令运行完成，用时 {secs} 秒",
-        L10nKey::NotifyCommandFinishedWithCommand => "{command} 已完成，用时 {secs} 秒",
+        L10nKey::NotifyCommandSucceeded => "命令执行成功，用时 {secs} 秒",
+        L10nKey::NotifyCommandSucceededWithCommand => "{command} 执行成功，用时 {secs} 秒",
+        L10nKey::NotifyCommandFailed => "命令执行失败，用时 {secs} 秒（退出码 {code}）",
+        L10nKey::NotifyCommandFailedWithCommand => {
+            "{command} 执行失败，用时 {secs} 秒（退出码 {code}）"
+        }
+        L10nKey::NotifyCommandFinishedUnknown => "命令已结束，用时 {secs} 秒（退出状态未知）",
+        L10nKey::NotifyCommandFinishedUnknownWithCommand => {
+            "{command} 已结束，用时 {secs} 秒（退出状态未知）"
+        }
         L10nKey::NotifyAgentFinished => "本轮已结束，用时 {secs} 秒",
         L10nKey::NotifyAgentWaiting => "等待你的输入",
         L10nKey::NotifyTurnFinished => "本轮已结束",
@@ -3094,6 +3135,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::TabUnnamedShell => "终端 {n}",
         L10nKey::ShellDefault => "默认",
         L10nKey::SidebarUngroupedGroup => "未分组",
+        L10nKey::SidebarNavigation => "终端标签",
         L10nKey::SidebarMoveToGroup => "移到分组",
         L10nKey::SidebarNewGroup => "新建分组…",
         L10nKey::SidebarRemoveFromGroup => "移出分组",

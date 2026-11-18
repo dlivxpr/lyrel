@@ -56,6 +56,24 @@ fn integration_notice_message(wrapper: Option<&str>) -> String {
     }
 }
 
+/// The ordinary command's authoritative shell result, never inferred from absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CommandResult {
+    Succeeded,
+    Failed(i32),
+    Unknown,
+}
+
+impl CommandResult {
+    pub(super) fn from_exit_code(code: Option<i32>) -> Self {
+        match code {
+            Some(0) => Self::Succeeded,
+            Some(code) => Self::Failed(code),
+            None => Self::Unknown,
+        }
+    }
+}
+
 /// Join whatever context a pane has into a notification title, most specific
 /// part first: an agent name if one is running, otherwise the machine the pane
 /// lives on, then the workspace it belongs to. Kept to two segments — Windows
@@ -76,18 +94,40 @@ impl TerminalView {
     pub(super) fn notify_command_finished(
         &self,
         label: &str,
+        exit_code: Option<i32>,
         elapsed: std::time::Duration,
         cx: &mut Context<Self>,
     ) {
         let secs = elapsed.as_secs().to_string();
         let command = label.trim();
-        let body = if command.is_empty() {
-            t_fmt(L10nKey::NotifyCommandFinished, &[("secs", &secs)])
-        } else {
-            t_fmt(
-                L10nKey::NotifyCommandFinishedWithCommand,
+        let result = CommandResult::from_exit_code(exit_code);
+        let body = match (result, command.is_empty()) {
+            (CommandResult::Succeeded, true) => {
+                t_fmt(L10nKey::NotifyCommandSucceeded, &[("secs", &secs)])
+            }
+            (CommandResult::Succeeded, false) => t_fmt(
+                L10nKey::NotifyCommandSucceededWithCommand,
                 &[("command", command), ("secs", &secs)],
-            )
+            ),
+            (CommandResult::Failed(code), true) => t_fmt(
+                L10nKey::NotifyCommandFailed,
+                &[("code", &code.to_string()), ("secs", &secs)],
+            ),
+            (CommandResult::Failed(code), false) => t_fmt(
+                L10nKey::NotifyCommandFailedWithCommand,
+                &[
+                    ("command", command),
+                    ("code", &code.to_string()),
+                    ("secs", &secs),
+                ],
+            ),
+            (CommandResult::Unknown, true) => {
+                t_fmt(L10nKey::NotifyCommandFinishedUnknown, &[("secs", &secs)])
+            }
+            (CommandResult::Unknown, false) => t_fmt(
+                L10nKey::NotifyCommandFinishedUnknownWithCommand,
+                &[("command", command), ("secs", &secs)],
+            ),
         };
         self.notify_pane(None, &body, cx);
     }
@@ -174,7 +214,7 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn notification_title(&self, lead: Option<&str>, cx: &App) -> String {
+    pub(crate) fn notification_title(&self, lead: Option<&str>, cx: &App) -> String {
         let host = self
             .workspace
             .as_ref()

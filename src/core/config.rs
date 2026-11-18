@@ -14,9 +14,27 @@ impl Config {
 
     pub fn load_with_outcome() -> (Self, LoadOutcome) {
         #[cfg(test)]
-        assert_scratch_config_dir("Config::load_with_outcome");
-        let (core, outcome) = CoreConfig::load_with_outcome();
-        (Self(core), outcome)
+        {
+            assert_scratch_config_dir("Config::load_with_outcome");
+            let _guard = Self::lock_config_file();
+            let (core, outcome) = CoreConfig::load_with_outcome();
+            return (Self(core), outcome);
+        }
+        #[cfg(not(test))]
+        {
+            let (core, outcome) = CoreConfig::load_with_outcome();
+            (Self(core), outcome)
+        }
+    }
+
+    /// GUI tests share the process's scratch config directory; any of them can
+    /// save between a test's own write and the read that verifies it. Hold the
+    /// returned guard across a whole save→load→assert sequence. It is a
+    /// reentrant mutex because `try_save`/`load_with_outcome` take the same
+    /// lock while the guard is held on this thread.
+    #[cfg(test)]
+    pub(crate) fn lock_config_file() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+        WRITE_LOCK.lock()
     }
 
     #[cfg(test)]
@@ -29,14 +47,18 @@ impl Config {
     #[cfg(test)]
     pub fn try_save(&self) -> std::io::Result<()> {
         assert_scratch_config_dir("Config::try_save");
-        // GUI tests have separate App globals but share the process's scratch
-        // directory. Serialize their writes just as a real UI event loop does.
-        static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = WRITE_LOCK.lock();
         self.0.try_save()
     }
 }
 
+/// GUI tests have separate App globals but share the process's scratch
+/// directory. Serialize their config-file writes *and* reads the way a real
+/// UI event loop does; reentrant so a test can hold the guard across calls
+/// that save or load again on the same thread.
+#[cfg(test)]
+static WRITE_LOCK: std::sync::LazyLock<parking_lot::ReentrantMutex<()>> =
+    std::sync::LazyLock::new(|| parking_lot::ReentrantMutex::new(()));
 #[cfg(test)]
 fn is_real_user_config_dir(dir: Option<&std::path::Path>) -> bool {
     dir.is_some() && dir == default_config_dir().as_deref()

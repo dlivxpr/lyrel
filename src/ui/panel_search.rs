@@ -766,8 +766,8 @@ mod gpui_tests {
         DaemonMsg::Cwd(root.to_path_buf())
             .encode(&mut pane)
             .expect("the pane's socket takes the cwd");
-        app.update_in(&mut vcx, |app, _, cx| {
-            app.set_right_panel_tab(RightPanelTab::Search, cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Search, window, cx);
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {

@@ -47,7 +47,32 @@ vim 想把它们用于自己的标签页。清除九个**跳到第 N 个标签�
 
 有些操作有意以未绑定状态发布，因为没有明显空余的按键
 可用：窗格调整大小与交换、工作区选择、大多数 git 命令、SFTP，以及
-面板标签页。它们都出现在全局搜索中，也都可以在这里绑定。
+右侧面板和设置分区导航。它们都出现在全局搜索中，也都可以在这里绑定。
+
+<a id="navigation-focus"></a>
+## 导航区域的键盘入口
+
+终端或编辑器持有焦点时，Tab 和方向键仍归内容所有。先通过下表操作进入导航区域；可在全局搜索中按名称执行，或在设置中重新绑定。
+
+| 入口 | 操作名 | macOS | Windows／Linux |
+| --- | --- | --- | --- |
+| 聚焦终端标签侧栏 | `FocusTerminalTabNavigation` | <kbd>⌘ ⇧ L</kbd> | <kbd>Ctrl ⇧ L</kbd> |
+| 聚焦右侧面板页签 | `FocusRightPanelNavigation` | 无默认绑定 | 无默认绑定 |
+| 聚焦设置分区导航 | `FocusSettingsNavigation` | 无默认绑定 | 无默认绑定 |
+| 聚焦左／右编辑器组 | `EditorFocusLeftGroup`／`EditorFocusRightGroup` | <kbd>⌘ ⌥ ←</kbd>／<kbd>⌘ ⌥ →</kbd> | <kbd>Ctrl Alt ←</kbd>／<kbd>Ctrl Alt →</kbd> |
+| 聚焦当前组的文档标签 | `FocusDocumentTabNavigation` | <kbd>⌘ ⌥ T</kbd> | <kbd>Ctrl Alt T</kbd> |
+| 打开全部文档列表（`+N`） | `EditorDocumentOverflow` | <kbd>⌘ ⌥ ⇧ T</kbd> | <kbd>Ctrl Alt ⇧ T</kbd> |
+
+终端标签侧栏入口只展开侧栏并聚焦当前可见标签或其分组标题，不切换会话。搜索、设置、关闭确认、切换器、worktree 提示或文档前置层打开时，该入口不抢占焦点；编辑器文本中的 <kbd>⌘ ⇧ L</kbd>／<kbd>Ctrl ⇧ L</kbd> 仍归 `SelectAllOccurrences`。文档标签入口要求代码面板已可见且存在文件，不会替你打开面板。
+
+进入后遵循各区域的键盘契约：
+
+- 每个导航组只有一个 roving Tab 停靠点。Tab 离开组，Shift+Tab 按该组的 roving 停靠点返回，不在每项之间逐项遍历。
+- 右侧面板和文档标签用 Left／Right，设置分区和终端标签侧栏用 Up／Down；方向键只移动焦点并回绕，Home／End 到首尾，不会激活另一页、会话或文档。
+- Enter／Space 手动激活焦点项并保留导航焦点。终端侧栏的分组标题通过同一按键折叠或展开；指针激活仍按既有行为把焦点交给内容。
+- Escape 在导航自身持有焦点且没有上层覆盖层时返回所属内容：右侧面板回到进入前焦点，设置回到当前页面而不关闭设置，终端侧栏回到活动 pane，文档标签回到当前组文本。Escape 是各表面的局部行为，不是可重新绑定的独立 action。
+- 终端侧栏只遍历可见分组标题和标签，折叠项不占用停靠点。关闭或重排后按稳定身份保留有效焦点，不会顺带激活另一会话。
+- 共享文档标签跟随聚焦编辑器组，并分别记住各组焦点。`+N` 列表可输入过滤，Up／Down 移动高亮，Enter 选择并聚焦文本，Escape 按打开来源返回文档标签或文本；不增加文档标签滚动或文档拖拽。
 
 ## 改为编辑 `config.json`
 

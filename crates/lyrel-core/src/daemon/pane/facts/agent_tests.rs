@@ -396,6 +396,105 @@ fn sentinel_events_drive_agent_session_state() {
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Agent(None))));
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn negative_process_probes_preserve_rich_turn_until_the_shell_prompt() {
+    use crate::core::cli_agent::{AgentStatus, CLIAgent};
+    use std::sync::atomic::AtomicU32;
+
+    struct Chunks {
+        parts: std::collections::VecDeque<&'static [u8]>,
+        group: Arc<AtomicU32>,
+    }
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some(part) = self.parts.pop_front() else {
+                return Ok(0);
+            };
+            self.group.fetch_add(1, Ordering::SeqCst);
+            buf[..part.len()].copy_from_slice(part);
+            Ok(part.len())
+        }
+    }
+
+    let group = Arc::new(AtomicU32::new(0));
+    let sampled_group = group.clone();
+    let state = Arc::new(Mutex::new(test_state(true)));
+    let (tx, rx) = mpsc::channel();
+    attach_subscriber(&mut state.lock().unwrap(), tx);
+    drain(&rx);
+    let hook = concat!(
+        "\x1b]133;C;wrapper;aid=lyrel\x07",
+        "\x1b]777;notify;lyrel://cli-agent;",
+        r#"{"v":1,"agent":"omp","event":"session-start","session_id":"wrapped"}"#,
+        "\x07\x1b]777;notify;lyrel://cli-agent;",
+        r#"{"v":1,"agent":"omp","event":"prompt-submit"}"#,
+        "\x07",
+    );
+    DaemonPane::spawn_reader(
+        state,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(OutputGate::new()),
+        Box::new(Chunks {
+            parts: [
+                hook.as_bytes(),
+                b"agent output\n",
+                b"\x1b]133;D;0;aid=lyrel\x07",
+            ]
+            .into_iter()
+            .collect(),
+            group,
+        }),
+        null_writer(),
+        || false,
+        ForegroundProbes {
+            // A changed identity forces a real reader probe on every chunk,
+            // including the chunk after the hook, without a wall-clock wait.
+            group: Box::new(move || {
+                Some(sampled_group.load(Ordering::SeqCst)
+                    as crate::daemon::procinfo::MediaProcessRoot)
+            }),
+            remote: Box::new(|| None),
+            agent: Box::new(|| Some(None)),
+            cwd: Box::new(|| None),
+            local_group: |_| Some(true),
+        },
+        Arc::new(DeathReporter::new(|| {})),
+    )
+    .join()
+    .unwrap();
+
+    let mut at_prompt = false;
+    let mut working = false;
+    let mut cleared = false;
+    for message in rx.try_iter() {
+        match message {
+            DaemonMsg::Prompt {
+                at_prompt: prompt, ..
+            } => at_prompt = prompt,
+            DaemonMsg::Agent(Some(agent)) => assert_eq!(agent, CLIAgent::OhMyPi),
+            DaemonMsg::AgentStatus(Some(session)) => {
+                assert!(session.rich);
+                assert_eq!(session.status, AgentStatus::Working);
+                assert_eq!(session.session_id.as_deref(), Some("wrapped"));
+                working = true;
+            }
+            DaemonMsg::AgentStatus(None) | DaemonMsg::Agent(None) => {
+                assert!(
+                    at_prompt,
+                    "a negative process probe cannot retire a rich turn"
+                );
+                assert!(working, "the hook must establish a working session first");
+                cleared = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(working, "subscribers receive the rich hook's working state");
+    assert!(cleared, "the real shell prompt still retires the session");
+}
+
 #[test]
 fn a_foreign_agent_hook_does_not_replace_the_foreground_session() {
     use crate::core::cli_agent::CLIAgent;

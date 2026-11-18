@@ -10,6 +10,8 @@ lyrel 按机器组织工作区，每个工作区包含标签页，每个标签�
 
 一个**窗格**把 shell 或程序连接到伪终端（PTY），在工作台中呈现它的输入与输出。
 
+当前桌面 GUI 通过 GPUI Kit `0.10.0` 的官方 `gpui-fast` facade 使用 Fast `0.1.16` 系列。GUI、daemon 与 CLI capture 共用 `rio-vt`／`rio-graphics`／`rio-unicode` `0.5.32` 及对应的 `rio-grapheme-width`；这条依赖链不替换 Lyrel 的 PTY、Session Daemon、Host、终端绘制管线或独立维护的 Markdown 编辑器。
+
 窗格在整个生命周期内都有固定的 ID，例如 `%42`。[CLI](/cli/overview) 通过这个 ID 定位窗格，窗格内部的 `$LYREL_PANE` 保存的也是这个 ID。
 
 <a id="tab"></a>
@@ -18,6 +20,12 @@ lyrel 按机器组织工作区，每个工作区包含标签页，每个标签�
 一个**标签页**就是一组窗格的布局。最初只有一个窗格；将它拆分后，标签页就容纳了两个窗格，按行列排列，可以拖动调整。
 
 标签页固定显示在左侧边栏中。标签页的标签会采用 lyrel 能获取到的最合适的信息：优先使用你设置的名称，否则使用其中运行的编程智能体名称，再否则使用其工作目录的最后一级名称。
+
+### 程序报告的标题
+
+支持 `validated-titles` 能力的端点对 OSC 0／2 标题使用同一规则：严格 UTF-8，最多 255 个 UTF-8 字节，不裁剪空白，保留首尾空格、其他合法空白和分号。空字符串仍表示重置；无效 UTF-8 或超过上限的报告会整体拒收，上一份有效标题及其生命周期元数据保持不变。
+
+命令期间接受的标题会在该命令结束时退休，拒收的报告不会把提示符标题误标为命令所有。旧本地或远端端点可能仍按旧规则裁切标题，新 GUI 不会宣称与其事实一致，也不会通过原始回放重建权威标题；界面会提示更新端点，既有会话继续运行，不自动替换 daemon／server 或终止会话。
 
 <a id="workspace"></a>
 ## 工作区
@@ -44,6 +52,8 @@ lyrel 按机器组织工作区，每个工作区包含标签页，每个标签�
 - **停止服务器需要明确操作。** 托盘菜单中的*退出并停止服务器…*会结束其管理的会话，并在操作前发出警告；关闭窗口不等于停止服务器。
 
 后台服务器也称 Session Daemon。GUI 和 [CLI](/cli/overview) 通过同一套共享核心访问它；本地服务器与远端服务器分别管理各自机器上的会话。窗口中的终端网格、图片解码和绘制缓存不取代 daemon 的会话权威。
+
+一般程序通过 OSC 7501 报告的当前记录同样归 pane 所属 daemon 所有。重新附着取得的是当前快照和后续有序更新，不是从终端历史重建的事件；记录只随存活 pane 和受支持的同会话 handoff 保留，不写入配置、机器树或磁盘回滚。旧端点没有该能力时继续提供既有会话，不自动更新或接管，详见[一般程序状态](/agents/status#program-status)。
 
 进程与线程边界、连接接管、终端回放和隐藏窗格的通知规则见[项目架构](/reference/architecture)。这里的“恢复”需区分重新附着存活会话与重建已经结束的 shell，不能将历史回放视为原进程存活。
 
@@ -420,6 +430,8 @@ node scripts/kitty-capacity-analysis.mjs `
 
 本地主机间接媒体按 `O/S` 验证实际请求区域，而不是将整个容器长度当成图片长度：单次读取内容最多 32 MiB，`S=0` 读取偏移后的剩余内容（剩余内容超限即拒绝），允许从明显更大的对象读取小区域。Linux 文件／POSIX shm 使用有界 descriptor read，不用可能因并发截断触发 `SIGBUS` 的普通文件映射；macOS POSIX shm FD 不支持 `read/write`，仅允许初次 `ftruncate`，因此从页对齐的 `O` 附近映射所需范围，复制后立即释放。Windows named shm 只打开既有 `Local\\`／`Global\\` 或无前缀对象，从 allocation-granularity 对齐的偏移映射有界区域，失败不创建对象；关闭自己的 handle，不删除 Windows section。Windows 的 section 长度按内核页取整，发送方应以 `S` 指明有效内容，避免把尾部 padding 当成像素。省略 `S` 时只用有界探测确定余量，绝不以零长度调用映射整个对象。需要映射的平台在映射／副本分配前预留 `64 MiB + 64 KiB` 峰值，覆盖最多 32 MiB 内容、映射对齐及页舍入；对象整体大小与所请求映射额度分开。macOS 名字最多 31 bytes，Linux 最多 255 bytes。平台依据为 [Apple XNU](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c) 与 [Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)。
 
+Linux 的 `t=s` 名称由 POSIX shm 在 `/dev/shm` 下解析；daemon 在校验已打开对象前使用 `O_NONBLOCK`，使没有 writer 的 FIFO 也不会卡住 reader。非 regular 对象沿既有 `EBADF:Failed to read image file` 路径拒收并执行一次性 `shm_unlink`；正常对象仍按 `O/S` 有界读取。该 Linux 专属打开标志不进入 macOS 的不可变共享内存映射或 Windows named section 路径。
+
 文件路径按发布的 [Kitty transmission-medium 规范](https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-transmission-medium) 跟随可验证的 symlink／junction 到最终 regular target；device、pipe、socket、UNC／网络盘、Windows ADS／DOS device namespace、未知或循环 reparse 拒绝。Windows 在逐段检查后固定本地 volume GUID、最终目录和文件 handle（不共享 delete），再次检查 regular/disk 类型；临时删除使用 [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)，不重新按路径删除。Unix 的 eligible 临时对象在同一文件系统内原子捕获到权限 `0700` 的私有目录，核验已打开对象的 `dev/ino` 后读取及 unlink；捕获了路径替换对象则不读取／unlink 它，恢复使用 Linux `renameat2(RENAME_NOREPLACE)`／macOS `renameatx_np(RENAME_EXCL)`。恢复冲突或文件系统不支持 exclusive rename 时保留实际对象并在本地日志给出恢复路径，绝不递归清理未知对象，也不覆盖后来建立的目标。此过程不复制图片、不是图片磁盘缓存。临时删除仍要求最终目标位于已知临时目录且路径含 `tty-graphics-protocol`；未满足条件的 `t=t` 可读取但保留对象。缺失、不可访问、特殊路径、短区域及无法读取均返回同一 `EBADF:Failed to read image file`，不泄露失败分类。
 
 本轮审查修复进一步固定 Windows 最终文件身份：先用零访问权限的 handle 固定已验证对象，再经 `ReOpenFile` 获取同一对象的读取／`DELETE` 权限；删除权限不可用时仍复用该对象，不重新解析路径。此修复的新增回归由中央统一执行，下方既有原生媒体通过记录不视为修复后的重跑结果。
@@ -429,6 +441,8 @@ node scripts/kitty-capacity-analysis.mjs `
 #145 的 production seam 回归通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；symlink／junction 目标及非 eligible 临时文件保留用例亦已在 Windows 通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`，实际看到 regular file、temp file、named shm 三行均为左红右绿；脚本用 raw VT 字节读取关联应答，输出 `MEDIA_PROTOCOL_OK`，并确认普通文件保留、eligible 临时文件删除及特殊路径统一拒收。按 Enter 后三行图片消失、源对象清理并返回 shell。Linux headless workspace 的完整 `--all-features` 回归已通过；真实 native SSH 的 Linux file／temp／POSIX shm 验收见[远程图片记录](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)，第二层 nested SSH 用例未执行。macOS（#152）延期，文件／POSIX shm 与最终原生观察不由 Windows 或 WSL 结果替代。
 
 上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收，Windows 已通过。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片。
+
+#305 在独立 WSL Ubuntu Linux 上执行 `cargo test --locked -p lyrel-core retention_daemon_linux_ -- --test-threads=1 --nocapture`，退出码 `0`，两个生产 daemon／真实 PTY 消费者均通过、无 ignored。无 writer 的真实 FIFO 被及时拒收和 unlink，后续输出及查询成功；正常共享内存从 offset `13` 读取指定 `4` bytes，消费者获得正确蓝色像素，随后放置与输出继续。该次独立验证使用 Rio `0.5.30`，证明修复不依赖 Rio 升级；不替代最终 `0.5.32` 组合或其他平台验收。日志为仓库外 `/home/dlivxpr/lyrel-302.aYEusI/305-linux-run2.log`。
 
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、GPUI 真实 PNG／raw 解码与 paint 回归，以及退休 worker／继任连接回归已在 Windows 通过。本轮原生有效图、压力与恢复观察见下方；全部无效／超限格式的原生表现、其他 DPI 及 macOS 仍未穷尽验证。仅收到 frame 或派生状态不等同于原生像素验收。
 

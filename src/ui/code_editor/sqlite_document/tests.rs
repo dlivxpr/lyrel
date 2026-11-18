@@ -299,10 +299,9 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
                     .is_some_and(|(host, _)| host == HostId(69))
         })
     });
-    assert!(
-        cells_contain(&dump(&sqlite_view(&app, &cx), &cx), "local"),
-        "the plain host's own copy"
-    );
+    until_named(&mut cx, "plain Host rows", |cx| {
+        cells_contain(&dump(&sqlite_view(&app, cx), cx), "local")
+    });
 
     // 映射 Host 的根在另一个目录：读它自己的库，不是本机同名文件。
     let decoy = super::super::test_host::canonical_tempdir();
@@ -396,7 +395,7 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
 fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
-    let path = people_database(dir.path(), "split.sqlite", "Ada", 3);
+    let path = people_database(dir.path(), "split.sqlite", "Ada", 501);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
     until(&mut cx, |cx| !dump(&sqlite_view(&app, cx), cx).1.is_empty());
@@ -445,6 +444,79 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
     });
     assert!(!dump(&primary, &cx).1.is_empty());
     assert!(!dump(&second, &cx).1.is_empty());
+
+    use gpui_kit::component::scroll::ScrollbarHandle as _;
+    let primary_scroll = primary.read_with(&cx, |view, cx| {
+        view.grid.read(cx).vertical_scroll_handle.clone()
+    });
+    let second_scroll = second.read_with(&cx, |view, cx| {
+        view.grid.read(cx).vertical_scroll_handle.clone()
+    });
+    let primary_horizontal = primary.read_with(&cx, |view, cx| {
+        view.grid.read(cx).horizontal_scroll_handle.clone()
+    });
+    let second_horizontal = second.read_with(&cx, |view, cx| {
+        view.grid.read(cx).horizontal_scroll_handle.clone()
+    });
+    let second_offset = second_scroll.offset();
+    let second_horizontal_offset = second_horizontal.offset();
+    let viewport = primary_scroll.viewport_bounds();
+    cx.update(|window, cx| {
+        window.drag(
+            gpui_kit::point(viewport.right() - px(8.), viewport.top() + px(8.)),
+            gpui_kit::point(viewport.right() - px(8.), viewport.bottom() - px(24.)),
+            cx,
+        );
+    });
+    settle(&mut cx);
+    assert!(
+        primary_scroll.offset().y < px(0.),
+        "the scrollbar reaches later loaded rows"
+    );
+    assert_eq!(
+        second_scroll.offset(),
+        second_offset,
+        "the other group stays at its own rows"
+    );
+
+    let viewport = primary_horizontal.viewport_bounds();
+    cx.update(|window, cx| {
+        window.drag(
+            gpui_kit::point(viewport.left() + px(8.), viewport.bottom() - px(8.)),
+            gpui_kit::point(viewport.right() - px(24.), viewport.bottom() - px(8.)),
+            cx,
+        );
+    });
+    settle(&mut cx);
+    assert!(
+        primary_horizontal.offset().x < px(0.),
+        "the scrollbar reaches offscreen loaded columns"
+    );
+    assert_eq!(
+        second_horizontal.offset(),
+        second_horizontal_offset,
+        "the other group retains its local columns"
+    );
+
+    cx.update(|window, cx| {
+        use gpui_kit::test::TestEventExt as _;
+        let button = window
+            .find_all("sqlite-next-page")
+            .into_iter()
+            .find(|button| button.bounds().left() >= second_scroll.viewport_bounds().left())
+            .expect("the second presentation's next-page control");
+        let target = button.bounds().center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+    });
+    until(&mut cx, |cx| {
+        primary.read_with(cx, |view, _| view.page_number() == 1)
+            && second.read_with(cx, |view, _| view.page_number() == 1)
+            && dump(&primary, cx).1.len() == 1
+            && dump(&second, cx).1.len() == 1
+    });
+    assert_eq!(dump(&primary, &cx).1[0][0], "501");
+    assert_eq!(dump(&second, &cx).1[0][0], "501");
 
     let primary_focus = primary.read_with(&cx, |view, cx| view.focus_handle(cx));
     let second_focus = second.read_with(&cx, |view, cx| view.focus_handle(cx));

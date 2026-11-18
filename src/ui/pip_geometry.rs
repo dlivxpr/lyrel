@@ -176,13 +176,6 @@ struct PipViewport {
     chrome: PaneChrome,
 }
 
-impl IntoElement for PipViewport {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl gpui_kit::Element for PipViewport {
     type RequestLayoutState = gpui_kit::AnyElement;
     type PrepaintState = gpui_kit::AnyElement;

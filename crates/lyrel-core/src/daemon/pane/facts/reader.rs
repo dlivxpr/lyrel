@@ -57,6 +57,13 @@ impl OutputObservation {
             || self.cwd.is_some()
     }
 
+    /// Whether this read carried any OSC 133 prompt mark at all. The pane only
+    /// probes foreground execution when one did, keeping the hot path free of
+    /// an extra syscall.
+    pub(in super::super) fn has_prompt_mark(&self) -> bool {
+        self.signals.shell.iter().any(|shell| shell.at_prompt)
+    }
+
     pub(super) fn apply(
         self,
         facts: &mut PaneFacts,
@@ -70,7 +77,19 @@ impl OutputObservation {
         // A hop must land before its first integrated remote prompt is latched.
         super::latch_remote_prompt(facts, saw_prompt_mark);
         if let Some(agent) = self.agent {
-            super::apply_agent(facts, agent, emit);
+            // Process-name recognition can miss wrappers or a just-started
+            // agent. Its absence cannot retire a hook-established rich turn
+            // before the shell returns; positive detection still can switch
+            // agents. Keep authoritative shell-mark handling unchanged.
+            let keep_rich_turn = agent.is_none()
+                && !facts.shell.at_prompt
+                && facts
+                    .agent_session
+                    .as_ref()
+                    .is_some_and(|session| session.rich);
+            if !keep_rich_turn {
+                super::apply_agent(facts, agent, emit);
+            }
         }
         super::apply_probed_cwd(facts, self.cwd, emit);
     }
@@ -162,6 +181,9 @@ impl FactReader {
         // Most reads contain no mark, so do not pay for a foreground syscall.
         if signals.shell.iter().any(|shell| shell.at_prompt) && foreground_running() {
             suppress_relayed_prompt_marks(&mut signals.shell);
+            // A/B do not carry an exit code. Clear the parser's standing value
+            // too, or the outer shell's next A/B would revive the relayed D.
+            self.sniffer.shell.last_exit_code = None;
         }
         // Probe on the final near-shell prompt even inside the interval: it may
         // be the last output after ssh exits, and must clear remote history scope.

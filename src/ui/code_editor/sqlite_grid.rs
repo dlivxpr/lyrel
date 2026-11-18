@@ -69,10 +69,9 @@ pub(super) fn value_text(value: &SqliteValue) -> String {
 
 /// One page of rows, presented through the Kit table.
 ///
-/// The rows and the column window belong to this presentation, so two groups
-/// can show different pages of the same read view without sharing a scroll
-/// position or a table selection. The page data itself belongs to the
-/// document.
+/// The document owns the query, row page, column window and loaded data.
+/// Each presentation projects that same page into its own table state, so
+/// local scroll and selection remain independent without a second query model.
 pub(super) struct SqliteGrid {
     columns: Vec<String>,
     rows: Vec<Vec<SqliteValue>>,

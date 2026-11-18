@@ -18,13 +18,6 @@ impl KeyboardRegion {
     }
 }
 
-impl IntoElement for KeyboardRegion {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl InteractiveElement for KeyboardRegion {
     fn interactivity(&mut self) -> &mut Interactivity {
         &mut self.interactivity

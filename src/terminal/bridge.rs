@@ -172,16 +172,12 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.set_title(title);
     }
 
-    fn set_current_directory(&mut self, path: std::path::PathBuf) {
+    fn set_current_directory(&mut self, path: Option<std::path::PathBuf>) {
         self.inner.set_current_directory(path);
     }
 
     fn set_semantic_prompt(&mut self, prompt: SemanticPrompt) {
         self.inner.set_semantic_prompt(prompt);
-    }
-
-    fn set_user_var(&mut self, name: String, value: String) {
-        self.inner.set_user_var(name, value);
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorShape>, blinking: bool) {

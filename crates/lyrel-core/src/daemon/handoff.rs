@@ -111,6 +111,11 @@ struct PaneRecord {
     /// at the same offsets and ignores the trailing data.
     #[serde(default)]
     glyph_len: u32,
+    /// Same-session program-status authority: session lifetime id, monotonic
+    /// counters, explicit payload, records and recency. Absent in blobs from
+    /// builds that predate the field; never written to disk by this daemon.
+    #[serde(default)]
+    program: Option<crate::core::program_status::ProgramStatusStore>,
 }
 
 /// What this process was told on the command line, if it was started as the far
@@ -263,6 +268,7 @@ fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File>
             colors: pane.colors.clone(),
             ring_len: encoded.len() as u32,
             glyph_len: glyphs.len() as u32,
+            program: pane.program.clone(),
         });
         data.extend_from_slice(&encoded);
         glyph_data.extend_from_slice(&glyphs);
@@ -431,6 +437,7 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
             head_modes: record.head_modes,
             colors: record.colors,
             glyphs,
+            program: record.program,
         });
     }
 
@@ -479,6 +486,7 @@ mod tests {
             head_modes: None,
             colors: None,
             glyphs: None,
+            program: None,
         }
     }
 

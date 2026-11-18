@@ -5,9 +5,9 @@ use gpui_kit::component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem}
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, Axis, Bounds, Context, Div, ExternalPaths,
-    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString,
-    Stateful, Window, canvas, deferred, div, ease_out_quint, linear_color_stop, linear_gradient,
-    prelude::*, px,
+    FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Orientation, Pixels, Role, SharedString, Stateful, Window, canvas, deferred, div,
+    ease_out_quint, linear_color_stop, linear_gradient, prelude::*, px,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -52,6 +52,12 @@ const ROW_HEIGHT: f32 = 30.;
 /// A row with a branch line under its title.
 const ROW_HEIGHT_TWO_LINE: f32 = 42.;
 
+/// A row carrying the title, a program-status line and a branch/progress
+/// line. Program state gets its own full-width line rather than sharing the
+/// metadata line: at the narrowest sidebar a shared line would elide the state
+/// itself, and OSC 9;4 progress must keep owning its line unmodified.
+const ROW_HEIGHT_THREE_LINE: f32 = 54.;
+
 /// The air between two groups — what makes a group a group without a box.
 const GROUP_GAP: f32 = 16.;
 
@@ -63,6 +69,20 @@ const META_REM: f32 = 11.5 / 16.;
 
 /// What sits between a group's branch and its diff counts.
 const META_SEP_TRIMMED: &str = "·";
+
+/// A keyboard stop in the terminal-tab sidebar: one visible tab row, or the
+/// disclosure header of one visible group. The header is included so a folded
+/// group stays keyboard-operable through the control that folds it; its rows
+/// are not, because they are not drawn.
+///
+/// Identity is the domain object — a tab's machine id or a group's key (and
+/// `None` for Ungrouped) — never a screen index. Insertion, close, regrouping
+/// and reorder move slots without renaming what focus is standing on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SidebarNavTarget {
+    Tab(lyrel_core::core::machine::TabId),
+    Group(Option<GroupKey>),
+}
 
 /// Tabular numerals, so a column of diff counts lines up digit for digit.
 fn tabular() -> gpui_kit::FontFeatures {
@@ -184,6 +204,9 @@ struct SidebarRowShown {
     title: Option<(SharedString, SharedString)>,
     branch: Option<(SharedString, SharedString, u32, u32)>,
     cwd: Option<(SharedString, SharedString)>,
+    /// The program states the row is presenting, already cached by the tab;
+    /// the hover card clones this handle rather than resummarizing records.
+    program: Option<Rc<crate::ui::program_summary::ProgramSummary>>,
 }
 
 #[derive(Clone)]
@@ -197,7 +220,9 @@ impl Render for DragGroup {
 
 /// Every detail a sidebar row could not fit, collected so the hover card can
 /// be rendered from cloneable data (an `AnyElement` cannot be cloned, but the
-/// tooltip closure has to rebuild its content on every hover).
+/// tooltip closure has to rebuild its content on every hover). Current program
+/// records are here even when nothing was elided: the row line is compact, and
+/// the card is where the remaining records and their pane attribution live.
 #[derive(Clone)]
 struct SidebarInfo {
     /// Full path, when the row's title was elided.
@@ -208,12 +233,307 @@ struct SidebarInfo {
     cwd: Option<SharedString>,
     /// Remote host, when the avatar only shows a dot for it.
     host: Option<SharedString>,
+    /// Current program records, listed with their pane and app attribution.
+    program: Option<Rc<crate::ui::program_summary::ProgramSummary>>,
 }
 
 impl LyrelApp {
     /// 左侧是唯一标签导航；收起时不绘制迷你轨道。
     pub(crate) fn sidebar_open(&self, cx: &gpui_kit::App) -> bool {
         self.left_panel_open(cx)
+    }
+
+    /// Every keyboard stop the visible sidebar draws, top to bottom: each
+    /// named group's disclosure header, then that group's rows unless it is
+    /// folded. Empty pinned groups keep their headers; calculated groups with
+    /// no tabs do not exist; Ungrouped reaches here as `Group(None)`.
+    ///
+    /// This is the same shape the renderer builds from, so focus cannot land
+    /// on a logical leaf folded out of sight or on a slot that only exists
+    /// while a drag preview is in the air.
+    pub(crate) fn sidebar_nav_targets(&self, cx: &gpui_kit::App) -> Vec<SidebarNavTarget> {
+        let keys = self.sidebar_group_keys(cx);
+        let groups = &self.sidebar_groups;
+        let mut targets = Vec::new();
+        for section in sidebar_sections(&keys, groups) {
+            if section.tabs.is_empty() && section.pinned().is_none() {
+                continue;
+            }
+            if section.name.is_some() {
+                targets.push(SidebarNavTarget::Group(section.key.clone()));
+            }
+            if groups.is_folded(section.key.as_ref()) {
+                continue;
+            }
+            targets.extend(
+                section
+                    .tabs
+                    .iter()
+                    .filter_map(|&i| self.tabs.get(i).map(|tab| SidebarNavTarget::Tab(tab.id()))),
+            );
+        }
+        targets
+    }
+
+    /// Enter the visible sidebar's single roving Tab stop. The selected
+    /// visible tab is focused without switching sessions; a folded group that
+    /// hides the active tab offers its own disclosure header instead, so the
+    /// remaining sessions stay one Enter away.
+    pub(crate) fn focus_terminal_tab_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tabs.is_empty() || self.sidebar_nav_overlay_open(window) {
+            return;
+        }
+        let targets = self.sidebar_nav_targets(cx);
+        if targets.is_empty() {
+            return;
+        }
+        if self.sidebar_collapsed {
+            self.sidebar_collapsed = false;
+            self.update_config(cx, |cfg| cfg.sidebar_collapsed = false);
+        }
+        let active = self.tabs.get(self.tabs.active_index()).map(Tab::id);
+        let active_header = active.and_then(|id| {
+            let at = self.tabs.index_of(id)?;
+            let key = self.sidebar_group_keys(cx).get(at).cloned().flatten();
+            let header = SidebarNavTarget::Group(key);
+            targets.contains(&header).then_some(header)
+        });
+        // Entry follows the active selection, not where a previous visit left
+        // its roving target: sessions may have switched behind the sidebar,
+        // and Enter must activate what is current. The remembered target only
+        // covers an active tab nothing visible can stand in for.
+        let target = active
+            .map(SidebarNavTarget::Tab)
+            .filter(|target| targets.contains(target))
+            .or(active_header)
+            .or_else(|| {
+                self.sidebar_nav_target
+                    .clone()
+                    .filter(|target| targets.contains(target))
+            })
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find(|target| matches!(target, SidebarNavTarget::Tab(_)))
+                    .cloned()
+            })
+            .or_else(|| targets.first().cloned());
+        let Some(target) = target else {
+            return;
+        };
+        *self.sidebar_reveal.borrow_mut() = Some(target.clone());
+        self.sidebar_nav_target = Some(target);
+        window.focus(&self.sidebar_nav_focus, cx);
+        cx.notify();
+    }
+
+    /// Drop or repair the roving target after the rows moved under it: a tab
+    /// closed, its cwd regrouped it, or its group was folded from somewhere
+    /// else. A hidden tab hands focus to its group's header; a vanished one
+    /// hands it to the first available row.
+    pub(crate) fn sidebar_nav_settle(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.sidebar_nav_target.clone() else {
+            return;
+        };
+        let targets = self.sidebar_nav_targets(cx);
+        if targets.contains(&current) {
+            return;
+        }
+        let header = match &current {
+            SidebarNavTarget::Tab(id) => self.tabs.index_of(*id).and_then(|at| {
+                let key = self.sidebar_group_keys(cx).get(at).cloned().flatten();
+                let header = SidebarNavTarget::Group(key);
+                targets.contains(&header).then_some(header)
+            }),
+            SidebarNavTarget::Group(_) => None,
+        };
+        self.sidebar_nav_target = header
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find(|target| matches!(target, SidebarNavTarget::Tab(_)))
+                    .cloned()
+            })
+            .or_else(|| targets.first().cloned());
+    }
+
+    /// The visible stop that should inherit navigation when `closing` goes:
+    /// the next row, then the previous one, then the closing group's own
+    /// disclosure header. Computed before the tab leaves the list so its place
+    /// is still exact; [`Self::sidebar_nav_settle`] repairs a header that the
+    /// close also removed.
+    pub(crate) fn sidebar_nav_successor_after_close(
+        &self,
+        closing: lyrel_core::core::machine::TabId,
+        cx: &gpui_kit::App,
+    ) -> Option<SidebarNavTarget> {
+        let targets = self.sidebar_nav_targets(cx);
+        let tabs: Vec<lyrel_core::core::machine::TabId> = targets
+            .iter()
+            .filter_map(|target| match target {
+                SidebarNavTarget::Tab(id) => Some(*id),
+                SidebarNavTarget::Group(_) => None,
+            })
+            .collect();
+        if let Some(at) = tabs.iter().position(|id| *id == closing) {
+            if let Some(next) = tabs
+                .get(at + 1)
+                .or_else(|| at.checked_sub(1).and_then(|previous| tabs.get(previous)))
+            {
+                return Some(SidebarNavTarget::Tab(*next));
+            }
+        }
+        let at = self.tabs.index_of(closing)?;
+        let key = self.sidebar_group_keys(cx).get(at).cloned().flatten();
+        Some(SidebarNavTarget::Group(key))
+    }
+
+    fn set_sidebar_nav_target(&mut self, target: SidebarNavTarget, cx: &mut Context<Self>) {
+        if self.sidebar_nav_target.as_ref() == Some(&target) {
+            return;
+        }
+        *self.sidebar_reveal.borrow_mut() = Some(target.clone());
+        self.sidebar_nav_target = Some(target);
+        cx.notify();
+    }
+
+    fn sidebar_nav_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        self.sidebar_nav_settle(cx);
+        let targets = self.sidebar_nav_targets(cx);
+        let Some(current) = self.sidebar_nav_target.clone() else {
+            if let Some(first) = targets.first().cloned() {
+                self.set_sidebar_nav_target(first, cx);
+            }
+            return;
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let at = targets
+            .iter()
+            .position(|target| *target == current)
+            .unwrap_or(0);
+        let next = if forward {
+            (at + 1) % targets.len()
+        } else {
+            (at + targets.len() - 1) % targets.len()
+        };
+        self.set_sidebar_nav_target(targets[next].clone(), cx);
+    }
+
+    fn sidebar_nav_endpoint(&mut self, last: bool, cx: &mut Context<Self>) {
+        self.sidebar_nav_settle(cx);
+        let targets = self.sidebar_nav_targets(cx);
+        let target = match last {
+            true => targets.last().cloned(),
+            false => targets.first().cloned(),
+        };
+        if let Some(target) = target {
+            self.set_sidebar_nav_target(target, cx);
+        }
+    }
+
+    /// Enter/Space on the roving target. A tab switches sessions but leaves
+    /// the sidebar owning the keyboard; a group header folds or unfolds that
+    /// group through the same control a pointer uses.
+    fn sidebar_nav_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_nav_settle(cx);
+        match self.sidebar_nav_target.clone() {
+            Some(SidebarNavTarget::Tab(id)) => {
+                if let Some(index) = self.tabs.index_of(id) {
+                    self.activate_from_sidebar_navigation(index, window, cx);
+                } else {
+                    self.sidebar_nav_settle(cx);
+                }
+            }
+            Some(SidebarNavTarget::Group(key)) => {
+                self.toggle_sidebar_group(key.as_ref(), cx);
+                self.sidebar_nav_settle(cx);
+            }
+            None => {}
+        }
+    }
+
+    /// Escape leaves the sidebar for the content it stands beside. Overlays
+    /// above the sidebar keep their dismissal priority; this is only reached
+    /// while the sidebar itself holds focus and no such surface is open.
+    fn sidebar_nav_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_previous_content(window, cx);
+        cx.notify();
+    }
+
+    /// Modal surfaces above workbench navigation. A visible code panel is
+    /// ordinary content; a diff, picker, or document prompt is not.
+    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window) -> bool {
+        let settings_here = self.settings.as_ref().is_some_and(|_| {
+            self.settings_window
+                .is_none_or(|(settings, _)| settings == window.window_handle())
+        });
+        settings_here
+            || self.search.is_open()
+            || self.close_prompt_open
+            || self.switcher.is_some()
+            || self.worktree_prompt.is_some()
+            || self.document_navigation_overlay_open()
+            || self
+                .tabs
+                .get(self.tabs.active_index())
+                .is_some_and(|tab| tab.document_front() == Some(crate::ui::tab::OverlayTop::Diff))
+    }
+
+    fn sidebar_nav_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Focus must be on the list itself. A rename field, a menu or anything
+        // else living inside the sidebar keeps its own keys.
+        if !self.sidebar_nav_focus.is_focused(window) {
+            return;
+        }
+        let modifiers = &event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.shift {
+            return;
+        }
+        let handled = match event.keystroke.key.as_str() {
+            "up" => {
+                self.sidebar_nav_step(false, cx);
+                true
+            }
+            "down" => {
+                self.sidebar_nav_step(true, cx);
+                true
+            }
+            "home" => {
+                self.sidebar_nav_endpoint(false, cx);
+                true
+            }
+            "end" => {
+                self.sidebar_nav_endpoint(true, cx);
+                true
+            }
+            "enter" | "space" => {
+                self.sidebar_nav_activate(window, cx);
+                true
+            }
+            "escape" => {
+                if self.sidebar_nav_overlay_open(window) {
+                    false
+                } else {
+                    self.sidebar_nav_leave(window, cx);
+                    true
+                }
+            }
+            _ => false,
+        };
+        if handled {
+            cx.stop_propagation();
+        }
     }
 
     /// What the right panel has reserved, from the sidebar's point of view.
@@ -249,6 +569,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let active = self.tabs.active_index();
+        let nav_focused = self.sidebar_nav_focus.is_focused(window);
+        let nav_target = self.sidebar_nav_target.clone();
         let sf = cx.global::<crate::ui::presets::Surfaces>().rail;
         let show_badges = self.mod_hint_badges;
         let width = self.sidebar_px(window, cx);
@@ -272,6 +594,15 @@ impl LyrelApp {
 
         let mut list = v_flex()
             .id("tab-sidebar-list")
+            // The whole visible column is one roving Tab stop: focus stays on
+            // this container and Up/Down move an active descendant keyed by
+            // tab/group identity. That keeps the sidebar out of the terminal's
+            // Tab and arrow input until the entry action asks for it.
+            .track_focus(&self.sidebar_nav_focus)
+            .role(Role::TabList)
+            .aria_orientation(Orientation::Vertical)
+            .aria_label(t(L10nKey::SidebarNavigation))
+            .on_key_down(cx.listener(Self::sidebar_nav_key_down))
             // A folder dragged in from Finder is pinned as a group of its own.
             .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(cx.theme().drag_border.opacity(0.06)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
@@ -469,7 +800,7 @@ impl LyrelApp {
 
         // A reveal whose row is not drawn this frame (folded away, or the tab
         // gone) is dropped, so it cannot fire when the row turns up later.
-        let reveal = self.sidebar_reveal.get();
+        let reveal = self.sidebar_reveal.borrow().clone();
         let mut reveal_drawn = false;
         for (n, (group_slot, group_ix)) in blocks.into_iter().enumerate() {
             if n == first_unpinned && show_divider {
@@ -478,6 +809,16 @@ impl LyrelApp {
             }
             let section = &sections[group_ix];
             let group_key = section.key.clone();
+            // A named section is also a keyboard stop: its header is the
+            // disclosure control that keeps a folded group's sessions one
+            // Enter away instead of unreachable.
+            let header_target = section
+                .name
+                .is_some()
+                .then(|| SidebarNavTarget::Group(group_key.clone()));
+            if let Some(target) = header_target.as_ref() {
+                reveal_drawn |= reveal.as_ref() == Some(target);
+            }
             // Only a group that draws a header can be folded — there is
             // nothing to click otherwise, and the one headerless section (the
             // list below the pinned groups, when nothing else is there) must
@@ -502,6 +843,10 @@ impl LyrelApp {
                 false => visible_by_section[group_ix].clone(),
             };
             let visible_tabs: Vec<usize> = visible.clone();
+            let visible_ids: Vec<SharedString> = visible_tabs
+                .iter()
+                .map(|&i| SharedString::from(format!("tab-{}", self.tabs[i].id())))
+                .collect();
             let row_slots: Rc<RefCell<Vec<Bounds<Pixels>>>> =
                 Rc::new(RefCell::new(vec![Bounds::default(); visible.len()]));
             let row_preview = reorder::preview(
@@ -548,13 +893,21 @@ impl LyrelApp {
             for (slot, i) in visible.into_iter().enumerate() {
                 let badge_pos = badge_pos[i];
                 let tab = &self.tabs[i];
-                reveal_drawn |= reveal == Some(tab.id());
+                let tab_id = tab.id();
+                let nav_row =
+                    nav_focused && nav_target.as_ref() == Some(&SidebarNavTarget::Tab(tab_id));
+                reveal_drawn |= reveal.as_ref() == Some(&SidebarNavTarget::Tab(tab_id));
                 let is_active = i == active;
                 let ssh_dot = self.tab_ssh_dot(tab, cx);
                 let asleep = tab.is_asleep();
                 let agent = tab.agent(cx).or_else(|| tab.asleep_agent());
                 let agent_status = tab.agent_status(cx);
                 let agent_unread = tab.agent_unread_count(cx);
+                // The tab's own program records, across every logical leaf
+                // including parked ones. Cached by the tab: this read costs a
+                // per-leaf version comparison, not a record rebuild.
+                let program = tab.program_summary(cx);
+                let program_status_text = program.as_ref().map(|summary| summary.row_label());
                 let git_cwd = git_click(tab, window, cx);
                 let badge_extra = if show_badges && badge_pos < 9 {
                     row_metrics::BADGE + row_metrics::GAP
@@ -806,6 +1159,7 @@ impl LyrelApp {
                     title: full_title.map(|full| (shown_title.clone(), full)),
                     branch: branch_shown.clone(),
                     cwd: cwd_shown.clone(),
+                    program: program.clone(),
                 };
                 let info = self.sidebar_info(tab, window, cx, &shown);
                 // Colors are captured by value so the tooltip builder (which
@@ -814,12 +1168,65 @@ impl LyrelApp {
                 let success = added_ink;
                 let danger = removed_ink;
 
-                // A row that grows a branch line under its title stands at
-                // `ROW_HEIGHT_TWO_LINE`; a one-line row at `ROW_HEIGHT`.
-                let two_line = git_line.is_some();
-                let row_h = match two_line {
-                    true => ROW_HEIGHT_TWO_LINE,
-                    false => ROW_HEIGHT,
+                // The program line is its own text row: sharing the metadata
+                // line would either elide the state at narrow widths or
+                // displace the OSC 9;4 progress that owns that line. The line
+                // names both origins in words, so the state never relies on
+                // the semantic color alone.
+                let program_unread = self.program_unread_count(tab, cx);
+                let program_line = program_status_text.as_ref().map(|label| {
+                    let color = program.as_ref().map_or_else(
+                        || cx.theme().muted_foreground,
+                        |summary| {
+                            crate::ui::program_summary::state_color(
+                                summary.representative().record(),
+                                cx,
+                            )
+                        },
+                    );
+                    h_flex()
+                        .id(("sidebar-program", i))
+                        .w_full()
+                        .min_w_0()
+                        .gap_1()
+                        .text_size(px(meta_size))
+                        .child(
+                            div()
+                                .id(("sidebar-program-status", i))
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .aria_label(label.clone())
+                                .truncate()
+                                .text_color(color)
+                                .child(label.clone()),
+                        )
+                        .when(program_unread != 0, |row| {
+                            let reminder = crate::ui::i18n::t_fmt(
+                                L10nKey::ProgramNewResults,
+                                &[("count", &program_unread.to_string())],
+                            );
+                            row.child(
+                                div()
+                                    .id(("sidebar-program-unread", i))
+                                    .test_support()
+                                    .aria_label(reminder.clone())
+                                    .flex_none()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(reminder),
+                            )
+                        })
+                });
+
+                // Title, program line and branch/progress line each stand on
+                // their own row; the program line never borrows the OSC 9;4
+                // line. A row with nothing but a title stays one line tall.
+                let extra_lines =
+                    usize::from(program_line.is_some()) + usize::from(git_line.is_some());
+                let row_h = match extra_lines {
+                    0 => ROW_HEIGHT,
+                    1 => ROW_HEIGHT_TWO_LINE,
+                    _ => ROW_HEIGHT_THREE_LINE,
                 };
                 let label_region = match rename_input {
                     Some(input) => div()
@@ -850,7 +1257,7 @@ impl LyrelApp {
                                 // per call instead of being moved out.
                                 let info = info.clone();
                                 gpui_kit::component::tooltip::Tooltip::element(
-                                    move |_window, _cx| {
+                                    move |_window, cx| {
                                         let card = v_flex()
                                             .gap_1()
                                             // The card is the one place that
@@ -924,6 +1331,11 @@ impl LyrelApp {
                                                         )
                                                         .child(div().truncate().child(host)),
                                                 )
+                                            })
+                                            .when_some(info.program.clone(), |c, program| {
+                                                c.child(crate::ui::program_summary::card_section(
+                                                    &program, cx,
+                                                ))
                                             });
                                         card
                                     },
@@ -959,17 +1371,38 @@ impl LyrelApp {
                                     )
                                 }),
                         )
+                        .when_some(program_line, |col, line| col.child(line))
                         .children(git_line)
                         .into_any_element(),
                 };
 
                 let row = h_flex()
                     .id(("tab-row", i))
+                    .relative()
                     // What a screen reader announces and presses: the full
                     // title, not the elided one drawn.
                     .role(gpui_kit::Role::Tab)
                     .aria_label(SharedString::from(title_text.to_string()))
                     .aria_selected(is_active)
+                    // The visible program line is muted metadata; the row's
+                    // description carries it to assistive technology too.
+                    .when_some(program_status_text, |row, status| {
+                        row.aria_description(status)
+                    })
+                    .when(nav_row, |row| {
+                        row.child(
+                            div()
+                                .id(("sidebar-nav-ring", i))
+                                .absolute()
+                                .inset_0()
+                                .rounded(crate::ui::rounding::ROW_RADIUS)
+                                .border_1()
+                                .border_color(cx.theme().primary),
+                        )
+                        // The list holds real focus; the row the ring marks is
+                        // what assistive technology should announce as current.
+                        .aria_active_descendant()
+                    })
                     .group(SharedString::from(format!("tab-row-{i}")))
                     .cursor_pointer()
                     .on_drag(DragTab, {
@@ -1026,6 +1459,7 @@ impl LyrelApp {
                                 let reveal = self.sidebar_reveal.clone();
                                 let scroll = self.sidebar_scroll.clone();
                                 let id = tab.id();
+                                let reveal_target = SidebarNavTarget::Tab(id);
                                 // The header sits directly above a group's
                                 // first row, one gap away.
                                 let lead = match slot == 0 && section.name.is_some() {
@@ -1039,8 +1473,8 @@ impl LyrelApp {
                                     if let Some(s) = by_tab.borrow_mut().get_mut(i) {
                                         *s = bounds;
                                     }
-                                    if reveal.get() == Some(id) {
-                                        reveal.set(None);
+                                    if reveal.borrow().as_ref() == Some(&reveal_target) {
+                                        *reveal.borrow_mut() = None;
                                         let view = scroll.bounds();
                                         let shift = reveal_shift(
                                             (bounds.top(), bounds.bottom()),
@@ -1068,6 +1502,9 @@ impl LyrelApp {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
+                        if this.sidebar_nav_focus.is_focused(window) {
+                            this.sidebar_nav_target = Some(SidebarNavTarget::Tab(tab_id));
+                        }
                         this.activate(i, window, cx);
                     }))
                     .child(self.tab_avatar_plain(
@@ -1139,7 +1576,12 @@ impl LyrelApp {
                                             Button::new(("sidebar-close", i))
                                                 .icon(IconName::Close)
                                                 .ghost()
-                                                .xsmall(),
+                                                .xsmall()
+                                                // The sidebar is one roving Tab
+                                                // stop; the close affordance is
+                                                // pointer/AX only so Tab does not
+                                                // walk every row's ×.
+                                                .tab_stop(false),
                                         )
                                         .tooltip(t(L10nKey::TabContextCloseTab))
                                         // Held here, because the row behind it
@@ -1204,7 +1646,10 @@ impl LyrelApp {
                             .expect("each slot emitted once")
                             .with_animation(
                                 (
-                                    SharedString::from(format!("row-slide-{}", p.generation)),
+                                    SharedString::from(format!(
+                                        "row-slide-{}-{}",
+                                        visible_ids[slot], p.generation
+                                    )),
                                     slot,
                                 ),
                                 Animation::new(std::time::Duration::from_millis(REORDER_SLIDE_MS))
@@ -1282,10 +1727,25 @@ impl LyrelApp {
                 let label = elide_label(&ts, &header_font, header_size, &name, name_avail);
                 let name_w = measure_text(&ts, &header_font, header_size, &label);
                 let hover_group = SharedString::from(format!("sidebar-group-{group_ix}"));
+                let header_nav = nav_focused && header_target.as_ref() == nav_target.as_ref();
                 let bar = h_flex()
                     .id(("sidebar-group", group_ix))
                     .group(hover_group.clone())
                     .relative()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(name.clone()))
+                    .aria_expanded(!folded)
+                    .when(header_nav, |bar| {
+                        bar.child(
+                            div()
+                                .id(("sidebar-group-nav-ring", group_ix))
+                                .absolute()
+                                .inset_0()
+                                .border_1()
+                                .border_color(cx.theme().primary),
+                        )
+                        .aria_active_descendant()
+                    })
                     .w_full()
                     .items_center()
                     .gap_1p5()
@@ -1300,7 +1760,13 @@ impl LyrelApp {
                     .hover(|s| s.text_color(cx.theme().foreground))
                     .on_click(cx.listener({
                         let key = group_key.clone();
-                        move |this, _, _window, cx| this.toggle_sidebar_group(key.as_ref(), cx)
+                        let target = SidebarNavTarget::Group(key.clone());
+                        move |this, _, window, cx| {
+                            if this.sidebar_nav_focus.is_focused(window) {
+                                this.sidebar_nav_target = Some(target.clone());
+                            }
+                            this.toggle_sidebar_group(key.as_ref(), cx)
+                        }
                     }))
                     .when_some(group_slot, |header, slot| {
                         let (surface, slot, slots) = match slot {
@@ -1502,6 +1968,39 @@ impl LyrelApp {
                     .when(folded, |bar| {
                         bar.child(div().flex_shrink_0().child(count_label))
                     })
+                    .child(
+                        // Keyboard navigation scrolls a folded group's header
+                        // into view the same way a row's canvas does.
+                        canvas(
+                            {
+                                let reveal = self.sidebar_reveal.clone();
+                                let scroll = self.sidebar_scroll.clone();
+                                let target = header_target
+                                    .clone()
+                                    .expect("a drawn header has a navigation target");
+                                move |bounds, window, _cx| {
+                                    if reveal.borrow().as_ref() == Some(&target) {
+                                        *reveal.borrow_mut() = None;
+                                        let view = scroll.bounds();
+                                        let shift = reveal_shift(
+                                            (bounds.top(), bounds.bottom()),
+                                            px(0.),
+                                            (view.top(), view.bottom()),
+                                        );
+                                        if shift != px(0.) {
+                                            let mut offset = scroll.offset();
+                                            offset.y += shift;
+                                            scroll.set_offset(offset);
+                                            window.refresh();
+                                        }
+                                    }
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .children(self.header_actions(
                         group_ix,
                         group_key.clone(),
@@ -1555,6 +2054,14 @@ impl LyrelApp {
                 Some(HeaderSlot::Pinned(s)) => (pinned_preview.as_ref(), Some(s)),
                 Some(HeaderSlot::Auto(s)) => (group_preview.as_ref(), Some(s)),
                 None => (None, None),
+            };
+            let group_identity = match &group_key {
+                Some(GroupKey::Pinned(id)) => format!("pinned-{id}"),
+                Some(GroupKey::Auto(AutoKey::Repo(path))) => {
+                    format!("repo-{}", path.display())
+                }
+                Some(GroupKey::Auto(AutoKey::SshHost(host))) => format!("ssh-{host}"),
+                None => format!("ungrouped-{group_ix}"),
             };
             // An empty pinned group says how to fill it, in the place its
             // rows would be: a tab can be dragged onto it, or opened here.
@@ -1642,7 +2149,10 @@ impl LyrelApp {
                     block
                         .with_animation(
                             (
-                                SharedString::from(format!("group-slide-{}", p.generation)),
+                                SharedString::from(format!(
+                                    "group-slide-{}-{}",
+                                    group_identity, p.generation
+                                )),
                                 slot,
                             ),
                             Animation::new(std::time::Duration::from_millis(REORDER_SLIDE_MS))
@@ -1655,7 +2165,7 @@ impl LyrelApp {
             });
         }
         if !reveal_drawn {
-            self.sidebar_reveal.set(None);
+            *self.sidebar_reveal.borrow_mut() = None;
         }
         if show_divider && !divider_drawn {
             list = list.child(self.sidebar_divider(divider_lit, divider_zone, cx));
@@ -2012,6 +2522,10 @@ impl LyrelApp {
             // repeating the cwd under it would be noise, not information.
             cwd: elided(&shown.cwd),
             host: None,
+            // Current program records are the card's own reason to exist even
+            // when nothing was elided: the row line is compact, so the card is
+            // where the remaining records and their pane attribution live.
+            program: shown.program.clone(),
         };
         // The host is read off the same leaf the title and cwd came from; a
         // split tab whose panes sit on different machines would otherwise
@@ -2023,8 +2537,12 @@ impl LyrelApp {
         }) {
             info.host = Some(target);
         }
-        (info.title.is_some() || info.branch.is_some() || info.cwd.is_some() || info.host.is_some())
-            .then_some(info)
+        (info.title.is_some()
+            || info.branch.is_some()
+            || info.cwd.is_some()
+            || info.host.is_some()
+            || info.program.is_some())
+        .then_some(info)
     }
 
     /// Where a tab being dragged in the sidebar would land if let go now,
@@ -4125,6 +4643,319 @@ mod fold_tests {
                 Some(AutoKey::Repo(PathBuf::from("/w/beta"))),
                 "and is what goes up as the next launch's hint"
             );
+        });
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    use crate::daemon::protocol::ClientMsg;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext};
+
+    fn repo(path: &str) -> AutoKey {
+        AutoKey::Repo(PathBuf::from(path))
+    }
+
+    fn assert_tab_owns_keyboard(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, index: usize) {
+        let target = app.read_with(vcx, |app, _| SidebarNavTarget::Tab(app.tabs[index].id()));
+        assert_navigation_owns_keyboard(app, vcx, target);
+    }
+
+    fn focus_pane(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, index: usize) {
+        app.update_in(vcx, |app, window, cx| {
+            let leaf = app.tabs[index].pane.first_leaf().expect("a test pane");
+            window.focus(&leaf.focus_handle(cx), cx);
+        });
+    }
+
+    fn assert_navigation_owns_keyboard(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        expected: SidebarNavTarget,
+    ) {
+        app.update_in(vcx, |app, window, _| {
+            assert!(
+                app.sidebar_nav_focus.is_focused(window),
+                "the sidebar keeps the roving Tab stop"
+            );
+            assert_eq!(app.sidebar_nav_target.as_ref(), Some(&expected));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_navigation_roves_groups_activates_and_returns_to_content(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        let alpha = repo("/w/alpha");
+        let beta = repo("/w/beta");
+        app.update(&mut vcx, |app, cx| {
+            *app.tabs[0].auto_group.borrow_mut() = Some(alpha.clone());
+            *app.tabs[1].auto_group.borrow_mut() = Some(alpha.clone());
+            *app.tabs[2].auto_group.borrow_mut() = Some(beta.clone());
+            app.sidebar_groups.auto_collapsed.push(beta.clone());
+            app.tabs.select(0);
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        focus_pane(&app, &mut vcx, 0);
+
+        // Enter through the real action/keymap path, not a private call.
+        vcx.simulate_keystrokes("secondary-shift-l");
+        vcx.run_until_parked();
+        assert_tab_owns_keyboard(&app, &mut vcx, 0);
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.tabs.active_index(),
+                0,
+                "focusing the sidebar must not switch sessions"
+            );
+        });
+
+        vcx.simulate_keystrokes("down");
+        assert_tab_owns_keyboard(&app, &mut vcx, 1);
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, _| {
+            assert_eq!(app.tabs.active_index(), 1);
+            assert!(
+                app.sidebar_nav_focus.is_focused(window),
+                "activation keeps navigation focus"
+            );
+            assert_eq!(
+                app.sidebar_nav_target,
+                Some(SidebarNavTarget::Tab(app.tabs[1].id()))
+            );
+        });
+
+        // Down from the last visible row of alpha lands on beta's disclosure
+        // control, which is folded and therefore has no rows of its own.
+        vcx.simulate_keystrokes("down");
+        assert_navigation_owns_keyboard(
+            &app,
+            &mut vcx,
+            SidebarNavTarget::Group(Some(GroupKey::Auto(beta.clone()))),
+        );
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert!(
+                !app.sidebar_groups.auto_collapsed.contains(&beta),
+                "Enter on a group header uses the same disclosure control"
+            );
+        });
+        vcx.simulate_keystrokes("down");
+        assert_tab_owns_keyboard(&app, &mut vcx, 2);
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, _| {
+            assert_eq!(app.tabs.active_index(), 2);
+            assert!(app.sidebar_nav_focus.is_focused(window));
+        });
+
+        // Home/End are endpoints over the same visible stops, and Escape
+        // returns to the intended pane of whichever session was activated.
+        vcx.simulate_keystrokes("home");
+        assert_navigation_owns_keyboard(
+            &app,
+            &mut vcx,
+            SidebarNavTarget::Group(Some(GroupKey::Auto(alpha.clone()))),
+        );
+        vcx.simulate_keystrokes("end");
+        assert_tab_owns_keyboard(&app, &mut vcx, 2);
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            let leaf = app.tabs[2].pane.first_leaf().expect("a test pane");
+            assert!(
+                leaf.contains_focused(window, cx),
+                "Escape returns to the active session's pane"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_navigation_skips_a_folded_active_row_and_keeps_it_reachable(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        let alpha = repo("/w/alpha");
+        let beta = repo("/w/beta");
+        app.update(&mut vcx, |app, cx| {
+            *app.tabs[0].auto_group.borrow_mut() = Some(alpha.clone());
+            *app.tabs[1].auto_group.borrow_mut() = Some(alpha.clone());
+            *app.tabs[2].auto_group.borrow_mut() = Some(beta.clone());
+            // The selected tab is the one folded out of sight.
+            app.sidebar_groups.auto_collapsed.push(alpha.clone());
+            app.tabs.select(0);
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        focus_pane(&app, &mut vcx, 0);
+        vcx.simulate_keystrokes("secondary-shift-l");
+        vcx.run_until_parked();
+
+        assert_navigation_owns_keyboard(
+            &app,
+            &mut vcx,
+            SidebarNavTarget::Group(Some(GroupKey::Auto(alpha.clone()))),
+        );
+        app.update_in(&mut vcx, |app, _, cx| {
+            assert_eq!(app.tabs.active_index(), 0);
+            assert!(
+                app.sidebar_nav_targets(cx).iter().all(
+                    |target| !matches!(target, SidebarNavTarget::Tab(id) if *id == app.tabs[0].id())
+                ),
+                "a folded row is never a keyboard stop"
+            );
+        });
+
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert!(!app.sidebar_groups.auto_collapsed.contains(&alpha));
+        });
+        vcx.simulate_keystrokes("down");
+        assert_tab_owns_keyboard(&app, &mut vcx, 0);
+        vcx.simulate_keystrokes("down");
+        assert_tab_owns_keyboard(&app, &mut vcx, 1);
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, _| {
+            assert_eq!(app.tabs.active_index(), 1);
+            assert!(app.sidebar_nav_focus.is_focused(window));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_navigation_keeps_domain_identity_through_reorder_and_close(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        let alpha = repo("/w/alpha");
+        app.update(&mut vcx, |app, cx| {
+            for index in 0..3 {
+                *app.tabs[index].auto_group.borrow_mut() = Some(alpha.clone());
+            }
+            app.tabs.select(0);
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        focus_pane(&app, &mut vcx, 0);
+        vcx.simulate_keystrokes("secondary-shift-l");
+        vcx.simulate_keystrokes("down");
+        let reordered = app.update_in(&mut vcx, |app, _, _| {
+            let id = app.tabs[1].id();
+            app.tabs.move_to(id, 0);
+            id
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.sidebar_nav_target,
+                Some(SidebarNavTarget::Tab(reordered)),
+                "reorder moves the row, not the identity focus stands on"
+            );
+            assert_eq!(app.tabs.index_of(reordered), Some(0));
+        });
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, _| {
+            assert_eq!(
+                app.tabs.get(app.tabs.active_index()).map(Tab::id),
+                Some(reordered)
+            );
+            assert!(app.sidebar_nav_focus.is_focused(window));
+        });
+
+        // Close the tab the navigation is standing on. The successor is the
+        // next visible row by domain identity, and navigation survives.
+        let survivor = app.update_in(&mut vcx, |app, window, cx| {
+            let at = app.tabs.index_of(reordered).expect("the focused tab");
+            let survivor = app
+                .tabs
+                .get((at + 1) % app.tabs.len())
+                .map(Tab::id)
+                .expect("another tab");
+            app.close_tab(at, window, cx);
+            survivor
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, _| {
+            assert!(!app.tabs.iter().any(|tab| tab.id() == reordered));
+            assert!(
+                app.sidebar_nav_focus.is_focused(window),
+                "a keyboard close leaves the sidebar's Tab stop in place"
+            );
+            assert_eq!(
+                app.sidebar_nav_target,
+                Some(SidebarNavTarget::Tab(survivor)),
+                "focus moves to a surviving domain identity, never a stale slot"
+            );
+            assert!(app.tabs.index_of(survivor).is_some());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_pointer_activation_keeps_content_focus_and_close_affordance_pointer_only(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        app.update(&mut vcx, |app, cx| {
+            app.tabs.select(0);
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        focus_pane(&app, &mut vcx, 0);
+        let row = app.update_in(&mut vcx, |app, _, _| app.sidebar_slots.borrow()[1]);
+        assert!(row.size.height > px(0.), "the second row is drawn");
+        vcx.simulate_click(row.center(), Modifiers::default());
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            assert_eq!(app.tabs.active_index(), 1);
+            let leaf = app.tabs[1].pane.first_leaf().expect("a test pane");
+            assert!(
+                leaf.contains_focused(window, cx),
+                "pointer activation keeps its established content-focus behavior"
+            );
+            assert!(!app.sidebar_nav_focus.is_focused(window));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn terminal_tab_and_arrows_stay_with_the_pty_while_content_owns_focus(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        app.update(&mut vcx, |app, cx| {
+            app.tabs.select(0);
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        focus_pane(&app, &mut vcx, 0);
+        streams[0]
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        vcx.simulate_keystrokes("tab");
+        let mut input = Vec::new();
+        while let Ok(message) = ClientMsg::read(&mut streams[0]) {
+            match message {
+                ClientMsg::Input(bytes) => {
+                    input.extend(bytes);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(input, b"\t", "Tab reaches the shell, not the sidebar");
+        app.update_in(&mut vcx, |app, window, _| {
+            assert!(!app.sidebar_nav_focus.is_focused(window));
         });
     }
 }

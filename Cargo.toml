@@ -51,27 +51,12 @@ lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install
 
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
+lyrel-code-editor = { path = "crates/lyrel-code-editor" }
 lyrel-text = { path = "crates/lyrel-text" }
 lyrel-epub = { path = "crates/lyrel-epub" }
 # GUI-free PDF reading backend adapted from the pinned Zorite MIT viewer.
 lyrel-pdf = { path = "crates/lyrel-pdf" }
 base64 = "0.23.1"
-# draw.io documents are read only as far as their page list and root: the
-# fixed engine still owns rendering. DTDs stay disabled.
-roxmltree = "0.21"
-# Position-preserving XML tokens for the ordered editable structure tree:
-# element/attribute/text/CDATA/comment/PI byte ranges and original spelling.
-# roxmltree validates well-formedness and namespace bindings; neither parser
-# is given a DTD or an external resolver, so external entities are never read.
-# MIT/Apache-2.0; see src/ui/code_editor/xml_document/UPSTREAM.toml.
-xmlparser = "=0.13.6"
-# Lossless YAML CST with source byte ranges, anchors, aliases and tags. The
-# default `binary` feature only adds base64 tag helpers, which this editor
-# does not use; keep the dependency to what the parser itself needs.
-yaml-edit = { version = "=0.3.6", default-features = false }
-# `yaml-edit` exposes its rowan syntax node types for source ranges; pin the
-# same registry version so the GUI can name that node type without re-parsing.
-rowan = "0.16"
 # Session and shell tokens are 128-bit OS entropy, never a timestamp or a
 # hash of the document. `getrandom` is already in the tree.
 getrandom = "0.3.4"
@@ -111,14 +96,6 @@ smol.workspace = true
 smallvec.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-# Lossless JSONC AST/token ranges for source-linked structure inspection.
-# MIT; the Value-backed Glim model is replaced, not wrapped (see
-# src/ui/code_editor/json_document/UPSTREAM.toml). JSON5 stays out.
-jsonc-parser = "=0.34.0"
-# Format-preserving TOML syntax with source spans for the #293 structure tree
-# and local edits. The immutable `Document::parse` tree keeps spans; the
-# `DocumentMut` conversion would despan it. MIT OR Apache-2.0.
-toml_edit = "0.25.19"
 tempfile = "3"
 # Browser session import stays desktop-local; database recovery runs in memory.
 rusqlite = { version = "0.41.0", features = ["bundled"] }
@@ -137,10 +114,6 @@ percent-encoding = "2"
 # The code editor's language-server client (`ui::lsp`). The same version
 # gpui-component's LSP hooks take their types from.
 lsp-types = { version = "0.97.0", features = ["proposed"] }
-# CSV/TSV record reading: the same reader Glim pins for its table, with
-# quoted delimiters, embedded newlines and flexible records. Source spans and
-# the parsed table are Lyrel's; this crate does not write files.
-csv = "1.4.0"
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
 encoding_rs = "0.8.35"
 
@@ -175,13 +148,6 @@ plist = "1"
 # vision won't accept, so we transcode to PNG. `image` is already in the tree via
 # gpui's own clipboard code, so pinning it here adds no new native code.
 image = "0.25"
-# The image document's GIF and multi-page TIFF decoders. Both are already in
-# the tree through `image`; naming the registry crates directly pins the same
-# image-rs implementations instead of reaching through `image`'s private
-# decoder paths. See `src/ui/code_editor/image_document/UPSTREAM.toml` for the
-# Glim GIF playback source record.
-gif = "0.14.2"
-tiff = "0.11.3"
 
 # The published transport shares gpui-pre-http-client types with Fast through Kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
@@ -285,9 +251,11 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Variant",
+    "Win32_UI_Notifications",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
+windows-core = "0.62.2"
 
 # Embeds `assets/favicon.ico` into the `.exe` so Windows shows the lyrel logo in
 # the taskbar / window / Explorer (macOS gets its icon from the `.app` bundle via
@@ -333,7 +301,12 @@ futures-channel = "0.3"
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+lyrel-core = { path = "crates/lyrel-core", features = ["test-support"] }
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+# Workbench fixtures encode images and inspect the lossless YAML tree.
+gif = "0.14.2"
+tiff = "0.11.3"
+yaml-edit = { version = "=0.3.6", default-features = false }
 # Self-made PDF fixtures for the production workbench seam; never linked into
 # the released library.
 lyrel-pdf = { path = "crates/lyrel-pdf", features = ["test-fixtures"] }
@@ -344,13 +317,14 @@ workspace = true
 [features]
 default = []
 updater = ["dep:async_zip"]
-native-markdown-tests = ["gpui-kit/test-support"]
+test-support = ["lyrel-core/test-support", "gpui-kit/test-support"]
+native-markdown-tests = ["test-support"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor；Linux 排除两个 desktop 包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-text", "crates/lyrel-epub", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-code-editor", "crates/lyrel-text", "crates/lyrel-epub", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
 
 [workspace.package]
 edition = "2024"
@@ -360,7 +334,7 @@ version = "0.3.5"
 
 [workspace.dependencies]
 # The public facade selects Fast consistently for component, base, assets and platform.
-gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
@@ -369,14 +343,14 @@ gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
 # mode stacks the daemon folds for replay stay in `lyrel-core`'s own
 # `term_modes`.
-rio-vt = { version = "=0.5.30", default-features = false }
+rio-vt = { version = "=0.5.32", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
-rio-unicode = "=0.5.30"
+rio-unicode = "=0.5.32"
 # Types plus the released `glyf` outline decoder and registry. `glyph` adds
 # skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
 # validates and retains registrations with it; the GUI decodes accepted bodies
 # for its derived picture.
-rio-graphics = { version = "=0.5.30", features = ["glyph"] }
+rio-graphics = { version = "=0.5.32", features = ["glyph"] }
 
 anyhow = "1"
 log = "0.4"
@@ -394,7 +368,7 @@ type_complexity = "allow"
 [profile.dev]
 # Keep debug/test dependency code and unwind records bounded without linker overrides.
 opt-level = 1
-codegen-units = 16
+codegen-units = 256
 debug = "limited"
 split-debuginfo = "unpacked"
 

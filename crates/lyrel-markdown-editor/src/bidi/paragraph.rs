@@ -36,8 +36,8 @@ use super::VisualMap;
 
 use gpui_kit::{
     App, AvailableSpace, Bounds, ContentMask, Element, ElementId, GlobalElementId, HighlightStyle,
-    Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString,
-    Size, TextAlign, TextRun, TextStyle, Window, WrappedLine, px,
+    Hitbox, HitboxBehavior, InspectorElementId, LayoutId, Pixels, Point, SharedString, Size,
+    TextAlign, TextRun, TextStyle, Window, WrappedLine, px,
 };
 
 /// Split `text` into lines at `breaks` (logical byte offsets, ascending) by
@@ -625,13 +625,6 @@ impl RtlText {
         highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
     ) -> Self {
         self.highlights = highlights.into_iter().collect();
-        self
-    }
-}
-
-impl IntoElement for RtlText {
-    type Element = Self;
-    fn into_element(self) -> Self::Element {
         self
     }
 }

@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 #[test]
 fn write_sends_input_frames() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 

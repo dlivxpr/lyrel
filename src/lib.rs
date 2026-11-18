@@ -164,10 +164,14 @@ fn apply_reloaded_config(
     // keymap below is: this watcher fires on every config write, and a sidebar
     // drag has no business touching the registry.
     let language_changed = cx.global::<Config>().gui_language != config.gui_language;
+    let motion_changed = cx.global::<Config>().motion_preference != config.motion_preference;
     if language_changed {
         crate::ui::i18n::set_locale(&config.gui_language);
     }
     cx.set_global(config);
+    if motion_changed {
+        crate::ui::motion::apply(cx);
+    }
     reload_themes(cx);
     crate::ui::theme::apply_cursor_hide_mode(cx);
     // The menu bar is built once from the current locale, so editing
@@ -613,6 +617,11 @@ fn handle_external_opens(urls: Vec<String>, cx: &mut App) {
 /// 启动桌面应用，保留平台初始化与进程级命令处理。
 pub fn run() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(target_os = "windows")]
+    if args.as_slice() == [std::ffi::OsStr::new("-Embedding")] {
+        crate::terminal::desktop_notification::windows_toast::run_embedding();
+        return;
+    }
     {
         if args.first().map(std::ffi::OsString::as_os_str)
             == Some(std::ffi::OsStr::new("agent-hook"))
@@ -813,6 +822,7 @@ pub fn run() {
         // The load above is reused rather than re-read: reading the same
         // file twice at launch would report the same failure twice.
         cx.set_global(config);
+        crate::ui::motion::apply(cx);
         crate::ui::theme::refresh_system_appearance(cx);
         crate::core::session::WorkspaceStore::init(cx);
         crate::ui::windows::WindowRegistry::init(cx);

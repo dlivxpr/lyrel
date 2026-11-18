@@ -2,8 +2,8 @@
 //! 连接编排只启动或退休它，不能单独推进 replay、文字或图形状态。
 
 use super::{
-    EventProxy, GraphicsViewportReporter, LinkSender, PaneEvent, ReaderSignals, ShellState,
-    TermSize,
+    EventProxy, GraphicsViewportReporter, LinkSender, PROGRAM_STATUS_PENDING_LIMIT, PaneEvent,
+    ReaderSignals, ShellState, TermSize,
 };
 use std::collections::VecDeque;
 use std::io::Read as _;
@@ -15,6 +15,7 @@ use crate::core::osc::Note;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, RemoteKind};
 use crate::daemon::transport::Stream;
 use crate::terminal::bridge::ParseBridge;
+use lyrel_core::core::program_status::ProgramStatusFrame;
 use lyrel_core::core::term_modes::KeyboardStacks;
 use parking_lot::FairMutex;
 use rio_vt::crosswords::Crosswords;
@@ -239,6 +240,8 @@ impl FrameReader {
             local_conpty,
             color_scheme_updates,
             colors,
+            program,
+            program_updates,
         } = signals;
         let mut awaiting_replay = awaiting_replay;
         proxy.parse_state.presentation.lock().unwrap().cursor = None;
@@ -597,6 +600,42 @@ impl FrameReader {
                                 "ignoring an undecodable pane colour frame ({} bytes)",
                                 frame.len()
                             ),
+                        }
+                    }
+                    DaemonMsg::ProgramStatus(frame) => {
+                        flush_batch!();
+                        let changed = program
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .apply(&frame);
+                        if changed {
+                            let mut pending = program_updates
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            let wake = pending.is_empty();
+                            if pending.len() >= PROGRAM_STATUS_PENDING_LIMIT {
+                                // A slow consumer must not lose the final state.
+                                // The authoritative projection is complete and
+                                // bounded, so replace the stale live tail with
+                                // one Baseline. That deliberately gives up live
+                                // attention/unread edges: no OS replay is faked.
+                                pending.clear();
+                                let baseline = ProgramStatusFrame::Baseline(
+                                    program
+                                        .lock()
+                                        .unwrap_or_else(|poison| poison.into_inner())
+                                        .snapshot(),
+                                );
+                                pending.push_back(baseline);
+                            } else {
+                                pending.push_back(frame);
+                            }
+                            drop(pending);
+                            // Semantics only: a hidden pane is not asked to
+                            // repaint, and the window keeps its own ack cursor.
+                            if wake {
+                                proxy.send(PaneEvent::ProgramStatusChanged);
+                            }
                         }
                     }
                     DaemonMsg::GlyphState(frame) => {
@@ -1114,7 +1153,7 @@ fn title_cuts(
 ) {
     let before = cuts.len();
     tok.feed_at(bytes, |off, payload| {
-        if lifetime.saw(payload) == TitleEffect::Retire {
+        if matches!(lifetime.saw(payload), TitleEffect::Retire) {
             cuts.push((off, ReaderCut::RetireTitle));
         }
     });

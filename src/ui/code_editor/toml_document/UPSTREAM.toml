@@ -2,7 +2,7 @@
 #
 # 固定 Glim 树没有 TOML 结构编辑器或局部 mutation 实现；本模块没有复制
 # Glim 的 TOML 源文件。可保留的交互来自 #289 已移植的
-# `src/ui/code_editor/structure_view.rs`（Glim `structured.rs` 的可见行／
+# `crates/lyrel-code-editor/src/tree.rs`（Glim `structured.rs` 的可见行／
 # 导航语义），输入面板来自 #290 的 `src/ui/code_editor/structure_edit.rs`。
 # TOML 语义、原区间、table/AoT 语句归属和局部规划由 Lyrel 在正式 registry
 # 的 `toml_edit` 上补齐。下面逐文件固定上游 revision、原始 blob SHA-256
@@ -31,7 +31,7 @@ not_imported = "`serde` feature, mutable `DocumentMut` write-back, formatter/nor
 upstream = "crates/glim-core/src/structured.rs"
 sha256 = "dc13ac6263f807fe5c8f6e06a7251d585d402ce39466452359d4b28e5a5abfac"
 bytes = 6247
-local = "src/ui/code_editor/structure_view.rs"
+local = "crates/lyrel-code-editor/src/tree.rs"
 status = "shared interaction already imported by #289; reused unchanged by TOML"
 retained = "可见行按深度优先展开、折叠状态与行索引分离、上下左右／Home／End 导航与源码行列计算"
 adapted = "TOML 投影自己实现 `Treelike`；节点语义、table/AoT 语句归属与源码范围属于 #293，不塞进通用树"
@@ -66,7 +66,7 @@ not_imported = "Glim detail 浮层、应用动作记录、菜单与 reader contr
 ticket = "#293"
 status = "added the missing TOML layer over the #289/#290 shared tree and edit panel"
 retained = "#289 的可见行／导航／源码定位语义、每文档单 worker 与 revision 安装；#290 的 `StructureEditPanel` 单／双字段面板与共享 `Document` 的 history、保存、另存为、冲突和关闭"
-adapted = "`toml_document/projection.rs` 用 `toml_edit::Document::parse` 一次读取当前 LF 源码，保存每节点的值/键/header 行与直接语句归属；ordinary table、inline table、AoT entry、dotted 和 quoted key 各保留自己的字面拼写。`toml_document/mutation.rs` 按 `(path, range, kind, key_range)` 重新解析目标，只规划最小 splice：改值、改键/表名、向表/inline 表加键、加子表/表数组、加 AoT entry、删除值/表/entry/AoT。删除不使用 `Table::span()` 或 `ArrayOfTables::span()` 当连续区间，而是逐条删除 header 行、直接 key/value 行与显式后代行，保留交错无关表。写入前重新解析结果并核对目标结构。"
+adapted = "`crates/lyrel-code-editor/src/toml/projection.rs` 用 `toml_edit::Document::parse` 一次读取当前 LF 源码，保存每节点的值/键/header 行与直接语句归属；ordinary table、inline table、AoT entry、dotted 和 quoted key 各保留自己的字面拼写。`crates/lyrel-code-editor/src/toml/mutation.rs` 按 `(path, range, kind, key_range)` 重新解析目标，只规划最小 splice：改值、改键/表名、向表/inline 表加键、加子表/表数组、加 AoT entry、删除值/表/entry/AoT。删除不使用 `Table::span()` 或 `ArrayOfTables::span()` 当连续区间，而是逐条删除 header 行、直接 key/value 行与显式后代行，保留交错无关表。写入前重新解析结果并核对目标结构。"
 replaced = "上游没有 TOML 树或 mutation；不导入 `serde_json`／Glim `format_document` 的整篇重排，不把 TOML 转成 JSON，不整篇 `DocumentMut::to_string()` 回写，也不把显示行号当身份"
 not_imported = "Glim YAML/XML 有损投影；TOML 的 JSON 化路径；全篇格式化；第二个输入面板或第二份可写内容"
 
