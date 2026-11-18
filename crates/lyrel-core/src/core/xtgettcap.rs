@@ -1,14 +1,15 @@
-//! XTGETTCAP discovery policy; the upstream parser owns request decoding.
+//! XTGETTCAP discovery policy and the desktop mirror adapter.
 //!
-//! The pure response policy and the wire-facing segment values live in
-//! `lyrel-protocol` and are re-exported here unchanged. The sniffer engine
-//! stays in this crate: it shares the daemon's graphics APC framing
-//! ([`crate::core::kitty_graphics::ApcTokenizer`]), which is terminal-image
-//! authority and does not move to `lyrel-protocol`.
+//! The bounded discovery framing filter and the pure response policy live in
+//! `lyrel-protocol` and are re-exported here unchanged, so the daemon, the
+//! desktop mirror and the CLI's capture mirror all share one framing engine.
+//! [`MirrorProcessor`] is the thin `rio-vt` adapter beside the desktop parser:
+//! it feeds only `Output` segments to the VT processor, so a non-owning
+//! terminal mirror consumes text, never XTGETTCAP. This also bounds legacy
+//! snapshots saved before the daemon extracted discovery.
 
+pub(crate) use lyrel_protocol::core::xtgettcap::Sniffer;
 pub use lyrel_protocol::core::xtgettcap::{Segment, Sniffed, response};
-
-use super::kitty_graphics::ApcTokenizer;
 
 /// A non-owning terminal mirror consumes text, never XTGETTCAP. This also
 /// bounds legacy snapshots saved before the daemon extracted discovery.
@@ -34,54 +35,6 @@ impl MirrorProcessor {
                 }
             }
         }
-    }
-}
-
-/// Strip complete, cancelled and oversized discovery requests before *any*
-/// daemon/desktop/CLI Processor. Only bounded live queries reach the owner.
-pub(crate) struct Sniffer(ApcTokenizer);
-
-impl Default for Sniffer {
-    fn default() -> Self {
-        Self(ApcTokenizer::xtgettcap())
-    }
-}
-
-impl Sniffer {
-    pub(crate) fn sniff<'a>(&mut self, bytes: &'a [u8]) -> Sniffed<'a> {
-        if self.0.at_boundary()
-            && bytes.last() != Some(&0x1b)
-            && memchr::memmem::find(bytes, b"\x1bP").is_none()
-        {
-            return Sniffed::Plain(bytes);
-        }
-        let segments = std::cell::RefCell::new(Vec::new());
-        self.0.tokenize(
-            bytes,
-            |run| {
-                let mut segments = segments.borrow_mut();
-                if let Some(Segment::Output(bytes)) = segments.last_mut() {
-                    bytes.extend_from_slice(run);
-                } else if !run.is_empty() {
-                    segments.push(Segment::Output(run.to_vec()));
-                }
-            },
-            |body, aborted, _| {
-                let mut segments = segments.borrow_mut();
-                // ESC P also interrupts a preceding unfinished control string.
-                // Preserve that cancellation without forwarding the query body.
-                segments.push(Segment::Output(vec![0x18]));
-                if !aborted {
-                    let mut query = Vec::with_capacity(body.len() + 4);
-                    query.extend_from_slice(b"\x1bP");
-                    query.extend_from_slice(body);
-                    query.extend_from_slice(b"\x1b\\");
-                    segments.push(Segment::Query(query));
-                }
-            },
-            |_, _| {},
-        );
-        Sniffed::Segments(segments.into_inner())
     }
 }
 

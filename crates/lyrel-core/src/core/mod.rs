@@ -6,7 +6,8 @@
 //! daemon, the CLI and the server. The modules listed as `pub mod` below keep
 //! effectful or authoritative implementations in this crate (the `MachineStore`
 //! persistence, the agent-history scanner, the agent-hook runner, the tokio
-//! process helper, and the graphics-coupled XTGETTCAP sniffer tests).
+//! process helper, and the XTGETTCAP owner-side tests that exercise the shared
+//! protocol framing filter).
 
 pub mod agent_history;
 pub mod agent_hooks;

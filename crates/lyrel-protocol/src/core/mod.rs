@@ -3,7 +3,8 @@
 //!
 //! Everything here is pure value/parse/helper code: configuration and SSH
 //! credential-reference naming, the machine-tree/session value models, the
-//! terminal OSC/paste/term-mode/XTGETTCAP client helpers, and the
+//! terminal OSC/paste/term-mode client helpers, the bounded XTGETTCAP
+//! discovery framing filter and response policy, and the
 //! cli-agent/agent-hooks/worktree/git helper families. Effectful authorities
 //! (the `MachineStore`, terminal image/Glyph state, SSH/PTY engines, the
 //! `Host` implementations) live in `lyrel-core`, which re-exports these
