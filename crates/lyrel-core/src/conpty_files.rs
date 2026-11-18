@@ -1,10 +1,15 @@
-//! Fixed ConPTY inputs shared by the build and Windows pane startup.
+//! The fixed ConPTY pin and its fail-closed verifier.
+//!
+//! One definition serves every consumer: the build script (which includes
+//! this file directly — build scripts cannot link the library), the daemon's
+//! Windows pane startup, and the standalone updater, which reaches it through
+//! this public module instead of a cross-crate `#[path]` include.
 use std::io;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-const MANIFEST: &str = include_str!("../../assets/windows/conpty/manifest.json");
+const MANIFEST: &str = include_str!("../../../assets/windows/conpty/manifest.json");
 pub const PREPARE_HINT: &str = "run `pwsh scripts/prepare-conpty.ps1` for a source build, or restore the matching lyrel package";
 
 pub fn architecture(arch: &str) -> Option<&'static str> {

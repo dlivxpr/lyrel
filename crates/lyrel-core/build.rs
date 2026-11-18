@@ -1,4 +1,5 @@
 #[cfg(windows)]
+#[path = "src/conpty_files.rs"]
 mod conpty_files;
 
 fn main() {
@@ -26,7 +27,7 @@ fn verify_conpty() -> std::io::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let manifest = root.join("assets/windows/conpty/manifest.json");
     println!("cargo:rerun-if-changed={}", manifest.display());
-    println!("cargo:rerun-if-changed=conpty_files.rs");
+    println!("cargo:rerun-if-changed=src/conpty_files.rs");
     println!("cargo:rerun-if-env-changed=LYREL_CONPTY_DIR");
     let source = std::env::var_os("LYREL_CONPTY_DIR")
         .map(PathBuf::from)

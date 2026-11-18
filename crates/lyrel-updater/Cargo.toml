@@ -1,0 +1,56 @@
+[package]
+name = "lyrel-updater"
+version.workspace = true
+edition.workspace = true
+description = "lyrel's standalone in-app updater: the shared update contract, plus the lyrel-updater executable that verifies, stages and installs release packages"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "lyrel_updater"
+
+[[bin]]
+name = "lyrel-updater"
+path = "src/main.rs"
+
+# The library half is the single authoritative owner of the update contract
+# shared by the GUI's update coordinator (`lyrel::core::update`) and this
+# executable: layout markers, backup naming, the VerifyPlan/InstallPlan argv
+# layouts, and the UpdateOutcome record. It deliberately builds without GPUI
+# and without lyrel-core's default extras — the Windows half needs only
+# lyrel-core's public ConPTY manifest facade, never the remote installer.
+[dependencies]
+lyrel-core = { path = "../lyrel-core", default-features = false }
+# `UpdateOutcome` persistence and the ConPTY target-manifest parsing. The
+# outcome schema crosses from this helper to the GUI, so both sides read the
+# definition from this crate instead of copy-pasting it.
+serde_json.workspace = true
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The standalone ZIP reader for portable packages: the same published release
+# the root GUI package locks, deflate only. Kept as this crate's own direct
+# dependency rather than reached for through lyrel-core's `remote-install`
+# feature, which would drag the whole HTTPS installer stack in with it.
+async_zip = { version = "0.0.19", default-features = false, features = ["deflate"] }
+smol = "2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    # `ConvertStringSecurityDescriptorToSecurityDescriptorW` + SECURITY_ATTRIBUTES:
+    # the elevated updater's %ProgramData% staging directory gets an explicit
+    # admin-only DACL (see `create_dir_admin_only` in the windows module).
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"
+
+[lints]
+workspace = true

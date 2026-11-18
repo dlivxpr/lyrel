@@ -235,19 +235,19 @@ jobs:
       - name: Check desktop production graph
         if: runner.os != 'Linux' && needs.preflight.outputs.production != 'true'
         timeout-minutes: 30
-        run: cargo check --locked --features updater --target ${{ matrix.target }}
+        run: cargo check --locked --target ${{ matrix.target }}
 
       - name: Build desktop production binaries
         if: runner.os != 'Linux' && needs.preflight.outputs.production == 'true'
         # 44152373197 的三平台冷启动中，两端仍持续编译却在 30 分钟被终止；
         # 不把旧的十分钟估计当作冷构建上限。测试与缓存失败策略不变。
         timeout-minutes: 45
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --features updater --target ${{ matrix.target }}
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --target ${{ matrix.target }}
 
       - name: Build Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 30
-        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
+        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }}
 
       # A binary that imports VCRUNTIME140.dll cannot start on a Windows
       # machine that has never installed the Visual C++ Redistributable — the
@@ -273,10 +273,10 @@ jobs:
             "target/${{ matrix.target }}/debug/lyrel-server.exe" `
             "target/${{ matrix.target }}/debug/lyrel-updater.exe"
 
-      # 测试图统一 updater,native-markdown-tests,test-support，并且所有编译/执行
+      # 测试图统一 native-markdown-tests,test-support，并且所有编译/执行
       # 步骤共用同一 --workspace 选择：windows-sys 与 tokio 的 dev-dependency
       # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
-      # （含 GUI-free 的 lyrel-document），新增成员自动进入门禁。
+      # （含 GUI-free 的 lyrel-document 与桌面 lyrel-updater），新增成员自动进入门禁。
       #
       # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
       # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；
@@ -284,18 +284,18 @@ jobs:
       - name: Compile desktop library unit tests
         if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
         timeout-minutes: 45
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --lib --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
         if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
         timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --lib --bins --tests --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --lib --bins --tests --no-run
 
       - name: Build lightweight graphics fixture
         id: graphics_fixture_build
         if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success'
         timeout-minutes: 15
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --workspace --features updater,native-markdown-tests,test-support --bin lyrel-graphics-fixture --target ${{ matrix.target }}
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --workspace --features native-markdown-tests,test-support --bin lyrel-graphics-fixture --target ${{ matrix.target }}
 
       # PR / scope=ci 没有生产 cargo build；测试图为四个 bin 生成的真实
       # 可执行文件仍必须通过 CRT 门禁，不能因事件不是 PR 就漏掉它。
@@ -317,13 +317,13 @@ jobs:
       - name: Test desktop library and headless
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 25
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} nextest run --locked --workspace --lib --bins --tests --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} nextest run --locked --workspace --lib --bins --tests --features native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
 
       # nextest 不跑 doctest；单独保留，避免文档示例随迁移悄悄变成 0 用例。
       - name: Test desktop doctests
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
         timeout-minutes: 20
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --doc --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }}
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --doc --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }}
 
       # native_* 与 cli_e2e 都是 harness=false：进程 main 自己持有原生平台、驱动
       # 真实 daemon，不经过 libtest，所以既不进 nextest，也不做名称筛选。
@@ -333,38 +333,38 @@ jobs:
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
         # harness=false 的进程 main 持有原生字体平台；不使用 libtest worker 或名称筛选。
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_markdown -- --nocapture
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --test native_markdown -- --nocapture
 
       # 与 native Markdown 相同：harness=false 的进程 main 持有原生字体平台。
       # 复用同一个已编译目标图，单独执行，避免一个目标失败吞掉另一个。
       - name: Test native terminal
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_terminal -- --nocapture
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --test native_terminal -- --nocapture
 
       # cli_e2e 的 main 自己并行驱动相互隔离的 daemon/TempDir，并直接打印结果；
       # 输出本来就未捕获，不需要再追加 -- --nocapture。
       - name: Test CLI end-to-end harness
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
         timeout-minutes: 15
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
 
       # Linux headless 只有 GUI-free 成员，生产图本身就是 --all-features；
       # 测试沿用同一选择，同样只把 harness=false 的 cli_e2e 排除在 nextest 之外。
       - name: Test Linux headless
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 20
-        run: cargo nextest run --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --lib --bins --tests --all-features --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(cli_e2e)'
+        run: cargo nextest run --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --lib --bins --tests --all-features --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(cli_e2e)'
 
       - name: Test Linux headless doctests
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 15
-        run: cargo test --doc --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
+        run: cargo test --doc --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }}
 
       - name: Test Linux CLI end-to-end harness
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 15
-        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }} --test cli_e2e
+        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }} --test cli_e2e
 
       # There is deliberately no post-mortem step here, and that is worth
       # recording, because an earlier version of this file had one: on failure it

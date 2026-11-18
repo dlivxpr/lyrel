@@ -90,6 +90,7 @@ for (const [name, files, expected] of [
   ['documentation site content is not a build input', { 'docs/docs.json': '{}', 'docs/theme.css': 'body {}' }, [false, false, false, false]],
   ['crate notices are not build inputs', { 'crates/lyrel-core/NOTICE.md': 'notice' }, [false, false, false, false]],
   ['the GUI-free document crate is validated on Linux too', { 'crates/lyrel-document/src/lib.rs': 'pub fn model() {}' }, [true, true, false, false]],
+  ['the standalone updater crate stays on the desktop platforms', { 'crates/lyrel-updater/src/windows.rs': 'pub fn run() {}' }, [true, false, false, false]],
   ['shared test-support fixtures rebuild the headless consumers too', { 'crates/lyrel-test-support/src/pty.rs': 'pub fn pty_sender() {}' }, [true, true, false, false]],
   ['cargo configuration changes rebuild every Rust target', { '.cargo/config.toml': '[target.x86_64-unknown-linux-gnu]\n' }, [true, true, true, false]],
 ]) {
