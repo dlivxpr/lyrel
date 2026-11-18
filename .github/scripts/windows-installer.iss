@@ -104,9 +104,15 @@ Source: "{#StageDir}\server\*"; DestDir: "{app}\server"; Flags: ignoreversion re
 ; all-users install alone — it cannot write {commonprograms} unelevated, and a
 ; per-user twin would both duplicate the Start Menu entry and outlive this
 ; uninstaller — so an elevated install depends on the stamp right here.
+; Keep the activator CLSID in sync with desktop_notification/windows.rs.
+#define ToastActivator "60EF7707-8F84-4911-9443-A7C8053AA5CF"
 [Icons]
-Name: "{autoprograms}\lyrel"; Filename: "{app}\lyrel-app.exe"; AppUserModelID: "io.github.dlivxpr.lyrel"
-Name: "{autodesktop}\lyrel"; Filename: "{app}\lyrel-app.exe"; Tasks: desktopicon; AppUserModelID: "io.github.dlivxpr.lyrel"
+Name: "{autoprograms}\lyrel"; Filename: "{app}\lyrel-app.exe"; AppUserModelID: "io.github.dlivxpr.lyrel"; AppUserModelToastActivatorCLSID: "{#ToastActivator}"
+Name: "{autodesktop}\lyrel"; Filename: "{app}\lyrel-app.exe"; Tasks: desktopicon; AppUserModelID: "io.github.dlivxpr.lyrel"; AppUserModelToastActivatorCLSID: "{#ToastActivator}"
+
+[Registry]
+Root: HKA; Subkey: "Software\Classes\CLSID\{{{#ToastActivator}}"; Flags: uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\CLSID\{{{#ToastActivator}}\LocalServer32"; ValueType: string; ValueData: """{app}\lyrel-app.exe"""; Flags: uninsdeletekey
 
 [Run]
 ; The registry shape lives in core::explorer_context_menu, not here: the app

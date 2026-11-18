@@ -251,9 +251,11 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Variant",
+    "Win32_UI_Notifications",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
+windows-core = "0.62.2"
 
 # Embeds `assets/favicon.ico` into the `.exe` so Windows shows the lyrel logo in
 # the taskbar / window / Explorer (macOS gets its icon from the `.app` bundle via

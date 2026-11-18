@@ -61,6 +61,25 @@ pub(crate) fn toast_app_id() -> Option<&'static str> {
     }
 }
 
+/// Build outputs may borrow branding, but only the installer-registered
+/// executable may publish the toast activator class.
+#[cfg(not(test))]
+pub(crate) fn clickable_app_id() -> Option<&'static str> {
+    use crate::terminal::desktop_notification::windows_toast::ACTIVATOR;
+    let app_id = toast_app_id()?;
+    let shortcut = all_users_shortcut_path()
+        .filter(|path| path.is_file())
+        .or_else(start_menu_shortcut_path)?;
+    let exe = std::env::current_exe().ok()?;
+    let shortcut = read_shortcut(&shortcut).ok()?;
+    (shortcut.aumid.as_deref() == Some(app_id)
+        && shortcut.activator == Some(ACTIVATOR)
+        && shortcut
+            .target
+            .is_some_and(|target| same_path(&target, &exe)))
+    .then_some(app_id)
+}
+
 enum Branding {
     /// Nothing carries our AUMID and we are not in a position to add it.
     Unavailable,
@@ -289,6 +308,8 @@ fn all_users_shortcut_path() -> Option<PathBuf> {
 struct Shortcut {
     aumid: Option<String>,
     target: Option<PathBuf>,
+    #[cfg(not(test))]
+    activator: Option<windows::core::GUID>,
 }
 
 /// Any prior COM init on this thread (`S_FALSE`) or another model
@@ -344,7 +365,15 @@ fn read_shortcut(lnk: &Path) -> Result<Shortcut, String> {
             })
             .filter(|p| !p.as_os_str().is_empty());
 
-        Ok(Shortcut { aumid, target })
+        Ok(Shortcut {
+            aumid,
+            target,
+            #[cfg(not(test))]
+            activator: store
+                .GetValue(&windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ToastActivatorCLSID)
+                .ok()
+                .and_then(|v| windows::Win32::System::Com::StructuredStorage::PropVariantToGUID(&v).ok()),
+        })
     }
 }
 

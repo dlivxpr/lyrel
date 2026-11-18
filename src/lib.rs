@@ -617,6 +617,11 @@ fn handle_external_opens(urls: Vec<String>, cx: &mut App) {
 /// 启动桌面应用，保留平台初始化与进程级命令处理。
 pub fn run() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(target_os = "windows")]
+    if args.as_slice() == [std::ffi::OsStr::new("-Embedding")] {
+        crate::terminal::desktop_notification::windows_toast::run_embedding();
+        return;
+    }
     {
         if args.first().map(std::ffi::OsString::as_os_str)
             == Some(std::ffi::OsStr::new("agent-hook"))

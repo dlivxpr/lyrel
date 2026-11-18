@@ -978,8 +978,8 @@ impl LyrelApp {
                         self.focus_leaf(&leaf, window, cx);
                     }
                     cx.notify();
+                    surface_window(window, cx);
                 }
-                surface_window(window, cx);
             }
             TrayAction::SetNotifyMode(mode) => {
                 self.update_config(cx, |cfg| cfg.notify_on_command_finish = mode)
