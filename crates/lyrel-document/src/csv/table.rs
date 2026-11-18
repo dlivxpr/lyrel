@@ -213,7 +213,7 @@ impl CsvTable {
         let mut cells = 0usize;
         let mut last_end = 0usize;
         loop {
-            if cancelled(cancel) {
+            if cancel.is_cancelled() {
                 return Err(CsvTableError::Cancelled);
             }
             let read = reader

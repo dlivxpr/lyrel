@@ -174,7 +174,7 @@ pub(crate) fn open<R: Read + Seek>(
     limits: &Limits,
     cancel: &CancelToken,
 ) -> Result<EpubBook, EpubError> {
-    cancel.check()?;
+    super::check_cancel(cancel)?;
     let mut archive = Archive::open(source, limits)?;
     let root = opf::rootfile(&mut archive, limits, cancel)?;
     let package = opf::package(&mut archive, &root, limits, cancel)?;
@@ -217,7 +217,7 @@ pub(crate) fn read_chapter<R: Read + Seek>(
     limits: &Limits,
     cancel: &CancelToken,
 ) -> Result<Chapter, EpubError> {
-    cancel.check()?;
+    super::check_cancel(cancel)?;
     let item = book.spine.get(index).ok_or_else(|| EpubError::Corrupt {
         detail: format!("chapter {index} does not exist"),
     })?;
@@ -242,7 +242,7 @@ pub(crate) fn read_chapter<R: Read + Seek>(
         let mut seen = HashSet::new();
         let mut total = 0u64;
         for source in blocks.iter().flat_map(|block| block.images.iter()) {
-            cancel.check()?;
+            super::check_cancel(cancel)?;
             if source == super::sanitize::BLOCKED_IMAGE_SRC {
                 continue;
             }

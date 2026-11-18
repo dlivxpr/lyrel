@@ -14,18 +14,20 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-/// A cancellation signal shared by every owner of one task.
-///
-/// Cloning links the same flag; [`CancelToken::linked`] combines two token
-/// sets so a detached stage can be cancelled by either its own lifecycle or
-/// the reader that started it (the workbench uses this to bridge Host
-/// transfer cancellation onto the document token).
+/// A cancellation signal shared by every copy of one task token. Projection
+/// jobs also observe the document's cancellation without cancelling their owner.
 #[derive(Clone, Debug)]
-pub struct CancelToken(Arc<Vec<Arc<AtomicBool>>>);
+pub struct CancelToken {
+    flag: Arc<AtomicBool>,
+    owner_flag: Option<Arc<AtomicBool>>,
+}
 
 impl Default for CancelToken {
     fn default() -> Self {
-        Self(Arc::new(vec![Arc::new(AtomicBool::new(false))]))
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            owner_flag: None,
+        }
     }
 }
 
@@ -34,35 +36,32 @@ impl CancelToken {
         Self::default()
     }
 
-    /// A token backed by one shared flag; cancelling either side cancels both.
-    pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
-        Self(Arc::new(vec![flag]))
-    }
-
     /// The flag this token was created with. The workbench hands it to the
     /// Host transfer layer (`transfer::CancelToken::from_flag`), so cancelling
     /// the document task also stops a bounded segment read in flight — one
     /// flag, two owners, no second cancellation authority.
     pub fn shared_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.0[0])
+        Arc::clone(&self.flag)
     }
 
-    /// A token that is cancelled when either source is.
-    pub fn linked(&self, other: &Self) -> Self {
-        Self(Arc::new(
-            self.0.iter().chain(other.0.iter()).cloned().collect(),
-        ))
-    }
-
-    /// Trip every flag this token shares with its clones.
-    pub fn cancel(&self) {
-        for flag in self.0.iter() {
-            flag.store(true, Ordering::Release);
+    fn with_owner(&self, owner: &Self) -> Self {
+        Self {
+            flag: Arc::clone(&self.flag),
+            owner_flag: Some(owner.shared_flag()),
         }
     }
 
+    /// Cancel this task and its clones, not the owning document.
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
     pub fn is_cancelled(&self) -> bool {
-        self.0.iter().any(|flag| flag.load(Ordering::Acquire))
+        self.flag.load(Ordering::Acquire)
+            || self
+                .owner_flag
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
     }
 }
 
@@ -172,7 +171,7 @@ impl<P, F> ProjectionState<P, F> {
         self.job_cancel = CancelToken::new();
         Some(ProjectionJob {
             generation: self.generation,
-            cancel: self.job_cancel.linked(&self.drop_cancel),
+            cancel: self.job_cancel.with_owner(&self.drop_cancel),
         })
     }
 
@@ -392,7 +391,7 @@ mod tests {
         state.invalidate();
         let second = state.take_job().unwrap();
         // Cancelling the older job must not resurrect or affect the newer one.
-        first.cancel();
+        first.cancel().cancel();
         assert!(first.is_cancelled());
         assert!(!second.is_cancelled());
         // Dropping the owner cancels every in-flight job.
@@ -401,12 +400,14 @@ mod tests {
     }
 
     #[test]
-    fn linked_tokens_cancel_from_either_side() {
-        let document = CancelToken::new();
-        let transfer = CancelToken::new();
-        let worker = document.linked(&transfer);
-        transfer.cancel();
+    fn a_job_observes_owner_cancellation_without_cancelling_siblings() {
+        let owner = CancelToken::new();
+        let worker = CancelToken::new().with_owner(&owner);
+        let sibling = CancelToken::new().with_owner(&owner);
+        worker.cancel();
         assert!(worker.is_cancelled());
-        assert!(!document.is_cancelled());
+        assert!(!sibling.is_cancelled());
+        owner.cancel();
+        assert!(sibling.is_cancelled());
     }
 }

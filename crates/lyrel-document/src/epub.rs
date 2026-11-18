@@ -52,6 +52,13 @@ pub use crate::state::CancelToken;
 
 use std::io::{Read, Seek};
 
+fn check_cancel(cancel: &CancelToken) -> Result<(), EpubError> {
+    if cancel.is_cancelled() {
+        return Err(EpubError::Cancelled);
+    }
+    Ok(())
+}
+
 /// Opens an archive and reads its book structure.
 ///
 /// `source` is a coherent version of the file (the caller owns its lifetime).

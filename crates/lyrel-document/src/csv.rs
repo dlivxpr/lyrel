@@ -26,7 +26,6 @@ pub enum TableInstall {
 /// One CSV/TSV document's table lifecycle. The shared text `Document`,
 /// revision checks against it, debounce and off-thread parse stay in the
 /// workbench adapter; the guard itself is [`ProjectionState`].
-#[derive(Debug)]
 pub struct CsvDocumentState {
     state: ProjectionState<CsvTable, CsvTableError>,
     parse_running: bool,

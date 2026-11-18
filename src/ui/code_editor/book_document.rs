@@ -18,11 +18,11 @@ use super::*;
 use gpui_kit::{App, Context, SharedString};
 use lyrel_core::host::transfer::SEGMENT_BYTES;
 use lyrel_core::host::{Host, HostId, MTime, Meta};
+use lyrel_document::epub::BookText;
 use lyrel_document::epub::{
     Bookmark, CancelToken, Chapter, EpubBook, EpubError, ImageMode, Limits, ReaderPrefs,
     ReaderRecord, ReadingPosition, TocEntry, locate, validate_record,
 };
-use lyrel_document::epub::BookText;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
@@ -165,7 +165,9 @@ pub(crate) fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Resul
             ),
         ));
     }
-    let mut temp = tempfile::Builder::new().prefix("lyrel-document-epub-").tempfile()?;
+    let mut temp = tempfile::Builder::new()
+        .prefix("lyrel-document-epub-")
+        .tempfile()?;
     let mut hasher = Sha256::new();
     let mut read = 0u64;
     while read < bound.len {

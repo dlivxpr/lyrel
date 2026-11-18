@@ -520,14 +520,7 @@ fn tight_budgets_and_cancellation_stop_work_visibly() {
     let mut limits = Limits::default();
     limits.block_bytes = 10;
     let file = std::fs::File::open(&fixture.path).unwrap();
-    let book = open_book(
-        file,
-        "a".repeat(64),
-        "x",
-        &limits,
-        &CancelToken::new(),
-    )
-    .unwrap();
+    let book = open_book(file, "a".repeat(64), "x", &limits, &CancelToken::new()).unwrap();
     let file = std::fs::File::open(&fixture.path).unwrap();
     assert!(matches!(
         read_chapter(
@@ -548,13 +541,7 @@ fn tight_budgets_and_cancellation_stop_work_visibly() {
     limits.chapters = 1;
     let file = std::fs::File::open(&fixture.path).unwrap();
     assert!(matches!(
-        open_book(
-            file,
-            "a".repeat(64),
-            "x",
-            &limits,
-            &CancelToken::new()
-        ),
+        open_book(file, "a".repeat(64), "x", &limits, &CancelToken::new()),
         Err(EpubError::Limit {
             resource: "chapters",
             ..

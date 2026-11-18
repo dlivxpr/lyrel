@@ -213,7 +213,7 @@ struct Sanitizer<'a> {
 
 impl Sanitizer<'_> {
     fn flatten_children(&mut self, parent: Node<'_, '_>, depth: usize) -> Result<(), EpubError> {
-        self.cancel.check()?;
+        super::check_cancel(self.cancel)?;
         if depth > self.limits.html_depth {
             return Err(EpubError::limit(
                 "HTML depth",
@@ -286,7 +286,7 @@ impl Sanitizer<'_> {
         depth: usize,
         pre: bool,
     ) -> Result<(), EpubError> {
-        self.cancel.check()?;
+        super::check_cancel(self.cancel)?;
         let mut builder = Builder::default();
         builder.sanitize_element(self, node, depth, pre)?;
         if builder.is_empty() {
@@ -296,7 +296,7 @@ impl Sanitizer<'_> {
     }
 
     fn finish_block(&mut self, mut builder: Builder) -> Result<(), EpubError> {
-        self.cancel.check()?;
+        super::check_cancel(self.cancel)?;
         if self.blocks.len() >= self.limits.blocks_per_chapter {
             return Err(EpubError::limit(
                 "chapter blocks",
@@ -460,7 +460,7 @@ impl Builder {
         depth: usize,
         pre: bool,
     ) -> Result<(), EpubError> {
-        owner.cancel.check()?;
+        super::check_cancel(owner.cancel)?;
         if depth > owner.limits.html_depth {
             return Err(EpubError::limit(
                 "HTML depth",
@@ -808,7 +808,7 @@ mod tests {
         let text = format!("<html><body><p>{}</p></body></html>", "word ".repeat(100));
         let document = roxmltree::Document::parse(&text).unwrap();
         let error =
-            sanitize_chapter(&document, "c.xhtml", &limits, &CancellationToken::new()).unwrap_err();
+            sanitize_chapter(&document, "c.xhtml", &limits, &CancelToken::new()).unwrap_err();
         assert!(matches!(
             error,
             EpubError::Limit {

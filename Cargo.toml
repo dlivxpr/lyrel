@@ -115,8 +115,7 @@ percent-encoding = "2"
 # gpui-component's LSP hooks take their types from.
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
-# Same pin as `lyrel-document`'s text codec (unified workspace declaration).
-encoding_rs = "0.8.44"
+encoding_rs.workspace = true
 
 
 # SSH profile ids in the connection manager UI (`ui::ssh_connect`,
@@ -337,6 +336,8 @@ edition = "2024"
 version = "0.3.5"
 
 [workspace.dependencies]
+encoding_rs = "0.8.44"
+
 # The public facade selects Fast consistently for component, base, assets and platform.
 gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 

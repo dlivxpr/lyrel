@@ -287,8 +287,16 @@ pub(crate) struct PdfView {
     text_queue: VecDeque<usize>,
     text_jobs: usize,
     // 拖拽选区：进行中的 (页, 起点, 当前点)，完成后只留 (页, 起点, 终点)。
-    sel_drag: Option<(usize, lyrel_document::pdf::NormPoint, lyrel_document::pdf::NormPoint)>,
-    text_sel: Option<(usize, lyrel_document::pdf::NormPoint, lyrel_document::pdf::NormPoint)>,
+    sel_drag: Option<(
+        usize,
+        lyrel_document::pdf::NormPoint,
+        lyrel_document::pdf::NormPoint,
+    )>,
+    text_sel: Option<(
+        usize,
+        lyrel_document::pdf::NormPoint,
+        lyrel_document::pdf::NormPoint,
+    )>,
     // 文档内查找：输入框、结果、当前命中与扫掠身份。
     find_open: bool,
     find_input: Entity<InputState>,
@@ -465,7 +473,11 @@ impl PdfView {
     }
 
     pub(crate) fn zoom_label(&self) -> SharedString {
-        format!("{:.0}%", self.page_width() / lyrel_document::pdf::PAGE_WIDTH * 100.).into()
+        format!(
+            "{:.0}%",
+            self.page_width() / lyrel_document::pdf::PAGE_WIDTH * 100.
+        )
+        .into()
     }
 
     pub(crate) fn status_text(&self, cx: &App) -> SharedString {
@@ -530,7 +542,8 @@ impl PdfView {
                     .viewport
                     .map(|size| f32::from(size.height))
                     .unwrap_or(900.);
-                let available_height = (viewport_height - 2. * lyrel_document::pdf::PAGE_PAD_Y).max(32.);
+                let available_height =
+                    (viewport_height - 2. * lyrel_document::pdf::PAGE_PAD_Y).max(32.);
                 available_width.min(available_height * page_width / page_height.max(1.))
             }
             None => lyrel_document::pdf::PAGE_WIDTH * self.zoom,
@@ -561,8 +574,9 @@ impl PdfView {
                 / lyrel_document::pdf::display_height(dim, previous_width).max(1.);
             let width = self.page_width();
             let viewport = self.viewport.unwrap_or_else(|| self.scroll.bounds().size);
-            let max_y =
-                (lyrel_document::pdf::content_height(&self.dims, width) - f32::from(viewport.height)).max(0.);
+            let max_y = (lyrel_document::pdf::content_height(&self.dims, width)
+                - f32::from(viewport.height))
+            .max(0.);
             let max_x = (width + 2. * PAGE_PAD_X - f32::from(viewport.width)).max(0.);
             // 保留当前页内的阅读锚点，包括查找定位在页顶之前留下的少量留边。
             // 旧像素偏移不能直接用于新页宽，否则长文档会退回前面数页。
@@ -682,7 +696,11 @@ impl PdfView {
 
     /// 跳到一个大纲／链接目的地：带坐标时把目标点放到视口顶部留边，
     /// 否则整页对齐；x 坐标只在页面比视口宽时水平居中该点。
-    fn go_to_destination(&mut self, destination: &lyrel_document::pdf::Destination, cx: &mut Context<Self>) {
+    fn go_to_destination(
+        &mut self,
+        destination: &lyrel_document::pdf::Destination,
+        cx: &mut Context<Self>,
+    ) {
         if self.dims.is_empty() {
             return;
         }
@@ -1106,7 +1124,10 @@ impl PdfView {
 
     /// 窗口坐标点到 (页, 归一化页内坐标)。页面在滚动列里的实际几何由
     /// scroll bounds、偏移和纯布局函数推出，不依赖该页是否已光栅化。
-    fn point_to_page(&self, position: Point<Pixels>) -> Option<(usize, lyrel_document::pdf::NormPoint)> {
+    fn point_to_page(
+        &self,
+        position: Point<Pixels>,
+    ) -> Option<(usize, lyrel_document::pdf::NormPoint)> {
         if self.dims.is_empty() {
             return None;
         }
@@ -1197,7 +1218,10 @@ impl PdfView {
         cx.notify();
     }
 
-    fn sync_document(&mut self, cx: &mut Context<Self>) -> Option<Arc<lyrel_document::pdf::PdfDocument>> {
+    fn sync_document(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<lyrel_document::pdf::PdfDocument>> {
         let (revision, ready) = {
             let document = self.document.read(cx);
             (document.revision(), document.ready())
@@ -1294,7 +1318,8 @@ impl PdfView {
         let document_id = self.document.entity_id();
         let revision = self.revision;
         for (index, attempt) in to_render {
-            let scale = lyrel_document::pdf::render_scale(page_width, scale_factor, self.dims[index].0);
+            let scale =
+                lyrel_document::pdf::render_scale(page_width, scale_factor, self.dims[index].0);
             let document = document.clone();
             let cancel = self.cancel.clone();
             #[cfg(test)]
@@ -1577,7 +1602,9 @@ impl PdfView {
                 .id(SharedString::from(format!("pdf-page-{index}")))
                 .test_support()
                 .absolute()
-                .top(px(lyrel_document::pdf::page_top_y(&self.dims, page_width, index)))
+                .top(px(lyrel_document::pdf::page_top_y(
+                    &self.dims, page_width, index,
+                )))
                 .left(gpui_kit::relative(0.5))
                 .ml(px(-page_width / 2.))
                 .w(px(page_width))
@@ -1881,7 +1908,11 @@ impl PdfView {
 
     /// 大纲面板：缩进的书签列表，点击或键盘 Enter 跳到各自目的地。
     /// 没有目的地的条目灰显且不可点，不假装能导航。
-    fn render_toc(&self, document: &lyrel_document::pdf::PdfDocument, cx: &mut Context<Self>) -> AnyElement {
+    fn render_toc(
+        &self,
+        document: &lyrel_document::pdf::PdfDocument,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut column = div()
             .id("pdf-toc")
             .test_support()
@@ -2017,7 +2048,9 @@ fn field_overlay(
         .aria_label(field.value.clone())
         .absolute()
         .left(px(rect.x * page_width))
-        .top(px(rect.y * lyrel_document::pdf::display_height(page_dim, page_width)))
+        .top(px(
+            rect.y * lyrel_document::pdf::display_height(page_dim, page_width)
+        ))
         .w(px(width))
         .h(px(height))
         .px(px((scale * 2.).min(6.)))

@@ -82,7 +82,7 @@ impl<R: Read + Seek> Archive<R> {
         limit: u64,
         cancel: &CancelToken,
     ) -> Result<Vec<u8>, EpubError> {
-        cancel.check()?;
+        super::check_cancel(cancel)?;
         let mut file = self.zip.by_name(name).map_err(|error| match error {
             zip::result::ZipError::FileNotFound => EpubError::Missing {
                 entry: name.to_owned(),
@@ -120,7 +120,7 @@ impl<R: Read + Seek> Archive<R> {
         let mut chunk = [0u8; 16 * 1024];
         let mut read = 0u64;
         loop {
-            cancel.check()?;
+            super::check_cancel(cancel)?;
             let count = file.read(&mut chunk)?;
             if count == 0 {
                 break;

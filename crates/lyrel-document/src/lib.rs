@@ -27,27 +27,27 @@
 pub mod text;
 
 #[cfg(feature = "formats")]
-pub mod state;
-#[cfg(feature = "formats")]
-pub mod tree;
-#[cfg(feature = "formats")]
-pub mod json;
-#[cfg(feature = "formats")]
-pub mod toml;
-#[cfg(feature = "formats")]
-pub mod yaml;
-#[cfg(feature = "formats")]
-pub mod xml;
-#[cfg(feature = "formats")]
 pub mod csv;
-#[cfg(feature = "formats")]
-pub mod image;
 #[cfg(feature = "formats")]
 pub mod drawio;
 #[cfg(feature = "formats")]
 pub mod epub;
 #[cfg(feature = "formats")]
+pub mod image;
+#[cfg(feature = "formats")]
+pub mod json;
+#[cfg(feature = "formats")]
 pub mod pdf;
+#[cfg(feature = "formats")]
+pub mod state;
+#[cfg(feature = "formats")]
+pub mod toml;
+#[cfg(feature = "formats")]
+pub mod tree;
+#[cfg(feature = "formats")]
+pub mod xml;
+#[cfg(feature = "formats")]
+pub mod yaml;
 
 #[cfg(feature = "formats")]
 pub use state::{CancelToken, ProjectionJob, ProjectionResult, ProjectionState};

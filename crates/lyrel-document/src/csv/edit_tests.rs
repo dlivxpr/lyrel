@@ -1,8 +1,8 @@
 //! 局部编辑的纯字节回归：只验证“哪些字节被替换、替换成什么”，
 //! 不经过 GUI。工作台层的真实输入／历史／保存另见 `tests.rs`。
 
-use super::super::table::DEFAULT_LIMITS;
 use super::super::CancelToken;
+use super::super::table::DEFAULT_LIMITS;
 use super::*;
 
 fn parse(text: &str, revision: u64) -> CsvTable {

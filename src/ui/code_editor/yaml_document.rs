@@ -28,9 +28,7 @@ use gpui_kit::{
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 
 use lyrel_document::tree::{self, SourceLocation, Treelike, VisibleRow};
-use lyrel_document::yaml::mutation::{
-    self, Mutation, MutationError, NodeTarget, UnsupportedEdit,
-};
+use lyrel_document::yaml::mutation::{self, Mutation, MutationError, NodeTarget, UnsupportedEdit};
 use lyrel_document::yaml::projection::{
     self, ContainerKind, ProjectionFailure, STRUCTURE_DEPTH, STRUCTURE_INPUT_BYTES,
     STRUCTURE_NODES, YamlNodeKind, YamlProjection, YamlScalarKind,
@@ -544,7 +542,11 @@ impl YamlView {
             .update(cx, |source, cx| source.set_soft_wrap(wrap, cx));
     }
 
-    pub(crate) fn set_format(&mut self, format: lyrel_document::text::TextFormat, cx: &mut Context<Self>) {
+    pub(crate) fn set_format(
+        &mut self,
+        format: lyrel_document::text::TextFormat,
+        cx: &mut Context<Self>,
+    ) {
         self.source
             .update(cx, |source, cx| source.set_format(format, cx));
     }

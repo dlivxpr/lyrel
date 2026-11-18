@@ -233,7 +233,9 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok()
+            })
             .is_some_and(|record| {
                 record.reading.chapter == 1
                     && record.bookmarks.len() == 1
@@ -391,7 +393,9 @@ fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut T
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok()
+            })
             .is_some_and(|record| {
                 record.reading.chapter == 0
                     && record.reading.fraction > 0.99

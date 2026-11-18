@@ -350,7 +350,7 @@ fn parse_nav(
     };
     let mut entries = Vec::new();
     for link in descendants(toc, "a") {
-        cancel.check()?;
+        super::check_cancel(cancel)?;
         if entries.len() >= limits.toc_entries {
             return Err(EpubError::limit("TOC entries", limits.toc_entries as u64));
         }
@@ -380,7 +380,7 @@ fn parse_ncx(
 ) -> Result<Vec<TocEntry>, EpubError> {
     let mut entries = Vec::new();
     for point in descendants(document.root_element(), "navPoint") {
-        cancel.check()?;
+        super::check_cancel(cancel)?;
         if entries.len() >= limits.toc_entries {
             return Err(EpubError::limit("TOC entries", limits.toc_entries as u64));
         }

@@ -417,7 +417,11 @@ impl SvgView {
             .update(cx, |source, cx| source.set_soft_wrap(wrap, cx));
     }
 
-    pub(crate) fn set_format(&mut self, format: lyrel_document::text::TextFormat, cx: &mut Context<Self>) {
+    pub(crate) fn set_format(
+        &mut self,
+        format: lyrel_document::text::TextFormat,
+        cx: &mut Context<Self>,
+    ) {
         self.source
             .update(cx, |source, cx| source.set_format(format, cx));
     }

@@ -440,8 +440,7 @@ impl LiveSession {
         if !self.ready || self.failed {
             return Err(Reject("not-ready"));
         }
-        if seq == 0 || body.is_empty() || body.len() > lyrel_document::drawio::MAX_DOCUMENT_BYTES
-        {
+        if seq == 0 || body.is_empty() || body.len() > lyrel_document::drawio::MAX_DOCUMENT_BYTES {
             return Err(Reject("commit-size"));
         }
         if seq < self.last_commit || (seq == self.last_commit && !sync) {

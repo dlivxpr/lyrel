@@ -80,12 +80,7 @@ pub struct SearchOutput {
 }
 
 /// Matches `query` across every chapter, stopping at the hit budget.
-pub fn search(
-    book: &BookText,
-    query: &str,
-    limits: &Limits,
-    cancel: &CancelToken,
-) -> SearchOutput {
+pub fn search(book: &BookText, query: &str, limits: &Limits, cancel: &CancelToken) -> SearchOutput {
     let mut output = SearchOutput::default();
     if query.is_empty() || query.len() > MAX_QUERY_BYTES {
         return output;
@@ -199,12 +194,7 @@ mod tests {
             ],
             bytes: 0,
         };
-        let output = search(
-            &book,
-            "needle",
-            &Limits::default(),
-            &CancelToken::new(),
-        );
+        let output = search(&book, "needle", &Limits::default(), &CancelToken::new());
         assert_eq!(output.hits.len(), 2);
         assert_eq!(output.hits[0].chapter, 0);
         assert_eq!(output.hits[0].block, 0);
@@ -221,12 +211,7 @@ mod tests {
             chapters: vec![chapter(0, &[&block])],
             bytes: block.len(),
         };
-        let output = search(
-            &book,
-            query,
-            &Limits::default(),
-            &CancelToken::new(),
-        );
+        let output = search(&book, query, &Limits::default(), &CancelToken::new());
         let [hit] = output.hits.as_slice() else {
             panic!("the full Unicode query must identify exactly one passage");
         };
