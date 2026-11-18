@@ -66,7 +66,7 @@ pub(super) struct FileHost {
 impl FileHost {
     pub(super) fn new(id: HostId) -> Arc<Self> {
         Arc::new(Self {
-            inner: lyrel_core::host::local::LocalHost::new(),
+            inner: lyrel_core::host::local::new(),
             id,
             gate: Mutex::new(None),
             entered: Arc::new(AtomicBool::new(false)),

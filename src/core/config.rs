@@ -77,9 +77,16 @@ fn assert_scratch_config_dir(what: &str) {
 
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) fn pin_test_config_dir() {
-    let dir = std::env::temp_dir().join(format!("lyrel-covtest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).ok();
-    set_config_dir(dir);
+    static PIN: std::sync::Once = std::sync::Once::new();
+    PIN.call_once(|| {
+        // The override lives for the process, but PID reuse must not import
+        // a previous test process's files or permissions.
+        let dir = tempfile::Builder::new()
+            .prefix("lyrel-covtest-")
+            .tempdir()
+            .expect("create isolated GUI test config directory");
+        set_config_dir(dir.keep());
+    });
 }
 
 impl std::ops::Deref for Config {
