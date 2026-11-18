@@ -24,10 +24,9 @@ use gpui_kit::{
     AnyElement, App, Context, ElementId, Entity, FocusHandle, Focusable, ListState, Render,
     SharedString, Subscription, Task, Window, div, px, relative, rems,
 };
-use lyrel_document::epub::search as book_search;
-use lyrel_document::epub::search::SearchHit;
 use lyrel_document::epub::{
-    CancelToken, Limits, ReaderPrefs, ReaderTheme, ReadingPosition, html_with_marks,
+    CancelToken, Limits, ReaderPrefs, ReaderTheme, ReadingPosition, SearchHit, SearchOutput,
+    html_with_marks, search as search_book,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -902,9 +901,9 @@ impl BookView {
         let query_for_task = query.clone();
         cx.spawn(async move |this, cx| {
             let output = cx
-                .background_spawn(async move {
-                    book_search::search(&text, &query_for_task, &limits, &cancel)
-                })
+                .background_spawn(
+                    async move { search_book(&text, &query_for_task, &limits, &cancel) },
+                )
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.install_search(generation, query, output, cx)
@@ -918,7 +917,7 @@ impl BookView {
         &mut self,
         generation: u64,
         query: String,
-        output: book_search::SearchOutput,
+        output: SearchOutput,
         cx: &mut Context<Self>,
     ) {
         if generation != self.search_generation || query != self.search_query {

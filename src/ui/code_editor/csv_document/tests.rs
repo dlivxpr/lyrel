@@ -6,6 +6,7 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 fn settle(cx: &mut VisualTestContext) {

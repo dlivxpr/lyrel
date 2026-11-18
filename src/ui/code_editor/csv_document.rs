@@ -31,6 +31,7 @@ use lyrel_document::csv::table;
 use lyrel_document::csv::table::{
     CsvCellId, CsvSort, CsvTable, CsvTableError, DEFAULT_LIMITS, DETAIL_CHARS,
 };
+use lyrel_document::text::TextFormat;
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 use std::sync::Arc;
 
