@@ -207,7 +207,7 @@ impl LyrelApp {
         self.editor_open_on_host_at(host, path, None, window, cx);
     }
 
-    fn editor_open_on_host_at(
+    pub(crate) fn editor_open_on_host_at(
         &mut self,
         host: SharedHost,
         path: &Path,
@@ -277,7 +277,7 @@ impl LyrelApp {
 
     /// The `OpenCompleted` placement: a split-group target lands in the other
     /// group; everything else lands in the tab's own strip.
-    fn editor_show_open_target(
+    pub(super) fn editor_show_open_target(
         &mut self,
         tab: TabId,
         group: Option<crate::ui::code_editor::GroupId>,
@@ -718,18 +718,20 @@ impl LyrelApp {
                 .is_some()
     }
 
+    pub(crate) fn active_editor_input(
+        &self,
+        cx: &App,
+    ) -> Option<crate::ui::code_editor::EditorInput> {
+        let tab = self.tabs.get(self.tabs.active_index())?.id();
+        self.editor
+            .read(cx)
+            .active_editor_input(tab, self.tab_code()?)
+    }
+
     pub(crate) fn editor_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
-        let (Some(tab), Some(code)) = (
-            self.tabs.get(self.tabs.active_index()).map(|t| t.id()),
-            self.tab_code(),
-        ) else {
-            return false;
-        };
         self.code_panel_visible()
             && self
-                .editor
-                .read(cx)
-                .active_editor_input(tab, code)
+                .active_editor_input(cx)
                 .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
 
@@ -779,7 +781,12 @@ impl LyrelApp {
             .update(cx, |editor, cx| editor.save(id, force, &root, window, cx));
     }
 
-    fn editor_save_as(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn editor_save_as(
+        &mut self,
+        id: BufferId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let root = self.editor_save_root();
         self.editor
             .update(cx, |editor, cx| editor.save_as(id, &root, window, cx));
@@ -920,7 +927,7 @@ impl LyrelApp {
 
     /// Closes the file with this buffer in the front tab's strip, wherever
     /// it has moved to since a menu was built for it.
-    pub(super) fn editor_close_buffer(
+    pub(crate) fn editor_close_buffer(
         &mut self,
         id: BufferId,
         window: &mut Window,
@@ -1258,7 +1265,7 @@ impl LyrelApp {
         }
     }
 
-    pub(super) fn editor_restore_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn editor_restore_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
             return;
         };
@@ -1277,7 +1284,7 @@ impl LyrelApp {
         });
     }
 
-    pub(super) fn editor_record_sessions(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn editor_record_sessions(&mut self, cx: &mut Context<Self>) {
         let spawn_host = self.spawn_host(cx);
         let mut changed: Vec<(TabId, crate::ui::editor_session::TabEditor)> = Vec::new();
         for tab in &self.tabs {
@@ -1521,6 +1528,23 @@ impl LyrelApp {
             EditorPanelEvent::OpenExternally { host, path } => {
                 self.open_outside_the_editor(*host, path, window, cx)
             }
+            EditorPanelEvent::FollowLink {
+                buffer,
+                source,
+                host,
+                path,
+                anchor,
+                revision,
+            } => self.editor_follow_link(
+                *buffer,
+                *source,
+                host.clone(),
+                path,
+                anchor.clone(),
+                *revision,
+                window,
+                cx,
+            ),
             EditorPanelEvent::FocusTerminal => self.focus_active(window, cx),
             EditorPanelEvent::FocusFileTree => {
                 self.file_tree.focus_handle.focus(window, cx);
@@ -1627,7 +1651,7 @@ impl LyrelApp {
 
     /// Runs one of the desktop openers on a local file, and says so when it
     /// fails to spawn — as any opener can (#542).
-    fn open_with(
+    pub(super) fn open_with(
         path: &Path,
         opener: fn(&Path) -> std::io::Result<()>,
         window: &mut Window,

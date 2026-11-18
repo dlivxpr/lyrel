@@ -1767,7 +1767,7 @@ impl Render for XmlView {
 }
 
 /// 右侧菜单的 XML 项：结构／源码切换；其余编辑命令仍由普通文本菜单提供。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator().menu(

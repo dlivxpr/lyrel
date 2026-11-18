@@ -583,7 +583,9 @@ impl LspStore {
         let (app, buffer) = (doc.app.clone(), doc.owner_id);
         cx.defer(move |cx| {
             let _ = app.update(cx, |app, cx| {
-                app.editor_set_document_symbols(buffer, None, cx)
+                app.editor.update(cx, |editor, cx| {
+                    editor.set_document_symbols(buffer, None, cx)
+                });
             });
         });
         let key = doc.server.clone();
@@ -738,7 +740,9 @@ impl LspStore {
                     // empty list — leaves the tree's outline in place.
                     let outline = (!outline.is_empty()).then_some(outline);
                     let _ = app.update(cx, |app, cx| {
-                        app.editor_set_document_symbols(buffer, outline, cx)
+                        app.editor.update(cx, |editor, cx| {
+                            editor.set_document_symbols(buffer, outline, cx)
+                        });
                     });
                 }
             });

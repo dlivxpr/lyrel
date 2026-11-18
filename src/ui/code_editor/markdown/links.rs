@@ -1,7 +1,13 @@
 //! Lyrel-owned ordinary file/URL navigation. Notebook/wiki constructs stay source-only.
+//!
+//! This module is pure resolution: it turns a raw link into a [`Target`] and
+//! locates a heading anchor in document text. Following a link is split by
+//! the editor inversion (#327): same-document anchors and external URLs stay
+//! with the editor (`EditorPanelState::follow_link`), while locating the
+//! presentation's tab/group and opening a file destination is shell work
+//! (`ui::app::editor_links`).
 use super::super::*;
 use lyrel_core::host::Host;
-use lyrel_markdown_editor::EditorState as MarkdownEditor;
 use std::io;
 
 pub(super) enum Target {
@@ -101,7 +107,7 @@ fn decode(value: &str) -> Result<String, L10nKey> {
     Ok(value)
 }
 
-fn anchor_position(source: &str, anchor: &str) -> Option<Position> {
+pub(super) fn anchor_position(source: &str, anchor: &str) -> Option<Position> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut fence: Option<(char, usize)> = None;
     for (row, line) in source.lines().enumerate() {
@@ -154,143 +160,21 @@ fn anchor_position(source: &str, anchor: &str) -> Option<Position> {
     None
 }
 
-pub(super) fn follow(
-    app: &mut LyrelApp,
-    id: BufferId,
-    source: &Entity<MarkdownEditor>,
-    raw: &str,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-) {
-    let Some(file) = app.editor.buffers.get(id) else {
-        return;
-    };
-    let host = file.host.clone();
-    let path = file.untitled.is_none().then(|| file.path.clone());
-    let revision = source.read(cx).document().read(cx).revision();
-    let target = match resolve(&*host, path.as_deref(), raw) {
-        Ok(target) => target,
-        Err(reason) => {
-            window.notify_app(
-                t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(reason))]),
-                cx,
-            );
-            return;
-        }
-    };
-    let (path, anchor) = match target {
-        Target::External(url) => {
-            cx.open_url(url.as_str());
-            return;
-        }
-        Target::Anchor(anchor) => {
-            let position = anchor_position(source.read(cx).text(), &anchor);
-            if let Some(position) = position {
-                let offset = source
-                    .read(cx)
-                    .offset_for_line_column(position.line as usize, position.character as usize);
-                source.update(cx, |view, cx| view.select_range(offset..offset, cx));
-            } else {
-                window.notify_app(t(L10nKey::MarkdownLinkAnchorNotFound), cx);
-            }
-            return;
-        }
-        Target::File(path, anchor) => (path, anchor),
-    };
-    let Some((tab, group)) = app.tabs.iter().find_map(|tab| {
-        let code = tab.code.as_ref()?;
-        std::iter::once(code.group)
-            .chain(code.split.as_ref().map(|other| other.id))
-            .find_map(|group| {
-                file.presentations
-                    .markdown_existing(tab.id(), group)
-                    .filter(|view| view == source)
-                    .map(|_| (tab.id(), group))
-            })
-    }) else {
-        return;
-    };
-    let target = buffers::OpenTarget {
-        workspace: app.workspace,
-        tab,
-        group: Some(group),
-        window_host: app.spawn_host(cx),
-        origin: Some((id, revision)),
-        origin_epoch: app.editor_resource_epoch(id, cx),
-    };
-    if let Some(anchor) = anchor {
-        let requested = path.clone();
-        let destination_host = host.clone();
-        // Decode on the same owning Host, never by opening a local lookalike.
-        HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| -> io::Result<Position> {
-                let bytes = h.read_file(&requested, 4 * 1024 * 1024)?;
-                let source = lyrel_document::text::decode_source(&bytes)?.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        t(L10nKey::MarkdownLinkInvalidDestination),
-                    )
-                })?;
-                anchor_position(&source.text, &anchor).ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        t(L10nKey::MarkdownLinkAnchorNotFound),
-                    )
-                })
-            },
-            move |app, result, window, cx| {
-                if !app.editor_open_target_valid(target, cx) {
-                    return;
-                }
-                match result {
-                    Ok(cursor) => open(
-                        app,
-                        destination_host,
-                        &path,
-                        Some(cursor),
-                        target,
-                        window,
-                        cx,
-                    ),
-                    Err(error) => {
-                        HostOps::notify_err(window, cx, t(L10nKey::MarkdownFollowLink), &error)
-                    }
-                }
-            },
-        );
-    } else {
-        open(app, host, &path, None, target, window, cx);
-    }
-}
-
-fn open(
-    app: &mut LyrelApp,
-    host: SharedHost,
-    path: &Path,
-    cursor: Option<Position>,
-    target: buffers::OpenTarget,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-) {
-    if !app.editor_open_target_valid(target, cx) {
-        return;
-    }
-    let reused = app.editor.buffers.open(
-        host,
-        path,
-        cursor,
-        target,
-        window,
-        cx,
-        |app| &mut app.editor.buffers,
-        EditorPanelState::buffer_edited,
-        LyrelApp::editor_open_target_valid,
-        LyrelApp::editor_opened,
-    );
-    if let Some(id) = reused {
-        app.editor_show_open_target(target, id, true, window, cx);
-    }
+/// Finds where a `#anchor` lands in the document at `path`, read on its
+/// owning Host — never by opening a local lookalike. The 4 MiB cap matches
+/// the bounded read the old link follower used.
+pub(crate) fn locate_anchor(host: &dyn Host, path: &Path, anchor: &str) -> io::Result<Position> {
+    let bytes = host.read_file(path, 4 * 1024 * 1024)?;
+    let source = lyrel_document::text::decode_source(&bytes)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            t(L10nKey::MarkdownLinkInvalidDestination),
+        )
+    })?;
+    anchor_position(&source.text, anchor).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            t(L10nKey::MarkdownLinkAnchorNotFound),
+        )
+    })
 }

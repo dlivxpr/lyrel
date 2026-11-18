@@ -71,8 +71,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn sqlite_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<SqliteView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .sqlite()
             .expect("a SQLite document")
@@ -85,8 +85,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path && file.input.sqlite().is_some())
         })
     });
@@ -186,20 +186,25 @@ fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAp
         view.read_with(cx, |view, _| view.state.total == Some(501))
     });
 
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.sqlite().is_some(), "a SQLite document");
         assert!(!file.dirty, "a database is never unsaved");
         assert!(!file.input.is_text(), "no fake text buffer");
         assert_eq!(file.path, path);
-        assert!(app.sqlite_document_active());
+        assert!(app.sqlite_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, path.clone()))
         );
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "a database is not a language-server text file"
         );
     });
@@ -290,12 +295,12 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         app.editor_open_on_host(second, &local_path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.tab_code()
                 .and_then(TabCode::active_id)
                 .is_some_and(|id| id != local)
                 && app
-                    .editor_active_location()
+                    .editor_active_location(cx)
                     .is_some_and(|(host, _)| host == HostId(69))
         })
     });
@@ -312,8 +317,8 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         app.editor_open_on_host(mapped, Path::new("/data.sqlite"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.editor_active_location()
+        app.read_with(cx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, _)| host == HostId(70))
         })
     });
@@ -376,7 +381,7 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
     });
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .filter(|file| file.path == empty)
                 .and_then(|file| file.input.sqlite().cloned())
                 .is_some_and(|view| {
@@ -404,8 +409,8 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx), "the database splits");
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            let Some(file) = app.editor.buffers.get(id) else {
+        app.read_with(cx, |app, cx| {
+            let Some(file) = app.editor.read(cx).buffers.get(id) else {
                 return false;
             };
             let Some(code) = app.tab_code() else {
@@ -423,8 +428,13 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
         })
     });
 
-    let (primary, second, first_group, second_group) = app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("retained document");
+    let (primary, second, first_group, second_group) = app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("retained document");
         let code = app.tab_code().expect("visible editor group");
         let tab = app
             .tabs

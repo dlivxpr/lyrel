@@ -1202,7 +1202,7 @@ impl Render for ImageView {
 }
 
 /// 右侧菜单里的取景与翻页命令，和快捷键、工具栏按钮是同一组动作。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
     multipage: bool,
 ) -> gpui_kit::component::menu::PopupMenu {

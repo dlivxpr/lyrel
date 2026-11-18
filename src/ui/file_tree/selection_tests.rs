@@ -206,8 +206,8 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
         &mut vcx,
         "opening the newly created file in the editor",
         |vcx| {
-            app.read_with(vcx, |app, _| {
-                app.editor_active_location()
+            app.read_with(vcx, |app, cx| {
+                app.editor_active_location(cx)
                     .is_some_and(|(host, path)| host == HostId::LOCAL && path == expected_child)
             })
         },

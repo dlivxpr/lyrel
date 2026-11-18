@@ -63,8 +63,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn yaml_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<YamlView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .yaml()
             .expect("a YAML document")
@@ -96,8 +96,8 @@ fn open(
         app.editor_open_on_host(host, &at, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.yaml().is_some())
         })
     });
@@ -214,8 +214,8 @@ fn type_edit_value(view: &Entity<YamlView>, cx: &mut VisualTestContext, text: &s
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -328,16 +328,21 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
 
     let (id, view) = open_ready(&app, &mut cx, host.clone(), &path);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(!file.dirty, "an untouched YAML opens clean");
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "native YAML is not a code language-service file"
         );
-        assert!(app.yaml_document_active());
+        assert!(app.yaml_document_active(cx));
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.mode()),
@@ -579,7 +584,7 @@ fn mapped_host_multi_document_anchors_tags_and_exact_save(tcx: &mut TestAppConte
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -744,7 +749,8 @@ fn utf16le_bom_and_line_endings_survive_a_tree_edit(tcx: &mut TestAppContext) {
     app.read_with(&cx, |app, cx| {
         let format = app
             .editor
-            .buffers
+            .read(cx)
+            .buffers()
             .get(id)
             .expect("document")
             .format(cx)
@@ -782,7 +788,7 @@ fn utf16le_bom_and_line_endings_survive_a_tree_edit(tcx: &mut TestAppContext) {
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -816,8 +822,8 @@ fn stale_and_invalid_source_reject_tree_edits_and_late_results_are_dropped(
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("YAML buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("YAML buffer");
         (
             file.presentations.yaml_existing(tab, right).expect("front"),
             file.presentations.yaml_existing(tab, left).expect("other"),
@@ -1024,7 +1030,7 @@ fn budget_limits_keep_source_editable_and_hide_tree_edits(tcx: &mut TestAppConte
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     open(&app, &mut cx, host, &many_path);
     let many = yaml_view(&app, &cx);
@@ -1053,7 +1059,7 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     click_row(&view, &mut cx, "$[\"text\"]");
@@ -1065,8 +1071,8 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -1086,8 +1092,8 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     host.fail_next_write();
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1109,15 +1115,15 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     );
     assert!(source_text(&app, &cx).contains("\"kept\""));
     assert!(
-        app.read_with(&cx, |app, _| app
-            .active_buffer()
+        app.read_with(&cx, |app, cx| app
+            .active_buffer(cx)
             .is_some_and(|file| file.dirty)),
         "the committed tree edit must be dirty before the external rewrite"
     );
     std::fs::write(&target, b"text: external\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -1139,8 +1145,8 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
         "the tree edit reaches the shared source"
     );
     assert!(
-        app.read_with(&cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.dirty)
+        app.read_with(&cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.dirty)
         }),
         "the applied tree edit leaves the document dirty"
     );
@@ -1157,7 +1163,7 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "cancelled close keeps the document"
     );
     save(&app, &mut cx);
@@ -1168,7 +1174,7 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &target);
     assert_eq!(

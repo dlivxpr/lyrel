@@ -59,8 +59,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn json_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<JsonView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .json()
             .expect("a JSON document")
@@ -92,8 +92,8 @@ fn open(
         app.editor_open_on_host(host, &at, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.json().is_some())
         })
     });
@@ -200,8 +200,8 @@ fn type_source(
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -245,16 +245,21 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 
     let (id, view) = open_ready(&app, &mut cx, host.clone(), &path);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(!file.dirty, "an untouched JSONC opens clean");
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "native JSON is not a code language-service file"
         );
-        assert!(app.json_document_active());
+        assert!(app.json_document_active(cx));
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.mode()),
@@ -444,7 +449,7 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert!(row_value(&reopened, &mut cx, "$[\"name\"]").as_deref() == Some("\"edited\""));
@@ -480,8 +485,8 @@ fn split_presentations_share_document_and_keep_folds_selection_and_full_value(
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("JSON buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("JSON buffer");
         (
             file.presentations.json_existing(tab, right).expect("front"),
             file.presentations.json_existing(tab, left).expect("other"),
@@ -615,8 +620,8 @@ fn tree_focused_undo_redo_reverses_the_tree_command_and_saves_exact_bytes(
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("JSON buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("JSON buffer");
         (
             file.presentations.json_existing(tab, right).expect("front"),
             file.presentations.json_existing(tab, left).expect("other"),
@@ -703,14 +708,14 @@ fn tree_focused_undo_redo_reverses_the_tree_command_and_saves_exact_bytes(
     });
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "closing one group must retain the shared document in the other"
     );
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -844,9 +849,9 @@ fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_struc
                 .visible()
         );
     });
-    app.read_with(&cx, |app, _| {
-        assert!(app.active_buffer().unwrap().input.text().is_some());
-        assert!(!app.active_buffer().unwrap().dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(app.active_buffer(cx).unwrap().input.text().is_some());
+        assert!(!app.active_buffer(cx).unwrap().dirty);
     });
     toggle_mode(&broken_view, &mut cx);
     let text = source_text(&app, &cx);
@@ -1105,7 +1110,7 @@ fn tree_value_edit_targets_the_selected_duplicate_and_saves_exact_bytes(tcx: &mu
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -1211,7 +1216,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     // A tree edit, then Save As to a new owning-Host target.
@@ -1224,8 +1229,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -1243,8 +1248,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     host.fail_next_write();
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1268,15 +1273,15 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     );
     assert!(source_text(&app, &cx).contains("\"kept\""));
     assert!(
-        app.read_with(&cx, |app, _| app
-            .active_buffer()
+        app.read_with(&cx, |app, cx| app
+            .active_buffer(cx)
             .is_some_and(|file| file.dirty)),
         "the committed tree edit must be dirty before the external rewrite"
     );
     std::fs::write(&target, b"{\"external\": true}\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -1309,8 +1314,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         "the tree edit must reach the shared source"
     );
     assert!(
-        app.read_with(&cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.dirty)
+        app.read_with(&cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.dirty)
         }),
         "the applied tree edit leaves the document dirty"
     );
@@ -1327,7 +1332,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "cancelled close keeps the document"
     );
     assert_eq!(std::fs::read(&target).unwrap(), kept);
@@ -1340,7 +1345,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &target);
     assert_eq!(
@@ -1379,8 +1384,8 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("JSON buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("JSON buffer");
         (
             file.presentations.json_existing(tab, right).expect("front"),
             file.presentations.json_existing(tab, left).expect("other"),
@@ -1507,23 +1512,23 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     });
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| {
+        app.read_with(&cx, |app, cx| {
             let group = app.tab_code().map(|code| code.group);
-            app.active_buffer().is_some_and(|file| {
+            app.active_buffer(cx).is_some_and(|file| {
                 group.is_some_and(|group| file.presentations.json_existing(tab, group).is_some())
             })
         }),
         "the other presentation still owns the document"
     );
     assert!(
-        app.read_with(&cx, |app, _| !app.editor.buffers.is_empty()),
+        app.read_with(&cx, |app, cx| !app.editor.read(cx).buffers.is_empty()),
         "one presentation close does not retire the shared document"
     );
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     assert_eq!(std::fs::read(&original).unwrap(), saved);
 }
@@ -1728,7 +1733,7 @@ fn jsonl_records_edit_values_keys_arrays_and_add_remove_lines(tcx: &mut TestAppC
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -1773,7 +1778,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     // A record insertion, then Save As to another owning-Host path.
@@ -1795,8 +1800,8 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -1814,8 +1819,8 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     host.fail_next_write();
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1839,15 +1844,15 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     );
     assert!(source_text(&app, &cx).contains("\"保留\""));
     assert!(
-        app.read_with(&cx, |app, _| app
-            .active_buffer()
+        app.read_with(&cx, |app, cx| app
+            .active_buffer(cx)
             .is_some_and(|file| file.dirty)),
         "the committed record edit must be dirty before the external rewrite"
     );
     std::fs::write(&target, b"{\"external\":true}\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -1883,7 +1888,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "cancelled close keeps the record document"
     );
     assert_eq!(std::fs::read(&target).unwrap(), kept);
@@ -1900,7 +1905,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &target);
     assert_eq!(
@@ -1957,7 +1962,7 @@ fn jsonl_record_budget_is_explicit_and_source_stays_editable(tcx: &mut TestAppCo
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
 
     // One more record exceeds the record budget before the node budget; the
@@ -2042,8 +2047,8 @@ fn jsonl_late_parse_and_stale_record_actions_never_write(tcx: &mut TestAppContex
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("JSONL buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("JSONL buffer");
         (
             file.presentations.json_existing(tab, right).expect("front"),
             file.presentations.json_existing(tab, left).expect("other"),

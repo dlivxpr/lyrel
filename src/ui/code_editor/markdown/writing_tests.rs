@@ -1,6 +1,7 @@
 //! 生产 workbench 写作消费者；由普通测试与 OS 主线程 native runner 共用。
 use super::super::*;
 use super::foundation::{save, settle, until};
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 #[cfg(feature = "native-markdown-tests")]
 use gpui_kit::test::TestEventExt as _;
@@ -27,10 +28,12 @@ fn open(
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -91,8 +94,8 @@ pub(super) fn continuous_writing(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -146,8 +149,8 @@ fn insertion_cancel_restores_trigger_without_stealing_transferred_focus(cx: &mut
         assert!(app.editor_split(window, cx));
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -175,8 +178,8 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -355,7 +358,7 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
     context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
     settle(&mut context);
     app.read_with(&context, |app, cx| {
-        assert!(!app.active_buffer().unwrap().dirty);
+        with_active_file(app, cx, |file, _| assert!(!file.dirty));
         assert_eq!(view.read(cx).text(), source);
     });
     context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
@@ -370,8 +373,8 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -412,7 +415,9 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
             settle(&mut context);
         }
     }
-    assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&context, |app, cx| {
+        with_active_file(app, cx, |file, _| !file.dirty).unwrap()
+    }));
 }
 
 #[cfg(feature = "native-markdown-tests")]

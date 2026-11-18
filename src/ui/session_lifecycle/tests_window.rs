@@ -164,13 +164,13 @@ fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut Te
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     vcx.run_until_parked();
     assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.tab_code().and_then(|code| code.active_id()),
             Some(edited),
             "Cancel keeps the same document open"
         );
-        assert_eq!(app.editor_unsaved(), vec![edited]);
+        assert_eq!(app.editor_unsaved(cx), vec![edited]);
         assert_eq!(app.tabs.len(), 2, "closing a window must not close a tab");
     });
     vcx.update(|window, cx| {

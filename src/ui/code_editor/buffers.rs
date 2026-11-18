@@ -123,12 +123,7 @@ type ValidTarget<E> = fn(&E, OpenTarget, &gpui_kit::App) -> bool;
 type Opened<E> = fn(&mut E, OpenTarget, OpenResult, &mut Window, &mut Context<E>);
 
 impl EditorBuffers {
-    pub(super) fn new<E: 'static>(
-        window: &Window,
-        cx: &mut Context<E>,
-        access: Access<E>,
-        edited: Edited<E>,
-    ) -> Self {
+    pub(super) fn new(window: &Window, cx: &mut Context<EditorPanelState>) -> Self {
         let (tx, rx) = smol::channel::unbounded::<WatchBatch>();
         cx.spawn_in(window, async move |view, cx| {
             while let Ok(first) = rx.recv().await {
@@ -139,16 +134,15 @@ impl EditorBuffers {
                 }
                 if view
                     .update_in(cx, |view, window, cx| {
-                        let owner = access(view);
                         let mut paths = HashSet::new();
                         for batch in batches {
-                            if batch.generation == owner.watch_generation {
+                            if batch.generation == view.buffers.watch_generation {
                                 paths.extend(batch.paths);
                             }
                         }
                         for path in paths {
-                            if access(view).watched_files.contains(&path) {
-                                access(view).external_change(&path, window, cx, access, edited);
+                            if view.buffers.watched_files.contains(&path) {
+                                view.buffers.external_change(&path, window, cx);
                             }
                         }
                     })
@@ -1171,11 +1165,10 @@ impl EditorBuffers {
 
     /// A watch only sees buffers on its own Host. SFTP-only buffers retain
     /// save-time conflict detection rather than borrowing a local watcher.
-    pub(super) fn rebuild_watch<E: 'static>(
+    pub(super) fn rebuild_watch(
         &mut self,
         host: Option<SharedHost>,
-        cx: &mut Context<E>,
-        access: Access<E>,
+        cx: &mut Context<EditorPanelState>,
     ) {
         let changed_host = match (&self.watch_host, &host) {
             (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
@@ -1207,10 +1200,10 @@ impl EditorBuffers {
             return;
         }
         self.watched_dirs = dirs;
-        self.apply_watch(cx, access);
+        self.apply_watch(cx);
     }
 
-    fn apply_watch<E: 'static>(&mut self, cx: &mut Context<E>, access: Access<E>) {
+    fn apply_watch(&mut self, cx: &mut Context<EditorPanelState>) {
         let Some(host) = self.watch_host.clone() else {
             return;
         };
@@ -1227,7 +1220,7 @@ impl EditorBuffers {
                 cx,
                 move |_| sub.set_dirs(&want),
                 move |view, result, cx| {
-                    let owner = access(view);
+                    let owner = &mut view.buffers;
                     if owner.watch_generation != generation {
                         return;
                     }
@@ -1236,7 +1229,7 @@ impl EditorBuffers {
                         log::warn!("editor: could not update the watched set: {error}");
                     }
                     if std::mem::take(&mut owner.watch_dirty) {
-                        owner.apply_watch(cx, access);
+                        owner.apply_watch(cx);
                     }
                 },
             );
@@ -1252,7 +1245,7 @@ impl EditorBuffers {
             cx,
             move |h| h.watch(&want).map(Arc::new),
             move |view, result: std::io::Result<Arc<WatchSub>>, cx| {
-                let owner = access(view);
+                let owner = &mut view.buffers;
                 if owner.watch_generation != generation {
                     return;
                 }
@@ -1268,7 +1261,7 @@ impl EditorBuffers {
                 let tx = owner.events_tx.clone();
                 owner.watch = Some(sub);
                 if owner.watched_dirs != opened_with {
-                    owner.apply_watch(cx, access);
+                    owner.apply_watch(cx);
                 }
                 cx.spawn(async move |_, _| {
                     while let Ok(paths) = events.recv().await {
@@ -1282,13 +1275,11 @@ impl EditorBuffers {
         );
     }
 
-    pub(super) fn external_change<E: 'static>(
+    pub(super) fn external_change(
         &mut self,
         path: &Path,
         window: &Window,
-        cx: &mut Context<E>,
-        access: Access<E>,
-        edited: Edited<E>,
+        cx: &mut Context<EditorPanelState>,
     ) {
         let Some(host) = self.watch_host.clone() else {
             return;
@@ -1312,7 +1303,7 @@ impl EditorBuffers {
                 Err(_) => Observed::Present(None),
             },
             move |view, observed, window, cx| {
-                let owner = access(view);
+                let owner = &mut view.buffers;
                 if owner.watch_generation != generation {
                     return;
                 }
@@ -1323,7 +1314,13 @@ impl EditorBuffers {
                     return;
                 }
                 if owner.apply_external_change(id, observed, cx) {
-                    owner.reload(id, window, cx, access, edited);
+                    owner.reload(
+                        id,
+                        window,
+                        cx,
+                        |editor| &mut editor.buffers,
+                        EditorPanelState::buffer_edited,
+                    );
                 }
             },
         );

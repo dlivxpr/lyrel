@@ -590,7 +590,7 @@ mod gpui_tests {
     use crate::ui::editor_session::{self, SplitEditor, TabEditor};
 
     fn front(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> PathBuf {
-        app.read_with(vcx, |app, _| app.active_buffer().unwrap().path.clone())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).unwrap().path.clone())
     }
 
     fn split(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
@@ -643,9 +643,10 @@ mod gpui_tests {
         assert!(!split(&app, &mut vcx));
         assert_eq!(front(&app, &mut vcx), PathBuf::from("/split/a.rs"));
         assert!(
-            app.read_with(&vcx, |app, _| app
+            app.read_with(&vcx, |app, cx| app
                 .editor
-                .buffers
+                .read(cx)
+                .buffers()
                 .iter()
                 .all(|b| b.path != std::path::Path::new("/split/b.rs"))),
             "a file no group shows any more is closed"
@@ -694,11 +695,11 @@ mod gpui_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             vcx.run_until_parked();
         }
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
             let code = app.tab_code().unwrap();
             assert!(code.is_split());
             assert!(!code.focus_is_left(), "the right group had the focus");
-            let path = |id| app.editor.buffers.get(id).unwrap().path.clone();
+            let path = |id| app.editor.read(cx).buffers().get(id).unwrap().path.clone();
             assert_eq!(path(code.active_id().unwrap()), c);
             assert_eq!(path(code.other_active_id().unwrap()), b);
         });
@@ -750,11 +751,12 @@ mod gpui_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             vcx.run_until_parked();
         }
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
             let code = app.tab_code().unwrap();
             assert_eq!(
                 app.editor
-                    .buffers
+                    .read(cx)
+                    .buffers()
                     .get(code.active_id().unwrap())
                     .unwrap()
                     .path,
@@ -779,7 +781,8 @@ mod gpui_tests {
             let input = app
                 .read(cx)
                 .editor
-                .buffers
+                .read(cx)
+                .buffers()
                 .get(left)
                 .unwrap()
                 .input
@@ -787,7 +790,7 @@ mod gpui_tests {
                 .expect("ordinary code editor")
                 .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
-            let before = app.read(cx).active_buffer().unwrap().path.clone();
+            let before = app.read(cx).active_buffer(cx).unwrap().path.clone();
             assert_eq!(
                 before,
                 PathBuf::from("/split/b.rs"),
@@ -797,7 +800,7 @@ mod gpui_tests {
             // only does if the group focus has followed it.
             window.dispatch_keystroke(gpui_kit::Keystroke::parse("ctrl-g").unwrap(), cx);
             assert!(
-                app.read(cx).editor.has_bar(),
+                app.read(cx).editor.read(cx).has_bar(),
                 "the command saw the group the keyboard is in"
             );
         });
@@ -818,7 +821,8 @@ mod gpui_tests {
             let input = app
                 .read(cx)
                 .editor
-                .buffers
+                .read(cx)
+                .buffers()
                 .get(left)
                 .unwrap()
                 .input
@@ -829,10 +833,10 @@ mod gpui_tests {
             let node = window.focused(cx).unwrap();
             node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);
             assert!(
-                app.read(cx).editor.has_bar(),
+                app.read(cx).editor.read(cx).has_bar(),
                 "the command saw the group the keyboard is in"
             );
-            let front = app.read(cx).active_buffer().unwrap().path.clone();
+            let front = app.read(cx).active_buffer(cx).unwrap().path.clone();
             assert_eq!(front, PathBuf::from("/split/a.rs"));
         });
     }
@@ -876,9 +880,9 @@ mod gpui_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             vcx.run_until_parked();
         }
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
             let code = app.tab_code().unwrap();
-            let path = |id| app.editor.buffers.get(id).unwrap().path.clone();
+            let path = |id| app.editor.read(cx).buffers().get(id).unwrap().path.clone();
             assert_eq!(
                 path(code.active_id().unwrap()),
                 PathBuf::from("/split/opened.rs")

@@ -1788,7 +1788,7 @@ impl Render for JsonView {
 
 /// 右侧菜单的 JSON 项：默认只给结构与源码切换；结构和源码切换之外的编辑
 /// 命令仍由普通文本菜单提供。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator().menu(

@@ -14,49 +14,55 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, PromptLevel,
+    AnyElement, Context, Entity, EntityId, EntityInputHandler as _, Focusable as _, PromptLevel,
     SharedString, Subscription, Window, div, px, rems,
 };
 use lyrel_core::core::machine::TabId;
 
+#[cfg(any(test, feature = "native-markdown-tests"))]
+use crate::ui::app::LyrelApp;
 use crate::ui::editor_session::TabEditor;
 use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+#[cfg(any(test, feature = "native-markdown-tests"))]
+use gpui_kit::MouseButton;
 use lyrel_document::text::{EditorConfig, Indent, LineEnding, TextFormat};
 
 mod book_document;
 mod book_view;
 mod buffers;
 pub(crate) mod commands;
-mod csv_document;
+pub(crate) mod csv_document;
 mod document_input;
-mod drawio_document;
+pub(crate) mod drawio_document;
 pub(crate) mod drawio_engine;
-mod image_document;
-mod json_document;
+pub(crate) mod image_document;
+pub(crate) mod json_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
-mod pdf_document;
+pub(crate) mod pdf_document;
 mod structure_edit;
 mod structure_rows;
-mod svg_document;
+pub(crate) mod svg_document;
 mod text;
-mod toml_document;
-mod xml_document;
-mod yaml_document;
+pub(crate) mod toml_document;
+pub(crate) mod xml_document;
+pub(crate) mod yaml_document;
 use buffers::Loaded;
-use document_input::{EditorInput, Presentations};
+pub(crate) use document_input::EditorInput;
+use document_input::Presentations;
 mod gutter;
 mod nav;
 pub(crate) mod outline;
+mod overlay_render;
 pub(crate) mod problems;
 pub(crate) mod saving;
 mod split;
 pub(crate) use split::GroupId;
-mod sqlite_document;
+pub(crate) mod sqlite_document;
 mod sqlite_grid;
-mod strip;
+pub(crate) mod strip;
 use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
 pub(crate) use saving::{AfterUnsaved, BarKind};
@@ -100,6 +106,8 @@ pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoo
 /// JSON 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
 pub(crate) use json_document::KEY_CONTEXT as JSON_KEY_CONTEXT;
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+pub(crate) use nav::{BreadcrumbFacts, NavOpen, path_segments, symbol_command, symbol_rows};
+pub(crate) use strip::{PICKER_LIST_MAX_H, PICKER_ROW_H, PICKER_W};
 /// The chords that belong to the editor's text field and still have to work
 /// while the header strip holds the keyboard.
 pub(crate) const NAV_OR_STRIP_KEY_CONTEXT: &str = "Input || DocumentStrip";
@@ -115,7 +123,7 @@ pub(crate) use yaml_document::KEY_CONTEXT as YAML_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct BufferId(u64);
+pub(crate) struct BufferId(pub(crate) u64);
 
 impl BufferId {
     pub(crate) fn new() -> Self {
@@ -527,6 +535,15 @@ pub(crate) enum EditorPanelEvent {
         open: Vec<(PathBuf, BufferId, bool)>,
         snapshot: crate::ui::editor_session::TabEditor,
     },
+    /// A Markdown link requested a file in its originating presentation.
+    FollowLink {
+        buffer: BufferId,
+        source: EntityId,
+        host: SharedHost,
+        path: PathBuf,
+        anchor: Option<String>,
+        revision: u64,
+    },
     /// Show a path in the file tree (a directory link asked "where is this?").
     ShowInFileTree { path: PathBuf },
     /// Reveal a path in the file tree after opening it in the editor.
@@ -600,12 +617,7 @@ pub(crate) struct EditorPanelState {
 
 impl EditorPanelState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let buffers = buffers::EditorBuffers::new(
-            window,
-            cx,
-            |editor| &mut editor.buffers,
-            Self::buffer_edited,
-        );
+        let buffers = buffers::EditorBuffers::new(window, cx);
         Self {
             buffers,
             bar: None,
@@ -650,6 +662,10 @@ impl EditorPanelState {
 
     pub(crate) fn take_watch_refresh(&mut self) -> bool {
         self.buffers.take_watch_refresh()
+    }
+
+    pub(crate) fn strip_keyboard(&self) -> &gpui_kit::FocusHandle {
+        &self.strip_keyboard
     }
 
     pub(crate) fn strip_keyboard_focused(&self, window: &Window) -> bool {
@@ -1341,6 +1357,20 @@ impl EditorPanelState {
         Some((file.host.id(), file.reload_seq))
     }
 
+    /// Whether the original Markdown presentation still belongs to this group.
+    pub(crate) fn markdown_presentation_in(
+        &self,
+        id: BufferId,
+        tab: TabId,
+        group: GroupId,
+        source: EntityId,
+    ) -> bool {
+        self.buffers
+            .get(id)
+            .and_then(|file| file.presentations.markdown_existing(tab, group))
+            .is_some_and(|view| view.entity_id() == source)
+    }
+
     /// Whether an asynchronous open may still land. Only editor-verifiable
     /// predicates live here — the context epoch captured when the open
     /// started, and the origin document's identity. Whether the tab and group
@@ -1964,8 +1994,7 @@ impl EditorPanelState {
 
     /// Rebuilds the file watcher against the shell-resolved window host.
     pub(crate) fn rebuild_watch(&mut self, host: Option<SharedHost>, cx: &mut Context<Self>) {
-        self.buffers
-            .rebuild_watch(host, cx, |editor| &mut editor.buffers);
+        self.buffers.rebuild_watch(host, cx);
     }
 
     /// Whether this tab has not had its recorded files restored yet. A pure
@@ -2356,7 +2385,7 @@ impl EditorPanelState {
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),
                     )
-                    .children(self.render_gutter(id, window, cx))
+                    .children(self.render_gutter(id, cx))
                     .children(self.render_gutter_peek(id, tab, code, cx))
                     .children(f.popups.clone())
             }
@@ -3561,8 +3590,8 @@ mod close_gpui_tests {
             });
             vcx.dispatch_action(EditorNewFile);
             settle(&mut vcx);
-            let editor = app.read_with(&vcx, |app, _| {
-                app.active_buffer()
+            let editor = app.read_with(&vcx, |app, cx| {
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .code()
@@ -3581,9 +3610,9 @@ mod close_gpui_tests {
                     }),
                     docked,
                 );
-                app.read_with(&vcx, |app, _| {
+                app.read_with(&vcx, |app, cx| {
                     assert_eq!(
-                        app.active_buffer()
+                        app.active_buffer(cx)
                             .unwrap()
                             .input
                             .code()
@@ -3605,8 +3634,8 @@ mod close_gpui_tests {
             vcx.dispatch_action(ToggleCodePanel);
             settle(&mut vcx);
             assert_eq!(
-                app.read_with(&vcx, |app, _| app
-                    .active_buffer()
+                app.read_with(&vcx, |app, cx| app
+                    .active_buffer(cx)
                     .unwrap()
                     .input
                     .code()
@@ -3727,7 +3756,7 @@ mod close_gpui_tests {
         }
         assert_eq!(
             app.read_with(&vcx, |app, cx| app
-                .active_buffer()
+                .active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -3777,7 +3806,7 @@ mod pane_scrollback_tests {
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             let file = app
-                .active_buffer()
+                .active_buffer(cx)
                 .expect("scrollback opens a real editor buffer");
             let text = file.input.text().unwrap().read(cx).text().to_string();
             assert!(

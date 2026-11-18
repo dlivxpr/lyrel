@@ -2222,7 +2222,7 @@ impl Render for PdfView {
 
 /// 右侧菜单里的取景命令，与快捷键、工具栏按钮是同一组动作。复制项只在
 /// 真有选中文字时可用，灰色项仍占住位置，菜单形状保持稳定。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
     has_selection: bool,
 ) -> gpui_kit::component::menu::PopupMenu {

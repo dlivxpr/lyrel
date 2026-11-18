@@ -55,7 +55,7 @@ struct Capture {
 }
 
 pub(crate) struct ImageHost {
-    app: WeakEntity<LyrelApp>,
+    panel: WeakEntity<EditorPanelState>,
     id: BufferId,
     window: AnyWindowHandle,
     document: Entity<Document>,
@@ -77,7 +77,7 @@ pub(crate) struct ImageHost {
 
 impl ImageHost {
     pub(crate) fn new(
-        app: WeakEntity<LyrelApp>,
+        panel: WeakEntity<EditorPanelState>,
         id: BufferId,
         editor: &Entity<MarkdownEditor>,
         window: &Window,
@@ -92,7 +92,7 @@ impl ImageHost {
         })
         .detach();
         Self {
-            app,
+            panel,
             id,
             window: window.window_handle(),
             document,
@@ -146,8 +146,8 @@ impl ImageHost {
     }
 
     fn identity(&self, cx: &App) -> Option<(SharedHost, Option<PathBuf>)> {
-        let app = self.app.upgrade()?;
-        let file = app.read(cx).editor.buffers.get(self.id)?;
+        let panel = self.panel.upgrade()?;
+        let file = panel.read(cx).buffers.get(self.id)?;
         let source = file.input.markdown()?;
         if source.read(cx).document() != &self.document {
             return None;
@@ -175,7 +175,7 @@ impl ImageHost {
         for (editor, _) in self.views.values() {
             let _ = editor.update(cx, |_, cx| cx.notify());
         }
-        let _ = self.app.update(cx, |_, cx| cx.notify());
+        let _ = self.panel.update(cx, |_, cx| cx.notify());
         cx.notify();
     }
     /// Stops every in-flight picture transfer and drops its buffers.
@@ -201,11 +201,11 @@ impl ImageHost {
     ) {
         match event {
             NativeEvent::OpenLink(target) => {
-                let app = self.app.clone();
+                let panel = self.panel.clone();
                 let id = self.id;
                 let _ = self.window.update(cx, |_, window, cx| {
-                    let _ = app.update(cx, |app, cx| {
-                        links::follow(app, id, &editor, target, window, cx)
+                    let _ = panel.update(cx, |panel, cx| {
+                        panel.follow_link(id, &editor, target, window, cx)
                     });
                 });
             }

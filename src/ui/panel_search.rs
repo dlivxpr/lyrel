@@ -933,8 +933,8 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             vcx.background_executor.run_until_parked();
-            if app.read_with(&vcx, |app, _| {
-                app.editor_active_location().is_some_and(|(host, path)| {
+            if app.read_with(&vcx, |app, cx| {
+                app.editor_active_location(cx).is_some_and(|(host, path)| {
                     host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
                 })
             }) {
@@ -943,8 +943,8 @@ mod gpui_tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "the search hit opened the wrong file: expected {expected_target:?}, got {:?}",
-                app.read_with(&vcx, |app, _| {
-                    app.editor_active_location()
+                app.read_with(&vcx, |app, cx| {
+                    app.editor_active_location(cx)
                         .map(|(host, path)| (host, path.to_path_buf()))
                 })
             );
@@ -1084,8 +1084,8 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             vcx.background_executor.run_until_parked();
-            if app.read_with(&vcx, |app, _| {
-                app.editor_active_location().is_some_and(|(host, path)| {
+            if app.read_with(&vcx, |app, cx| {
+                app.editor_active_location(cx).is_some_and(|(host, path)| {
                     host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
                 })
             }) {
@@ -1099,8 +1099,7 @@ mod gpui_tests {
         }
         app.read_with(&vcx, |app, cx| {
             let file = app
-                .editor
-                .local_file(app.tab_code().unwrap().active_id().unwrap())
+                .editor_active_local_file(cx)
                 .expect("the hit opened a local code editor");
             let input = file.input.read(cx);
             let cursor = input.cursor_position();

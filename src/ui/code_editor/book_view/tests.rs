@@ -35,8 +35,8 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
 }
 
 fn active(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<BookView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("document")
             .book()
             .expect("EPUB reader")
@@ -55,7 +55,7 @@ fn open(
     });
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer().is_some_and(|file| {
+            app.active_buffer(cx).is_some_and(|file| {
                 file.path == path
                     && file
                         .input
@@ -64,7 +64,7 @@ fn open(
             })
         })
     });
-    app.read_with(cx, |app, _| app.active_buffer().unwrap().id())
+    app.read_with(cx, |app, cx| app.active_buffer(cx).unwrap().id())
 }
 
 fn side_item_id(
@@ -264,7 +264,7 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     // consumer under test.
     app.update_in(&mut cx, |app, _, cx| {
         let view = app
-            .active_editor_input()
+            .active_editor_input(cx)
             .and_then(|input| input.book().cloned())
             .expect("EPUB reader");
         view.update(cx, |view, cx| {
@@ -328,8 +328,8 @@ fn unsupported_and_corrupt_books_stay_visible_read_only_documents(tcx: &mut Test
             app.editor_open_on_host(host.clone(), path, window, cx)
         });
         until(&mut cx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer()
+            app.read_with(cx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| file.path == *path && file.input.book().is_some())
             })
         });

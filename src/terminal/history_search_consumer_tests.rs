@@ -194,17 +194,17 @@ fn reverse_search_cmd_enter_owns_dispatch_only_while_searching(cx: &mut TestAppC
     });
     for _ in 0..200 {
         vcx.run_until_parked();
-        if app.read_with(&vcx, |app, _| app.editor_active_local_file().is_some()) {
+        if app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(app.read_with(&vcx, |app, _| app.editor_active_local_file().is_some()));
+    assert!(app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()));
     vcx.simulate_keystrokes("cmd-enter");
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.editor_active_local_file()
+            app.editor_active_local_file(cx)
                 .unwrap()
                 .input
                 .read(cx)
@@ -266,17 +266,20 @@ fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "cargo build", "git commit -m x"]
-                .into_iter()
-                .map(String::from)
-                .collect());
-            
+            seed_history(
+                view,
+                ["git status", "cargo build", "git commit -m x"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
 
             view.handle_editor_key(&key("ctrl-r"), false, cx);
             assert!(view.history.search().is_some(), "Ctrl+R opens the search");
             view.commit_text("gst", cx);
             assert_eq!(
-                view.history.search()
+                view.history
+                    .search()
                     .as_ref()
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git status")
@@ -295,23 +298,27 @@ fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "cargo build", "git commit -m x"]
-                .into_iter()
-                .map(String::from)
-                .collect());
-            
+            seed_history(
+                view,
+                ["git status", "cargo build", "git commit -m x"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
 
             view.handle_editor_key(&key("ctrl-r"), false, cx);
             view.commit_text("git", cx);
             assert_eq!(
-                view.history.search()
+                view.history
+                    .search()
                     .as_ref()
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git commit -m x")
             );
             view.handle_editor_key(&key("ctrl-r"), false, cx);
             assert_eq!(
-                view.history.search()
+                view.history
+                    .search()
                     .as_ref()
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git status")
@@ -351,11 +358,13 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
     window
         .update(cx, |view, _, cx| {
             assert!(view.input_active(), "prompt report engages the editor");
-            let mut history = history_fixture(["git status", "cargo build --release", "echo hello"]
-                .into_iter()
-                .map(String::from)
-                .collect());
-            
+            let mut history = history_fixture(
+                ["git status", "cargo build --release", "echo hello"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
+
             history.meta.insert(
                 "cargo build --release".into(),
                 crate::terminal::history::EntryMeta {
@@ -367,7 +376,8 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
             view.handle_editor_key(&key("ctrl-r"), false, cx);
             view.commit_text("c", cx);
             assert!(
-                view.history.search()
+                view.history
+                    .search()
                     .as_ref()
                     .is_some_and(|rs| !rs.matches().is_empty()),
                 "the query has matches for the menu to draw"
@@ -382,105 +392,105 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
-    /// #541: the history menu floats over live grid cells, and a `div` that
-    /// carries no handler of its own inserts no hitbox — so the press went
-    /// straight through to the grid behind the menu, which cleared the
-    /// selection, dragged out a new one, or (with the link modifier held)
-    /// opened whatever link the menu was covering.
-    ///
-    /// The second half is the other side of the pair `src/ui/app.rs` keeps for
-    /// the resize handle: with the menu gone the very same press must still
-    /// reach the grid, or this would pass on a pane that never sees a mouse.
-    #[gpui_kit::test]
-    fn a_press_on_the_history_menu_never_reaches_the_grid(cx: &mut TestAppContext) {
-        use gpui_kit::{MouseMoveEvent, PlatformInput};
+/// #541: the history menu floats over live grid cells, and a `div` that
+/// carries no handler of its own inserts no hitbox — so the press went
+/// straight through to the grid behind the menu, which cleared the
+/// selection, dragged out a new one, or (with the link modifier held)
+/// opened whatever link the menu was covering.
+///
+/// The second half is the other side of the pair `src/ui/app.rs` keeps for
+/// the resize handle: with the menu gone the very same press must still
+/// reach the grid, or this would pass on a pane that never sees a mouse.
+#[gpui_kit::test]
+fn a_press_on_the_history_menu_never_reaches_the_grid(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseMoveEvent, PlatformInput};
 
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        wait_for_input_active(&window, cx);
+    crate::core::config::pin_test_config_dir();
+    let (window, mut daemon) = harness(cx);
+    prompt_ready(&window, cx, &mut daemon);
+    wait_for_input_active(&window, cx);
 
-        window
-            .update(cx, |view, window, cx| {
-                window.activate_window();
-                view.focus_handle.focus(window, cx);
-                seed_history(view, vec!["echo one".to_string(), "echo two".to_string()]);
-                
-                view.handle_editor_key(&key("ctrl-r"), false, cx);
-                cx.notify();
-            })
-            .unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+            seed_history(view, vec!["echo one".to_string(), "echo two".to_string()]);
 
-        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-        vcx.update(|window, _| window.refresh());
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
+            cx.notify();
+        })
+        .unwrap();
+
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+
+    // The menu is laid out one row under the cursor, plus the gap
+    // `render_reverse_search_menu` leaves; this lands in the middle of its
+    // first row, where a candidate is drawn.
+    let lh = window.update(cx, |view, _, _| view.line_height).unwrap();
+    let at = point(
+        px(GRID_PAD_X) + px(10.),
+        px(GRID_PAD_Y) + lh * 2.0 + px(10.),
+    );
+
+    let press = |vcx: &mut gpui_kit::VisualTestContext| {
+        vcx.update(|window, cx| {
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: at,
+                    pressed_button: None,
+                    modifiers: Modifiers::none(),
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+        });
         vcx.run_until_parked();
+    };
 
-        // The menu is laid out one row under the cursor, plus the gap
-        // `render_reverse_search_menu` leaves; this lands in the middle of its
-        // first row, where a candidate is drawn.
-        let lh = window.update(cx, |view, _, _| view.line_height).unwrap();
-        let at = point(
-            px(GRID_PAD_X) + px(10.),
-            px(GRID_PAD_Y) + lh * 2.0 + px(10.),
-        );
+    press(&mut vcx);
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.history.search().is_some(),
+                "the press must not have closed the menu either"
+            );
+            assert!(
+                !view.selection_scroll.is_selecting(),
+                "the menu swallowed the press, so no selection started under it"
+            );
+        })
+        .unwrap();
 
-        let press = |vcx: &mut gpui_kit::VisualTestContext| {
-            vcx.update(|window, cx| {
-                window.dispatch_event(
-                    PlatformInput::MouseMove(MouseMoveEvent {
-                        position: at,
-                        pressed_button: None,
-                        modifiers: Modifiers::none(),
-                    }),
-                    cx,
-                );
-                window.dispatch_event(
-                    PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: at,
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }),
-                    cx,
-                );
-            });
-            vcx.run_until_parked();
-        };
+    window
+        .update(cx, |view, _, cx| {
+            view.history.cancel_search();
+            cx.notify();
+        })
+        .unwrap();
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
 
-        press(&mut vcx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.history.search().is_some(),
-                    "the press must not have closed the menu either"
-                );
-                assert!(
-                    !view.selection_scroll.is_selecting(),
-                    "the menu swallowed the press, so no selection started under it"
-                );
-            })
-            .unwrap();
-
-        window
-            .update(cx, |view, _, cx| {
-                view.history.cancel_search();
-                cx.notify();
-            })
-            .unwrap();
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-
-        press(&mut vcx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.selection_scroll.is_selecting(),
-                    "with no menu over it the same press is the grid's to take"
-                );
-            })
-            .unwrap();
-    }
+    press(&mut vcx);
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.selection_scroll.is_selecting(),
+                "with no menu over it the same press is the grid's to take"
+            );
+        })
+        .unwrap();
+}
 
 #[gpui_kit::test]
 fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestAppContext) {
@@ -489,11 +499,23 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
     // isolated process instead of touching another test's history fixture.
     if std::env::var_os("LYREL_CUSTOM_HISTORY_CONSUMER_CHILD").is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &format!("{}::custom_histfile_seed_reaches_the_owning_panes_reverse_search", module_path!().split_once("::").unwrap().1)])
+            .args([
+                "--exact",
+                &format!(
+                    "{}::custom_histfile_seed_reaches_the_owning_panes_reverse_search",
+                    module_path!().split_once("::").unwrap().1
+                ),
+            ])
             .args(["--nocapture", "--test-threads=1", "--"])
             .env("LYREL_CUSTOM_HISTORY_CONSUMER_CHILD", "1")
-            .output().unwrap();
-        assert!(output.status.success(), "isolated production history consumer failed:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated production history consumer failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     }
     let (_window, view, mut daemon) = rooted_harness(cx);
@@ -503,13 +525,20 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let origin = tempfile::TempDir::new().unwrap();
     let custom = origin.path().join("custom history");
-    let seed = [b"echo custom_histfile_seed_184\n".as_slice(), PLAIN_METAFIED_ZSH_HISTORY].concat();
+    let seed = [
+        b"echo custom_histfile_seed_184\n".as_slice(),
+        PLAIN_METAFIED_ZSH_HISTORY,
+    ]
+    .concat();
     std::fs::write(&custom, &seed).unwrap();
     std::fs::write(&other, ": 1700000000:0;echo other_panes_private_seed_184\n").unwrap();
     cx.update(|cx| {
         let config = cx.global_mut::<Config>();
         config.per_pane_history = true;
-        config.shell = Some(crate::core::config::ShellConfig { program: "/usr/bin/zsh".into(), args: Vec::new() });
+        config.shell = Some(crate::core::config::ShellConfig {
+            program: "/usr/bin/zsh".into(),
+            args: Vec::new(),
+        });
     });
     view.update(cx, |view, cx| {
         view.pane_id = pane;
@@ -525,40 +554,61 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
         active: true,
         at_prompt: true,
         last_exit: None,
-    }.encode(&mut daemon).unwrap();
+    }
+    .encode(&mut daemon)
+    .unwrap();
     for _ in 0..200 {
-        if view.read_with(cx, |view, _| view.terminal.at_prompt()) { break; }
+        if view.read_with(cx, |view, _| view.terminal.at_prompt()) {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     view.update(cx, |view, cx| {
         assert!(view.terminal.at_prompt());
         view.follow_history_scope(cx);
-        view.input.editor_mut().set("echo recorded_during_pane_seed_184");
+        view.input
+            .editor_mut()
+            .set("echo recorded_during_pane_seed_184");
         view.submit_command(cx);
     });
     for _ in 0..200 {
         cx.run_until_parked();
         let ready = view.update(cx, |view, cx| {
             view.follow_history_scope(cx);
-            view.history.entries().iter().any(|line| line == "echo custom_histfile_seed_184")
+            view.history
+                .entries()
+                .iter()
+                .any(|line| line == "echo custom_histfile_seed_184")
         });
-        if ready { break; }
+        if ready {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     view.update(cx, |view, cx| {
         view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("custom_histfile_seed_184", cx);
         assert_eq!(
-            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
             Some("echo custom_histfile_seed_184"),
             "reverse search must consume this pane's existing custom-HISTFILE seed",
         );
-        assert!(!view.history.entries().iter().any(|line| line.contains("other_panes_private_seed_184")));
+        assert!(
+            !view
+                .history
+                .entries()
+                .iter()
+                .any(|line| line.contains("other_panes_private_seed_184"))
+        );
         view.history.cancel_search();
         view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("recorded_during_pane_seed_184", cx);
         assert_eq!(
-            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
             Some("echo recorded_during_pane_seed_184"),
             "loading the private seed must preserve commands submitted while it was reading",
         );
@@ -566,7 +616,9 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
         view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("读取令牌", cx);
         assert_eq!(
-            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
             Some("echo '读取令牌失败ー🙂'"),
             "a pane-ID filename must not discard the actual zsh seed format",
         );

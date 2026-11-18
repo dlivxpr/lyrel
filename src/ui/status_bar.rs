@@ -510,7 +510,7 @@ mod tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while app.read_with(&vcx, |app, _| !app.markdown_document_active()) {
+        while app.read_with(&vcx, |app, cx| !app.markdown_document_active(cx)) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "Markdown fixture loads"

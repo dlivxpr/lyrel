@@ -2366,7 +2366,7 @@ impl Render for SqliteView {
 
 /// The context menu of a database document: what its data can do, nothing a
 /// text editor would offer on a document with no text.
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator()

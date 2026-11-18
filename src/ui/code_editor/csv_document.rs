@@ -2056,7 +2056,7 @@ impl Render for CsvView {
 
 /// 表格的右侧菜单。表格模式只给真实可用的操作；源码模式沿用文本命令，
 /// 但不出现任何单元格／行／列编辑入口。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: PopupMenu,
     view: &Entity<CsvView>,
     mode: CsvMode,

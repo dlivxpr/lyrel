@@ -39,7 +39,10 @@ use crate::ui::settings_window::SettingsWindow;
 use crate::ui::tab::presentation::{OpenedFrom, SpawnAs, inherited_start_dir};
 mod actions;
 mod composition;
+mod editor_links;
+mod editor_navigation;
 mod editor_panel;
+mod editor_render;
 mod initialization;
 mod pane_binding;
 mod settings_bridge;
@@ -4144,7 +4147,7 @@ impl LyrelApp {
                 .is_some_and(|w| w.is_remote()),
             self.unsaved_ssh_session(window, cx).is_some(),
         )
-        .with_editor(self.editor_palette_items(), self.editor_can_dispatch(cx));
+        .with_editor(self.editor_palette_items(cx), self.editor_can_dispatch(cx));
         let agents = self.offered_agents(cx);
         let terminals = TerminalCatalog::new(self.workspace, &self.shells, &agents)
             .items(|id| self.tab_rows_for(id, true, cx), cx);
@@ -4205,7 +4208,7 @@ impl LyrelApp {
             .search
             .open(catalog, tab, query, Self::on_search_event, window, cx);
         if tab.in_editor_row() {
-            let tabs = self.editor_search_tabs();
+            let tabs = self.editor_search_tabs(cx);
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
         }
         self.refresh_file_index(window, cx);
@@ -4235,7 +4238,7 @@ impl LyrelApp {
                     kind,
                     CommandKind::GoToSymbol { .. } | CommandKind::GoToLocation { .. }
                 ) {
-                    self.editor_symbol_preview_commit();
+                    self.editor_symbol_preview_commit(cx);
                 }
                 self.close_search(window, cx);
                 self.run_command(kind, window, cx);

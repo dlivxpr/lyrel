@@ -876,7 +876,7 @@ impl Render for SvgView {
 }
 
 /// 右侧菜单：先给源码/预览切换，再是预览取景命令。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator()

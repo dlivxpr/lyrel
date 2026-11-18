@@ -65,10 +65,10 @@ fn save_before_close_only_removes_the_captured_tab_presentation(cx: &mut TestApp
         })
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "original edits");
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_ne!(id, replacement);
         assert_eq!(app.tab_code().unwrap().active_id(), Some(replacement));
-        assert!(app.active_buffer().unwrap().dirty);
+        assert!(app.active_buffer(cx).unwrap().dirty);
     });
 }
 
@@ -89,8 +89,8 @@ fn cancelling_save_as_retires_close_even_after_a_later_successful_save(cx: &mut 
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -115,14 +115,14 @@ fn failed_save_before_close_keeps_edits_and_cannot_resume_on_a_later_save(cx: &m
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(occupied.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.untitled.is_some() && !file.saving)
-                && app.editor.waiters.is_empty()
+                && app.editor.read(cx).waiters.is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert!(file.dirty);
         assert!(file.path.as_os_str().is_empty());
@@ -135,8 +135,8 @@ fn failed_save_before_close_keeps_edits_and_cannot_resume_on_a_later_save(cx: &m
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(recovered.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -173,7 +173,7 @@ fn conflict_close_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
@@ -198,8 +198,8 @@ fn conflict_close_scenario(cx: &mut TestAppContext, markdown: bool) {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "external content");
     vcx.simulate_prompt_answer(t(L10nKey::EditorOverwrite));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -225,10 +225,10 @@ fn stale_native_save_as_cannot_write_a_replacement_buffer(cx: &mut TestAppContex
     let replacement = new_edited_file(&app, &mut vcx);
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     settle(&mut vcx);
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_ne!(original, replacement);
         assert_eq!(app.tab_code().unwrap().active_id(), Some(replacement));
-        assert!(app.active_buffer().unwrap().untitled.is_some());
+        assert!(app.active_buffer(cx).unwrap().untitled.is_some());
     });
     assert!(!path.exists());
 }
@@ -251,7 +251,7 @@ fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppCont
     settle(&mut vcx);
     app.read_with(&vcx, |app, cx| {
         let pos = app
-            .active_buffer()
+            .active_buffer(cx)
             .unwrap()
             .input
             .text()
@@ -291,7 +291,7 @@ fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppCont
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !path.exists() || app.read_with(&vcx, |app, _| app.active_buffer().unwrap().saving) {
+    while !path.exists() || app.read_with(&vcx, |app, cx| app.active_buffer(cx).unwrap().saving) {
         assert!(
             std::time::Instant::now() < deadline,
             "the document save did not finish"
@@ -320,9 +320,9 @@ fn file_save_before_close_keeps_a_later_focused_editor_group(cx: &mut TestAppCon
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| !app.tab_code().unwrap().shows(original))
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tab_code().unwrap().active_id(), Some(replacement));
-        assert!(app.active_buffer().unwrap().dirty);
+        assert!(app.active_buffer(cx).unwrap().dirty);
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "original edits");
 }
@@ -343,22 +343,22 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
         window.input("unsaved Markdown", cx);
     });
     settle(&mut vcx);
-    let id = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().id());
+    let id = app.read_with(&vcx, |app, cx| app.active_buffer(cx).unwrap().id());
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| None);
     settle(&mut vcx);
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_has_focus(window, cx));
-        assert_eq!(app.active_buffer().unwrap().path, path);
-        assert!(app.active_buffer().unwrap().dirty);
+        assert_eq!(app.active_buffer(cx).unwrap().path, path);
+        assert!(app.active_buffer(cx).unwrap().dirty);
     });
     vcx.dispatch_action(CloseActiveTab);
     settle(&mut vcx);
@@ -368,8 +368,8 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(occupied.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && !file.saving)
         })
     });
@@ -382,21 +382,21 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     vcx.simulate_prompt_answer(t(L10nKey::Save));
     wait_until(&mut vcx, |vcx| {
         host.entered.load(std::sync::atomic::Ordering::SeqCst)
-            && app.read_with(vcx, |app, _| {
-                app.active_buffer().is_some_and(|file| !file.saving)
-                    && app.editor.waiters.is_empty()
+            && app.read_with(vcx, |app, cx| {
+                app.active_buffer(cx).is_some_and(|file| !file.saving)
+                    && app.editor.read(cx).waiters.is_empty()
             })
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(recovered.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        app.read_with(vcx, |app, cx| {
+            !app.active_buffer(cx).unwrap().dirty && !app.active_buffer(cx).unwrap().saving
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert!(file.input.code().is_none());
         assert_eq!(

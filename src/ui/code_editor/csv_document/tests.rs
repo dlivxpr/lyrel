@@ -34,8 +34,8 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
 }
 
 fn view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<CsvView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input().unwrap().csv().unwrap().clone()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx).unwrap().csv().unwrap().clone()
     })
 }
 
@@ -44,8 +44,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedHost, pa
         app.editor_open_on_host(host, path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.csv().is_some())
         })
     });
@@ -75,8 +75,8 @@ fn source(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> String {
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -238,14 +238,14 @@ fn utf16_tsv_source_history_and_stale_parse_keep_exact_values(tcx: &mut TestAppC
     let (release, entered) = test_support::pause_next_parse();
     app.update_in(&mut cx, |app, window, cx| {
         app.focus_editor(window, cx);
-        let active = app.active_editor_input().unwrap();
+        let active = app.active_editor_input(cx).unwrap();
         let input = active.text().unwrap();
         input.replace(0.."甲".len(), "丙", window, cx);
     });
     until(&mut cx, |_| entered.load(Ordering::Acquire));
     let at = source(&app, &cx).find("second").unwrap();
     app.update_in(&mut cx, |app, window, cx| {
-        app.active_editor_input()
+        app.active_editor_input(cx)
             .unwrap()
             .text()
             .unwrap()
@@ -272,12 +272,11 @@ fn utf16_tsv_source_history_and_stale_parse_keep_exact_values(tcx: &mut TestAppC
     assert!(source(&app, &cx).contains("third"));
     let end = source(&app, &cx).len();
     app.update_in(&mut cx, |app, window, cx| {
-        app.active_editor_input().unwrap().text().unwrap().replace(
-            end..end,
-            "\"unfinished",
-            window,
-            cx,
-        );
+        app.active_editor_input(cx)
+            .unwrap()
+            .text()
+            .unwrap()
+            .replace(end..end, "\"unfinished", window, cx);
     });
     until(&mut cx, |cx| {
         csv.read_with(cx, |view, cx| view.parse_error(cx).is_some())
@@ -430,7 +429,7 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
         original,
         "a table edit is not an implicit save"
     );
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty));
 
     // Table-mode undo/redo are the shared Document history, not a table copy.
     cx.update(|window, cx| window.press(&chord("z"), cx));
@@ -456,7 +455,7 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     open(
         &app,
@@ -725,8 +724,8 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut T
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("CSV buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("CSV buffer");
         (
             file.presentations.csv_existing(tab, right).expect("front"),
             file.presentations.csv_existing(tab, left).expect("other"),
@@ -832,7 +831,7 @@ fn a_stale_table_cannot_write_back_while_the_source_is_reparsing(tcx: &mut TestA
     let (release, entered) = test_support::pause_next_parse();
     app.update_in(&mut cx, |app, window, cx| {
         app.focus_editor(window, cx);
-        app.active_editor_input()
+        app.active_editor_input(cx)
             .unwrap()
             .text()
             .unwrap()
@@ -891,8 +890,8 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
     settle(&mut cx);
     enter_path(&mut cx, copy);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == copy && !file.saving && !file.dirty)
         })
     });
@@ -922,8 +921,8 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
     );
     release.send(()).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.saving)
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| !file.saving)
         })
     });
     assert_eq!(
@@ -932,7 +931,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
         "the paused save wrote the snapshot it started with"
     );
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty),
         "a completed old save does not mark newer edits clean"
     );
     save(&app, &mut cx);
@@ -947,7 +946,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     open(&app, &mut cx, host, copy);
     ready(&app, &mut cx, 2);
@@ -976,7 +975,7 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
         value(&app, cx, 0, 0).as_deref() == Some("mine")
             && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
     });
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty));
 
     // Cancelling an unsaved close keeps the document and its edit.
     app.update_in(&mut cx, |app, window, cx| {
@@ -985,8 +984,8 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     settle(&mut cx);
     cx.simulate_prompt_answer(t(L10nKey::Cancel));
     settle(&mut cx);
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().is_some()));
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty));
     assert_eq!(value(&app, &cx, 0, 0).as_deref(), Some("mine"));
 
     // A failed Host write preserves the edit, the dirty state and the original.
@@ -996,11 +995,11 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(&mut cx, |cx| {
         host.entered.load(Ordering::SeqCst)
-            && app.read_with(cx, |app, _| {
-                app.active_buffer().is_some_and(|file| !file.saving)
+            && app.read_with(cx, |app, cx| {
+                app.active_buffer(cx).is_some_and(|file| !file.saving)
             })
     });
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty));
     assert_eq!(value(&app, &cx, 0, 0).as_deref(), Some("mine"));
     assert_eq!(std::fs::read(&path).unwrap(), original);
 
@@ -1008,15 +1007,15 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     // the in-memory table edit with the disk content.
     std::fs::write(&path, b"x,y\nz,w\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
-    assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().dirty));
     assert_eq!(value(&app, &cx, 0, 0).as_deref(), Some("mine"));
-    assert!(app.read_with(&cx, |app, _| {
-        app.active_buffer().unwrap().input.csv().is_some()
+    assert!(app.read_with(&cx, |app, cx| {
+        app.active_buffer(cx).unwrap().input.csv().is_some()
     }));
 }
 
@@ -1043,7 +1042,7 @@ fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(tcx: &mut
     // A clean external reload replaces the authoritative source while the cell
     // input is still open.
     std::fs::write(&path, "x,b\nc,d\n").unwrap();
-    let buffer = app.read_with(&cx, |app, _| app.active_buffer().unwrap().id());
+    let buffer = app.read_with(&cx, |app, cx| app.active_buffer(cx).unwrap().id());
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_reload_from_disk(buffer, window, cx)
     });
@@ -1069,8 +1068,8 @@ fn open_remote(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedH
     });
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        let opened = app.read_with(cx, |app, _| {
-            app.active_buffer()
+        let opened = app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.csv().is_some())
         });
         if opened {
@@ -1080,8 +1079,8 @@ fn open_remote(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedH
         if Instant::now() >= deadline {
             let stat = host.stat(path);
             let read = host.read_file(path, 1024 * 1024).map(|bytes| bytes.len());
-            let active = app.read_with(cx, |app, _| {
-                app.active_buffer().map(|file| {
+            let active = app.read_with(cx, |app, cx| {
+                app.active_buffer(cx).map(|file| {
                     (
                         file.path.clone(),
                         file.input.is_text(),
@@ -1174,7 +1173,7 @@ fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(tcx: &mut Te
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     open_remote(&app, &mut cx, reader.clone(), &path);
     ready(&app, &mut cx, 3);

@@ -445,13 +445,13 @@ mod tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             settle(&mut vcx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         if !app.read_with(&vcx, |app, cx| {
-            app.active_editor_input()
+            app.active_editor_input(cx)
                 .unwrap()
                 .markdown()
                 .unwrap()
@@ -482,7 +482,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -498,7 +498,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -530,7 +530,7 @@ mod tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             settle(&mut vcx);
             assert!(
                 std::time::Instant::now() < deadline,
@@ -547,7 +547,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .unwrap()
                     .text()
                     .unwrap()
@@ -563,7 +563,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .unwrap()
                     .text()
                     .unwrap()
@@ -590,7 +590,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -607,7 +607,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -626,7 +626,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -636,7 +636,7 @@ mod tests {
                     .to_string(),
                 "中🎉 新\n新 omega 新"
             );
-            assert!(app.active_buffer().unwrap().dirty);
+            assert!(app.active_buffer(cx).unwrap().dirty);
         });
         vcx.update(|window, cx| window.press("escape", cx));
         settle(&mut vcx);
@@ -647,7 +647,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -657,7 +657,7 @@ mod tests {
                     .to_string(),
                 "中🎉 alpha\nAlpha omega alpha"
             );
-            assert!(!app.active_buffer().unwrap().dirty);
+            assert!(!app.active_buffer(cx).unwrap().dirty);
         });
     }
 
@@ -671,13 +671,13 @@ mod tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             settle(&mut vcx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().expect("markdown presentation");
+            let input = app.active_editor_input(cx).expect("markdown presentation");
             input.focus(window, cx);
         });
         settle(&mut vcx);
@@ -707,7 +707,7 @@ mod tests {
         loop {
             settle(&mut vcx);
             let ready = app.read_with(&vcx, |app, cx| {
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .and_then(|input| input.markdown().cloned())
                     .is_some_and(|view| view.read(cx).scroll_handle().max_offset().x > px(0.))
             });

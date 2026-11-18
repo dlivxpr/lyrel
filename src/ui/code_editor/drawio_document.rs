@@ -1360,7 +1360,7 @@ impl Render for DrawioView {
 }
 
 /// Right-click menu: the same page and zoom actions as the toolbar and keys.
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
     multipage: bool,
 ) -> gpui_kit::component::menu::PopupMenu {

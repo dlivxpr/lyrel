@@ -1,5 +1,6 @@
 //! 原生字体消费者：生产 workbench 的 Mermaid 输入、派生图形、history 与 Host 保存。
 use super::super::super::*;
+use super::super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext};
@@ -79,9 +80,8 @@ fn ready_after(
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
     until(context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer()
-                .is_some_and(|file| !file.dirty && !file.saving)
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
         })
     });
 }
@@ -99,10 +99,12 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -136,8 +138,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut context);
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -221,10 +223,12 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let reopened = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let reopened = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -260,8 +264,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             expected.as_bytes()
         );
     });
-    app.read_with(&context, |app, _| {
-        assert!(!app.active_buffer().unwrap().dirty)
+    app.read_with(&context, |app, cx| {
+        with_active_file(app, cx, |file, _| assert!(!file.dirty));
     });
     context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
     settle(&mut context);
@@ -351,10 +355,12 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -406,8 +412,8 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         app.open_file_in_editor(&other, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == other)
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |file, _| file.path == other).unwrap_or(false)
         })
     });
     removed.release(&mut context);
@@ -419,14 +425,9 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         );
     });
     app.read_with(&context, |app, cx| {
+        let input = active_editor_input(app, cx).unwrap();
         assert_eq!(
-            app.active_editor_input()
-                .unwrap()
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string(),
+            input.text().unwrap().read(cx).text().to_string(),
             "# Other\nDO NOT CHANGE\n"
         )
     });
@@ -449,10 +450,12 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()

@@ -579,7 +579,7 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             settle(vcx);
-            if app.read_with(vcx, |app, _| app.editor_active_local_file().is_some()) {
+            if app.read_with(vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
                 return;
             }
             assert!(
@@ -919,7 +919,9 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         wait_for_editor(&app, &mut vcx);
-        let editor = app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
+        let editor = app.read_with(&vcx, |app, cx| {
+            app.editor_active_local_file(cx).unwrap().input
+        });
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
         }));
@@ -1194,8 +1196,9 @@ mod gpui_tests {
             wait_for_editor(&app, &mut vcx);
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
-            let editor =
-                app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
+            let editor = app.read_with(&vcx, |app, cx| {
+                app.editor_active_local_file(cx).unwrap().input
+            });
             vcx.simulate_keystrokes("a");
             settle(&mut vcx);
             let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());

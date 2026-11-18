@@ -1,5 +1,6 @@
 //! 通过生产 workbench lifecycle 验证替换后的文档，不访问旧 Markdown 内核。
 use super::super::*;
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 #[cfg(feature = "native-markdown-tests")]
 use gpui_kit::test::TestEventExt as _;
@@ -49,10 +50,10 @@ fn until_state<T: std::fmt::Debug>(
 pub(super) fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
     until_state(context, "owning document save", |context| {
-        app.read_with(context, |app, _| {
-            let state = app
-                .active_buffer()
-                .map(|file| (file.id(), file.dirty, file.saving, file.conflict));
+        app.read_with(context, |app, cx| {
+            let state = with_active_file(app, cx, |file, _| {
+                (file.id(), file.dirty, file.saving, file.conflict)
+            });
             (
                 state
                     .as_ref()
@@ -81,10 +82,12 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -103,13 +106,9 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
     settle(&mut context);
     app.read_with(&context, |app, cx| {
+        let input = active_editor_input(app, cx).unwrap();
         assert_eq!(
-            app.active_editor_input()
-                .unwrap()
-                .text()
-                .unwrap()
-                .read(cx)
-                .cursor_position(),
+            input.text().unwrap().read(cx).cursor_position(),
             Position::new(1, 2)
         )
     });
@@ -132,8 +131,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             "split frame callbacks must preserve the first view's newer selection"
         );
     });
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -155,14 +154,10 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     context.update(|window, cx| window.input("中🎉", cx));
     settle(&mut context);
     app.read_with(&context, |app, cx| {
-        assert!(app.active_buffer().unwrap().dirty);
+        with_active_file(app, cx, |file, _| assert!(file.dirty));
+        let input = active_editor_input(app, cx).unwrap();
         assert_eq!(
-            app.active_editor_input()
-                .unwrap()
-                .text()
-                .unwrap()
-                .read(cx)
-                .cursor_position(),
+            input.text().unwrap().read(cx).cursor_position(),
             Position::new(1, 3)
         );
     });
@@ -194,8 +189,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
     context.dispatch_action(commands::TransformToUppercase);
     settle(&mut context);
-    app.read_with(&context, |app, _| {
-        assert!(app.active_buffer().unwrap().dirty)
+    app.read_with(&context, |app, cx| {
+        with_active_file(app, cx, |file, _| assert!(file.dirty));
     });
     save(&app, &mut context);
     assert!(
@@ -217,22 +212,25 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     app.read_with(&context, |app, cx| {
-        let file = app.active_buffer().unwrap();
-        assert_eq!(file.host.id(), HostId(237));
-        assert_eq!(
-            file.input
-                .markdown()
-                .unwrap()
-                .read(cx)
-                .document()
-                .read(cx)
-                .encode()
-                .unwrap(),
-            expected
-        );
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(file.host.id(), HostId(237));
+            assert_eq!(
+                file.input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                expected
+            );
+        });
     });
 }
 
@@ -245,10 +243,12 @@ pub(super) fn composition(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -294,8 +294,8 @@ pub(super) fn composition(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let owner = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let owner = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -313,8 +313,8 @@ pub(super) fn composition(cx: &mut TestAppContext) {
     });
     drop(owner);
     settle(&mut context);
-    let remaining = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let remaining = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -365,10 +365,12 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -465,20 +467,17 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     app.read_with(&context, |app, cx| {
-        assert_eq!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string(),
-            original
-        )
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(
+                file.input.text().unwrap().read(cx).text().to_string(),
+                original
+            )
+        });
     });
 }
 
@@ -499,10 +498,12 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -753,8 +754,8 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -854,10 +855,12 @@ pub(super) fn native_viewport_jump(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -922,10 +925,12 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -941,8 +946,8 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -970,15 +975,13 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
         app.open_file_in_editor(&path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     app.read_with(&context, |app, cx| {
-        let view = app
-            .active_editor_input()
-            .unwrap()
-            .markdown()
-            .unwrap()
-            .read(cx);
+        let view = active_editor_input(app, cx).unwrap();
+        let view = view.markdown().unwrap().read(cx);
         assert!(view.is_source_only());
         assert!(!view.is_live());
         assert_eq!(view.document().read(cx).encode().unwrap(), source);
@@ -998,10 +1001,12 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -1104,22 +1109,24 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     app.read_with(&context, |app, cx| {
-        assert_eq!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .markdown()
-                .unwrap()
-                .read(cx)
-                .document()
-                .read(cx)
-                .encode()
-                .unwrap(),
-            original.as_bytes()
-        )
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(
+                file.input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                original.as_bytes()
+            )
+        });
     });
 }
 

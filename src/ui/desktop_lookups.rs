@@ -445,7 +445,12 @@ pub fn pane_ids(cx: &App, entry: &crate::core::session::WindowView) -> Option<Ve
 pub fn display_name_for(cx: &App, client_ws: WorkspaceId) -> Option<String> {
     let entry = crate::core::session::WorkspaceStore::all(cx).get(client_ws)?;
     match mirror_of(cx, entry) {
-        Some(mirror) => Some(mirror.name.clone().unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())),
+        Some(mirror) => Some(
+            mirror
+                .name
+                .clone()
+                .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string()),
+        ),
         None => entry.label.clone(),
     }
 }

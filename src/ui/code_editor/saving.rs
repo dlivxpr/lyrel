@@ -634,13 +634,15 @@ impl EditorPanelState {
             return;
         };
         let identity = bar.identity.clone();
+        let kind = bar.kind;
+        let input = bar.input.clone();
         if !self.accepts_prompt(&identity, cx) {
             self.dismiss_bar();
             cx.emit(EditorPanelEvent::FocusDocument);
             return;
         }
-        let text = bar.input.read(cx).value().to_string();
-        match bar.kind {
+        let text = input.read(cx).value().to_string();
+        match kind {
             BarKind::GoToLine { id } => {
                 let Some((line, column)) = parse_line_target(&text) else {
                     return;
@@ -658,7 +660,6 @@ impl EditorPanelState {
             }
             BarKind::SaveAs { id } => {
                 let path = PathBuf::from(text.trim());
-                let identity = bar.identity.clone();
                 let Some(file) = self.buffers.get(id) else {
                     return;
                 };

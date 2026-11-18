@@ -387,12 +387,7 @@ impl EditorPanelState {
         self.active_file(code)?.gutter.root()
     }
 
-    pub(crate) fn render_gutter(
-        &self,
-        id: BufferId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(crate) fn render_gutter(&self, id: BufferId, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !enabled(cx) {
             return None;
         }
@@ -1275,7 +1270,8 @@ mod tests {
                 .expect("a buffer");
             let input = app
                 .editor
-                .buffers
+                .read(cx)
+                .buffers()
                 .get(id)
                 .expect("the buffer")
                 .input
@@ -1286,18 +1282,22 @@ mod tests {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);
                 state.focus(window, cx);
             });
-            app.editor
-                .buffers
-                .get_mut(id)
-                .unwrap()
-                .gutter
-                .set_base_for_test(base);
+            app.editor.update(cx, |editor, _| {
+                editor
+                    .buffers
+                    .get_mut(id)
+                    .unwrap()
+                    .gutter
+                    .set_base_for_test(base);
+            });
             (id, input)
         });
         vcx.run_until_parked();
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let hunks = app.editor_gutter_hunks_now(id, cx);
+            let hunks = app
+                .editor
+                .update(cx, |editor, cx| editor.gutter_hunks_now(id, cx));
             assert_eq!(*hunks, vec![h(1..2, 1..2), h(4..4, 4..5)]);
 
             assert!(app.editor_gutter_step(true, window, cx));
@@ -1313,7 +1313,10 @@ mod tests {
                 input.read(cx).text().to_string(),
                 "one\ntwo\nthree\nfour\nfive\n"
             );
-            assert_eq!(*app.editor_gutter_hunks_now(id, cx), vec![h(4..4, 4..5)]);
+            let hunks = app
+                .editor
+                .update(cx, |editor, cx| editor.gutter_hunks_now(id, cx));
+            assert_eq!(*hunks, vec![h(4..4, 4..5)]);
         });
 
         // One undo takes the whole revert back.
@@ -1332,8 +1335,15 @@ mod tests {
         // next change and takes the keys; Escape hands them back.
         let peek_open = |app: &gpui_kit::Entity<LyrelApp>,
                          vcx: &mut gpui_kit::VisualTestContext| {
-            app.update_in(vcx, |app, _, _| {
-                app.editor.buffers.get(id).unwrap().gutter.peek.is_some()
+            app.read_with(vcx, |app, cx| {
+                app.editor
+                    .read(cx)
+                    .buffers()
+                    .get(id)
+                    .unwrap()
+                    .gutter
+                    .peek
+                    .is_some()
             })
         };
         app.update_in(&mut vcx, |app, window, cx| {

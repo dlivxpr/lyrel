@@ -21,28 +21,25 @@
 //! editor leads with a pill naming the terminal it covers, which docks it back
 //! beside that terminal.
 
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    Anchor, AnyElement, Context, Entity, Focusable as _, FontWeight, SharedString, Subscription,
-    Window, anchored, deferred, div, px, rems,
-};
+use gpui_kit::{Context, Entity, Focusable as _, SharedString, Subscription, Window};
 
-use super::{BufferId, StripNav, TabCode};
+use super::{BufferId, EditorPanelState, StripNav, TabCode};
+#[cfg(test)]
 use crate::ui::app::LyrelApp;
-use crate::ui::document_column::DocumentChrome;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::host_ops::HostId;
+use crate::ui::i18n::{L10nKey, t_fmt};
+use lyrel_core::core::machine::TabId;
 
-pub(super) use crate::ui::document_column::{
+pub(crate) use crate::ui::document_column::{
     HEADER_CELL_H as CELL_H, HEADER_CELL_MAX_W as CELL_MAX_W, HEADER_CELL_RADIUS as CELL_RADIUS,
     HEADER_CELL_TEXT as CELL_TEXT,
 };
 
-const PICKER_W: f32 = 340.;
-const PICKER_LIST_MAX_H: f32 = 340.;
-const PICKER_ROW_H: f32 = 28.;
+pub(crate) const PICKER_W: f32 = 340.;
+pub(crate) const PICKER_LIST_MAX_H: f32 = 340.;
+pub(crate) const PICKER_ROW_H: f32 = 28.;
 
 /// The strip's own key context. The group focus pair is bound in
 /// `Input || DocumentStrip` so it keeps working while the cells hold the
@@ -52,21 +49,21 @@ pub(crate) const KEY_CONTEXT: &str = "DocumentStrip";
 
 /// One file cell the header strip draws, and everything the cell needs to
 /// say what it is and whether it holds the strip's keyboard focus.
-pub(super) struct StripCell {
-    pub(super) id: BufferId,
-    pub(super) name: SharedString,
-    pub(super) tip: String,
-    pub(super) active: bool,
-    pub(super) dirty: bool,
+pub(crate) struct StripCell {
+    pub(crate) id: BufferId,
+    pub(crate) name: SharedString,
+    pub(crate) tip: String,
+    pub(crate) active: bool,
+    pub(crate) dirty: bool,
     /// This cell is the group's remembered document — the one Enter or Space
     /// would show.
-    pub(super) nav_focused: bool,
+    pub(crate) nav_focused: bool,
     /// The strip — not the text — holds the keyboard, so the focused cell is
     /// lit.
-    pub(super) strip_focused: bool,
+    pub(crate) strip_focused: bool,
     /// One-based place in the tab list, for assistive technology.
-    pub(super) position: usize,
-    pub(super) count: usize,
+    pub(crate) position: usize,
+    pub(crate) count: usize,
 }
 
 impl TabCode {
@@ -173,96 +170,33 @@ pub(crate) struct StripPicker {
 }
 
 /// One row of the list.
-struct PickerRow {
-    id: BufferId,
-    name: SharedString,
-    dir: SharedString,
-    dirty: bool,
-    front: bool,
+pub(crate) struct PickerRow {
+    pub(crate) id: BufferId,
+    pub(crate) name: SharedString,
+    pub(crate) dir: SharedString,
+    pub(crate) dirty: bool,
+    pub(crate) front: bool,
 }
 
-impl LyrelApp {
-    /// How many names the strip holds. Fixed counts rather than a measure:
-    /// names differ so much in width that a measured fit would reshuffle the
-    /// strip whenever a long one came forward.
-    pub(super) fn editor_strip_cap(&self, chrome: DocumentChrome, cx: &gpui_kit::App) -> usize {
-        let (left, right) = (self.left_panel_open(cx), self.right_panel_open(cx));
-        match chrome {
-            DocumentChrome::Fill if left && right => 5,
-            DocumentChrome::Fill => 7,
-            _ if right => 2,
-            _ => 3,
-        }
-    }
-
-    /// The cell Enter or Space would activate: the focused group's remembered
-    /// cell while it is still one of the cells on screen, otherwise the
-    /// document in front, otherwise the first cell. See
+impl EditorPanelState {
+    /// The cell Enter or Space would activate among `visible` — the focused
+    /// group's remembered cell while it is still one of the cells on screen,
+    /// otherwise the document in front, otherwise the first cell. See
     /// [`TabCode::strip_target`].
-    pub(super) fn editor_strip_target(&self, visible: &[BufferId]) -> Option<BufferId> {
-        self.tab_code()?.strip_target(visible)
+    pub(crate) fn strip_target(
+        &self,
+        code: Option<&TabCode>,
+        visible: &[BufferId],
+    ) -> Option<BufferId> {
+        code?.strip_target(visible)
     }
 
-    /// Whether a real terminal or the ordinary editor content owns the
-    /// keyboard. Navigation entry must not fire through a picker, an editor
-    /// prompt, or another workbench input merely because it has Input context.
-    fn document_navigation_content_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
-        if self.editor_has_focus(window, cx) || self.editor.strip_keyboard.is_focused(window) {
-            return true;
-        }
-        self.tabs.get(self.tabs.active_index()).is_some_and(|tab| {
-            tab.pane
-                .leaves()
-                .iter()
-                .any(|leaf| leaf.contains_focused(window, cx))
-        })
-    }
-
-    /// Moves the keyboard into the focused group's strip, on the document it
-    /// remembers. Nothing is brought to the front: entering the strip shows
-    /// what Enter would open, and leaves the text as it was.
-    pub(crate) fn focus_document_tab_navigation(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.code_panel_visible()
-            || self.tab_code().is_none_or(|code| code.files.is_empty())
-            || self.sidebar_nav_overlay_open(window)
-            || !self.document_navigation_content_has_focus(window, cx)
-        {
-            return false;
-        }
-        self.editor.strip_keyboard.focus(window, cx);
-        cx.notify();
-        true
-    }
-
-    /// Opens — or closes — the `+N` list from the keyboard. The list holds
-    /// every open document, hidden ones first, and its filter box takes the
-    /// typing; choosing one brings it to the front.
-    pub(crate) fn editor_document_overflow(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.code_panel_visible() || self.tab_code().is_none_or(|code| code.files.is_empty()) {
-            return false;
-        }
-        if let Some(picker) = &self.editor.strip_picker {
-            // The same chord closes the list only while the list itself holds
-            // the keyboard. A picker sitting under a search, a prompt or
-            // another overlay does not answer for that surface's keys.
-            if !picker.input.read(cx).focus_handle(cx).is_focused(window) {
-                return false;
-            }
-        } else if self.sidebar_nav_overlay_open(window)
-            || !self.document_navigation_content_has_focus(window, cx)
-        {
-            return false;
-        }
-        self.editor_toggle_strip_picker(window, cx, true);
-        true
+    /// Moves the keyboard into the header strip. The decision that the strip
+    /// may take the keyboard — a visible panel, files in it, no modal above,
+    /// and a surface that belongs to the panel holding the focus — is the
+    /// shell's; this performs the focus move itself.
+    pub(crate) fn focus_strip_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.strip_keyboard.focus(window, cx);
     }
 
     /// The strip's keyboard, while the strip holds it: the focused cell moves
@@ -272,8 +206,10 @@ impl LyrelApp {
     ///
     /// `visible` is the cells the last draw put on screen. A document closed
     /// since is dropped here rather than acted on by position.
-    pub(super) fn editor_strip_key(
+    pub(crate) fn strip_key(
         &mut self,
+        tab: TabId,
+        code: &mut TabCode,
         visible: &[BufferId],
         ev: &gpui_kit::KeyDownEvent,
         window: &mut Window,
@@ -283,15 +219,12 @@ impl LyrelApp {
         if ev.keystroke.modifiers.modified() {
             return;
         }
-        let Some(code) = self.tab_code() else {
-            return;
-        };
         let shown: Vec<BufferId> = visible
             .iter()
             .copied()
             .filter(|id| code.files.contains(id))
             .collect();
-        let Some(current) = self.editor_strip_target(&shown) else {
+        let Some(current) = code.strip_target(&shown) else {
             return;
         };
         let Some(ix) = shown.iter().position(|id| *id == current) else {
@@ -303,64 +236,68 @@ impl LyrelApp {
             "home" => shown[0],
             "end" => *shown.last().expect("the strip draws a cell"),
             "enter" | "space" => {
-                self.editor_strip_select(current, window, cx);
+                self.strip_select(code, current, cx);
                 cx.stop_propagation();
                 return;
             }
             "escape" => {
-                self.focus_editor(window, cx);
+                self.focus_editor(tab, code, window, cx);
                 cx.stop_propagation();
                 return;
             }
             _ => return,
         };
-        if let Some(code) = self.tab_code_mut() {
-            code.remember_strip_focus(next);
-        }
+        code.remember_strip_focus(next);
         cx.stop_propagation();
         cx.notify();
     }
 
     /// Pointer activation of a strip cell: the document comes to the front
     /// and its text takes the keyboard, as clicking a tab always did.
-    pub(super) fn editor_strip_activate(
+    pub(crate) fn strip_activate(
         &mut self,
+        tab: TabId,
+        code: &mut TabCode,
         id: BufferId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor_strip_select(id, window, cx);
-        self.focus_editor(window, cx);
+        self.strip_select(code, id, cx);
+        self.focus_editor(tab, code, window, cx);
     }
 
     /// Brings a document to the front from the strip without moving the
     /// keyboard. Keyboard activation keeps the cells navigable.
-    fn editor_strip_select(&mut self, id: BufferId, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pos) = self
-            .tab_code()
-            .and_then(|code| code.files.iter().position(|file| *file == id))
-        else {
+    pub(crate) fn strip_select(
+        &mut self,
+        code: &mut TabCode,
+        id: BufferId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pos) = code.files.iter().position(|file| *file == id) else {
             return;
         };
-        if let Some(code) = self.tab_code_mut() {
-            code.active = pos;
-            code.remember_strip_focus(id);
-        }
-        self.editor.dismiss_bar();
+        code.active = pos;
+        code.remember_strip_focus(id);
+        self.dismiss_bar();
         cx.notify();
     }
 
-    fn editor_strip_rows(&self, cx: &gpui_kit::App) -> Vec<PickerRow> {
-        let Some(code) = self.tab_code() else {
+    fn strip_rows(
+        &self,
+        code: Option<&TabCode>,
+        local_host: HostId,
+        _cx: &gpui_kit::App,
+    ) -> Vec<PickerRow> {
+        let Some(code) = code else {
             return Vec::new();
         };
         let front = code.active_id();
         let roots = code.roots.as_slice();
-        let local_host = self.spawn_host(cx);
         code.by_recency()
             .into_iter()
             .filter_map(|id| {
-                let f = self.editor.buffers.get(id)?;
+                let f = self.buffers.get(id)?;
                 let dir = if f.untitled.is_some() {
                     String::new()
                 } else {
@@ -382,14 +319,19 @@ impl LyrelApp {
     }
 
     /// The rows the query leaves, in the order Up/Down walks them.
-    fn editor_strip_matches(&self, cap: usize, cx: &gpui_kit::App) -> (Vec<PickerRow>, usize) {
+    pub(crate) fn strip_matches(
+        &self,
+        code: Option<&TabCode>,
+        local_host: HostId,
+        cap: usize,
+        cx: &gpui_kit::App,
+    ) -> (Vec<PickerRow>, usize) {
         let q = self
-            .editor
             .strip_picker
             .as_ref()
             .map(|p| p.input.read(cx).value().trim().to_lowercase())
             .unwrap_or_default();
-        let rows = self.editor_strip_rows(cx);
+        let rows = self.strip_rows(code, local_host, cx);
         if !q.is_empty() {
             let hits: Vec<PickerRow> = rows
                 .into_iter()
@@ -408,32 +350,40 @@ impl LyrelApp {
         (rows, hidden)
     }
 
-    pub(super) fn editor_toggle_strip_picker(
+    /// Opens — or closes — the `+N` list. `file_count` names how many open
+    /// documents the placeholder speaks of; `from_keyboard` says the chord,
+    /// not the pointer, asked, which decides where Escape returns the
+    /// keyboard.
+    pub(crate) fn toggle_strip_picker(
         &mut self,
+        tab: TabId,
+        code: Option<&TabCode>,
+        file_count: usize,
+        from_keyboard: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-        from_keyboard: bool,
     ) {
-        if self.editor.strip_picker.is_some() {
-            self.editor_close_strip_picker(window, cx);
+        if self.strip_picker.is_some() {
+            self.close_strip_picker(tab, code, window, cx);
             return;
         }
-        let n = self.tab_code().map_or(0, |c| c.files.len());
-        let restore_strip = from_keyboard && self.editor.strip_keyboard.is_focused(window);
+        let restore_strip = from_keyboard && self.strip_keyboard.is_focused(window);
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(t_fmt(L10nKey::EditorStripSearch, &[("n", &n.to_string())]))
+            InputState::new(window, cx).placeholder(t_fmt(
+                L10nKey::EditorStripSearch,
+                &[("n", &file_count.to_string())],
+            ))
         });
         input.update(cx, |state, cx| state.focus(window, cx));
         let _sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| {
             if matches!(ev, InputEvent::Change) {
-                if let Some(p) = this.editor.strip_picker.as_mut() {
+                if let Some(p) = this.strip_picker.as_mut() {
                     p.hi = 0;
                 }
                 cx.notify();
             }
         });
-        self.editor.strip_picker = Some(StripPicker {
+        self.strip_picker = Some(StripPicker {
             input,
             hi: 0,
             over_button: true,
@@ -443,58 +393,75 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(super) fn editor_close_strip_picker(
+    /// Closes the list, returning the keyboard where it came from: the strip
+    /// when the list was opened from the strip's own keyboard, the text it
+    /// was pointing at otherwise.
+    pub(crate) fn close_strip_picker(
         &mut self,
+        tab: TabId,
+        code: Option<&TabCode>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(picker) = self.editor.strip_picker.take() else {
+        let Some(picker) = self.strip_picker.take() else {
             return;
         };
         if picker.restore_strip {
-            self.editor.strip_keyboard.focus(window, cx);
-        } else {
-            self.focus_editor(window, cx);
+            self.strip_keyboard.focus(window, cx);
+        } else if let Some(code) = code {
+            self.focus_editor(tab, code, window, cx);
         }
         cx.notify();
     }
 
-    fn editor_strip_pick(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+    /// A row's choice: the document comes to the front, and the keyboard goes
+    /// back to where the list was opened from — the strip's own keyboard
+    /// keeps it, a pointer's choice returns it to the text.
+    pub(crate) fn strip_pick(
+        &mut self,
+        tab: TabId,
+        code: &mut TabCode,
+        id: BufferId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let restore_strip = self
-            .editor
             .strip_picker
             .as_ref()
             .is_some_and(|picker| picker.restore_strip);
-        self.editor.strip_picker = None;
+        self.strip_picker = None;
         if restore_strip {
             // Selection changes the front document, not the keyboard owner.
             // The select path also remembers this document against the group
             // that is focused now, so the next render exposes a valid cell.
-            self.editor_strip_select(id, window, cx);
-            self.editor.strip_keyboard.focus(window, cx);
-        } else if let Some(pos) = self
-            .tab_code()
-            .and_then(|c| c.files.iter().position(|f| *f == id))
-        {
-            self.editor_activate(pos, window, cx);
+            self.strip_select(code, id, cx);
+            self.strip_keyboard.focus(window, cx);
+        } else if let Some(pos) = code.files.iter().position(|f| *f == id) {
+            self.activate(pos, tab, code, window, cx);
         }
         cx.notify();
     }
 
-    fn on_strip_picker_key(
+    /// The list's keyboard: Up/Down walk the rows, Enter chooses, Escape
+    /// closes. `local_host` is the shell's answer to which machine the
+    /// window's files live on, for the rows' directory names.
+    pub(crate) fn strip_picker_key(
         &mut self,
+        tab: TabId,
+        code: &mut TabCode,
+        local_host: HostId,
         ev: &gpui_kit::KeyDownEvent,
         cap: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (rows, _) = self.editor_strip_matches(cap, cx);
-        let Some(p) = self.editor.strip_picker.as_mut() else {
+        let (rows, _) = self.strip_matches(Some(&*code), local_host, cap, cx);
+        let Some(p) = self.strip_picker.as_mut() else {
             return;
         };
         let n = rows.len();
         match ev.keystroke.key.as_str() {
-            "escape" => self.editor_close_strip_picker(window, cx),
+            "escape" => self.close_strip_picker(tab, Some(code), window, cx),
             "up" if n > 0 => {
                 p.hi = p.hi.min(n - 1).saturating_sub(1);
                 cx.notify();
@@ -506,7 +473,7 @@ impl LyrelApp {
             "enter" => {
                 if let Some(row) = rows.get(p.hi.min(n.saturating_sub(1))) {
                     let id = row.id;
-                    self.editor_strip_pick(id, window, cx);
+                    self.strip_pick(tab, code, id, window, cx);
                 }
             }
             _ => return,
@@ -514,311 +481,10 @@ impl LyrelApp {
         cx.stop_propagation();
     }
 
-    /// The `+N` button at the end of the strip, with its list when open.
-    pub(super) fn render_strip_overflow(
-        &self,
-        hidden: &[BufferId],
-        cap: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let open = self.editor.strip_picker.is_some();
-        // The chip exists only when there is something behind it, but the
-        // list can be opened from the keyboard with every file in the strip,
-        // so it is still anchored at the strip's end then.
-        if hidden.is_empty() && !open {
-            return None;
-        }
-        let theme = cx.theme();
-        let hidden_dirty = hidden
-            .iter()
-            .any(|id| self.editor.buffers.get(*id).is_some_and(|f| f.dirty));
-        let button = h_flex()
-            .id("editor-strip-more")
-            .test_support()
-            .occlude()
-            .flex_none()
-            .h(px(CELL_H))
-            .px(px(8.))
-            .gap(px(5.))
-            .items_center()
-            .rounded(px(CELL_RADIUS))
-            .text_size(rems(12. / 16.))
-            .font_features(crate::ui::theme::tabular_figures())
-            .text_color(theme.muted_foreground)
-            .role(gpui_kit::Role::Button)
-            .aria_label(t(L10nKey::EditorStripAllFiles))
-            .when(open, |d| d.bg(theme.sidebar_accent))
-            .hover(|s| s.bg(theme.sidebar_accent).text_color(theme.foreground))
-            .when(hidden_dirty, |d| {
-                d.child(
-                    div()
-                        .size(px(crate::ui::tab_strip::ROW_STATUS_DOT))
-                        .rounded_full()
-                        .bg(theme.muted_foreground),
-                )
-            })
-            .child(format!("+{}", hidden.len()))
-            .child(
-                Icon::new(IconName::ChevronDown)
-                    .xsmall()
-                    .text_color(theme.muted_foreground),
-            )
-            .tooltip(|window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(t(L10nKey::EditorStripAllFiles))
-                    .build(window, cx)
-            })
-            .on_hover(cx.listener(|this, over: &bool, _, _| {
-                if let Some(p) = this.editor.strip_picker.as_mut() {
-                    p.over_button = *over;
-                }
-            }))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.editor_toggle_strip_picker(window, cx, false);
-            }));
-        Some(
-            div()
-                .relative()
-                .flex_none()
-                .children((!hidden.is_empty()).then(|| button.into_any_element()))
-                .children(self.render_strip_picker(cap, cx))
-                .into_any_element(),
-        )
-    }
-
-    fn render_strip_picker(&self, cap: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let picker = self.editor.strip_picker.as_ref()?;
-        let (rows, hidden) = self.editor_strip_matches(cap, cx);
-        let querying = !picker.input.read(cx).value().trim().is_empty();
-        let hi = picker.hi.min(rows.len().saturating_sub(1));
-        let theme = cx.theme();
-        let (fg, muted) = (theme.foreground, theme.muted_foreground);
-        let row_hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.hover);
-
-        let heading = |label: SharedString| {
-            div()
-                .h(px(24.))
-                .pt(px(4.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .text_size(rems(11. / 16.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(muted)
-                .child(label)
-        };
-        let empty = rows.is_empty();
-        let mut list = v_flex()
-            .id("editor-strip-list")
-            .max_h(px(PICKER_LIST_MAX_H))
-            .overflow_y_scroll()
-            .gap(px(1.));
-        for (i, row) in rows.into_iter().enumerate() {
-            if !querying && i == 0 && hidden > 0 {
-                list = list.child(heading(
-                    t_fmt(L10nKey::EditorStripHidden, &[("n", &hidden.to_string())]).into(),
-                ));
-            }
-            if !querying && i == hidden {
-                list = list.child(heading(t(L10nKey::EditorStripInBar).into()));
-            }
-            let id = row.id;
-            let group: SharedString = format!("editor-strip-row-{i}").into();
-            let slot = div()
-                .id(("editor-strip-row-close", i))
-                .relative()
-                .flex_none()
-                .size(px(18.))
-                .rounded(px(4.))
-                .hover(|s| s.bg(theme.muted))
-                .when(row.dirty, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .group_hover(group.clone(), |s| s.invisible())
-                            .child(div().size(px(6.)).rounded_full().bg(muted)),
-                    )
-                })
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(row.dirty, |d| d.invisible())
-                        .group_hover(group.clone(), |s| s.visible())
-                        .child(Icon::new(IconName::Close).xsmall().text_color(muted)),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.editor_close_buffer(id, window, cx);
-                }));
-            list = list.child(
-                h_flex()
-                    .id(SharedString::from(format!("editor-strip-row-{i}")))
-                    .test_support()
-                    .group(group)
-                    .flex_none()
-                    .h(px(PICKER_ROW_H))
-                    .pl(px(8.))
-                    .pr(px(4.))
-                    .gap(px(8.))
-                    .items_center()
-                    .rounded(px(6.))
-                    .when(i == hi, |d| d.bg(row_hover))
-                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                        if let Some(p) = this.editor.strip_picker.as_mut()
-                            && p.hi != i
-                        {
-                            p.hi = i;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.editor_strip_pick(id, window, cx);
-                    }))
-                    .child(
-                        div()
-                            .min_w(px(40.))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .overflow_hidden()
-                            .text_color(fg)
-                            .when(row.front, |d| d.font_weight(FontWeight::MEDIUM))
-                            .child(row.name),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .overflow_hidden()
-                            .text_size(rems(11.5 / 16.))
-                            .text_color(muted)
-                            .child(row.dir),
-                    )
-                    .child(slot),
-            );
-        }
-        if empty {
-            list = list.child(
-                div()
-                    .h(px(PICKER_ROW_H))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .text_color(muted)
-                    .child(t(L10nKey::EditorStripNoMatch)),
-            );
-        }
-
-        let rule = || div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(theme.border);
-        let footer_button = |key: &'static str, label: L10nKey| {
-            div()
-                .id(key)
-                .text_color(muted)
-                .hover(|s| s.text_color(fg))
-                .child(t(label))
-        };
-        let card = v_flex()
-            .occlude()
-            .w(px(PICKER_W))
-            .p(px(5.))
-            .bg(theme.popover)
-            .text_color(theme.popover_foreground)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(10.))
-            .shadow_lg()
-            .text_size(rems(CELL_TEXT))
-            .on_key_down(
-                cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                    this.on_strip_picker_key(ev, cap, window, cx);
-                }),
-            )
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                if this
-                    .editor
-                    .strip_picker
-                    .as_ref()
-                    .is_some_and(|p| p.over_button)
-                {
-                    return;
-                }
-                this.editor_close_strip_picker(window, cx);
-            }))
-            .child(
-                h_flex()
-                    .h(px(30.))
-                    .px(px(4.))
-                    .gap(px(3.))
-                    .items_center()
-                    .child(Icon::new(IconName::Search).xsmall().text_color(muted))
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&picker.input)
-                                .appearance(false)
-                                .small()
-                                .text_size(rems(CELL_TEXT)),
-                        ),
-                    ),
-            )
-            .child(rule())
-            .child(list)
-            .child(rule())
-            .child(
-                h_flex()
-                    .h(px(28.))
-                    .px(px(8.))
-                    .gap(px(14.))
-                    .items_center()
-                    .text_size(rems(12. / 16.))
-                    .child(
-                        footer_button("editor-strip-close-saved", L10nKey::EditorStripCloseSaved)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.editor.strip_picker = None;
-                                let ids = this.editor_strip_others(true);
-                                this.editor_close_buffers(ids, window, cx);
-                                this.focus_editor(window, cx);
-                            })),
-                    )
-                    .child(
-                        footer_button("editor-strip-close-others", L10nKey::EditorStripCloseOthers)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.editor.strip_picker = None;
-                                let ids = this.editor_strip_others(false);
-                                this.editor_close_buffers(ids, window, cx);
-                                this.focus_editor(window, cx);
-                            })),
-                    ),
-            );
-        Some(
-            div()
-                .absolute()
-                .right_0()
-                .top(px(CELL_H + 4.))
-                .child(
-                    deferred(
-                        anchored()
-                            .anchor(Anchor::TopRight)
-                            .snap_to_window_with_margin(px(8.))
-                            .child(card),
-                    )
-                    .with_priority(1),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// Every file in the strip but the one in front — only the saved ones
     /// when `saved_only`.
-    fn editor_strip_others(&self, saved_only: bool) -> Vec<BufferId> {
-        let Some(code) = self.tab_code() else {
+    pub(crate) fn strip_others(&self, code: Option<&TabCode>, saved_only: bool) -> Vec<BufferId> {
+        let Some(code) = code else {
             return Vec::new();
         };
         let front = code.active_id();
@@ -826,8 +492,72 @@ impl LyrelApp {
             .iter()
             .copied()
             .filter(|id| Some(*id) != front)
-            .filter(|id| !saved_only || self.editor.buffers.get(*id).is_some_and(|f| !f.dirty))
+            .filter(|id| !saved_only || self.buffers.get(*id).is_some_and(|f| !f.dirty))
             .collect()
+    }
+
+    // ---- What the shell's `+N` rendering needs to ask ----
+
+    /// Whether the list is open.
+    pub(crate) fn strip_picker_open(&self) -> bool {
+        self.strip_picker.is_some()
+    }
+
+    /// The highlighted row, clamped to the rows the query leaves.
+    pub(crate) fn strip_picker_highlight(&self, rows: usize) -> usize {
+        self.strip_picker
+            .as_ref()
+            .map_or(0, |p| p.hi.min(rows.saturating_sub(1)))
+    }
+
+    /// The pointer is on the `+N` button: a press there is the button's to
+    /// answer, so the list does not also close itself on the press.
+    pub(crate) fn set_strip_picker_hover(&mut self, over: bool) {
+        if let Some(p) = self.strip_picker.as_mut() {
+            p.over_button = over;
+        }
+    }
+
+    /// The pointer moved onto a row: it becomes the highlighted one.
+    pub(crate) fn set_strip_picker_highlight(&mut self, i: usize) {
+        if let Some(p) = self.strip_picker.as_mut()
+            && p.hi != i
+        {
+            p.hi = i;
+        }
+    }
+
+    /// Drops the list without restoring the keyboard — the caller answers
+    /// for where the keyboard goes next.
+    pub(crate) fn dismiss_strip_picker(&mut self) {
+        self.strip_picker = None;
+    }
+
+    /// The filter box's filter.
+    pub(crate) fn strip_picker_query(&self, cx: &gpui_kit::App) -> String {
+        self.strip_picker
+            .as_ref()
+            .map(|p| p.input.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default()
+    }
+
+    /// The list's own keyboard focus, so the shell can ask whether the list
+    /// itself holds the keyboard before answering its closing chord.
+    pub(crate) fn strip_picker_has_focus(&self, window: &Window, cx: &gpui_kit::App) -> bool {
+        self.strip_picker
+            .as_ref()
+            .is_some_and(|picker| picker.input.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    /// The filter box the list renders, while the list is open.
+    pub(crate) fn strip_picker_input(&self) -> Option<Entity<InputState>> {
+        self.strip_picker.as_ref().map(|p| p.input.clone())
+    }
+
+    /// Whether the pointer is on the `+N` button: a press there is the
+    /// button's to answer, so the list stays open through it.
+    pub(crate) fn strip_picker_over_button(&self) -> bool {
+        self.strip_picker.as_ref().is_some_and(|p| p.over_button)
     }
 }
 
@@ -945,17 +675,34 @@ mod gpui_tests {
 
     /// The document in front, by its path — the identity a user sees.
     fn front(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> PathBuf {
-        app.read_with(vcx, |app, _| app.active_buffer().unwrap().path.clone())
+        app.read_with(vcx, |app, cx| {
+            let code = app.tab_code().unwrap();
+            app.editor.read(cx).active_file(code).unwrap().path.clone()
+        })
     }
 
     fn strip_has_keys(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
-        vcx.update(|window, cx| app.read(cx).editor.strip_keyboard.is_focused(window))
+        vcx.update(|window, cx| {
+            app.read(cx)
+                .editor
+                .read(cx)
+                .strip_keyboard
+                .is_focused(window)
+        })
     }
 
     fn content_has_keys(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
         vcx.update(|window, cx| {
             let app = app.read(cx);
-            app.active_editor_input()
+            let Some(code) = app.tab_code() else {
+                return false;
+            };
+            let Some(tab) = app.tabs.get(app.tabs.active_index()) else {
+                return false;
+            };
+            app.editor
+                .read(cx)
+                .active_editor_input(tab.id(), code)
                 .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
         })
     }
@@ -964,9 +711,8 @@ mod gpui_tests {
         vcx.update(|window, cx| {
             app.read(cx)
                 .editor
-                .strip_picker
-                .as_ref()
-                .is_some_and(|picker| picker.input.read(cx).focus_handle(cx).is_focused(window))
+                .read(cx)
+                .strip_picker_has_focus(window, cx)
         })
     }
 
@@ -975,7 +721,9 @@ mod gpui_tests {
     }
 
     fn dirty(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, id: BufferId) -> bool {
-        app.read_with(vcx, |app, _| app.editor.buffers.get(id).unwrap().dirty)
+        app.read_with(vcx, |app, cx| {
+            app.editor.read(cx).buffers().get(id).unwrap().dirty
+        })
     }
 
     #[gpui_kit::test]
@@ -1282,14 +1030,14 @@ mod gpui_tests {
 
         // The × the strip offers on the cell.
         app.update_in(&mut vcx, |app, window, cx| {
-            app.editor_close_buffer(b, window, cx);
+            app.editor_close_file(1, window, cx);
         });
         settle(&mut vcx);
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
             let code = app.tab_code().unwrap();
             assert!(!code.files.contains(&b), "the closed document is gone");
             assert_eq!(
-                app.active_buffer().unwrap().path,
+                app.editor.read(cx).active_file(code).unwrap().path,
                 PathBuf::from("/strip/c.rs"),
                 "the neighbour in front took over"
             );
@@ -1334,7 +1082,7 @@ mod gpui_tests {
 
         // Closing it still asks first, and the document stays open.
         app.update_in(&mut vcx, |app, window, cx| {
-            app.editor_close_buffer(edited, window, cx);
+            app.editor_close_file(1, window, cx);
         });
         settle(&mut vcx);
         assert!(
@@ -1347,7 +1095,7 @@ mod gpui_tests {
                 "a cancelled close keeps the document"
             );
         });
-        vcx.simulate_prompt_answer(t(L10nKey::Cancel));
+        vcx.simulate_prompt_answer(crate::ui::i18n::t(L10nKey::Cancel));
         settle(&mut vcx);
         assert!(dirty(&app, &mut vcx, edited));
     }
@@ -1363,25 +1111,30 @@ mod gpui_tests {
         crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             let tab = app.tabs[0].id();
-            let id = app.editor_new_buffer(
-                host.clone(),
-                path.clone(),
-                None,
-                BufferKind::Text,
-                "fn main() {}\n".into(),
-                TextFormat::default(),
-                EditorConfig::default(),
-                lyrel_document::text::detect_indent("", "rust"),
-                None,
-                window,
-                cx,
-            );
+            let id = app.editor.update(cx, |editor, cx| {
+                editor.new_buffer(
+                    host.clone(),
+                    path.clone(),
+                    None,
+                    BufferKind::Text,
+                    "fn main() {}\n".into(),
+                    TextFormat::default(),
+                    EditorConfig::default(),
+                    lyrel_document::text::detect_indent("", "rust"),
+                    None,
+                    window,
+                    cx,
+                )
+            });
             app.editor_show_in_tab(tab, id, true, window, cx);
         });
         settle(&mut vcx);
         vcx.update(|window, cx| window.input("// edit", cx));
         settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.active_buffer().unwrap().dirty));
+        assert!(app.read_with(&vcx, |app, cx| {
+            let code = app.tab_code().unwrap();
+            app.editor.read(cx).active_file(code).unwrap().dirty
+        }));
 
         // The strip has the keyboard, and the document commands still reach
         // the document in front.
@@ -1389,7 +1142,10 @@ mod gpui_tests {
         assert!(strip_has_keys(&app, &mut vcx));
         vcx.update(|window, cx| window.press("secondary-s", cx));
         wait_until(&mut vcx, |vcx| {
-            app.read_with(vcx, |app, _| !app.active_buffer().unwrap().dirty)
+            app.read_with(vcx, |app, cx| {
+                let code = app.tab_code().unwrap();
+                !app.editor.read(cx).active_file(code).unwrap().dirty
+            })
         });
         assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
     }

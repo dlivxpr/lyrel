@@ -336,7 +336,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let in_front = self
-            .editor_preview_buffer()
+            .editor_preview_buffer(cx)
             .and_then(|id| self.editor.read(cx).local_file(id))
             .is_some_and(|f| f.path == path);
         if in_front {

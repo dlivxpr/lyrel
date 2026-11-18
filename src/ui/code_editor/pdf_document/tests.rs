@@ -51,8 +51,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path)
         })
     });
@@ -68,8 +68,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn pdf_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<PdfView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .pdf()
             .expect("a PDF document")
@@ -83,7 +83,7 @@ fn content(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> PdfContent {
 
 fn ready(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> bool {
     app.read_with(cx, |app, cx| {
-        app.active_buffer()
+        app.active_buffer(cx)
             .and_then(|file| file.input.pdf())
             .is_some_and(|view| {
                 matches!(
@@ -121,18 +121,26 @@ fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppConte
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
 
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.pdf().is_some(), "a PDF document");
         assert!(!file.dirty, "a PDF is never unsaved");
         assert_eq!(file.path, path);
-        assert!(app.pdf_document_active());
+        assert!(app.pdf_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, path.clone()))
         );
-        assert!(app.editor.local_file(id).is_none(), "not a text file");
+        assert!(
+            app.editor.read(cx).local_file(id).is_none(),
+            "not a text file"
+        );
     });
     assert!(ready(&app, &cx));
     let view = pdf_view(&app, &cx);
@@ -287,7 +295,7 @@ fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppConte
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(true);
     std::fs::write(&path, &replacement).unwrap();
@@ -332,7 +340,7 @@ fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppCon
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(true);
     std::fs::write(&path, &replacement).unwrap();
@@ -566,8 +574,16 @@ fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        assert!(!app.editor.has_bar(), "no prompt opened over a PDF");
-        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(
+            !app.editor.read(cx).has_bar(),
+            "no prompt opened over a PDF"
+        );
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty);
         assert_eq!(file.format(cx), None, "a PDF has no text format");
     });
@@ -603,8 +619,8 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
                 .is_some_and(|id| id != local)
         })
     });
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor_active_location().unwrap().0, HostId(84));
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(84));
     });
     assert_eq!(
         pdf_view(&app, &cx).read_with(&cx, |view, _| view.page_count()),
@@ -628,13 +644,13 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
         app.editor_open_on_host(mapped, Path::new("/doc.pdf"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.tab_code()
                 .and_then(TabCode::active_id)
                 .is_some_and(|id| {
                     id != local
                         && app
-                            .editor_active_location()
+                            .editor_active_location(cx)
                             .is_some_and(|(host, _)| host == HostId(85))
                 })
         })
@@ -686,8 +702,8 @@ fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("PDF");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("PDF");
         (
             file.presentations
                 .pdf_existing(tab, right)
@@ -722,15 +738,15 @@ fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
         12
     );
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(false);
     std::fs::write(&path, &replacement).unwrap();
     until(&mut cx, |cx| {
         ready(&app, cx) && pdf_view(&app, cx).read_with(cx, |view, _| view.page_count() == 1)
     });
-    app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("still open");
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("still open");
         assert!(file.conflict.is_none(), "a clean PDF reloads itself");
         assert!(!file.dirty);
     });
@@ -750,26 +766,31 @@ fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut 
         app.editor_open_on_host(shared, &path, window, cx)
     });
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor.buffers.iter().count(), 0, "still reading");
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(
+            app.editor.read(cx).buffers.iter().count(),
+            0,
+            "still reading"
+        );
     });
     app.update_in(&mut cx, |app, window, cx| app.close_tab(0, window, cx));
     settle(&mut cx);
     let _ = gate.send(());
     settle(&mut cx);
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert_eq!(
-            app.editor.buffers.iter().count(),
+            app.editor.read(cx).buffers.iter().count(),
             0,
             "a late read installs no document into a closed tab"
         );
     });
 
     let id = open(&app, &mut cx, &path);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.input.pdf().is_some())
@@ -1321,7 +1342,7 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::write(&path, &fixtures::forms_document(true)).unwrap();
     until(&mut cx, |cx| status(&app, cx).starts_with("Page 1 / 1"));
@@ -1364,8 +1385,8 @@ fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("PDF");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("PDF");
         (
             file.presentations
                 .pdf_existing(tab, right)

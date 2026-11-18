@@ -28,8 +28,8 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
     settle(cx);
 }
 fn view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<MarkdownEditor> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -46,7 +46,7 @@ pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
@@ -137,7 +137,7 @@ fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut Test
             app.open_file_in_editor(&path, window, cx)
         });
         until(&mut context, |cx| {
-            app.read_with(cx, |app, _| app.active_buffer().is_some())
+            app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
         });
         let first = view(&app, &context);
         app.update_in(&mut context, |app, window, cx| {
@@ -181,13 +181,13 @@ fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut Test
             view.unmark_text(window, cx);
         });
         settle(&mut context);
-        assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+        assert!(app.read_with(&context, |app, cx| app.active_buffer(cx).unwrap().dirty));
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut context);
         owner.read_with(&context, |view, cx| {
             assert_eq!(view.document().read(cx).encode().unwrap(), original);
         });
-        assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+        assert!(!app.read_with(&context, |app, cx| app.active_buffer(cx).unwrap().dirty));
     }
 }
 
@@ -202,7 +202,7 @@ fn representation_conversion_is_separate_from_adjacent_typing_undo(cx: &mut Test
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let editor = view(&app, &context);
     editor.update_in(&mut context, |view, window, cx| {
@@ -237,7 +237,7 @@ fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let editor = view(&app, &context);
     editor.update_in(&mut context, |view, window, cx| {
@@ -277,7 +277,7 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     app.update_in(&mut cx, |app, window, cx| {
         assert!(app.editor_split(window, cx))
@@ -294,13 +294,15 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
         app.editor_open_on_host(host.clone(), &other, window, cx);
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|f| f.path == other)
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|f| f.path == other)
         })
     });
     release.send(()).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.iter().all(|f| !f.saving))
+        app.read_with(cx, |app, cx| {
+            app.editor.read(cx).buffers.iter().all(|f| !f.saving)
+        })
     });
     assert_eq!(std::fs::read(&other).unwrap(), b"fn untouched() {}\n");
     let expected = "注---\r\ntitle: intact\n---\r\n<Unknown />\n"
@@ -315,7 +317,7 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     view(&app, &cx).read_with(&cx, |view, cx| {
         assert_eq!(view.document().read(cx).encode().unwrap(), expected)
@@ -337,7 +339,7 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
@@ -348,8 +350,8 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         app.open_file_in_editor(&other, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|f| f.path == other)
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|f| f.path == other)
         })
     });
     // A menu command dispatched before a draw must follow actual input focus.
@@ -367,9 +369,9 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     });
     settle(&mut cx);
     app.read_with(&cx, |app, cx| {
-        assert_eq!(app.active_buffer().unwrap().path, path);
+        assert_eq!(app.active_buffer(cx).unwrap().path, path);
         assert_eq!(
-            app.active_editor_input()
+            app.active_editor_input(cx)
                 .unwrap()
                 .text()
                 .unwrap()
@@ -391,7 +393,7 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     settle(&mut cx);
     app.read_with(&cx, |app, cx| {
         assert_eq!(
-            app.active_editor_input()
+            app.active_editor_input(cx)
                 .unwrap()
                 .text()
                 .unwrap()
@@ -410,7 +412,7 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
             .unwrap()
             .files
             .iter()
-            .position(|id| app.editor.buffers.get(*id).unwrap().path == path)
+            .position(|id| app.editor.read(cx).buffers.get(*id).unwrap().path == path)
             .unwrap();
         app.editor_activate(pos, window, cx);
     });
@@ -451,7 +453,7 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         app.update_in(&mut cx, |app, window, cx| {
             assert!(app.editor_has_focus(window, cx));
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -496,7 +498,7 @@ fn active_markdown_rename_to_mdx_retains_each_view_and_history(cx: &mut TestAppC
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
@@ -529,8 +531,8 @@ fn active_markdown_rename_to_mdx_retains_each_view_and_history(cx: &mut TestAppC
             b"---\r\ntitle: untouched\n---\r\n<Component />"
         );
     });
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.active_buffer().unwrap().path, renamed)
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(app.active_buffer(cx).unwrap().path, renamed)
     });
 }
 
@@ -546,7 +548,7 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
@@ -554,7 +556,7 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     let second = view(&app, &cx);
     assert_ne!(first, second);
@@ -798,8 +800,8 @@ mod integrated_acceptance {
             app.open_file_in_editor(&at, window, cx)
         });
         until(cx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer()
+            app.read_with(cx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| file.path.as_path() == path)
             })
         });
@@ -817,11 +819,11 @@ mod integrated_acceptance {
             app.editor_open_on_host(host, &at, window, cx)
         });
         until(cx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer()
+            app.read_with(cx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| file.path.as_path() == path)
                     && app
-                        .editor_active_location()
+                        .editor_active_location(cx)
                         .is_some_and(|(_, open)| open == path)
             })
         });
@@ -847,7 +849,7 @@ mod integrated_acceptance {
 
     fn is_ready(app: &Entity<LyrelApp>, cx: &VisualTestContext, id: BufferId) -> bool {
         app.read_with(cx, |app, cx| {
-            let Some(file) = app.editor.buffers.get(id) else {
+            let Some(file) = app.editor.read(cx).buffers.get(id) else {
                 return false;
             };
             match extension(&file.path) {
@@ -917,7 +919,7 @@ mod integrated_acceptance {
 
     fn ready_state(app: &Entity<LyrelApp>, cx: &VisualTestContext, id: BufferId) -> String {
         app.read_with(cx, |app, cx| {
-            let Some(file) = app.editor.buffers.get(id) else {
+            let Some(file) = app.editor.read(cx).buffers.get(id) else {
                 return "not installed".to_string();
             };
             let name = file.path.file_name().unwrap().to_string_lossy();
@@ -978,8 +980,9 @@ mod integrated_acceptance {
     }
 
     fn wait_ready(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: BufferId) {
-        let name = app.read_with(cx, |app, _| {
+        let name = app.read_with(cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .map(|file| file.path.display().to_string())
@@ -1003,7 +1006,12 @@ mod integrated_acceptance {
     /// 检查内部缓存或源码接线。
     fn assert_intact(app: &Entity<LyrelApp>, cx: &VisualTestContext, id: BufferId) {
         app.read_with(cx, |app, cx| {
-            let file = app.editor.buffers.get(id).expect("installed document");
+            let file = app
+                .editor
+                .read(cx)
+                .buffers
+                .get(id)
+                .expect("installed document");
             let name = file.path.file_name().unwrap().to_string_lossy().to_string();
             let source = || {
                 file.input
@@ -1163,13 +1171,14 @@ mod integrated_acceptance {
             documents.push((path.clone(), id));
         }
         assert_eq!(
-            app.read_with(&cx, |app, _| app.editor.buffers.iter().count()),
+            app.read_with(&cx, |app, cx| app.editor.read(cx).buffers.iter().count()),
             documents.len(),
             "one document per distinct Host/path"
         );
         assert!(
-            app.read_with(&cx, |app, _| app
+            app.read_with(&cx, |app, cx| app
                 .editor
+                .read(cx)
                 .buffers
                 .iter()
                 .all(|file| file.host.id() == HostId::LOCAL)),
@@ -1196,7 +1205,7 @@ mod integrated_acceptance {
         settle(&mut cx);
         assert_eq!(app.read_with(&cx, |app, _| app.tabs.active_index()), 1);
         assert_eq!(
-            app.read_with(&cx, |app, _| app.editor.buffers.iter().count()),
+            app.read_with(&cx, |app, cx| app.editor.read(cx).buffers.iter().count()),
             documents.len()
         );
         app.update_in(&mut cx, |app, window, cx| {
@@ -1224,11 +1233,11 @@ mod integrated_acceptance {
             assert!(app.editor_split(window, cx));
         });
         settle(&mut cx);
-        let (primary, focused) = app.read_with(&cx, |app, _| {
-            let file = app.editor.buffers.get(csv_id).unwrap();
+        let (primary, focused) = app.read_with(&cx, |app, cx| {
+            let file = app.editor.read(cx).buffers.get(csv_id).unwrap();
             (
                 file.input.csv().unwrap().clone(),
-                app.active_editor_input().unwrap().csv().unwrap().clone(),
+                app.active_editor_input(cx).unwrap().csv().unwrap().clone(),
             )
         });
         assert_ne!(primary.entity_id(), focused.entity_id());
@@ -1269,8 +1278,9 @@ mod integrated_acceptance {
             CSV_SOURCE,
             "a format edit is not an implicit save"
         );
-        assert!(app.read_with(&cx, |app, _| {
+        assert!(app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(csv_id)
                 .is_some_and(|file| file.dirty)
@@ -1281,8 +1291,8 @@ mod integrated_acceptance {
             source.read_with(cx, |editor, _| editor.text().to_string() == CSV_TEXT)
         });
         settle(&mut cx);
-        assert!(!app.read_with(&cx, |app, _| {
-            app.editor.buffers.get(csv_id).unwrap().dirty
+        assert!(!app.read_with(&cx, |app, cx| {
+            app.editor.read(cx).buffers.get(csv_id).unwrap().dirty
         }));
         assert_eq!(std::fs::read(&csv_path).unwrap(), CSV_SOURCE);
 
@@ -1316,9 +1326,11 @@ mod integrated_acceptance {
             app.editor_close_buffer(close_id, window, cx)
         });
         settle(&mut cx);
-        assert!(app.read_with(&cx, |app, _| { app.editor.buffers.get(close_id).is_none() }));
+        assert!(app.read_with(&cx, |app, cx| {
+            app.editor.read(cx).buffers.get(close_id).is_none()
+        }));
         assert_eq!(
-            app.read_with(&cx, |app, _| app.editor.buffers.iter().count()),
+            app.read_with(&cx, |app, cx| app.editor.read(cx).buffers.iter().count()),
             documents.len() - 1
         );
         assert_eq!(std::fs::read(&close_path).unwrap(), SOURCE);
@@ -1328,8 +1340,12 @@ mod integrated_acceptance {
         for (path, _) in &documents {
             if path.file_name().unwrap() != "ordinary.rs" {
                 assert!(
-                    app.read_with(&cx, |app, _| {
-                        app.editor.buffers.iter().any(|file| file.path == *path)
+                    app.read_with(&cx, |app, cx| {
+                        app.editor
+                            .read(cx)
+                            .buffers
+                            .iter()
+                            .any(|file| file.path == *path)
                     }),
                     "{} disappeared from the mixed workspace",
                     path.display()
@@ -1375,14 +1391,16 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(remote_id)
                     .and_then(|file| file.input.csv())
                     .is_some_and(|view| view.read(cx).facts(cx) == Some((2, 2)))
             })
         });
-        let remote_view = app.read_with(&cx, |app, _| {
+        let remote_view = app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(remote_id)
                 .unwrap()
@@ -1416,6 +1434,7 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(local_id)
                     .and_then(|file| file.input.csv())
@@ -1428,8 +1447,9 @@ mod integrated_acceptance {
         });
         release.send(()).unwrap();
         until(&mut cx, |cx| {
-            app.read_with(cx, |app, _| {
+            app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(remote_id)
                     .is_some_and(|file| !file.saving && !file.dirty)
@@ -1452,8 +1472,9 @@ mod integrated_acceptance {
         );
 
         // Editing and saving the local document now changes only its bytes.
-        let local_view = app.read_with(&cx, |app, _| {
+        let local_view = app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(local_id)
                 .unwrap()
@@ -1481,8 +1502,9 @@ mod integrated_acceptance {
         });
         cx.dispatch_action(crate::core::actions::EditorSave);
         until(&mut cx, |cx| {
-            app.read_with(cx, |app, _| {
+            app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(local_id)
                     .is_some_and(|file| !file.saving && !file.dirty)
@@ -1502,14 +1524,15 @@ mod integrated_acceptance {
             app.editor_close_buffer(remote_id, window, cx)
         });
         settle(&mut cx);
-        assert!(app.read_with(&cx, |app, _| {
-            app.editor.buffers.get(remote_id).is_none()
+        assert!(app.read_with(&cx, |app, cx| {
+            app.editor.read(cx).buffers.get(remote_id).is_none()
         }));
         let fresh = test_host::FileHost::mapped(HostId(2991), remote_root.path());
         let reopened = open_on_host(&app, &mut cx, fresh, Path::new("/work/table.csv"));
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(reopened)
                     .and_then(|file| file.input.csv())
@@ -1545,6 +1568,7 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(json_id)
                     .and_then(|file| file.input.json())
@@ -1553,8 +1577,8 @@ mod integrated_acceptance {
         });
         release_read.send(()).unwrap();
         until(&mut cx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.editor.buffers.iter().any(|file| {
+            app.read_with(cx, |app, cx| {
+                app.editor.read(cx).buffers.iter().any(|file| {
                     file.path == Path::new("/work/late.png") && file.input.image().is_some()
                 })
             })
@@ -1565,8 +1589,14 @@ mod integrated_acceptance {
             "late decode kept focus"
         );
         assert_eq!(
-            app.read_with(&cx, |app, _| {
-                app.editor.buffers.get(json_id).unwrap().path.clone()
+            app.read_with(&cx, |app, cx| {
+                app.editor
+                    .read(cx)
+                    .buffers
+                    .get(json_id)
+                    .unwrap()
+                    .path
+                    .clone()
             }),
             local_json,
             "the late decode installed the mapped Host's own document"
@@ -1581,8 +1611,9 @@ mod integrated_acceptance {
     fn save_active(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: BufferId) {
         cx.dispatch_action(crate::core::actions::EditorSave);
         until(cx, |cx| {
-            app.read_with(cx, |app, _| {
+            app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(id)
                     .is_some_and(|file| !file.saving && !file.dirty)
@@ -1655,14 +1686,16 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(csv_id)
                     .and_then(|file| file.input.csv())
                     .is_some_and(|view| view.read(cx).facts(cx) == Some((2, 2)))
             })
         });
-        let csv_view = app.read_with(&cx, |app, _| {
+        let csv_view = app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(csv_id)
                 .unwrap()
@@ -1691,14 +1724,16 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(json_id)
                     .and_then(|file| file.input.json())
                     .is_some_and(|view| view.read(cx).structure_ready(cx))
             })
         });
-        let json_view = app.read_with(&cx, |app, _| {
+        let json_view = app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(json_id)
                 .unwrap()
@@ -1776,7 +1811,9 @@ mod integrated_acceptance {
                 app.editor_close_buffer(id, window, cx)
             });
             settle(&mut cx);
-            assert!(app.read_with(&cx, |app, _| { app.editor.buffers.get(id).is_none() }));
+            assert!(app.read_with(&cx, |app, cx| {
+                app.editor.read(cx).buffers.get(id).is_none()
+            }));
         }
         let fresh = fixture.connect_control_as(
             "fixture:native-ssh-299-reopen",
@@ -1787,6 +1824,7 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(reopened_csv)
                     .and_then(|file| file.input.csv())
@@ -1806,6 +1844,7 @@ mod integrated_acceptance {
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
+                    .read(cx)
                     .buffers
                     .get(reopened_json)
                     .and_then(|file| file.input.json())

@@ -10,22 +10,24 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let document = app.update_in(&mut vcx, |app, window, cx| {
         let tab = app.tabs[0].id();
-        let n = app.editor.buffers.next_untitled();
-        let id = app.editor_new_buffer(
-            host.clone(),
-            PathBuf::new(),
-            Some(n),
-            BufferKind::Markdown,
-            "# Author text\n".into(),
-            TextFormat::default(),
-            EditorConfig::default(),
-            lyrel_document::text::detect_indent("", "markdown"),
-            None,
-            window,
-            cx,
-        );
+        let id = app.editor.update(cx, |editor, cx| {
+            let n = editor.buffers.next_untitled();
+            editor.new_buffer(
+                host.clone(),
+                PathBuf::new(),
+                Some(n),
+                BufferKind::Markdown,
+                "# Author text\n".into(),
+                TextFormat::default(),
+                EditorConfig::default(),
+                lyrel_document::text::detect_indent("", "markdown"),
+                None,
+                window,
+                cx,
+            )
+        });
         app.editor_show_in_tab(tab, id, true, window, cx);
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.path.as_os_str().is_empty());
         let document = file
             .input
@@ -39,9 +41,14 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
     });
     settle(&mut vcx);
     app.read_with(&vcx, |app, cx| {
-        let bar = app.editor.bar.as_ref().expect("remote Save As bar");
+        let bar = app
+            .editor
+            .read(cx)
+            .bar
+            .as_ref()
+            .expect("remote Save As bar");
         assert!(bar.input.read(cx).value().ends_with(".md"));
-        assert!(app.active_buffer().unwrap().path.as_os_str().is_empty());
+        assert!(app.active_buffer(cx).unwrap().path.as_os_str().is_empty());
     });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
@@ -49,13 +56,13 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
         window.press("enter", cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.saving && file.untitled.is_none())
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.host.id(), HostId(729));
         assert_eq!(file.language(), "markdown");
         let view = file.input.markdown().unwrap().read(cx);
@@ -99,7 +106,7 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
@@ -109,19 +116,19 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         window.press("enter", cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.saving)
         })
     });
     std::fs::write(&target, b"external\r\nsecond\nthird\r\nfourth").unwrap();
     app.update_in(&mut vcx, |app, window, cx| {
-        let id = app.active_buffer().unwrap().id();
+        let id = app.active_buffer(cx).unwrap().id();
         app.editor_reload_from_disk(id, window, cx);
     });
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -133,7 +140,7 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let input = &app.active_buffer().unwrap().input;
+        let input = &app.active_buffer(cx).unwrap().input;
         assert_eq!(input.markdown().is_some(), markdown);
         assert_eq!(
             input.text().unwrap().read(cx).text().to_string(),
@@ -156,8 +163,8 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.editor_save_active(window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -196,7 +203,7 @@ fn in_flight_save_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
@@ -218,11 +225,11 @@ fn in_flight_save_scenario(cx: &mut TestAppContext, markdown: bool) {
             app.tabs.iter().all(|tab| tab.id() != original)
         })
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.tabs[0].id(), survivor);
         assert_eq!(app.tab_code().unwrap().active_id(), Some(replacement));
-        assert!(app.active_buffer().unwrap().dirty);
+        assert!(app.active_buffer(cx).unwrap().dirty);
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "saved original");
 }
@@ -256,15 +263,15 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     let local = app.read_with(&vcx, |app, _| app.tab_code().unwrap().active_id().unwrap());
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.editor_active_location()
+        app.read_with(vcx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, _)| host == HostId(701))
         })
     });
@@ -281,15 +288,16 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
         window.press("enter", cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(app.active_buffer().unwrap().host.id(), HostId(701));
+        assert_eq!(app.active_buffer(cx).unwrap().host.id(), HostId(701));
         assert_eq!(
             app.editor
+                .read(cx)
                 .buffers
                 .get(local)
                 .unwrap()
@@ -311,15 +319,16 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.editor_save_active(window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        app.read_with(vcx, |app, cx| {
+            !app.active_buffer(cx).unwrap().dirty && !app.active_buffer(cx).unwrap().saving
         })
     });
     assert_eq!(host.writes.load(Ordering::SeqCst), 2);
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert!(
             app.editor
-                .local_file(app.active_buffer().unwrap().id())
+                .read(cx)
+                .local_file(app.active_buffer(cx).unwrap().id())
                 .is_none()
         )
     });
@@ -349,15 +358,15 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.open_file_in_editor(&left_path, window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_split(window, cx);
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == path)
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.path == path)
         })
     });
     app.update_in(&mut vcx, |app, window, cx| {
@@ -386,14 +395,19 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
     });
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.editor.buffers.get(id).is_some_and(|file| !file.saving)
+        app.read_with(vcx, |app, cx| {
+            app.editor
+                .read(cx)
+                .buffers
+                .get(id)
+                .is_some_and(|file| !file.saving)
         })
     });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tab_code().unwrap().views_of(id), 2);
         assert_eq!(
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .unwrap()
@@ -422,7 +436,7 @@ fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut 
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
@@ -439,7 +453,7 @@ fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut 
     assert!(!target.exists());
     assert_eq!(host.writes.load(Ordering::SeqCst), 0);
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.path, moved);
         assert_eq!(file.host.id(), HostId(703));
         assert_eq!(

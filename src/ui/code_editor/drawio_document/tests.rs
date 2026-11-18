@@ -91,8 +91,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path)
         })
     });
@@ -104,8 +104,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
 }
 
 fn view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<DrawioView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .drawio()
             .expect("a draw.io document")
@@ -137,16 +137,24 @@ fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut Te
 
     let id = open(&app, &mut cx, &plain);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.drawio().is_some(), "a draw.io document");
         assert!(!file.dirty, "a preview is never unsaved");
-        assert!(app.drawio_document_active());
+        assert!(app.drawio_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, plain.clone()))
         );
-        assert!(app.editor.local_file(id).is_none(), "not a text buffer");
+        assert!(
+            app.editor.read(cx).local_file(id).is_none(),
+            "not a text buffer"
+        );
         assert!(file.input.text().is_none());
         assert!(!file.format(cx).is_some(), "no text save format");
     });
@@ -170,15 +178,15 @@ fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut Te
         app.editor_close_file(0, window, cx)
     });
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
-        assert!(app.editor.buffers.get(id).is_none());
+    app.read_with(&cx, |app, cx| {
+        assert!(app.editor.read(cx).buffers.get(id).is_none());
     });
 
     let packed_id = open(&app, &mut cx, &packed);
     assert_eq!(pages(&app, &cx), 3, "compressed pages are all declared");
-    app.read_with(&cx, |app, _| {
-        assert!(app.editor.buffers.get(packed_id).is_some());
-        assert!(!app.active_buffer().unwrap().dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(app.editor.read(cx).buffers.get(packed_id).is_some());
+        assert!(!app.active_buffer(cx).unwrap().dirty);
     });
 }
 
@@ -214,8 +222,8 @@ fn page_controls_and_split_groups_keep_their_own_page(tcx: &mut TestAppContext) 
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("diagram");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("diagram");
         (
             file.presentations
                 .drawio_existing(tab, right)
@@ -246,7 +254,7 @@ fn page_controls_and_split_groups_keep_their_own_page(tcx: &mut TestAppContext) 
 
     dispatch(&app, &mut cx, DrawioNextPage);
     app.read_with(&cx, |app, cx| {
-        let file = app.active_buffer().expect("diagram");
+        let file = app.active_buffer(cx).expect("diagram");
         let (front, other) = (
             file.presentations.drawio_existing(tab, right).unwrap(),
             file.presentations.drawio_existing(tab, left).unwrap(),
@@ -286,8 +294,13 @@ fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
             cx.global::<crate::core::config::Config>().editor_soft_wrap,
             wrap_before
         );
-        assert!(!app.editor.has_bar());
-        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!app.editor.read(cx).has_bar());
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty);
         assert!(file.format(cx).is_none());
         assert!(file.conflict.is_none());
@@ -313,7 +326,7 @@ fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(tcx: &mut
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     dispatch(&app, &mut cx, DrawioNextPage);
     assert_eq!(page(&app, &cx), 1);
@@ -321,7 +334,7 @@ fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(tcx: &mut
     std::fs::write(&path, uncompressed(3)).unwrap();
     until(&mut cx, |cx| pages(&app, cx) == 3);
     app.read_with(&cx, |app, cx| {
-        let file = app.active_buffer().expect("still open");
+        let file = app.active_buffer(cx).expect("still open");
         assert!(file.conflict.is_none(), "a clean preview reloads itself");
         assert!(!file.dirty);
         let view = file.input.drawio().unwrap();
@@ -351,14 +364,14 @@ fn the_owning_host_supplies_the_diagram_bytes(tcx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/host.drawio"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.host.id() == HostId(297))
         })
     });
     assert_eq!(pages(&app, &cx), 4, "the remote bytes won");
-    app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("remote diagram");
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("remote diagram");
         assert_eq!(file.path, Path::new("/host.drawio"));
         assert_ne!(file.path, local);
     });
@@ -377,7 +390,12 @@ fn malformed_and_non_diagram_files_report_their_own_failure(tcx: &mut TestAppCon
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &broken);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("failure document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("failure document");
         assert!(file.input.drawio().is_some(), "still a diagram place");
         let view = file.input.drawio().unwrap();
         assert_eq!(view.read(cx).page_count(cx), 0);
@@ -395,8 +413,13 @@ fn malformed_and_non_diagram_files_report_their_own_failure(tcx: &mut TestAppCon
     // A generic .xml that is not a draw.io root stays source, not a failure
     // diagram and not an external application.
     let xml_id = open(&app, &mut cx, &not_diagram);
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(xml_id).expect("text document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(xml_id)
+            .expect("text document");
         assert!(file.input.text().is_some(), "ordinary XML stays text");
         assert!(file.input.drawio().is_none());
     });
@@ -507,7 +530,12 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
     // sweep's job, run explicitly here so the assertion is not a race.
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.edit_revision(), 1, "the commit landed");
         assert_eq!(
@@ -525,7 +553,12 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
     dispatch(&app, &mut cx, DrawioUndo);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(
             !file.dirty,
             "undo back to the saved bytes reads clean again"
@@ -542,7 +575,12 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
     dispatch(&app, &mut cx, DrawioRedo);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(file.dirty, "the redo brings the edit back");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.bytes().as_deref(), Some(committed.as_ref()));
@@ -571,7 +609,12 @@ fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
     });
     settle(&mut cx);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(
             file.dirty,
             "the canvas holds a refused edit, so the document is unsaved"
@@ -627,8 +670,13 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty, "the saved bytes are the document");
         assert!(file.conflict.is_none());
     });
@@ -649,7 +697,7 @@ fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext)
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let committed: Arc<[u8]> = Arc::from(uncompressed(2).as_slice());
     let diagram = view(&app, &cx);
@@ -664,20 +712,26 @@ fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext)
     });
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        assert!(app.editor.buffers.get(id).unwrap().dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(app.editor.read(cx).buffers.get(id).unwrap().dirty);
     });
     std::fs::write(&path, uncompressed(3)).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(file.dirty, "the engine's edits are still the document");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(
@@ -711,7 +765,12 @@ fn an_identical_commit_is_not_an_edit(tcx: &mut TestAppContext) {
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty, "an identical sync is not an edit");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.edit_revision(), 0, "no content revision");
@@ -755,8 +814,8 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/remote.drawio"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.host.id() == HostId(298))
         })
     });
@@ -772,8 +831,8 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
         );
     });
     settle(&mut cx);
-    let id = app.read_with(&cx, |app, _| {
-        app.active_buffer().expect("remote diagram").id()
+    let id = app.read_with(&cx, |app, cx| {
+        app.active_buffer(cx).expect("remote diagram").id()
     });
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_file(id, false, window, cx);
@@ -832,9 +891,9 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
-            !app.editor.buffers.get(id).unwrap().dirty,
+            !app.editor.read(cx).buffers.get(id).unwrap().dirty,
             "the engine save cleared dirty"
         );
     });
@@ -884,7 +943,12 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut T
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(file.dirty, "the rewritten page is unsaved work");
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.page_count(), 2, "both pages survive the commit");
@@ -903,7 +967,12 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut T
     });
     // An independent consumer decodes the served bytes back to two pages.
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         let bytes = view_of(file)
             .read(cx)
             .document()
@@ -936,8 +1005,8 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
         assert!(app.editor_split(window, cx), "the diagram splits");
     });
     settle(&mut cx);
-    let views = app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("diagram");
+    let views = app.read_with(&cx, |app, cx| {
+        let file = app.editor.read(cx).buffers.get(id).expect("diagram");
         let mut views = vec![view_of(file).clone()];
         for (_, _, view) in file.presentations.drawios() {
             if !views.contains(&view) {
@@ -1020,8 +1089,13 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
         original.as_slice(),
         "the original file is untouched by a save-as"
     );
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty, "the confirmed model is on disk");
         assert_eq!(file.path.as_path(), target.as_path());
     });
@@ -1042,8 +1116,8 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
         assert!(app.editor_split(window, cx), "the diagram splits");
     });
     settle(&mut cx);
-    let views = app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("diagram");
+    let views = app.read_with(&cx, |app, cx| {
+        let file = app.editor.read(cx).buffers.get(id).expect("diagram");
         let mut views = vec![view_of(file).clone()];
         for (_, _, view) in file.presentations.drawios() {
             if !views.contains(&view) {
@@ -1127,8 +1201,13 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
     until(&mut cx, |_cx| {
         std::fs::read(&target).is_ok_and(|bytes| bytes.as_slice() == original.as_slice())
     });
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty, "the confirmed model is on disk");
     });
 }
@@ -1159,8 +1238,13 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
     });
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(
             file.dirty,
             "the document bytes are clean, but the canvas holds a refused edit"
@@ -1209,8 +1293,13 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
         );
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(file.drawio_flush.is_none(), "the refusal settles the save");
         assert!(file.dirty, "the refused model is still unsaved");
     });
@@ -1245,8 +1334,13 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
     });
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty, "the fixed canvas matches the saved bytes");
     });
     cx.update(|window, _| {
@@ -1311,8 +1405,9 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
     loop {
         app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
         settle(&mut cx);
-        let expired = app.read_with(&cx, |app, _| {
+        let expired = app.read_with(&cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.dirty && file.drawio_flush.is_none())
@@ -1328,12 +1423,17 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
         original.as_slice(),
         "an unconfirmed engine model is never replaced by stale bytes"
     );
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
             app.tabs.iter().any(|entry| entry.id() == tab),
             "the cancelled close keeps the tab and its unsaved work"
         );
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(file.dirty, "the engine's model is still unsaved");
         assert!(
             file.drawio_flush.is_none(),
@@ -1391,8 +1491,13 @@ fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppCont
         original.as_slice(),
         "save-as never rewrites the original"
     );
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("still installed");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert_eq!(
             file.path.as_path(),
             target.as_path(),
@@ -1443,14 +1548,15 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &remote, window, cx);
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
-    let id = app.read_with(&cx, |app, _| {
-        app.active_buffer().expect("remote diagram").id()
+    let id = app.read_with(&cx, |app, cx| {
+        app.active_buffer(cx).expect("remote diagram").id()
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.host.id() == host.id() && !file.host.id().is_local())
@@ -1472,7 +1578,9 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     settle(&mut cx);
     confirm_pending_sync(&app, &mut cx);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| !app.editor.buffers.get(id).unwrap().dirty)
+        app.read_with(cx, |app, cx| {
+            !app.editor.read(cx).buffers.get(id).unwrap().dirty
+        })
     });
     // Reopen the same remote path: the document the Host now holds parses and
     // carries the engine's change.

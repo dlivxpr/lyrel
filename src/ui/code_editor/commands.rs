@@ -951,8 +951,8 @@ mod gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         open_rs(&app, &mut vcx, "/commands/active.rs");
         vcx.run_until_parked();
-        let input = app.read_with(&vcx, |app, _| {
-            app.active_buffer()
+        let input = app.read_with(&vcx, |app, cx| {
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .code()
@@ -989,8 +989,8 @@ mod gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         open_rs(&app, &mut vcx, "/commands/keyboard.rs");
         vcx.run_until_parked();
-        let input = app.read_with(&vcx, |app, _| {
-            app.active_buffer()
+        let input = app.read_with(&vcx, |app, cx| {
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .code()
@@ -1034,7 +1034,7 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             vcx.run_until_parked();
             assert!(
                 std::time::Instant::now() < deadline,
@@ -1046,7 +1046,7 @@ mod gpui_tests {
             app.toggle_document_preview(window, cx)
         });
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app.active_buffer(cx).unwrap().input.clone();
             input.text().unwrap().set_selected_range(5..5, cx);
             input.focus(window, cx);
         });
@@ -1054,7 +1054,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -1064,7 +1064,7 @@ mod gpui_tests {
                     .to_string(),
                 "one\n<!-- two -->\nthree"
             );
-            assert!(app.active_buffer().unwrap().dirty);
+            assert!(app.active_buffer(cx).unwrap().dirty);
         });
         vcx.simulate_keystrokes("secondary-z");
         vcx.run_until_parked();
@@ -1072,7 +1072,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -1087,7 +1087,7 @@ mod gpui_tests {
         vcx.simulate_keystrokes("f o o space f o o");
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
         });
@@ -1096,7 +1096,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -1111,7 +1111,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
+                app.active_buffer(cx)
                     .unwrap()
                     .input
                     .text()
@@ -1133,20 +1133,20 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             vcx.run_until_parked();
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, window, cx| {
             app.toggle_document_preview(window, cx);
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             input.text().unwrap().set_selected_range(4..7, cx);
             input.focus(window, cx);
         });
         vcx.dispatch_action(MoveLineUp);
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input
                     .markdown()
@@ -1162,7 +1162,7 @@ mod gpui_tests {
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.dispatch_action(CopyLineDown);
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input
                     .markdown()
@@ -1177,7 +1177,7 @@ mod gpui_tests {
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input
                     .markdown()
@@ -1204,14 +1204,14 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             vcx.run_until_parked();
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, window, cx| {
             app.toggle_document_preview(window, cx);
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             input.text().unwrap().set_selected_range(0..7, cx);
             input.focus(window, cx);
         });
@@ -1221,7 +1221,7 @@ mod gpui_tests {
             window.press("tab", cx);
         });
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input.text().unwrap().read(cx).text().to_string(),
                 "        one\n        two\nthree"
@@ -1231,7 +1231,7 @@ mod gpui_tests {
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input.text().unwrap().read(cx).text().to_string(),
                 "one\ntwo\nthree"
@@ -1252,7 +1252,7 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             vcx.run_until_parked();
             assert!(
                 std::time::Instant::now() < deadline,
@@ -1264,7 +1264,7 @@ mod gpui_tests {
             app.toggle_document_preview(window, cx)
         });
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
             assert!(app.editor_apply_command(Command::All, window, cx));
@@ -1272,7 +1272,7 @@ mod gpui_tests {
         });
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             assert_eq!(
                 input.text().unwrap().read(cx).text().to_string(),
                 "FOO foo foo"
@@ -1283,7 +1283,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .unwrap()
                     .text()
                     .unwrap()
@@ -1294,7 +1294,7 @@ mod gpui_tests {
             )
         });
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
             assert!(app.editor_apply_command(Command::Next, window, cx));
@@ -1304,7 +1304,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .unwrap()
                     .text()
                     .unwrap()
@@ -1318,7 +1318,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input()
+                app.active_editor_input(cx)
                     .unwrap()
                     .text()
                     .unwrap()
@@ -1339,7 +1339,7 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()) {
             vcx.run_until_parked();
             assert!(
                 std::time::Instant::now() < deadline,
@@ -1368,7 +1368,7 @@ mod gpui_tests {
             (Command::Unwrap, "(中)", 1..4, "中"),
         ] {
             app.update_in(&mut vcx, |app, window, cx| {
-                let input = app.active_editor_input().unwrap();
+                let input = app.active_editor_input(cx).unwrap();
                 let text = input.text().unwrap();
                 let len = text.read(cx).text().len();
                 text.replace(0..len, before, window, cx);
@@ -1379,7 +1379,7 @@ mod gpui_tests {
             vcx.run_until_parked();
             app.read_with(&vcx, |app, cx| {
                 assert_eq!(
-                    app.active_buffer()
+                    app.active_buffer(cx)
                         .unwrap()
                         .input
                         .text()
@@ -1394,7 +1394,7 @@ mod gpui_tests {
             vcx.run_until_parked();
             app.read_with(&vcx, |app, cx| {
                 assert_eq!(
-                    app.active_buffer()
+                    app.active_buffer(cx)
                         .unwrap()
                         .input
                         .text()
@@ -1407,7 +1407,7 @@ mod gpui_tests {
             });
         }
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = app.active_editor_input(cx).unwrap();
             let text = input.text().unwrap();
             let len = text.read(cx).text().len();
             text.replace(0..len, "(中)\nfoo foo foo\n", window, cx);

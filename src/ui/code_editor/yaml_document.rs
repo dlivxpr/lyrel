@@ -1820,7 +1820,7 @@ impl Render for YamlView {
 }
 
 /// 右侧菜单的 YAML 项：默认只给结构与源码切换。
-pub(super) fn menu_entries(
+pub(crate) fn menu_entries(
     menu: gpui_kit::component::menu::PopupMenu,
 ) -> gpui_kit::component::menu::PopupMenu {
     menu.separator().menu(

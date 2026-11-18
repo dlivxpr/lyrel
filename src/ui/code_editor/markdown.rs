@@ -1,10 +1,13 @@
 //! Zorite-derived editor 的工作台样式与原生消费者入口。文件生命周期保留在 buffers/saving。
-use crate::ui::i18n::{L10nKey, t};
+use super::{BufferId, EditorPanelEvent, EditorPanelState};
+use crate::ui::host_ops::SharedHost;
+use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::{App, Context};
+use gpui_kit::{App, Context, Entity, Window};
 use lyrel_markdown_editor::{AlertIcons, EditorState, Labels, SyntaxStyle};
 pub(super) mod images;
-mod links;
+pub(crate) mod links;
 mod mermaid_host;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod resources_tests;
@@ -106,10 +109,77 @@ fn labels() -> Labels {
     labels
 }
 
+impl EditorPanelState {
+    /// A Markdown link was activated in one of this panel's presentations.
+    ///
+    /// Resolution stays document-local: external URLs go to the browser and a
+    /// same-document anchor selects in place. A file destination is a
+    /// cross-panel intent — the panel emits [`EditorPanelEvent::FollowLink`]
+    /// and the shell (`ui::app::editor_links`) finds the presentation's tab
+    /// and group, decodes any anchor on the owning Host, and opens it there.
+    /// The origin document's revision rides along so a completion that lands
+    /// after the buffer moved on is dropped by the open's own epoch guards.
+    pub(crate) fn follow_link(
+        &mut self,
+        id: BufferId,
+        source: &Entity<EditorState>,
+        raw: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(file) = self.buffers.get(id) else {
+            return;
+        };
+        let host: SharedHost = file.host.clone();
+        let path = file.untitled.is_none().then(|| file.path.clone());
+        let revision = source.read(cx).document().read(cx).revision();
+        let target = match links::resolve(&*host, path.as_deref(), raw) {
+            Ok(target) => target,
+            Err(reason) => {
+                window.notify_app(
+                    t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(reason))]),
+                    cx,
+                );
+                return;
+            }
+        };
+        let (path, anchor) = match target {
+            links::Target::External(url) => {
+                cx.open_url(url.as_str());
+                return;
+            }
+            links::Target::Anchor(anchor) => {
+                let position = links::anchor_position(source.read(cx).text(), &anchor);
+                if let Some(position) = position {
+                    let offset = source.read(cx).offset_for_line_column(
+                        position.line as usize,
+                        position.character as usize,
+                    );
+                    source.update(cx, |view, cx| view.select_range(offset..offset, cx));
+                } else {
+                    window.notify_app(t(L10nKey::MarkdownLinkAnchorNotFound), cx);
+                }
+                return;
+            }
+            links::Target::File(path, anchor) => (path, anchor),
+        };
+        cx.emit(EditorPanelEvent::FollowLink {
+            buffer: id,
+            source: source.entity_id(),
+            host,
+            path,
+            anchor,
+            revision,
+        });
+    }
+}
+
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod foundation;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod table_code_tests;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+pub(super) mod test_support;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod writing_tests;
 #[cfg(feature = "native-markdown-tests")]
