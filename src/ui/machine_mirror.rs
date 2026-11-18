@@ -112,6 +112,8 @@ impl MachineMirrors {
         for write in since {
             write(machine);
         }
+        let snapshots = mirror_snapshots(machine);
+        crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
         cx.refresh_windows();
     }
 
@@ -128,10 +130,21 @@ impl MachineMirrors {
         if let Some(since) = mirrors.since_pull.get_mut(&host) {
             since.push(Box::new(edit));
         }
+        // Keep the read-only projection the lower layers read in step with the
+        // mirror: every write above lands in the published snapshots too, so a
+        // pane-liveness or title read never sees a half-written machine.
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
+        }
     }
 
     pub fn install(cx: &mut App, host: HostId, machine: Machine) {
         cx.default_global::<Self>().machines.insert(host, machine);
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
+        }
         cx.refresh_windows();
     }
 
@@ -161,6 +174,11 @@ impl MachineMirrors {
         if !applied {
             log::debug!("machine mirror for {host:?} fell behind; re-pulling");
             Self::refresh(cx, host);
+            return;
+        }
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
         }
     }
 
@@ -463,6 +481,29 @@ pub fn display_name_of(ws: &Workspace, panes: &[PaneRecord]) -> String {
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
+}
+
+/// The read-only per-workspace projection the layers below the workbench read
+/// (`crate::ui::desktop_lookups`), recomputed from the machine as it stands
+/// after any write. One source of truth for what the tree says a workspace
+/// holds and what it calls it — the same pure reads the UI-facing functions
+/// in this module make.
+fn mirror_snapshots(
+    machine: &Machine,
+) -> Vec<(WorkspaceId, crate::ui::desktop_lookups::WorkspaceMirror)> {
+    machine
+        .user_workspaces()
+        .map(|ws| {
+            let pane_ids = ws.tabs.iter().flat_map(|t| t.root.pane_ids()).collect();
+            (
+                ws.id,
+                crate::ui::desktop_lookups::WorkspaceMirror {
+                    pane_ids,
+                    display_name: Some(display_name_of(ws, &machine.panes)),
+                },
+            )
+        })
+        .collect()
 }
 
 pub fn subject_path_of(ws: &Workspace, panes: &[PaneRecord]) -> Option<String> {

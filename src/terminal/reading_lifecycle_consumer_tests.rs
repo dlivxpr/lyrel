@@ -128,7 +128,7 @@ fn reading_lifecycle_replay_and_relink_publish_fresh_content(cx: &mut TestAppCon
         view.adopt_relink(
             client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Local,
+            &crate::ui::route::PaneRoute::Local,
             TermSize::new(80, 24),
             10,
             20,

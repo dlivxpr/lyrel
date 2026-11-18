@@ -19,9 +19,11 @@ use crate::core::shells::ShellInventory;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteKind, ShellSpec};
 use crate::daemon::spawn::DaemonMismatch;
+use crate::terminal::forward_client::ForwardClient;
 use crate::terminal::view::{ChildExited, TerminalView};
-use crate::ui::forwards::{Forwarding, route::ForwardRoute};
+use crate::ui::forwards::Forwarding;
 use crate::ui::host_registry::HostId;
+use crate::ui::route::ForwardRoute;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
 use crate::ui::scm::ScmIntent;
@@ -599,7 +601,7 @@ impl LyrelApp {
         };
         cx.background_executor()
             .spawn(async move {
-                let left = route.teardown();
+                let left = ForwardClient::teardown(&route);
                 if !left.is_empty() {
                     log::warn!("{} forwards survived a workspace teardown", left.len());
                 }
@@ -1065,7 +1067,7 @@ impl LyrelApp {
             return;
         };
         let target = remote.target.clone();
-        let label = crate::ui::remote_connect::route_label(cx, &remote);
+        let label = crate::ui::desktop_lookups::route_label(cx, &remote);
         if !target.hosts_our_server() {
             window.notify_app(
                 t_fmt(L10nKey::AppRestartServerNoServer, &[("label", &label)]),
@@ -1117,7 +1119,7 @@ impl LyrelApp {
             return;
         };
         let target = remote.target.clone();
-        let label = crate::ui::remote_connect::route_label(cx, &remote);
+        let label = crate::ui::desktop_lookups::route_label(cx, &remote);
         if !target.hosts_our_server() {
             window.notify_app(
                 t_fmt(L10nKey::AppRestartServerNoServer, &[("label", &label)]),
@@ -2024,7 +2026,7 @@ impl LyrelApp {
             (L10nKey::PaneMenuTitle, None, false, false),
             (
                 L10nKey::PaneFindScrollback,
-                Some(Box::new(crate::terminal::view::FindInTerminal)),
+                Some(Box::new(crate::core::actions::FindInTerminal)),
                 !ready,
                 false,
             ),
@@ -3349,7 +3351,7 @@ impl LyrelApp {
         self.editor_forget_tab(closing, cx);
         let worktree_cwd = self.tab_host_cwd(index, window, cx);
         let snapshot = tab_to_session(&self.tabs[index], cx);
-        let leaves: Vec<(u64, crate::terminal::PaneRoute, bool)> = self.tabs[index]
+        let leaves: Vec<(u64, crate::ui::route::PaneRoute, bool)> = self.tabs[index]
             .pane
             .terminals()
             .iter()
@@ -3372,7 +3374,7 @@ impl LyrelApp {
             let retiring = crate::ui::tree_sync::Retiring {
                 tab: closing,
                 panes: held.iter().map(|(id, _)| *id).collect(),
-                route: crate::terminal::PaneRoute::for_workspace(
+                route: crate::ui::route::PaneRoute::for_workspace(
                     self.window_workspace(cx).as_ref(),
                 ),
             };
@@ -4130,7 +4132,7 @@ impl LyrelApp {
                     == crate::core::config::DocumentLayout::Fill,
                 remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
                     .filter(|remote| remote.target.hosts_our_server())
-                    .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
+                    .map(|remote| crate::ui::desktop_lookups::route_label(cx, &remote)),
             },
             WorkspaceStore::all(cx)
                 .get(self.workspace)
@@ -4169,7 +4171,7 @@ impl LyrelApp {
                 .as_ref()
                 .and_then(|pane| pane.read(cx).spawnable_cwd()),
             focused.as_ref().and_then(|pane| pane.read(cx).host_cwd()),
-            crate::ui::path_display::home_for_host(cx, host),
+            crate::ui::desktop_lookups::home_for_host(cx, host),
         )
     }
 

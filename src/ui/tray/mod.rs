@@ -465,6 +465,23 @@ pub(crate) fn init(cx: &mut App) {
         *slot = Some(tx.clone());
     }
 
+    // The notification-click bridge: platform activation callbacks enqueue a
+    // typed `PaneActivation` on a process-wide channel (they may run on a COM
+    // or AppKit thread, never the UI thread), and this loop — created with
+    // the tray channel, surviving every window — turns it into the same
+    // reveal dispatch a tray click gets. A click with no window owning the
+    // pane stays inert, exactly as a stale tray click does.
+    let (activation_tx, activation_rx) =
+        smol::channel::unbounded::<crate::ui::notification_bridge::PaneActivation>();
+    crate::ui::notification_bridge::install(activation_tx);
+    cx.spawn(async move |cx| {
+        while let Ok(activation) = activation_rx.recv().await {
+            let crate::ui::notification_bridge::PaneActivation::Reveal { leaf_id } = activation;
+            cx.update(|cx| dispatch(TrayAction::RevealPane { leaf_id }, cx));
+        }
+    })
+    .detach();
+
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv().await {
             cx.update(|cx| dispatch(action, cx));

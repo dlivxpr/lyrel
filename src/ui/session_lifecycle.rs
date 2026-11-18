@@ -72,7 +72,7 @@ impl SessionLifecycle {
     pub(crate) fn wake(
         tabs: &mut TabSet,
         index: usize,
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: WorkspaceId,
         font_size: f32,
         window: &mut Window,
@@ -104,7 +104,7 @@ impl SessionLifecycle {
 /// One restore attempt owns its route and liveness evidence. A failed listing
 /// is not an empty listing, and client-local SSH never borrows remote IDs.
 pub(crate) struct SessionRestore {
-    workspace: Option<crate::terminal::PaneWorkspace>,
+    workspace: Option<crate::ui::route::PaneWorkspace>,
     owner: WorkspaceId,
     font_size: f32,
     alive: Option<HashMap<u64, Option<String>>>,
@@ -112,11 +112,11 @@ pub(crate) struct SessionRestore {
 
 impl SessionRestore {
     fn new(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: WorkspaceId,
         font_size: f32,
     ) -> Self {
-        let alive = alive_panes_on(&crate::terminal::PaneRoute::for_workspace(
+        let alive = alive_panes_on(&crate::ui::route::PaneRoute::for_workspace(
             workspace.as_ref(),
         ));
         Self {
@@ -128,7 +128,7 @@ impl SessionRestore {
     }
 
     pub(crate) fn reopen(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: WorkspaceId,
         font_size: f32,
         mut snapshot: SessionTab,
@@ -286,9 +286,9 @@ fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
 /// shells over all of them — the same destruction-by-inference this file's
 /// restore path is built to avoid.
 fn alive_panes_on(
-    route: &crate::terminal::PaneRoute,
+    route: &crate::ui::route::PaneRoute,
 ) -> Option<std::collections::HashMap<u64, Option<String>>> {
-    if !matches!(route, crate::terminal::PaneRoute::Local) {
+    if !matches!(route, crate::ui::route::PaneRoute::Local) {
         return Some(std::collections::HashMap::new());
     }
     match crate::terminal::RemoteTerminal::try_list_panes_on(route) {
@@ -361,7 +361,7 @@ fn pane_free_for(
 
 impl SessionRestore {
     pub(crate) fn tabs(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: WorkspaceId,
         session: Option<Session>,
         font_size: f32,
@@ -375,7 +375,7 @@ impl SessionRestore {
         let workspace = restore.workspace.as_ref();
         let mut tabs: Vec<Tab> = Vec::with_capacity(session.tabs.len());
         let mut dropped = 0usize;
-        let home = crate::ui::path_display::home_for_host(
+        let home = crate::ui::desktop_lookups::home_for_host(
             cx,
             workspace.map_or(HostId::LOCAL, |w| w.target.host_id()),
         );
@@ -577,16 +577,16 @@ fn remap_presentation_slot(
 /// ended from here. Without `remote_window` every pane is the machine's.
 pub(crate) fn split_machine_held(
     remote_window: bool,
-    leaves: &[(u64, crate::terminal::PaneRoute, bool)],
+    leaves: &[(u64, crate::ui::route::PaneRoute, bool)],
 ) -> (
-    Vec<(u64, crate::terminal::PaneRoute)>,
-    Vec<(u64, crate::terminal::PaneRoute)>,
+    Vec<(u64, crate::ui::route::PaneRoute)>,
+    Vec<(u64, crate::ui::route::PaneRoute)>,
 ) {
     let (held, here): (Vec<_>, Vec<_>) = leaves
         .iter()
         .cloned()
         .partition(|(_, _, native_ssh)| leaf_shares_the_window_daemon(remote_window, *native_ssh));
-    let strip = |v: Vec<(u64, crate::terminal::PaneRoute, bool)>| {
+    let strip = |v: Vec<(u64, crate::ui::route::PaneRoute, bool)>| {
         v.into_iter().map(|(id, route, _)| (id, route)).collect()
     };
     (strip(held), strip(here))

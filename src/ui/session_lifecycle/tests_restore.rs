@@ -6,12 +6,12 @@ use super::{
 /// nothing on the window's machine could.
 #[test]
 fn a_remote_windows_native_ssh_pane_is_ended_here_and_the_rest_by_its_machine() {
-    let local = crate::terminal::PaneRoute::Local;
+    let local = crate::ui::route::PaneRoute::Local;
     let leaves = vec![(4, local.clone(), false), (5, local.clone(), true)];
 
     let (held, here) = split_machine_held(true, &leaves);
     let ids =
-        |v: &[(u64, crate::terminal::PaneRoute)]| v.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        |v: &[(u64, crate::ui::route::PaneRoute)]| v.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     assert_eq!(ids(&held), vec![4]);
     assert_eq!(ids(&here), vec![5]);
 

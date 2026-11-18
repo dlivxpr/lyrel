@@ -238,7 +238,7 @@ pub(super) fn bind_to_a_disconnected_remote_workspace(
     cx: &mut Context<TerminalView>,
 ) -> crate::core::session::WorkspaceId {
     use crate::core::session::{RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore};
-    use crate::terminal::PaneWorkspace;
+    use crate::ui::route::PaneWorkspace;
     let host = RemoteRef::new(
         RemoteTarget::direct("me", "build-box", 22),
         WorkspaceId::new(),

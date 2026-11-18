@@ -131,7 +131,7 @@ impl LyrelApp {
                     .iter()
                     .filter_map(|workspace| workspace.host.as_ref())
                     .find(|host| host.host_id() == id)
-                    .map(|host| crate::ui::remote_connect::route_label(cx, host))
+                    .map(|host| crate::ui::desktop_lookups::route_label(cx, host))
                     .or_else(|| {
                         self.host_snapshots
                             .get(&id)

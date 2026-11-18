@@ -38,7 +38,7 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
         crate::ui::windows::WindowRegistry::init(cx);
         crate::ui::windows::WindowRegistry::register(cx, workspace, handle, app.downgrade());
         crate::ui::windows::WindowRegistry::register(cx, other_workspace, other_vcx.window_handle(), other.downgrade());
-        remote_connect::HostLinks::insert(cx, host.clone(), host.home());
+        desktop_lookups::HostLinks::insert(cx, host.clone(), host.home());
     });
     app.update_in(&mut vcx, |app, window, cx| app.open_switcher(window, cx));
     vcx.run_until_parked();
@@ -56,5 +56,5 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
     assert_eq!(vcx.update(|_, cx| RemoteLinks::status_of(cx, workspace)), Some(crate::ui::remote_workspace::RemoteStatus::Disconnected));
     assert_eq!(app.read_with(cx, |app, _| app.workspace), workspace);
     assert_eq!(other.read_with(cx, |app, _| (app.workspace, app.tabs.len())), (other_workspace, 1), "the production menu must not invalidate an unrelated rooted window");
-    assert!(vcx.update(|_, cx| remote_connect::HostLinks::get(cx, target.host_id()).is_none()));
+    assert!(vcx.update(|_, cx| desktop_lookups::HostLinks::get(cx, target.host_id()).is_none()));
 }

@@ -118,7 +118,7 @@ pub(crate) struct Retiring {
     pub tab: TabId,
     /// The tab's panes on the window's machine.
     pub panes: Vec<u64>,
-    pub route: crate::terminal::PaneRoute,
+    pub route: crate::ui::route::PaneRoute,
 }
 
 /// Records that the user closed `tab` in this window, which is what lets the

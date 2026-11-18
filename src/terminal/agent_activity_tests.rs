@@ -488,7 +488,7 @@ fn a_turn_that_finished_while_the_link_was_down_still_badges(cx: &mut TestAppCon
         pane.adopt_relink(
             new_client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Local,
+            &crate::ui::route::PaneRoute::Local,
             TermSize::new(80, 24),
             8,
             17,

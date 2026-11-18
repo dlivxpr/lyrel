@@ -24,7 +24,7 @@ fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut 
         app.workspace = remote_id;
         let target = app.tabs[0].pane.first_leaf().unwrap();
         target.terminal().unwrap().update(cx, |view, _| {
-            view.set_workspace(Some(crate::terminal::PaneWorkspace {
+            view.set_workspace(Some(crate::ui::route::PaneWorkspace {
                 workspace: WorkspaceId::new(),
                 target: RemoteTarget::direct("me", "pip-remote", 22),
                 spec: None,

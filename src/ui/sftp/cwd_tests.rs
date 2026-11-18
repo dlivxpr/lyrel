@@ -100,7 +100,7 @@ fn an_open_sftp_panel_follows_cwd_frames_without_a_pane_switch(cx: &mut TestAppC
 #[gpui_kit::test]
 fn a_workspace_switch_with_the_same_pane_id_retires_sftp_navigation(cx: &mut TestAppContext) {
     use crate::core::session::{RemoteTarget, WorkspaceId};
-    use crate::terminal::PaneWorkspace;
+    use crate::ui::route::PaneWorkspace;
 
     let (app, mut vcx, _stream) = harness_with_pane(cx);
     app.update_in(&mut vcx, |app, window, cx| {

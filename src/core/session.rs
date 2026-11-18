@@ -191,7 +191,7 @@ impl WorkspaceStore {
         let Some(host) = Self::remote_ref(cx, id) else {
             return true;
         };
-        crate::ui::remote_connect::HostLinks::get(cx, host.host_id()).is_some()
+        crate::ui::desktop_lookups::HostLinks::get(cx, host.host_id()).is_some()
     }
 
     pub fn claim_remote(cx: &mut gpui_kit::App, mut host: RemoteRef) -> WorkspaceId {

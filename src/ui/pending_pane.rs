@@ -9,7 +9,7 @@ use gpui_kit::{
 };
 
 use crate::daemon::protocol::ShellSpec;
-use crate::terminal::PaneWorkspace;
+use crate::ui::route::PaneWorkspace;
 use crate::ui::i18n::{L10nKey, t_fmt};
 mod creation;
 pub(crate) use creation::{PendingLaunch, SpawnFinished};
@@ -83,7 +83,7 @@ impl PendingPane {
     ) -> Self {
         let machine = workspace
             .as_ref()
-            .map(|workspace| crate::ui::remote_connect::target_label(cx, &workspace.target))
+            .map(|workspace| crate::ui::desktop_lookups::target_label(cx, &workspace.target))
             .unwrap_or_else(|| crate::ui::i18n::t(L10nKey::AppLocalServerName).to_string());
         Self::new(
             machine,

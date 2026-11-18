@@ -229,7 +229,7 @@ fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(
                         view.adopt_relink(
                             client,
                             Vec::new(),
-                            &crate::terminal::PaneRoute::Local,
+                            &crate::ui::route::PaneRoute::Local,
                             TermSize::new(80, 24),
                             10,
                             20,

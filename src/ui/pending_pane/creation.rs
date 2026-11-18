@@ -7,7 +7,8 @@ use crate::core::session::WorkspaceId;
 use crate::daemon::protocol::NativeSshSpec;
 use crate::terminal::remote::handshake::{PaneHandshake, attach_refused};
 use crate::terminal::view::{NativeSshParts, ShellParts, TerminalView};
-use crate::terminal::{PaneRoute, SpawnCancellation, TermSize};
+use crate::terminal::{SpawnCancellation, TermSize};
+use crate::ui::route::PaneRoute;
 use crate::ui::tab::TabSet;
 
 /// The workbench supplies only an immutable slot/workspace lease, never itself.

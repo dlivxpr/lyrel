@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::actions::FindInTerminal;
 use crate::terminal::view::input::TerminalInputHandler;
 use gpui_kit::InputHandler;
 

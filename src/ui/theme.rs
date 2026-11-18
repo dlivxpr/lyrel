@@ -8,8 +8,7 @@ use gpui_kit::{
 use crate::core::actions::*;
 use crate::core::config::{Config, WindowBackdrop};
 use crate::terminal::view::{
-    ClearScrollback, CopyText, CutText, FindInTerminal, FindNext, FindPrevious, PasteText,
-    RedoEdit, SelectAll, UndoEdit,
+    ClearScrollback, CopyText, CutText, PasteText, RedoEdit, SelectAll, UndoEdit,
 };
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::presets;

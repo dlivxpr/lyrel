@@ -7,6 +7,7 @@ use super::*;
 use crate::terminal::completion::CandidateKind;
 use crate::terminal::completion::state::{CompletionContext, CompletionWork, RemoteRequest};
 use crate::terminal::prompt_input::layout::input_start;
+use crate::terminal::sftp_client::SftpClient;
 
 impl TerminalView {
     pub(super) fn ghost_suggestion(&self) -> Option<String> {
@@ -73,10 +74,12 @@ impl TerminalView {
                 }
             }
             CompletionWork::Remote(request) => {
-                let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
+                let route = crate::ui::route::SftpRoute::new(self.pane_id, self.workspace.clone());
                 let dir = request.directory().to_string();
                 cx.spawn(async move |this, cx| {
-                    let listed = cx.background_spawn(async move { route.list(&dir) }).await;
+                    let listed = cx
+                        .background_spawn(async move { SftpClient::list(&route, &dir) })
+                        .await;
                     let _ =
                         this.update(cx, |view, cx| view.remote_path_results(request, listed, cx));
                 })

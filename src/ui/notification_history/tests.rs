@@ -479,7 +479,7 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
         );
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(crate::ui::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
@@ -502,7 +502,7 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
             Notification::info("asynchronous native pane").pane(
                 Some(app.workspace),
                 1,
-                &crate::terminal::PaneRoute::Local,
+                &crate::ui::route::PaneRoute::Local,
             ),
             cx,
         );

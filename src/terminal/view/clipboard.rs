@@ -30,7 +30,7 @@ fn trim_trailing_spaces(text: &str) -> String {
 /// permission to sleep on the first restart after the user granted it. So:
 /// refuse what this side can see is forbidden, and defer otherwise.
 fn allows_remote_clipboard_write(
-    workspace: Option<&crate::terminal::PaneWorkspace>,
+    workspace: Option<&crate::ui::route::PaneWorkspace>,
     ssh_spec: Option<&crate::daemon::protocol::NativeSshSpec>,
 ) -> bool {
     remote_paste_spec(workspace, ssh_spec).is_none_or(|spec| spec.remote_clipboard_write)
@@ -256,7 +256,7 @@ impl TerminalView {
     /// tree spells it.
     pub(in crate::terminal) fn drop_remote_path(
         &mut self,
-        drag: &crate::ui::file_tree::RemotePathDrag,
+        drag: &crate::ui::file_drag::RemotePathDrag,
         cx: &mut Context<Self>,
     ) {
         self.paste_paths(vec![drag.path.to_string_lossy().into_owned()], cx);
@@ -367,7 +367,7 @@ impl TerminalView {
             return false;
         };
         let host = format!("{}@{}", spec.user, spec.host);
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
+        let route = crate::ui::route::SftpRoute::new(self.pane_id, self.workspace.clone());
         let prepared = self.remote_paste.prepare(&route, &mut cx.to_async());
         let pane_id = self.pane_id;
         cx.spawn(async move |this, cx| {

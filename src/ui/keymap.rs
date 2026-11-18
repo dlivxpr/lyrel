@@ -3,8 +3,8 @@ use gpui_kit::{App, Global, KeyBinding, Keystroke, Modifiers};
 use crate::core::actions::*;
 use crate::core::config::{Config, KeybindingOverride};
 use crate::terminal::view::{
-    AlternatePaste, ClearScrollback, CopyText, FindInTerminal, FindNext, FindPrevious,
-    InsertNewline, InsertNewlineFallback, PasteText, RunReverseSearchSelection, ToggleComposer,
+    AlternatePaste, ClearScrollback, CopyText, InsertNewline, InsertNewlineFallback, PasteText,
+    RunReverseSearchSelection, ToggleComposer,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::palette;

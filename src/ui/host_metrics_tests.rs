@@ -240,7 +240,7 @@ impl RemoteServer {
 
     fn install(&self, vcx: &mut VisualTestContext) {
         vcx.update(|_, cx| {
-            crate::ui::remote_connect::HostLinks::insert(cx, self.host.clone(), self.host.home())
+            crate::ui::desktop_lookups::HostLinks::insert(cx, self.host.clone(), self.host.home())
         });
     }
 }

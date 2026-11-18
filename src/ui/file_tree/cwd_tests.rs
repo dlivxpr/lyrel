@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
-use crate::terminal::PaneWorkspace;
+use crate::ui::route::PaneWorkspace;
 use crate::terminal::view::quiet_test_pane;
 use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::pane::{Pane, PaneSlot};

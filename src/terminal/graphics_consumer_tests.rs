@@ -2128,7 +2128,7 @@ fn reconnect_replay_replaces_an_open_picture_without_inheriting_its_hold(cx: &mu
         view.adopt_relink(
             client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Local,
+            &crate::ui::route::PaneRoute::Local,
             TermSize::new(80, 24),
             10,
             20,
@@ -2272,7 +2272,7 @@ fn synchronized_resize_consumer(cx: &mut TestAppContext, finish_before_size: Opt
         view.adopt_relink(
             client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Remote {
+            &crate::ui::route::PaneRoute::Remote {
                 header: Box::new(crate::daemon::router::RouteHeader::wsl("resize-fixture")),
                 resize_echo: true,
             },
@@ -2686,7 +2686,7 @@ fn synchronized_relink_first_hold_uses_new_empty_surface_geometry(cx: &mut TestA
         TermSize::new(80, 24),
         PtySource::Raw,
     );
-    let route = crate::terminal::PaneRoute::Remote {
+    let route = crate::ui::route::PaneRoute::Remote {
         header: Box::new(crate::daemon::router::RouteHeader::wsl(
             "first-hold-fixture",
         )),

@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
-use super::route::{ForwardOwnerKey, ForwardRoute};
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, ForwardStatus, ShellSpec, SshPhase};
-use crate::terminal::PaneWorkspace;
+use crate::terminal::forward_client::ForwardClient;
 use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
+use crate::ui::route::{ForwardOwnerKey, ForwardRoute, PaneWorkspace};
 
 use crate::native_ssh_graphics_fixture as native_fixture;
 
@@ -308,7 +308,7 @@ fn managed_forward_real_routes_reject_recover_and_continue_editing(cx: &mut Test
         view.set_workspace(Some(workspace));
     });
     exercise(&app, &mut vcx, 1, echo_port, &pane_route);
-    workspace_route.teardown();
+    ForwardClient::teardown(&workspace_route);
     drop(native);
     drop(fixture);
 }

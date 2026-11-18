@@ -2,6 +2,7 @@
 //! Detailed frame painting remains TerminalElement's responsibility.
 
 use super::*;
+use crate::core::actions::{FindInTerminal, FindNext, FindPrevious};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::menu::ContextMenuExt;
@@ -165,11 +166,11 @@ impl Render for TerminalView {
                 window.focus(&this.focus_handle, cx);
                 this.drop_files(paths, cx);
             }))
-            .drag_over::<crate::ui::file_tree::RemotePathDrag>(|s, _, _, cx| {
+            .drag_over::<crate::ui::file_drag::RemotePathDrag>(|s, _, _, cx| {
                 s.bg(cx.theme().drag_border.opacity(0.12))
             })
             .on_drop(cx.listener(
-                |this, drag: &crate::ui::file_tree::RemotePathDrag, window, cx| {
+                |this, drag: &crate::ui::file_drag::RemotePathDrag, window, cx| {
                     window.focus(&this.focus_handle, cx);
                     this.drop_remote_path(drag, cx);
                 },

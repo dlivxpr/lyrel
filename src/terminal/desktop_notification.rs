@@ -299,12 +299,14 @@ fn try_clickable_notification(title: &str, body: &str, leaf_id: u64) -> bool {
     windows_toast::enqueue(title, body, leaf_id)
 }
 
-/// Ask the tray dispatch loop to bring `leaf_id` to the front. Runs on whatever
-/// thread the platform hands the activation to, so it only touches the channel.
+/// Ask the workbench to bring `leaf_id` to the front. Runs on whatever
+/// thread the platform hands the activation to, so it only touches the
+/// process-wide activation channel — the tray dispatch loop drains that into
+/// the window/pane reveal, and never runs here.
 #[cfg(target_os = "macos")]
 fn reveal_pane(leaf_id: u64) {
-    if let Some(tx) = crate::ui::tray::sender() {
-        let _ = tx.try_send(crate::ui::tray::TrayAction::RevealPane { leaf_id });
+    if let Some(tx) = crate::ui::notification_bridge::sender() {
+        let _ = tx.try_send(crate::ui::notification_bridge::PaneActivation::Reveal { leaf_id });
     }
 }
 

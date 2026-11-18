@@ -3,6 +3,7 @@ use super::*;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg};
 use crate::daemon::transport::Stream;
 use crate::terminal::remote::PtySource;
+use crate::ui::desktop_file::OpenFileRequested;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{Bounds, Entity, TestAppContext, point};
 

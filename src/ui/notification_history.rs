@@ -182,7 +182,7 @@ impl Notification {
         mut self,
         workspace: Option<WorkspaceId>,
         pane: u64,
-        route: &crate::terminal::PaneRoute,
+        route: &crate::ui::route::PaneRoute,
     ) -> Self {
         let pane = if route.is_local() {
             ScopedPane::client_local(pane)

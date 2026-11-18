@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use gpui_kit::{App, AppContext as _, BorrowAppContext as _};
 
 use crate::core::session::{WindowView, WorkspaceId, WorkspaceStore};
-use crate::terminal::{PaneRoute, RemoteTerminal};
+use crate::terminal::RemoteTerminal;
+use crate::ui::route::PaneRoute;
 use crate::ui::host_ops::{HostId, InFlight};
 
 const LOCAL_TTL: Duration = Duration::from_millis(2_000);
@@ -103,7 +104,7 @@ impl PaneLivenessCache {
 
 pub fn liveness_of(cx: &App, workspace: &WindowView) -> Liveness {
     let host = workspace.host_id();
-    let Some(ids) = crate::ui::machine_mirror::pane_ids(cx, workspace) else {
+    let Some(ids) = crate::ui::desktop_lookups::pane_ids(cx, workspace) else {
         return Liveness::Unknown;
     };
     match cx.try_global::<PaneLivenessCache>() {
@@ -125,7 +126,7 @@ pub fn sweep(cx: &mut App) {
         if targets.iter().any(|(seen, _)| *seen == host) {
             continue;
         }
-        if crate::ui::machine_mirror::pane_ids(cx, w).is_none_or(|ids| ids.is_empty()) {
+        if crate::ui::desktop_lookups::pane_ids(cx, w).is_none_or(|ids| ids.is_empty()) {
             continue;
         }
         targets.push((host, w.id));
@@ -147,9 +148,9 @@ fn probe_host(cx: &mut App, host: HostId, workspace: WorkspaceId) {
     // — one of the few the server allows per connection, and once those were
     // all taken by panes, a whole new connection with its handshake each time.
     let probe = if host.is_local() {
-        Probe::Route(crate::ui::remote_workspace::pane_route_for(cx, workspace))
+        Probe::Route(crate::ui::desktop_lookups::pane_route_for(cx, workspace))
     } else {
-        match crate::ui::remote_connect::HostLinks::get(cx, host) {
+        match crate::ui::desktop_lookups::HostLinks::get(cx, host) {
             Some(link) => Probe::Control(std::sync::Arc::clone(link.client())),
             None => {
                 cx.update_global::<PaneLivenessCache, _>(|cache, _| cache.finish_probe(host, None));

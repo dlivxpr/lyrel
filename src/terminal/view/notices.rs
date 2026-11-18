@@ -218,10 +218,10 @@ impl TerminalView {
         let host = self
             .workspace
             .as_ref()
-            .map(|w| crate::ui::remote_connect::target_label(cx, &w.target));
+            .map(|w| crate::ui::desktop_lookups::target_label(cx, &w.target));
         let workspace = self
             .owner_workspace
-            .and_then(|id| crate::ui::machine_mirror::display_name_for(cx, id));
+            .and_then(|id| crate::ui::desktop_lookups::display_name_for(cx, id));
         compose_notification_title(lead.map(str::to_string), host, workspace)
     }
 }

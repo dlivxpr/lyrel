@@ -65,9 +65,6 @@ actions!(
         SelectAll,
         UndoEdit,
         RedoEdit,
-        FindInTerminal,
-        FindNext,
-        FindPrevious,
         ClearScrollback,
         InsertNewline,
         InsertNewlineFallback,
@@ -122,18 +119,9 @@ impl gpui_kit::EventEmitter<TitleContractUnsupported> for TerminalView {}
 /// A file link the user clicked, on its way to whoever can show it. The
 /// terminal resolves the path — it is the only thing that knows the pane's
 /// directory and host — and the app opens it, because the editor and the file
-/// tree are its to drive.
-pub struct OpenFileRequested {
-    pub host_id: crate::ui::host_ops::HostId,
-    pub path: std::path::PathBuf,
-    pub line: Option<u32>,
-    pub column: Option<u32>,
-    /// A directory link asks "where is this?", not "what does it say?" — the
-    /// app answers it in the file tree instead of the editor.
-    pub is_dir: bool,
-}
-
-impl gpui_kit::EventEmitter<OpenFileRequested> for TerminalView {}
+/// tree are its to drive. The payload lives in `crate::ui::desktop_file`,
+/// shared with the launchers below it there.
+impl gpui_kit::EventEmitter<crate::ui::desktop_file::OpenFileRequested> for TerminalView {}
 
 /// A command boundary may have changed a known repository. The shell bumps
 /// its epoch without scheduling a second read alongside the badge refresh.
@@ -216,7 +204,7 @@ pub struct ShellParts {
     terminal: RemoteTerminal,
     pub(crate) pane_id: u64,
     shell_spec: Option<ShellSpec>,
-    pub(crate) workspace: Option<crate::terminal::PaneWorkspace>,
+    pub(crate) workspace: Option<crate::ui::route::PaneWorkspace>,
     pub(crate) restored: bool,
     pub(crate) owner: Option<crate::core::session::WorkspaceId>,
 }
@@ -226,7 +214,7 @@ impl ShellParts {
         terminal: RemoteTerminal,
         pane_id: u64,
         shell_spec: Option<ShellSpec>,
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         restored: bool,
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> Self {
@@ -264,7 +252,7 @@ fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
 pub struct TerminalView {
     pub terminal: RemoteTerminal,
     host_id: crate::ui::host_ops::HostId,
-    workspace: Option<crate::terminal::PaneWorkspace>,
+    workspace: Option<crate::ui::route::PaneWorkspace>,
     pub pane_id: u64,
     shell_spec: Option<ShellSpec>,
     owner_workspace: Option<crate::core::session::WorkspaceId>,
@@ -381,8 +369,8 @@ pub struct TerminalView {
     integration_notice_shown: bool,
     created_at: std::time::Instant,
     /// How opaque the pane wants this terminal painted this frame: 1.0 at
-    /// rest, [`crate::ui::pane::INACTIVE_DIM`] for an unfocused pane in a
-    /// split, [`crate::ui::pane::LIFTED_DIM`] while the pane is being
+    /// rest, [`crate::ui::pane_dim::INACTIVE_DIM`] for an unfocused pane in a
+    /// split, [`crate::ui::pane_dim::LIFTED_DIM`] while the pane is being
     /// dragged. The pane leaf computes it and stores it here, because the
     /// dim is applied by blending the terminal's own colours toward the
     /// window background instead of the pane's element opacity — an opacity
@@ -412,7 +400,7 @@ pub(super) enum LoopbackPlan {
     Direct,
     NoForwardNeeded,
     ForwardOnPane(u64),
-    ForwardOnWorkspace(Box<crate::terminal::PaneWorkspace>),
+    ForwardOnWorkspace(Box<crate::ui::route::PaneWorkspace>),
 }
 
 /// What a pane's loopback port takes to open, given how its links would be
@@ -437,7 +425,7 @@ pub(super) fn port_route_of(plan: &LoopbackPlan, local: bool) -> PortRoute {
 
 pub(super) fn loopback_plan(
     enabled: bool,
-    workspace: Option<&crate::terminal::PaneWorkspace>,
+    workspace: Option<&crate::ui::route::PaneWorkspace>,
     remote_kind: Option<crate::daemon::protocol::RemoteKind>,
     pane_id: u64,
 ) -> LoopbackPlan {
@@ -466,8 +454,8 @@ impl TerminalView {
     /// How forward requests about this pane reach the daemon that owns them —
     /// through the workspace when there is one, and by pane id when there is
     /// not. The Ports list and the port watcher build the same thing.
-    pub(crate) fn forward_route(&self) -> crate::ui::forwards::route::ForwardRoute {
-        crate::ui::forwards::route::ForwardRoute::new(self.pane_id, self.workspace.clone())
+    pub(crate) fn forward_route(&self) -> crate::ui::route::ForwardRoute {
+        crate::ui::route::ForwardRoute::new(self.pane_id, self.workspace.clone())
     }
 
     fn loopback_plan(&self, cx: &gpui_kit::App) -> LoopbackPlan {
@@ -586,7 +574,7 @@ fn wsl_share_path(distro: &str, posix: &str) -> Option<std::path::PathBuf> {
 /// pane's host, being the distro's own server, is not `HostId::LOCAL`.
 fn wsl_share_distro(
     remote: Option<&crate::daemon::protocol::RemoteContext>,
-    workspace: Option<&crate::terminal::PaneWorkspace>,
+    workspace: Option<&crate::ui::route::PaneWorkspace>,
     host_is_local: bool,
 ) -> Option<String> {
     match remote {
@@ -982,7 +970,7 @@ impl TerminalView {
     pub fn display_home(&self, cx: &gpui_kit::App) -> Option<std::path::PathBuf> {
         match self.remote_context().is_some() {
             true => None,
-            false => crate::ui::path_display::home_for_host(cx, self.host_id),
+            false => crate::ui::desktop_lookups::home_for_host(cx, self.host_id),
         }
     }
 
@@ -998,11 +986,11 @@ impl TerminalView {
         self.host_id
     }
 
-    pub fn workspace(&self) -> Option<&crate::terminal::PaneWorkspace> {
+    pub fn workspace(&self) -> Option<&crate::ui::route::PaneWorkspace> {
         self.workspace.as_ref()
     }
 
-    pub fn set_workspace(&mut self, workspace: Option<crate::terminal::PaneWorkspace>) {
+    pub fn set_workspace(&mut self, workspace: Option<crate::ui::route::PaneWorkspace>) {
         self.host_id = workspace
             .as_ref()
             .map_or(crate::ui::host_ops::HostId::LOCAL, |w| w.target.host_id());
@@ -1019,8 +1007,8 @@ impl TerminalView {
         self.links.invalidate_geometry();
     }
 
-    pub fn pane_route(&self) -> crate::terminal::PaneRoute {
-        crate::terminal::PaneRoute::for_workspace(self.workspace.as_ref())
+    pub fn pane_route(&self) -> crate::ui::route::PaneRoute {
+        crate::ui::route::PaneRoute::for_workspace(self.workspace.as_ref())
     }
 
     fn accepts_input(&self, cx: &gpui_kit::App) -> bool {
@@ -1033,7 +1021,7 @@ impl TerminalView {
         else {
             return true;
         };
-        crate::ui::remote_workspace::workspace_accepts_input(cx, ws)
+        crate::ui::desktop_lookups::accepts_input(cx, ws)
     }
 
     pub fn relink_plan(&self) -> (u64, TermSize, u16, u16) {
@@ -1050,7 +1038,7 @@ impl TerminalView {
         &mut self,
         stream: crate::daemon::transport::Stream,
         buffered: Vec<u8>,
-        route: &crate::terminal::PaneRoute,
+        route: &crate::ui::route::PaneRoute,
         size: TermSize,
         cell_w: u16,
         cell_h: u16,
@@ -1063,7 +1051,7 @@ impl TerminalView {
         &mut self,
         stream: crate::daemon::transport::Stream,
         buffered: Vec<u8>,
-        route: &crate::terminal::PaneRoute,
+        route: &crate::ui::route::PaneRoute,
         size: TermSize,
         cell_w: u16,
         cell_h: u16,
@@ -2266,58 +2254,6 @@ fn wheel_route(mode: Mode, shift: bool, up: bool) -> WheelRoute {
     WheelRoute::Scrollback
 }
 
-/// Hands a path to whatever the OS has it associated with. Also the fallback
-/// for a directory the file tree cannot reach.
-///
-/// The path is spelled this OS's way first: Explorer takes `c:/a.png` as a
-/// request to show Documents.
-pub(crate) fn open_file_path(path: &std::path::Path) -> std::io::Result<()> {
-    let path = &super::search::spelled_for(super::search::PathStyle::NATIVE, path);
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener).arg(path).spawn()?;
-    Ok(())
-}
-
-/// Shows a path where it lives, rather than opening it.
-///
-/// `open -R` and `explorer /select,` both select the file inside its folder;
-/// no desktop-neutral Linux equivalent exists, so there the folder is opened
-/// and the file is left for the eye to find.
-pub(crate) fn reveal_file_path(path: &std::path::Path) -> std::io::Result<()> {
-    let path = &super::search::spelled_for(super::search::PathStyle::NATIVE, path);
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut c = std::process::Command::new("open");
-        c.arg("-R").arg(path);
-        c
-    };
-    // Explorer wants `/select,` bare and the path quoted behind it. `arg`
-    // quotes the whole thing the moment the path holds a space, and Explorer
-    // answers a quoted switch by opening Documents and reporting success —
-    // so the command line is written out by hand.
-    #[cfg(windows)]
-    let mut command = {
-        use std::os::windows::process::CommandExt;
-        let mut c = std::process::Command::new("explorer");
-        c.raw_arg(format!("/select,\"{}\"", path.display()));
-        c
-    };
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let mut command = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(path.parent().unwrap_or(path));
-        c
-    };
-    command.spawn()?;
-    Ok(())
-}
-
 /// The coordinate encoding the application negotiated for mouse reports.
 /// `?1006` selects SGR, `?1005` selects UTF-8; with neither set the report
 /// uses the original X10 byte packing. The emulator keeps `?1005` and
@@ -2451,7 +2387,7 @@ mod tests {
 
     use crate::core::session::{RemoteTarget, WorkspaceId};
     use crate::daemon::protocol::RemoteKind;
-    use crate::terminal::PaneWorkspace;
+    use crate::ui::route::PaneWorkspace;
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -4663,7 +4599,7 @@ mod gpui_tests {
                 view.adopt_relink(
                     new_client,
                     Vec::new(),
-                    &crate::terminal::PaneRoute::Local,
+                    &crate::ui::route::PaneRoute::Local,
                     TermSize::new(100, 30),
                     8,
                     17,

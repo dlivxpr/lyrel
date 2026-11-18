@@ -314,7 +314,7 @@ impl LyrelApp {
                         rows: rows.clone(),
                     },
                 );
-                remote_connect::HostLinks::insert(cx, connected.host, home.clone());
+                crate::ui::desktop_lookups::HostLinks::insert(cx, connected.host, home.clone());
                 // The listing outlives the link: mirrored into the store so
                 // the switcher still knows this machine's workspaces after a
                 // restart, without a connection.

@@ -5,6 +5,7 @@
 use super::prompt::menu_layout;
 use super::*;
 use crate::terminal::history_session::{PromptHistory, unix_now};
+use crate::terminal::sftp_client::SftpClient;
 
 const MAX_HISTORY_BYTES: u64 = 4 << 20;
 
@@ -85,7 +86,7 @@ impl TerminalView {
         }
         self.native_history_seed_pending = false;
         let load = self.history.seed_load();
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
+        let route = crate::ui::route::SftpRoute::new(self.pane_id, self.workspace.clone());
         cx.spawn(async move |this, cx| {
             let seed = cx
                 .background_spawn(async move { native_shell_history_seed(&route) })
@@ -182,7 +183,7 @@ impl TerminalView {
         if !host.is_connected() {
             return Vec::new();
         }
-        let Some(home) = crate::ui::remote_connect::HostLinks::home(cx, self.host_id) else {
+        let Some(home) = crate::ui::desktop_lookups::HostLinks::home(cx, self.host_id) else {
             return Vec::new();
         };
         crate::terminal::history::shell_history_names()
@@ -329,20 +330,23 @@ impl TerminalView {
 // 0ef08cf: a native shell channel owns its SSH/SFTP connection even while
 // its desktop HostId is local. Never substitute the workspace Host here.
 fn native_shell_history_seed(
-    route: &crate::ui::sftp::SftpRoute,
+    route: &crate::ui::route::SftpRoute,
 ) -> crate::terminal::history::History {
     use crate::daemon::protocol::{SftpOp, SftpOpResult};
-    let home = match route.op(SftpOp::Realpath { path: ".".into() }) {
+    let home = match SftpClient::op(route, SftpOp::Realpath { path: ".".into() }) {
         SftpOpResult::Link(home) => home,
         _ => return crate::terminal::history::History::default(),
     };
     let mut seed = crate::terminal::history::History::default();
     for relative in crate::terminal::history::shell_history_names() {
         let path = crate::daemon::ssh::sftp::remote_join(&home, relative);
-        if let SftpOpResult::File { bytes, .. } = route.op(SftpOp::ReadFile {
-            path,
-            max_bytes: MAX_HISTORY_BYTES,
-        }) {
+        if let SftpOpResult::File { bytes, .. } = SftpClient::op(
+            route,
+            SftpOp::ReadFile {
+                path,
+                max_bytes: MAX_HISTORY_BYTES,
+            },
+        ) {
             seed.prepend_seed(crate::terminal::history::from_shell_file(
                 &crate::daemon::ssh::sftp::remote_basename(relative),
                 &bytes,

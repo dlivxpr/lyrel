@@ -239,7 +239,7 @@ pub(crate) struct RightPanelState {
     pub(crate) cpu: crate::ui::proc_usage::CpuTracker,
     pub(crate) procs_loading: bool,
     pub(crate) procs_gen: u64,
-    pub(crate) procs_forwards: Option<crate::ui::forwards::route::ForwardRoute>,
+    pub(crate) procs_forwards: Option<crate::ui::route::ForwardRoute>,
     /// Who to ask about `procs_pane` — `None` means this machine's daemon.
     pub(crate) procs_host: Option<crate::ui::host_ops::SharedHost>,
     /// Whether the host that owns this pane cannot describe its processes at
@@ -274,7 +274,7 @@ pub(crate) struct RightPanelState {
     /// forwarded, and switching back would re-offer what was just dismissed.
     /// A few `u16` per connection is not worth reclaiming.
     pub(crate) auto_forwarded: std::collections::HashMap<
-        crate::ui::forwards::route::ForwardOwnerKey,
+        crate::ui::route::ForwardOwnerKey,
         std::collections::HashSet<u16>,
     >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
@@ -312,7 +312,7 @@ const AUTO_FORWARD_BURST: usize = 4;
 pub(crate) struct PaneForwardCtx {
     pub(crate) pane_id: u64,
     /// `Some` when the pane has somewhere to hold managed forwards.
-    pub(crate) route: Option<crate::ui::forwards::route::ForwardRoute>,
+    pub(crate) route: Option<crate::ui::route::ForwardRoute>,
     pub(crate) port_route: crate::terminal::view::PortRoute,
     /// The host that owns this pane's processes, when that is not this
     /// machine. A remote workspace's panes live in the peer's registry, so the
@@ -1702,7 +1702,13 @@ impl LyrelApp {
                 cx.spawn(async move |this, cx| {
                     let built = cx
                         .background_executor()
-                        .spawn(async move { route.ensure_loopback("127.0.0.1", port) })
+                        .spawn(async move {
+                            crate::terminal::forward_client::ForwardClient::ensure_loopback(
+                                &route,
+                                "127.0.0.1",
+                                port,
+                            )
+                        })
                         .await;
                     let _ = this.update_in(cx, |app, window, cx| match built {
                         Ok(f) => {
@@ -1848,10 +1854,10 @@ impl LyrelApp {
             return;
         }
         let origin = match owner {
-            crate::ui::forwards::route::ForwardOwnerKey::Pane(pane) => {
+            crate::ui::route::ForwardOwnerKey::Pane(pane) => {
                 lyrel_core::core::pane_sidecar::ScopedPane::client_local(pane)
             }
-            crate::ui::forwards::route::ForwardOwnerKey::Workspace(_) => {
+            crate::ui::route::ForwardOwnerKey::Workspace(_) => {
                 let Some(pane) = self.right_panel.procs_pane else {
                     return;
                 };
@@ -1908,7 +1914,7 @@ impl LyrelApp {
     fn sync_procs(
         &mut self,
         pane_id: Option<u64>,
-        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
+        forwards: Option<crate::ui::route::ForwardRoute>,
         host: Option<crate::ui::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
@@ -1952,7 +1958,7 @@ impl LyrelApp {
         &mut self,
         pane_id: u64,
         generation: u64,
-        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
+        forwards: Option<crate::ui::route::ForwardRoute>,
         host: Option<crate::ui::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {

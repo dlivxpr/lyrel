@@ -68,7 +68,7 @@ impl LyrelApp {
     /// Bind a retained connecting slot. Creation errors are asynchronous and
     /// remain on PendingPane; callers place this identity before it can land.
     pub(crate) fn new_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: Option<WorkspaceId>,
         font_size: f32,
         working_directory: Option<std::path::PathBuf>,
@@ -94,7 +94,7 @@ impl LyrelApp {
     /// Bind an existing attachment without permitting a fresh replacement shell.
     /// A missing or unreachable pane remains an attach-only pending failure.
     pub(crate) fn attach_existing_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         pane: u64,
         owner: WorkspaceId,
         font_size: f32,
@@ -117,7 +117,7 @@ impl LyrelApp {
     }
 
     fn pending_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<crate::ui::route::PaneWorkspace>,
         owner: Option<WorkspaceId>,
         font_size: f32,
         working_directory: Option<std::path::PathBuf>,
@@ -341,7 +341,7 @@ impl LyrelApp {
     }
 
     pub(super) fn kill_pane_off_thread(
-        route: crate::terminal::PaneRoute,
+        route: crate::ui::route::PaneRoute,
         pane_id: u64,
         cx: &mut App,
     ) {
@@ -361,7 +361,7 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
+            |app, view, ev: &crate::ui::desktop_file::OpenFileRequested, window, cx| {
                 // The popup can outlive focus changes. Resolve its retained pane,
                 // never the workspace that happened to receive the later action.
                 if view.read(cx).host_id() == ev.host_id

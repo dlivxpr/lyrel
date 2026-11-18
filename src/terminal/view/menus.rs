@@ -1,6 +1,7 @@
 //! General terminal commands, composed after the Host-aware link section.
 
 use super::*;
+use crate::core::actions::FindInTerminal;
 use gpui_kit::Entity;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};

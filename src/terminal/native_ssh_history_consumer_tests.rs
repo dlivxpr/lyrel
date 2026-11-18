@@ -69,7 +69,7 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     host.write_file(&path, b"echo REMOTE_HOME_ONLY_185\n").unwrap();
     let _history = RemoteHistoryFile(host.clone(), path);
     std::fs::write(fixture.local_config_dir().join("history"), b"echo LOCAL_ONLY_185\n").unwrap();
-    cx.update(|cx| crate::ui::remote_connect::HostLinks::insert(cx, host.clone(), host.home()));
+    cx.update(|cx| crate::ui::desktop_lookups::HostLinks::insert(cx, host.clone(), host.home()));
     let shell = crate::daemon::protocol::ShellSpec {
         program: "/bin/cat".into(), args: Vec::new(), args_are_lyrel_defaults: false,
     };

@@ -75,7 +75,7 @@ fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
     Retiring {
         tab,
         panes,
-        route: crate::terminal::PaneRoute::Local,
+        route: crate::ui::route::PaneRoute::Local,
     }
 }
 

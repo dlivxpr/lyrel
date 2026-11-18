@@ -20,11 +20,13 @@ use crate::daemon::protocol::{
 };
 use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
 use crate::terminal::RemoteTerminal;
+use crate::terminal::sftp_client::SftpClient;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{
     HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
 };
+use crate::ui::route::SftpRoute;
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
 
 mod revalidation;
@@ -72,109 +74,11 @@ pub(crate) enum SftpEdit {
     },
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SftpRoute {
-    pane_id: u64,
-    workspace: Option<crate::terminal::PaneWorkspace>,
-}
-
-impl SftpRoute {
-    pub(crate) fn new(pane_id: u64, workspace: Option<crate::terminal::PaneWorkspace>) -> Self {
-        Self { pane_id, workspace }
-    }
-
-    /// What makes this route *this* route, for a [`HostId`]. Keyed by pane —
-    /// two panes into the same server are two routes, because every op is
-    /// addressed to a pane's SSH connection — and by workspace, because a
-    /// workspace pane's id was minted by the far daemon and can collide with
-    /// a local one.
-    ///
-    /// [`HostId`]: crate::ui::host_registry::HostId
-    pub(crate) fn connection_key(&self) -> String {
-        match &self.workspace {
-            Some(ws) => format!("sftp:{}:{}", ws.workspace, self.pane_id),
-            None => format!("sftp:{}", self.pane_id),
-        }
-    }
-
-    fn workspace_op(
-        &self,
-        op: crate::daemon::protocol::WorkspaceOp,
-    ) -> Option<crate::daemon::protocol::WorkspaceRequest> {
-        RemoteTerminal::workspace_request(self.workspace.as_ref()?, self.pane_id, op)
-    }
-
-    pub(crate) fn list(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpList {
-            path: path.to_string(),
-        }) else {
-            return RemoteTerminal::sftp_list(self.pane_id, path);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpEntries(e)) => Ok(e),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    pub(crate) fn op(&self, op: SftpOp) -> SftpOpResult {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpOp { op: op.clone() })
-        else {
-            return RemoteTerminal::sftp_op(self.pane_id, op);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpOpResult(r)) => r,
-            Ok(other) => SftpOpResult::Error(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => SftpOpResult::Error(e.to_string()),
-        }
-    }
-
-    pub(crate) fn transfer_start(&self, spec: SftpTransferSpec) -> Result<u64, String> {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferStart {
-                spec: spec.clone(),
-            })
-        else {
-            return RemoteTerminal::sftp_transfer_start(spec);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferStarted { job_id }) => Ok(job_id),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    pub(crate) fn transfer_list(&self) -> Result<Vec<SftpJobProgress>, String> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferList)
-        else {
-            return RemoteTerminal::sftp_transfer_list(self.pane_id);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferProgress(jobs)) => Ok(jobs),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
-
 type SftpPaneKey = (Option<crate::core::session::WorkspaceId>, u64);
 
 pub(crate) struct SftpPanelState {
     pub(crate) open_pane_id: Option<u64>,
-    pub(crate) open_workspace: Option<crate::terminal::PaneWorkspace>,
+    pub(crate) open_workspace: Option<crate::ui::route::PaneWorkspace>,
     pub(crate) cwd: String,
     pub(crate) cwds: std::collections::HashMap<SftpPaneKey, String>,
     shell_cwds: std::collections::HashMap<SftpPaneKey, String>,
@@ -498,10 +402,10 @@ impl LyrelApp {
     }
 
     fn sftp_route(&self) -> SftpRoute {
-        SftpRoute {
-            pane_id: self.sftp_panel.open_pane_id.unwrap_or_default(),
-            workspace: self.sftp_panel.open_workspace.clone(),
-        }
+        SftpRoute::new(
+            self.sftp_panel.open_pane_id.unwrap_or_default(),
+            self.sftp_panel.open_workspace.clone(),
+        )
     }
 
     fn pane_workspace(
@@ -509,7 +413,7 @@ impl LyrelApp {
         pane_id: u64,
         window: &Window,
         cx: &App,
-    ) -> Option<crate::terminal::PaneWorkspace> {
+    ) -> Option<crate::ui::route::PaneWorkspace> {
         let leaf = self
             .tabs
             .get(self.tabs.active_index())?
@@ -566,7 +470,9 @@ impl LyrelApp {
         let generation = self.sftp_panel.nav_gen;
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.op(SftpOp::Realpath { path: ".".into() }) })
+                .background_spawn(async move {
+                    SftpClient::op(&route, SftpOp::Realpath { path: ".".into() })
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -614,7 +520,7 @@ impl LyrelApp {
         let key = (route.workspace.as_ref().map(|ws| ws.workspace), pane_id);
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.list(&list_path) })
+                .background_spawn(async move { SftpClient::list(&route, &list_path) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -798,7 +704,7 @@ impl LyrelApp {
             remote,
             recursive,
         };
-        match self.sftp_route().transfer_start(spec) {
+        match SftpClient::transfer_start(&self.sftp_route(), spec) {
             Ok(_) => self.sftp_panel.error = None,
             Err(e) => self.sftp_panel.error = Some(e),
         }
@@ -830,7 +736,7 @@ impl LyrelApp {
         let generation = self.sftp_panel.nav_gen;
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.op(SftpOp::Readlink { path }) })
+                .background_spawn(async move { SftpClient::op(&route, SftpOp::Readlink { path }) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -872,7 +778,7 @@ impl LyrelApp {
     ) {
         let route = self.sftp_route();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { route.op(op) }).await;
+            let result = cx.background_spawn(async move { SftpClient::op(&route, op) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.sftp_panel.open_pane_id != Some(pane_id) {
                     return;
@@ -1080,7 +986,7 @@ impl LyrelApp {
             if let Ok(Ok(Some(paths))) = rx.await {
                 let entries = cx
                     .background_spawn(async move {
-                        route.list(&directory).map(|entries| (directory, entries))
+                        SftpClient::list(&route, &directory).map(|entries| (directory, entries))
                     })
                     .await;
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -1188,7 +1094,7 @@ impl LyrelApp {
                 remote: remote_join(&cwd, &name),
                 recursive,
             };
-            match self.sftp_route().transfer_start(spec) {
+            match SftpClient::transfer_start(&self.sftp_route(), spec) {
                 Ok(job_id) => {
                     self.sftp_panel.uploads_awaiting_listing.insert(job_id);
                 }
@@ -1231,7 +1137,7 @@ impl LyrelApp {
 
     fn sftp_poll_jobs(&mut self, cx: &mut Context<Self>) {
         if self.sftp_panel.open_pane_id.is_some() {
-            let jobs = self.sftp_route().transfer_list();
+            let jobs = SftpClient::transfer_list(&self.sftp_route());
             self.sftp_apply_jobs(jobs, cx);
         }
     }
@@ -1317,7 +1223,7 @@ impl LyrelApp {
                     .flatten();
                 let Some(route) = pane else { break };
                 let jobs = cx
-                    .background_spawn(async move { route.transfer_list() })
+                    .background_spawn(async move { SftpClient::transfer_list(&route) })
                     .await;
                 let keep = this
                     .update(cx, |this, cx| {
@@ -1354,7 +1260,7 @@ impl LyrelApp {
                 // never a second permanent timer or a queue of directory requests.
                 let (request, entries) = cx
                     .background_spawn(async move {
-                        let entries = route.list(request.path());
+                        let entries = SftpClient::list(&route, request.path());
                         (request, entries)
                     })
                     .await;

@@ -10,6 +10,7 @@ use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
 use crate::ui::app::LyrelApp;
 use crate::ui::file_copy;
+use crate::ui::file_drag::RemotePathDrag;
 use crate::ui::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
 use crate::ui::host_registry::HostRegistry;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -45,8 +46,6 @@ mod refresh_tests;
 pub(crate) mod read_probe;
 #[cfg(test)]
 use read_probe::{InstanceTicket, ReadKind, ReadProbe};
-
-pub(crate) use lifecycle::{IndexKey, searchable_roots};
 
 // The tree is laid out the way every other list in this panel is: the column
 // sits `CONTENT_INSET` in and each row pads itself a further `ROW_INSET`, so a
@@ -1225,7 +1224,7 @@ impl LyrelApp {
             if self.can_spawn_locally(cx) {
                 // The OS association can fail to spawn like any other opener
                 // (#542): say so with the same words a failed file link uses.
-                if let Err(e) = crate::terminal::view::open_file_path(path) {
+                if let Err(e) = crate::ui::desktop_file::open_file_path(path) {
                     log::warn!("failed to open {}: {e}", path.display());
                     window.notify_app(
                         crate::ui::host_ops::failure(
@@ -2532,13 +2531,6 @@ fn dotfiles_menu_item(show_hidden: bool, app: &gpui_kit::WeakEntity<LyrelApp>) -
 
 struct DragGhost {
     name: String,
-}
-
-/// A row dragged out of a remote Files tree: a path on that remote, which
-/// nothing on this machine can open. See the row's `on_drag`.
-#[derive(Clone)]
-pub(crate) struct RemotePathDrag {
-    pub path: PathBuf,
 }
 
 impl gpui_kit::Render for DragGhost {

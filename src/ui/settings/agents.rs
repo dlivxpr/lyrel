@@ -563,7 +563,7 @@ impl SettingsWindow {
             host: crate::ui::host_ops::HostId::LOCAL,
             label: t(L10nKey::AppAgentHooksThisComputer).to_string(),
         }];
-        let configured = crate::ui::remote_connect::available_hosts(cx);
+        let configured = crate::ui::desktop_lookups::available_hosts(cx);
         for id in crate::ui::host_registry::HostRegistry::ids(cx) {
             if id.is_local() {
                 continue;
@@ -683,7 +683,7 @@ impl SettingsWindow {
         if !host.is_connected() {
             return None;
         }
-        let home = crate::ui::remote_connect::HostLinks::home(cx, host_id)?;
+        let home = crate::ui::desktop_lookups::HostLinks::home(cx, host_id)?;
         Some((host, Some(home)))
     }
 

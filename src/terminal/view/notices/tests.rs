@@ -568,7 +568,7 @@ fn a_dropped_link_does_not_claim_the_process_exited(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_workspace_pane_answers_to_its_workspaces_name(cx: &mut TestAppContext) {
     use crate::core::session::{RemoteTarget, WorkspaceId};
-    use crate::terminal::PaneWorkspace;
+    use crate::ui::route::PaneWorkspace;
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {

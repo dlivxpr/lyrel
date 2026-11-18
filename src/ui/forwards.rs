@@ -1,5 +1,4 @@
 mod editing;
-pub(crate) mod route;
 
 #[cfg(test)]
 mod native_tests;

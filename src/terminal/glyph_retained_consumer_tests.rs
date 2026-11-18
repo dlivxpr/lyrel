@@ -482,7 +482,7 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
         view.adopt_relink_with_version(
             client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Remote {
+            &crate::ui::route::PaneRoute::Remote {
                 header: Box::new(crate::daemon::router::RouteHeader::wsl(
                     "glyph-resize-fixture",
                 )),

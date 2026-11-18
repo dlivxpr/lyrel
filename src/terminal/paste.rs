@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use gpui_kit::{AppContext as _, AsyncApp, ClipboardEntry, ClipboardItem, Task};
 
 use crate::core::shell_quote::quote_for_shell;
-use crate::ui::sftp::SftpRoute;
+use crate::terminal::sftp_client::SftpClient;
+use crate::ui::route::SftpRoute;
 
 /// Paths as one line of shell words, trailing space included so whatever is
 /// typed next starts a word of its own.
@@ -112,7 +113,7 @@ impl StartedUpload {
             cx.background_executor().timer(POLL).await;
             let listed = {
                 let route = route.clone();
-                cx.background_spawn(async move { route.transfer_list() })
+                cx.background_spawn(async move { SftpClient::transfer_list(&route) })
                     .await
             };
             // 查询失败不代表传输失败，仍按无进展时长继续观察。
@@ -138,7 +139,7 @@ impl StartedUpload {
                     if !self.is_dir {
                         let (route, path) = (route.clone(), self.remote.clone());
                         cx.background_spawn(async move {
-                            route.op(SftpOp::Chmod { path, mode: 0o600 })
+                            SftpClient::op(&route, SftpOp::Chmod { path, mode: 0o600 })
                         })
                         .await;
                     }
@@ -189,7 +190,7 @@ pub(super) fn write_clipboard_image(img: &gpui_kit::Image) -> Option<std::path::
 /// needs path translation instead, and a workspace without connection details
 /// has no channel to piggyback on — both keep the local-path behavior.
 pub(super) fn remote_paste_spec<'a>(
-    workspace: Option<&'a crate::terminal::PaneWorkspace>,
+    workspace: Option<&'a crate::ui::route::PaneWorkspace>,
     ssh_spec: Option<&'a crate::daemon::protocol::NativeSshSpec>,
 ) -> Option<&'a crate::daemon::protocol::NativeSshSpec> {
     if let Some(ws) = workspace {
@@ -291,8 +292,8 @@ fn staged_entry_expired(mtime: u64, now: u64) -> bool {
 
 /// Remove the staging directory's expired entries. Best effort: a failure
 /// here costs disk space, never a paste, so nothing is reported.
-fn prune_remote_clipboard_dir(route: &crate::ui::sftp::SftpRoute, dir: &str) {
-    let Ok(entries) = route.list(dir) else {
+fn prune_remote_clipboard_dir(route: &crate::ui::route::SftpRoute, dir: &str) {
+    let Ok(entries) = SftpClient::list(route, dir) else {
         return;
     };
     let now = std::time::SystemTime::now()
@@ -314,7 +315,7 @@ fn prune_remote_clipboard_dir(route: &crate::ui::sftp::SftpRoute, dir: &str) {
 /// Delete a remote file or directory tree. A symlink is removed as a link and
 /// never followed — the tree is ours, where it points is not.
 fn remove_remote_tree(
-    route: &crate::ui::sftp::SftpRoute,
+    route: &crate::ui::route::SftpRoute,
     path: &str,
     kind: crate::daemon::protocol::SftpEntryKind,
     depth: usize,
@@ -324,13 +325,13 @@ fn remove_remote_tree(
     // one rather than any real one.
     const MAX_DEPTH: usize = 64;
     if kind != SftpEntryKind::Dir {
-        route.op(SftpOp::RemoveFile {
+        SftpClient::op(route, SftpOp::RemoveFile {
             path: path.to_string(),
         });
         return;
     }
     if depth < MAX_DEPTH
-        && let Ok(children) = route.list(path)
+        && let Ok(children) = SftpClient::list(route, path)
     {
         for child in children {
             if child.name == "." || child.name == ".." {
@@ -340,7 +341,7 @@ fn remove_remote_tree(
             remove_remote_tree(route, &child_path, child.kind, depth + 1);
         }
     }
-    route.op(SftpOp::RemoveDir {
+    SftpClient::op(route, SftpOp::RemoveDir {
         path: path.to_string(),
     });
 }
@@ -364,14 +365,14 @@ pub(super) struct StartedUpload {
 /// could not be made and nothing was started; a source that could not be
 /// started on its own is reported in its own entry.
 fn start_paste_uploads(
-    route: &crate::ui::sftp::SftpRoute,
+    route: &crate::ui::route::SftpRoute,
     pane_id: u64,
     dir: &str,
     sources: &[std::path::PathBuf],
 ) -> Result<Vec<PasteUpload>, String> {
     use crate::daemon::protocol::{SftpOp, SftpOpResult, SftpTransferKind, SftpTransferSpec};
     let paste_dir = crate::daemon::ssh::sftp::remote_join(dir, &paste_dir_name());
-    if let SftpOpResult::Error(e) = route.op(SftpOp::Mkdir {
+    if let SftpOpResult::Error(e) = SftpClient::op(route, SftpOp::Mkdir {
         path: paste_dir.clone(),
     }) {
         return Err(e);
@@ -389,7 +390,7 @@ fn start_paste_uploads(
                     .map_err(|e| format!("{}: {e}", local.display()))?
                     .is_dir();
                 let remote = crate::daemon::ssh::sftp::remote_join(&paste_dir, &name);
-                let job = route.transfer_start(SftpTransferSpec {
+                let job = SftpClient::transfer_start(route, SftpTransferSpec {
                     pane_id,
                     kind: SftpTransferKind::Upload,
                     local: local.clone(),
@@ -432,9 +433,9 @@ fn staging_dir_is_safe(
 /// Create and verify the per-user staging directory, answering the absolute
 /// remote path to upload into. Blocking: every step is a daemon round trip
 /// over the pane's SSH connection, so this only ever runs off the UI thread.
-fn prepare_remote_clipboard_dir(route: &crate::ui::sftp::SftpRoute) -> Result<String, String> {
+fn prepare_remote_clipboard_dir(route: &crate::ui::route::SftpRoute) -> Result<String, String> {
     use crate::daemon::protocol::{SftpOp, SftpOpResult};
-    let home = match route.op(SftpOp::Realpath {
+    let home = match SftpClient::op(route, SftpOp::Realpath {
         path: ".".to_string(),
     }) {
         SftpOpResult::Link(home) if home.starts_with('/') => home,
@@ -451,18 +452,23 @@ fn prepare_remote_clipboard_dir(route: &crate::ui::sftp::SftpRoute) -> Result<St
         // An existing directory fails here with EEXIST; the checks below are
         // what decide whether this one is ours, so the result carries no
         // information worth branching on.
-        let _ = route.op(SftpOp::Mkdir { path: dir.clone() });
+        let _ = SftpClient::op(route, SftpOp::Mkdir { path: dir.clone() });
     }
-    if let SftpOpResult::Link(target) = route.op(SftpOp::Readlink { path: dir.clone() }) {
+    if let SftpOpResult::Link(target) =
+        SftpClient::op(route, SftpOp::Readlink { path: dir.clone() })
+    {
         return Err(format!("{dir} is a symlink to {target}"));
     }
-    if let SftpOpResult::Error(e) = route.op(SftpOp::Chmod {
-        path: dir.clone(),
-        mode: REMOTE_CLIPBOARD_MODE,
-    }) {
+    if let SftpOpResult::Error(e) = SftpClient::op(
+        route,
+        SftpOp::Chmod {
+            path: dir.clone(),
+            mode: REMOTE_CLIPBOARD_MODE,
+        },
+    ) {
         return Err(format!("{dir} is not owned by this session: {e}"));
     }
-    match route.op(SftpOp::Stat { path: dir.clone() }) {
+    match SftpClient::op(route, SftpOp::Stat { path: dir.clone() }) {
         SftpOpResult::Stat(entry)
             if staging_dir_is_safe(false, Some(entry.kind), entry.permissions) =>
         {
@@ -512,7 +518,7 @@ mod tests {
         );
     }
     use crate::core::session::{RemoteTarget, WorkspaceId};
-    use crate::terminal::PaneWorkspace;
+    use crate::ui::route::PaneWorkspace;
     use gpui_kit::ExternalPaths;
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
@@ -527,7 +533,7 @@ mod tests {
     /// The SSH user a paste would be uploaded for, or `None` when the pane
     /// keeps the local-path behavior.
     fn remote_paste_user<'a>(
-        workspace: Option<&'a crate::terminal::PaneWorkspace>,
+        workspace: Option<&'a crate::ui::route::PaneWorkspace>,
         ssh_spec: Option<&'a crate::daemon::protocol::NativeSshSpec>,
     ) -> Option<&'a str> {
         remote_paste_spec(workspace, ssh_spec).map(|s| s.user.as_str())

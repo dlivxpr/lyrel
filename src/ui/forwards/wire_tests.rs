@@ -4,12 +4,11 @@ use std::time::Duration;
 
 use gpui_kit::TestAppContext;
 
-use super::route::ForwardOwnerKey;
 use crate::daemon::protocol::{
     ClientMsg, DaemonMsg, ForwardStatus, ManagedForward, SshForwardKind, WorkspaceOp,
 };
-use crate::terminal::PaneWorkspace;
 use crate::ui::app::test_window::harness_with_tabs;
+use crate::ui::route::{ForwardOwnerKey, PaneWorkspace};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mutation {

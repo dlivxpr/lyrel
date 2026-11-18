@@ -52,7 +52,7 @@ impl LyrelApp {
         }
         Self::prompt_daemon_version_mismatch(window, cx);
         crate::ui::remote_connect::register(cx);
-        crate::ui::remote_connect::sweep_wsl(cx);
+        crate::ui::desktop_lookups::sweep_wsl(cx);
         Self::prompt_remote_daemon_mismatch(window, cx);
         app.reopen_remote_at_startup(cx);
         app
@@ -206,6 +206,16 @@ impl LyrelApp {
             .observe_global::<crate::terminal::pane_liveness::PaneLivenessCache>(|_this, cx| {
                 cx.notify();
             });
+        // The rules the terminal asks below the workbench through: what a
+        // workspace's panes attach over, and whether another client is
+        // driving it. Installed once per process; the terminal side only ever
+        // forwards the call, so it never imports the supervisors themselves.
+        crate::ui::desktop_lookups::install_pane_route_for(
+            crate::ui::remote_workspace::pane_route_for,
+        );
+        crate::ui::desktop_lookups::install_accepts_input(
+            crate::ui::remote_workspace::workspace_accepts_input,
+        );
         let this = cx.weak_entity();
         let keystroke_watch = cx.intercept_keystrokes(move |_ev, _window, cx| {
             let _ = this.update(cx, |this, cx| this.dismiss_mod_hint(cx));

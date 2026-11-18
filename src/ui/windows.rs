@@ -538,7 +538,7 @@ pub fn menu_order(cx: &App) -> Vec<(WorkspaceId, bool)> {
 }
 
 pub struct PaneCountQuery {
-    route: crate::terminal::PaneRoute,
+    route: crate::ui::route::PaneRoute,
     claimed: Vec<u64>,
 }
 
@@ -564,7 +564,7 @@ pub fn live_pane_count(q: &PaneCountQuery) -> Option<usize> {
                 .collect();
             Some(claimed.iter().filter(|id| alive.contains(id)).count())
         }
-        Err(_) if matches!(route, crate::terminal::PaneRoute::Local) => Some(0),
+        Err(_) if matches!(route, crate::ui::route::PaneRoute::Local) => Some(0),
         Err(_) => None,
     }
 }

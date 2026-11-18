@@ -48,7 +48,7 @@ use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView};
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
 use crate::ui::host_ops::{HostId, HostOps};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::search::files::{FileIndex, FileList, IndexedFile, rank, walk};
+use crate::ui::file_search::{FileIndex, FileList, IndexedFile, rank, walk};
 
 /// How tall the text may grow, in lines, before it scrolls instead.
 const MAX_ROWS: usize = 8;
@@ -2158,7 +2158,7 @@ impl TerminalView {
                     this.drop_files(paths, cx);
                 }))
                 .on_drop(cx.listener(
-                    |this, drag: &crate::ui::file_tree::RemotePathDrag, window, cx| {
+                    |this, drag: &crate::ui::file_drag::RemotePathDrag, window, cx| {
                         cx.stop_propagation();
                         this.focus_composer(window, cx);
                         this.drop_remote_path(drag, cx);
@@ -2933,7 +2933,7 @@ mod tests {
 
     #[test]
     fn a_file_mention_is_spelled_from_the_panes_directory() {
-        let index = crate::ui::search::files::build_index(
+        let index = crate::ui::file_search::build_index(
             &[PathBuf::from("/repo")],
             vec![
                 PathBuf::from("/repo/app/src/main.rs"),

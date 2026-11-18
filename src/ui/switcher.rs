@@ -437,7 +437,7 @@ fn host_items(hosts: Vec<HostChoice>, query: &str, local_label: &str) -> Vec<Hos
         items.push(HostItem::Local);
     }
     items.extend(
-        remote_connect::filter_hosts(&hosts, query)
+        crate::ui::desktop_lookups::filter_hosts(&hosts, query)
             .into_iter()
             .map(HostItem::Host),
     );
@@ -467,7 +467,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         remote_connect::register(cx);
-        remote_connect::sweep_wsl(cx);
+        crate::ui::desktop_lookups::sweep_wsl(cx);
         let query = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(crate::ui::i18n::t(
@@ -783,7 +783,7 @@ impl LyrelApp {
         // Listed once for the whole frame: the pending groups below name
         // themselves from it, and so does the pass that settles every group's
         // link state further down.
-        let configured = remote_connect::available_hosts(cx);
+        let configured = crate::ui::desktop_lookups::available_hosts(cx);
 
         for target in self.pending_machines() {
             let key = target.to_string();
@@ -797,7 +797,7 @@ impl LyrelApp {
                 // announce itself to the banners below by a raw UUID (#485).
                 // The pass below overwrites this while the profile is still
                 // configured; this is what is left when it is not.
-                label: remote_connect::label_from_hosts(&configured, &target),
+                label: crate::ui::desktop_lookups::label_from_hosts(&configured, &target),
                 key,
                 endpoint: String::new(),
                 target: Some(target),
@@ -1118,7 +1118,8 @@ impl LyrelApp {
         supervised: Option<&MachineStatus>,
         cx: &mut Context<Self>,
     ) -> Link {
-        let has_link = remote_connect::HostLinks::get(cx, target.host_id()).is_some();
+        let has_link =
+            crate::ui::desktop_lookups::HostLinks::get(cx, target.host_id()).is_some();
         link_from(self.connect.state(), target, supervised, has_link)
     }
 
@@ -1258,7 +1259,7 @@ impl LyrelApp {
     fn form_items(&self, form: &CreateForm, cx: &App) -> Vec<HostItem> {
         let query = form.host.read(cx).value().trim().to_string();
         host_items(
-            remote_connect::available_hosts(cx),
+            crate::ui::desktop_lookups::available_hosts(cx),
             &query,
             t(L10nKey::SwitcherThisComputer),
         )

@@ -21,7 +21,7 @@ use windows::Win32::UI::Notifications::{
 use windows::core::{BOOL, GUID, HSTRING, IUnknown, Interface, PCWSTR, Ref, Result, implement, w};
 
 use crate::core::aumid::AUMID;
-use crate::ui::tray::TrayAction;
+use crate::ui::notification_bridge::PaneActivation;
 
 // Keep in sync with windows-installer.iss. Distinct from the install AppId.
 pub(crate) const ACTIVATOR: GUID = GUID::from_u128(0x60ef7707_8f84_4911_9443_a7c8053aa5cf);
@@ -62,7 +62,7 @@ pub(super) fn enqueue(title: &str, body: &str, leaf_id: u64) -> bool {
 enum Destination {
     Live {
         instance: uuid::Uuid,
-        actions: smol::channel::Sender<TrayAction>,
+        actions: smol::channel::Sender<PaneActivation>,
     },
     Shell(Option<SyncSender<()>>),
 }
@@ -86,7 +86,7 @@ impl INotificationActivationCallback_Impl for Callback_Impl {
                     instance: own,
                     actions,
                 } if *own == instance => {
-                    let _ = actions.try_send(TrayAction::RevealPane { leaf_id });
+                    let _ = actions.try_send(PaneActivation::Reveal { leaf_id });
                 }
                 Destination::Shell(_) => relay_activation(instance, *app_id, *invoked),
                 Destination::Live { .. } => {}
@@ -151,7 +151,7 @@ struct RunningPaneCallback {
 }
 
 impl RunningPaneCallback {
-    fn new(instance: uuid::Uuid, actions: smol::channel::Sender<TrayAction>) -> Result<Self> {
+    fn new(instance: uuid::Uuid, actions: smol::channel::Sender<PaneActivation>) -> Result<Self> {
         let callback: INotificationActivationCallback = Callback {
             destination: Destination::Live { instance, actions },
         }
@@ -275,7 +275,7 @@ fn worker(rx: Receiver<Toast>) {
     // Entity IDs can be recycled by another GUI. The token only names a pane
     // in the GUI that issued the toast, even if COM activates a different one.
     let instance = uuid::Uuid::new_v4();
-    let actions = crate::ui::tray::sender();
+    let actions = crate::ui::notification_bridge::sender();
     let clickable = (|| {
         crate::core::aumid::clickable_app_id()?;
         let actions = actions.clone()?;
@@ -318,7 +318,7 @@ fn worker(rx: Receiver<Toast>) {
 fn show(
     toast: &Toast,
     instance: Option<uuid::Uuid>,
-    actions: Option<&smol::channel::Sender<TrayAction>>,
+    actions: Option<&smol::channel::Sender<PaneActivation>>,
 ) -> Result<windows::UI::Notifications::ToastNotification> {
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
@@ -342,7 +342,7 @@ fn show(
         && let Some(actions) = actions.cloned()
     {
         notification.Activated(&TypedEventHandler::new(move |_, _| {
-            let _ = actions.try_send(TrayAction::RevealPane { leaf_id });
+            let _ = actions.try_send(PaneActivation::Reveal { leaf_id });
             Ok(())
         }))?;
     }
@@ -397,7 +397,7 @@ mod tests {
         unsafe { callback.Activate(&HSTRING::from(AUMID), &HSTRING::from(valid), &[]) }.unwrap();
         assert_eq!(
             received.try_recv(),
-            Ok(TrayAction::RevealPane { leaf_id: 42 })
+            Ok(PaneActivation::Reveal { leaf_id: 42 })
         );
     }
 
@@ -423,7 +423,7 @@ mod tests {
             callback.Activate(&app, &payload, &[]).unwrap();
             assert_eq!(
                 owner_received.try_recv(),
-                Ok(TrayAction::RevealPane { leaf_id: 42 })
+                Ok(PaneActivation::Reveal { leaf_id: 42 })
             );
             assert!(other_received.is_empty());
             drop(owner_registration);

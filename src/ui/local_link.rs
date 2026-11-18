@@ -93,7 +93,7 @@ impl LocalLink {
     }
 
     /// Whether the local daemon advertised `feature` on its control hello —
-    /// [`HostLinks::peer_supports`](crate::ui::remote_connect::HostLinks::peer_supports)
+    /// [`HostLinks::peer_supports`](crate::ui::desktop_lookups::HostLinks::peer_supports)
     /// for this machine. `false` while the link is down, for the same reason.
     pub fn supports(cx: &App, feature: &str) -> bool {
         cx.try_global::<LocalLink>()

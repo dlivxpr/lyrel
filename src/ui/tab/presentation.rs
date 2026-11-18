@@ -596,7 +596,7 @@ pub(crate) struct SplitRequest {
     target: EntityId,
     spawn: SpawnAs,
     cwd: Option<std::path::PathBuf>,
-    workspace: Option<crate::terminal::PaneWorkspace>,
+    workspace: Option<crate::ui::route::PaneWorkspace>,
 }
 
 impl SplitRequest {
@@ -607,7 +607,7 @@ impl SplitRequest {
         EntityId,
         SpawnAs,
         Option<std::path::PathBuf>,
-        Option<crate::terminal::PaneWorkspace>,
+        Option<crate::ui::route::PaneWorkspace>,
     ) {
         (self.tab, self.target, self.spawn, self.cwd, self.workspace)
     }

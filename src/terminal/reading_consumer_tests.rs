@@ -1180,7 +1180,7 @@ fn reading_ordered_resize_harness(
         view.adopt_relink(
             client,
             Vec::new(),
-            &crate::terminal::PaneRoute::Remote {
+            &crate::ui::route::PaneRoute::Remote {
                 header: Box::new(crate::daemon::router::RouteHeader::wsl(
                     "reading-resize-fixture",
                 )),

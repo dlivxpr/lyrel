@@ -82,7 +82,7 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
     // control client acquires the workspace before its reconnect can run.
     fixture.restart_router();
     cx.update(|cx| {
-        remote_connect::HostLinks::remove(cx, host);
+        desktop_lookups::HostLinks::remove(cx, host);
         RemoteLinks::mark(cx, host, |link| {
             link.state = LinkState::Reconnecting;
             link.attach_sent.clear();

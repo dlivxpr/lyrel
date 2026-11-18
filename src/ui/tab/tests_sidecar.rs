@@ -27,7 +27,7 @@ fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
         app.workspace = window_id;
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(crate::ui::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
@@ -159,7 +159,7 @@ fn native_sidecar_window(
         app.workspace = window_id;
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(crate::ui::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
