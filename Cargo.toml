@@ -27,6 +27,12 @@ harness = false
 required-features = ["native-markdown-tests"]
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# The standalone updater's library half: the shared update contract (layout
+# markers, backup naming, the VerifyPlan/InstallPlan argv layouts, and the
+# UpdateOutcome record) consumed by this coordinator and by the
+# `lyrel-updater` executable, which lives in `crates/lyrel-updater`. GPUI-free,
+# like everything else at this seam.
+lyrel-updater = { path = "crates/lyrel-updater" }
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `lyrel-server` shares with
 # this GUI. Everything that does *not* need gpui lives there.
@@ -288,13 +294,6 @@ objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSS
 futures-channel = "0.3"
 
 
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-# The standalone updater's library half: the shared update contract (layout
-# markers, backup naming, the VerifyPlan/InstallPlan argv layouts, and the
-# UpdateOutcome record) consumed by this coordinator and by the
-# `lyrel-updater` executable, which lives in `crates/lyrel-updater`. GPUI-free,
-# like everything else at this seam.
-lyrel-updater = { path = "crates/lyrel-updater" }
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

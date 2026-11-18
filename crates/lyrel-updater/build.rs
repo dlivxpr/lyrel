@@ -8,8 +8,8 @@ fn main() {
         // Absolute so the resource compiler resolves it from its own working
         // directory regardless of where Cargo invokes the build script from;
         // the icon lives at the repository root, two levels up from here.
-        let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/favicon.ico");
+        let icon =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/favicon.ico");
         println!("cargo:rerun-if-changed={}", icon.display());
         let mut res = winresource::WindowsResource::new();
         res.set_icon(icon.to_str().expect("the icon path is valid UTF-8"));

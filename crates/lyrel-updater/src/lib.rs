@@ -230,7 +230,7 @@ mod tests {
         while let Some(flag) = args.next() {
             assert!(
                 parsed
-                    .parse_flag(&flag, &mut args, || "usage".to_string())
+                    .parse_flag(flag.to_str().unwrap(), &mut args, || "usage".to_string())
                     .unwrap(),
                 "every emitted flag is recognised"
             );

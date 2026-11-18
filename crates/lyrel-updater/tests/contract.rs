@@ -71,7 +71,7 @@ mod windows_contract {
         ElevatedStagePlan, InstallPlan, PortableInstallPlan, TailOptions, VerifyPlan, WatcherPlan,
     };
     use std::ffi::OsString;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     fn install_plan() -> InstallPlan {
         InstallPlan {
@@ -246,7 +246,10 @@ mod windows_contract {
         // A space in a path must never reach the CRT splitter unquoted.
         assert!(line.contains(r#""C:\Program Files\lyrel""#), "{line}");
         assert!(
-            line.contains(&format!("\"--expected-sha256\" \"{}\"", plan.expected_sha256)),
+            line.contains(&format!(
+                "\"--expected-sha256\" \"{}\"",
+                plan.expected_sha256
+            )),
             "{line}"
         );
         assert!(
@@ -276,7 +279,10 @@ mod windows_contract {
         // The doubled backslash keeps the closing quote inside the argument.
         assert!(line.contains(r#""--config-dir" "D:\lyrel\\""#), "{line}");
         // The flags after the config dir survive: the quote did not escape.
-        assert!(line.contains(r#""--result-file" "C:\cfg\update-outcome.json""#), "{line}");
+        assert!(
+            line.contains(r#""--result-file" "C:\cfg\update-outcome.json""#),
+            "{line}"
+        );
 
         // Interior backslashes stay literal: doubling them would rename paths.
         let mut plan = elevated_stage_plan();
@@ -319,7 +325,9 @@ mod windows_contract {
     #[test]
     fn capabilities_cover_elevation_matches_what_the_helper_prints() {
         let answer = lyrel_updater::ELEVATION_CAPABILITIES.join("\n");
-        assert!(lyrel_updater::capabilities_cover_elevation(answer.as_bytes()));
+        assert!(lyrel_updater::capabilities_cover_elevation(
+            answer.as_bytes()
+        ));
         // Order and unrelated tokens are the helper's business.
         assert!(lyrel_updater::capabilities_cover_elevation(
             b"install\nrelaunch-watcher\nelevated-stage\ninstall-elevated\n"
@@ -384,7 +392,11 @@ mod conpty_contract {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path()).unwrap();
         fs::write(root.path().join("conpty.dll"), staged("conpty.dll")).unwrap();
-        fs::write(root.path().join("OpenConsole.exe"), staged("OpenConsole.exe")).unwrap();
+        fs::write(
+            root.path().join("OpenConsole.exe"),
+            staged("OpenConsole.exe"),
+        )
+        .unwrap();
         fs::write(
             root.path().join("LICENSE-ConPTY.txt"),
             staged("LICENSE-ConPTY.txt"),

@@ -25,6 +25,7 @@ lyrel-core = { path = "../lyrel-core", default-features = false }
 # `UpdateOutcome` persistence and the ConPTY target-manifest parsing. The
 # outcome schema crosses from this helper to the GUI, so both sides read the
 # definition from this crate instead of copy-pasting it.
+serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 

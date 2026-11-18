@@ -78,8 +78,8 @@ jobs:
       # updater crate），不重复构建。
       - name: Build all default binaries
         working-directory: lyrel
-        shell: bash
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        shell: pwsh
+        run: '& ./scripts/cargo-windows.ps1 build --release --locked --target x86_64-pc-windows-msvc'
 
       - name: Archive desktop packaging inputs
         working-directory: lyrel
@@ -523,7 +523,8 @@ jobs:
 
       - name: Build lyrel-server
         working-directory: lyrel
-        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
+        shell: pwsh
+        run: '& ./scripts/cargo-windows.ps1 build --release --locked -p lyrel-server --target ${{ matrix.target }}'
 
       - name: Assert the binary needs no VC++ redistributable
         working-directory: lyrel

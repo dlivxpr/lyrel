@@ -936,7 +936,7 @@ pub fn apply_pending_at_launch() -> bool {
 /// before any window exists; `spawn_check`'s hydration carries the result
 /// into Settings.
 pub fn absorb_update_outcome_at_launch() {
-    use lyrel_updater::outcome::{read_outcome, UpdateOutcome};
+    use lyrel_updater::outcome::{UpdateOutcome, read_outcome};
 
     let Some(path) = update_outcome_path() else {
         return;
@@ -2179,10 +2179,7 @@ fn prepare_windows_update(
                 result_file: None,
                 expected_sha256: None,
             };
-            (
-                lyrel_updater::windows::InstallPlan::COMMAND,
-                plan.rest(),
-            )
+            (lyrel_updater::windows::InstallPlan::COMMAND, plan.rest())
         }
         WindowsUpdateLayout::Portable(_) => {
             let verify = lyrel_updater::windows::VerifyPlan::Portable {
@@ -3056,7 +3053,7 @@ mod tests {
     /// writing both would race each other.
     #[test]
     fn an_updater_outcome_is_absorbed_exactly_once() {
-        use lyrel_updater::outcome::{write_outcome, UpdateOutcome};
+        use lyrel_updater::outcome::{UpdateOutcome, write_outcome};
 
         let _lock = UPDATE_STATE_LOCK.lock().unwrap();
         crate::core::config::pin_test_config_dir();

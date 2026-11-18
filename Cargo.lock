@@ -6306,7 +6306,6 @@ version = "0.3.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
- "async_zip",
  "base64 0.23.1",
  "chrono",
  "core-foundation 0.10.1",
@@ -6328,6 +6327,7 @@ dependencies = [
  "lyrel-document",
  "lyrel-markdown-editor",
  "lyrel-test-support",
+ "lyrel-updater",
  "memchr",
  "merman",
  "notify",
@@ -6514,6 +6514,21 @@ dependencies = [
  "tempfile",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-updater"
+version = "0.3.5"
+dependencies = [
+ "async_zip",
+ "libc",
+ "lyrel-core",
+ "serde",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winresource",
 ]
 
 [[package]]

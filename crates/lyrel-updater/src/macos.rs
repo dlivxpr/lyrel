@@ -239,11 +239,7 @@ fn extract_archive(archive: &Path, stage: &Path) -> Result<PathBuf, String> {
     Ok(unpacked.join("lyrel.app"))
 }
 
-fn verify_update(
-    current: &Path,
-    replacement: &Path,
-    expected_version: &str,
-) -> Result<(), String> {
+fn verify_update(current: &Path, replacement: &Path, expected_version: &str) -> Result<(), String> {
     let executable = replacement.join("Contents/MacOS/lyrel-app");
     let updater = replacement.join("Contents/MacOS/lyrel-updater");
     if !replacement.is_dir() || !executable.is_file() || !updater.is_file() {

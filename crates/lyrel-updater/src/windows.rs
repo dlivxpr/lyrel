@@ -1024,9 +1024,8 @@ fn run_install_stage(
             plan.installer.display()
         )
     })?;
-    fs::copy(plan.stage.join("checksums.txt"), &staged_checksums).map_err(|error| {
-        format!("copying the checksums into the protected staging: {error}")
-    })?;
+    fs::copy(plan.stage.join("checksums.txt"), &staged_checksums)
+        .map_err(|error| format!("copying the checksums into the protected staging: {error}"))?;
     fs::copy(plan.stage.join("lyrel-updater.exe"), &staged_updater)
         .map_err(|error| format!("copying the updater into the protected staging: {error}"))?;
     // Re-verified at their new home: the copy, not just the source, is
@@ -1184,8 +1183,7 @@ fn pin_helper_to_installed(staged: &Path, install_dir: &Path) -> Result<(), Stri
 }
 
 fn file_digest(path: &Path) -> Result<String, String> {
-    let bytes =
-        fs::read(path).map_err(|error| format!("reading {}: {error}", path.display()))?;
+    let bytes = fs::read(path).map_err(|error| format!("reading {}: {error}", path.display()))?;
     Ok(lyrel_core::daemon::install::checksums::hex(
         &lyrel_core::daemon::install::checksums::sha256(&bytes),
     ))
@@ -1379,9 +1377,7 @@ fn finish_watch(plan: &WatcherPlan, gui: &GuiProcess, end: WatchOutcome) -> Resu
         // launch below is what reads it: an unexplained update that
         // simply asks again is exactly what the outcome file is for.
         log_line(&plan.log, outcome.detail.as_deref().unwrap_or_default());
-        if let Err(error) =
-            crate::outcome::write_outcome(&plan.result_file, &outcome)
-        {
+        if let Err(error) = crate::outcome::write_outcome(&plan.result_file, &outcome) {
             log_line(
                 &plan.log,
                 &format!(
@@ -1685,8 +1681,7 @@ fn extract_portable_archive(archive: &Path, payload: &Path) -> Result<(), String
             entry_count
         ));
     }
-    fs::create_dir(payload)
-        .map_err(|error| format!("creating {}: {error}", payload.display()))?;
+    fs::create_dir(payload).map_err(|error| format!("creating {}: {error}", payload.display()))?;
 
     let mut seen = HashSet::new();
     let mut expanded_bytes = 0u64;
@@ -1938,9 +1933,9 @@ fn validate_windows_component(component: &str) -> Result<(), String> {
     if component.is_empty()
         || component.ends_with(' ')
         || component.ends_with('.')
-        || component.chars().any(|character| {
-            character == '\0' || character < ' ' || INVALID.contains(&character)
-        })
+        || component
+            .chars()
+            .any(|character| character == '\0' || character < ' ' || INVALID.contains(&character))
     {
         return Err(format!(
             "the portable ZIP contains an invalid Windows path component: {component:?}"
@@ -1983,11 +1978,10 @@ fn validate_windows_component(component: &str) -> Result<(), String> {
 fn portable_path_key(path: &Path) -> Result<String, String> {
     path.components()
         .map(|component| match component {
-            Component::Normal(component) => {
-                component.to_str().map(str::to_lowercase).ok_or_else(|| {
-                    format!("the portable ZIP path is not UTF-8: {}", path.display())
-                })
-            }
+            Component::Normal(component) => component
+                .to_str()
+                .map(str::to_lowercase)
+                .ok_or_else(|| format!("the portable ZIP path is not UTF-8: {}", path.display())),
             _ => Err(format!(
                 "the portable ZIP contains an unsafe path with a non-normal component: {}",
                 path.display()
@@ -2246,23 +2240,11 @@ fn replace_portable_and_relaunch(
         .filter(|(source, _)| source.exists())
         .try_for_each(|(source, destination)| copy_path(&source, &destination));
     if let Err(error) = copy_result {
-        return rollback_portable_failure(
-            install_dir,
-            &backup,
-            error,
-            &relaunch_previous,
-            report,
-        );
+        return rollback_portable_failure(install_dir, &backup, error, &relaunch_previous, report);
     }
 
     if let Err(error) = activate_replacement(install_dir) {
-        return rollback_portable_failure(
-            install_dir,
-            &backup,
-            error,
-            &relaunch_previous,
-            report,
-        );
+        return rollback_portable_failure(install_dir, &backup, error, &relaunch_previous, report);
     }
 
     // The replacement survived its launch grace period. Old managed files
@@ -2292,11 +2274,7 @@ fn rollback_portable_failure(
     Err(recovery_error(cause, restore, relaunch, backup))
 }
 
-fn restore_moved_roots(
-    install_dir: &Path,
-    backup: &Path,
-    moved: &[&str],
-) -> Result<(), String> {
+fn restore_moved_roots(install_dir: &Path, backup: &Path, moved: &[&str]) -> Result<(), String> {
     let mut errors = Vec::new();
     for root in moved.iter().rev() {
         let previous = backup.join(root);
@@ -2378,9 +2356,8 @@ fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {
         for entry in fs::read_dir(source)
             .map_err(|error| format!("reading {}: {error}", source.display()))?
         {
-            let entry = entry.map_err(|error| {
-                format!("reading an entry in {}: {error}", source.display())
-            })?;
+            let entry = entry
+                .map_err(|error| format!("reading an entry in {}: {error}", source.display()))?;
             copy_path(&entry.path(), &destination.join(entry.file_name()))?;
         }
         return Ok(());
@@ -2628,8 +2605,7 @@ fn product_version(path: &Path) -> Result<String, String> {
         {
             continue;
         }
-        let value =
-            unsafe { std::slice::from_raw_parts(value as *const u16, value_len as usize) };
+        let value = unsafe { std::slice::from_raw_parts(value as *const u16, value_len as usize) };
         let value = value.strip_suffix(&[0]).unwrap_or(value);
         return String::from_utf16(value).map_err(|error| {
             format!(
@@ -2657,8 +2633,7 @@ fn version_resource(path: &Path) -> Result<Vec<u8>, String> {
         ));
     }
     let mut data = vec![0u8; size as usize];
-    if unsafe { GetFileVersionInfoW(wide.as_ptr(), 0, size, data.as_mut_ptr() as *mut c_void) }
-        == 0
+    if unsafe { GetFileVersionInfoW(wide.as_ptr(), 0, size, data.as_mut_ptr() as *mut c_void) } == 0
     {
         return Err(format!(
             "reading the version resource from {}",
@@ -2776,8 +2751,7 @@ mod tests {
         let executable = std::env::current_exe().unwrap();
         fs::copy(&executable, root.path().join("lyrel-app.exe")).unwrap();
 
-        let error =
-            verify_installed_payload(root.path(), env!("CARGO_PKG_VERSION")).unwrap_err();
+        let error = verify_installed_payload(root.path(), env!("CARGO_PKG_VERSION")).unwrap_err();
         assert!(error.contains("lyrel-updater.exe"), "{error}");
 
         fs::copy(&executable, root.path().join("lyrel-updater.exe")).unwrap();
@@ -2902,8 +2876,7 @@ mod tests {
         );
 
         report_outcome(Some(&outcome_path), &log, "27.0.0", &Ok(()));
-        let outcome =
-            crate::outcome::read_outcome(&outcome_path).unwrap();
+        let outcome = crate::outcome::read_outcome(&outcome_path).unwrap();
         assert_eq!(
             outcome,
             Some(crate::outcome::UpdateOutcome {
@@ -2915,8 +2888,7 @@ mod tests {
 
         let failure: Result<(), String> = Err("the installer exited with code 5".to_string());
         report_outcome(Some(&outcome_path), &log, "27.0.0", &failure);
-        let outcome =
-            crate::outcome::read_outcome(&outcome_path).unwrap();
+        let outcome = crate::outcome::read_outcome(&outcome_path).unwrap();
         assert_eq!(
             outcome,
             Some(crate::outcome::UpdateOutcome {
@@ -3685,8 +3657,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let unknown = root.path().join("unknown.zip");
         write_test_zip(&unknown, &[("notes.txt", b"user data".to_vec())]);
-        let error =
-            extract_portable_archive(&unknown, &root.path().join("unknown")).unwrap_err();
+        let error = extract_portable_archive(&unknown, &root.path().join("unknown")).unwrap_err();
         assert!(error.contains("unknown top-level entry"), "{error}");
 
         let duplicate = root.path().join("duplicate.zip");
