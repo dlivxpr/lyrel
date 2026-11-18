@@ -1,9 +1,7 @@
-//! The real-service OpenCode statistics agreement case, moved from
-//! `lyrel-server`'s `stdio_conformance` suite with its statistics owner. It
-//! compares `LocalHost` against a real remote Host (the `lyrel-server --stdio`
-//! child located through `LYREL_TEST_LYREL_SERVER`, or an explicit
-//! `LYREL_TEST_OPENCODE_REMOTE_COMMAND` transport) over an isolated OpenCode
-//! service seeded through `LYREL_TEST_OPENCODE_*`.
+//! Compare LocalHost with the shipped stdio server (or the explicitly provided
+//! remote command) over an isolated OpenCode service.
+
+#![cfg(unix)]
 
 use std::io;
 use std::process::{Child, Command, Stdio};
@@ -31,9 +29,8 @@ impl LinkShutdown for ServerProcess {
     }
 }
 
-fn stdio_host(sandbox: &std::path::Path) -> Option<SharedHost> {
-    let executable = std::env::var("LYREL_TEST_LYREL_SERVER").ok()?;
-    let mut child = Command::new(executable)
+fn stdio_host(sandbox: &std::path::Path) -> SharedHost {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lyrel-server"))
         .args(["--stdio", "--serve"])
         .env("LYREL_DATA_DIR", sandbox)
         .stdin(Stdio::piped())
@@ -47,11 +44,9 @@ fn stdio_host(sandbox: &std::path::Path) -> Option<SharedHost> {
         child: Mutex::new(Some(child)),
     });
     let hello = ControlHello::host_rpc("opencode-statistics-smoke", "localhost");
-    Some(
-        RemoteHost::connect_with(stdout, stdin, Some(closer), "stdio:opencode", &hello)
-            .expect("handshake with lyrel-server --stdio")
-            .into_shared(),
-    )
+    RemoteHost::connect_with(stdout, stdin, Some(closer), "stdio:opencode", &hello)
+        .expect("handshake with lyrel-server --stdio")
+        .into_shared()
 }
 
 #[test]
@@ -73,7 +68,6 @@ fn opencode_statistics_real_service_local_and_remote_host_agree() {
         .parse()
         .unwrap();
     let sandbox = tempfile::tempdir().unwrap();
-    let stdio_remote = stdio_host(sandbox.path());
     let remote = if let Ok(command) = std::env::var("LYREL_TEST_OPENCODE_REMOTE_COMMAND") {
         let mut child = Command::new("sh")
             .args(["-c", &command])
@@ -98,9 +92,7 @@ fn opencode_statistics_real_service_local_and_remote_host_agree() {
         .unwrap()
         .into_shared()
     } else {
-        stdio_remote.unwrap_or_else(|| {
-            panic!("set LYREL_TEST_LYREL_SERVER or LYREL_TEST_OPENCODE_REMOTE_COMMAND")
-        })
+        stdio_host(sandbox.path())
     };
     let local = LocalHost::new();
     for host in [&*local as &dyn lyrel_core::host::Host, &*remote] {

@@ -9,13 +9,13 @@ use super::{
     provenance::sanitize_name,
 };
 use crate::github::Transport;
-use lyrel_core::{
-    core::agent_hooks::{HookAgent, HookTarget},
-    host::{Host, HostId, Meta},
-};
 use install::{
     changed, check_ancestors, check_host, cleanup, inspect_directory, invalid, normalize_selector,
     parent_and_name, read_lock, rename_live, safe_meta, validate_relative,
+};
+use lyrel_core::{
+    core::agent_hooks::{HookAgent, HookTarget},
+    host::{Host, HostId, Meta},
 };
 use serde_json::Value;
 use std::{

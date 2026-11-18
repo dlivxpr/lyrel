@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::host::local::LocalHost;
 use crate::statistics::{DateWindow, StatisticsCache, scan};
+use lyrel_core::host::local::LocalHost;
 
 fn isolated_launch(root: &Path) -> HashMap<String, String> {
     let omp = root.join("native-omp");

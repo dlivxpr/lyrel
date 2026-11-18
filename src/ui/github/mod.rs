@@ -271,10 +271,8 @@ fn system_connector(proxy: Option<String>) -> Connector {
             log::info!("github: signed in via {source:?}");
         }
         let from_gh = matches!(resolved, Some((_, TokenSource::GhCli)));
-        let first: Arc<dyn Transport> = Arc::new(HttpTransport::new(
-            resolved.map(|(t, _)| t),
-            proxy.clone(),
-        ));
+        let first: Arc<dyn Transport> =
+            Arc::new(HttpTransport::new(resolved.map(|(t, _)| t), proxy.clone()));
         if !from_gh {
             return Connection { transport: first };
         }

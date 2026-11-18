@@ -51,8 +51,8 @@ fn only_credential_free_github_repository_sources_and_safe_relative_paths_are_ac
 }
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use lyrel_core::{
-    core::github::{ApiError, Reply, Transport},
+use lyrel_insights::{
+    github::{ApiError, Reply, Transport},
     skills::catalog::{discover, search},
 };
 use serde_json::{Value, json};
@@ -130,7 +130,7 @@ fn two_skills(reference: &str) -> Http {
 // environment, real gh executable, or user repository is consulted.
 struct AuthorizedHttp {
     http: Http,
-    token: Option<lyrel_core::core::github::Token>,
+    token: Option<lyrel_insights::github::Token>,
 }
 impl Transport for AuthorizedHttp {
     fn get(&self, path: &str) -> Result<Reply, ApiError> {
@@ -146,7 +146,7 @@ impl Transport for AuthorizedHttp {
 
 #[test]
 fn local_environment_or_gh_authorization_discovers_and_prepares_private_pinned_files() {
-    use lyrel_core::core::github::token::{TokenEnv, TokenSource, resolve_token};
+    use lyrel_insights::github::token::{TokenEnv, TokenSource, resolve_token};
 
     for source in ["GH_TOKEN", "GITHUB_TOKEN", "gh"] {
         let vars = |name: &str| match name {
@@ -255,7 +255,7 @@ fn private_tree_document_and_companion_failures_keep_the_original_api_classifica
             http.responses.insert(path, Err(failure.clone()));
             let http = AuthorizedHttp {
                 http,
-                token: lyrel_core::core::github::Token::new("synthetic-catalog-secret"),
+                token: lyrel_insights::github::Token::new("synthetic-catalog-secret"),
             };
             let result = discover(&http, &GitHubSource::parse("acme/tools").unwrap())
                 .and_then(|catalog| catalog.prepare(&http, 0));
@@ -268,7 +268,7 @@ fn private_tree_document_and_companion_failures_keep_the_original_api_classifica
 fn github_authorization_is_not_accepted_by_skills_sh_search() {
     let http = AuthorizedHttp {
         http: Http::default(),
-        token: lyrel_core::core::github::Token::new("synthetic-catalog-secret"),
+        token: lyrel_insights::github::Token::new("synthetic-catalog-secret"),
     };
     let error = search(&http, "pdf").unwrap_err();
     assert!(matches!(
@@ -499,9 +499,9 @@ fn yaml_frontmatter_is_really_parsed_and_skill_search_filters_the_same_catalog()
 #[test]
 #[ignore = "真实公开匿名 GitHub HTTP；仅在明确联网验收时执行，安装范围始终为 TempDir"]
 fn public_github_install_is_immediately_browsable_with_cli_compatible_project_provenance() {
-    use lyrel_core::{
-        core::github::http::HttpTransport,
-        host::local::LocalHost,
+    use lyrel_core::host::local::LocalHost;
+    use lyrel_insights::{
+        github::http::HttpTransport,
         skills::{
             ScanRequest,
             install::{

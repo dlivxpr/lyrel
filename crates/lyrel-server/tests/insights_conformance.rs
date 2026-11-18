@@ -1,44 +1,23 @@
-//! Insights-owned `Host` conformance cases: statistics and skills workflows
-//! that used to live in `lyrel-core`'s shared suite.
-//!
-//! Every case runs against a real [`LocalHost`] and — when
-//! `LYREL_TEST_LYREL_SERVER` points at a built `lyrel-server` binary — against
-//! a real `lyrel-server --stdio` child through [`RemoteHost`], the same
-//! factories the GUI drives. Without the env var the stdio half skips loudly
-//! instead of pretending it ran; protocol-shape coverage over a synthetic
-//! TCP peer lives in `remote_statistics.rs`, which always runs.
-//!
-//! The completeness guard below is the same contract core's suite keeps: a
-//! case defined in this file must be registered in `CASES`, and the count
-//! assertion stops the suite from silently shrinking.
+//! Insight consumers run against real local files and the shipped stdio server.
 
+#[cfg(unix)]
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
 use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
 use lyrel_core::daemon::control::{ControlHello, LinkShutdown};
+#[cfg(unix)]
 use lyrel_core::host::SharedHost;
 use lyrel_core::host::local::LocalHost;
+#[cfg(unix)]
 use lyrel_core::host::remote::RemoteHost;
 use lyrel_insights::skills;
 
-pub type Case = fn(h: &dyn lyrel_core::host::Host, sandbox: &Path);
-
-/// Name and function for every insights-owned conformance case. The
-/// `every_case_is_registered` guard compares this table against the `pub fn`
-/// definitions in this file, exactly like core's `for_each_host_case!` table.
-pub const CASES: &[(&str, Case)] = &[
-    ("statistics_native_overview", statistics_native_overview),
-    (
-        "statistics_kimi_native_overview",
-        statistics_kimi_native_overview,
-    ),
-    (
-        "skills_browse_is_readonly_and_host_bound",
-        skills_browse_is_readonly_and_host_bound,
-    ),
-];
+type Case = fn(h: &dyn lyrel_core::host::Host, sandbox: &Path);
 
 fn write(h: &dyn lyrel_core::host::Host, p: &Path, body: &str) {
     h.write_file(p, body.as_bytes())
@@ -245,10 +224,12 @@ pub fn skills_browse_is_readonly_and_host_bound(h: &dyn lyrel_core::host::Host, 
     assert_eq!(h.read_file(&untouched, 1024).unwrap(), b"unchanged");
 }
 
+#[cfg(unix)]
 struct ServerProcess {
     child: Mutex<Option<Child>>,
 }
 
+#[cfg(unix)]
 impl LinkShutdown for ServerProcess {
     fn shutdown_link(&self) -> io::Result<()> {
         if let Some(mut child) = self.child.lock().unwrap().take() {
@@ -259,14 +240,9 @@ impl LinkShutdown for ServerProcess {
     }
 }
 
-/// A real `lyrel-server --stdio` child, located through
-/// `LYREL_TEST_LYREL_SERVER` (the CI workflow sets it; locally it usually is
-/// absent). Returns `None` — and the caller skips — when the binary path is
-/// not provided. Dropping the returned host shuts the child down through the
-/// `LinkShutdown` closer.
-fn stdio_host(sandbox: &Path) -> Option<SharedHost> {
-    let executable = std::env::var("LYREL_TEST_LYREL_SERVER").ok()?;
-    let mut child = Command::new(executable)
+#[cfg(unix)]
+fn stdio_host(sandbox: &Path) -> SharedHost {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lyrel-server"))
         .args(["--stdio", "--serve"])
         .env("LYREL_DATA_DIR", sandbox)
         .stdin(Stdio::piped())
@@ -284,98 +260,51 @@ fn stdio_host(sandbox: &Path) -> Option<SharedHost> {
     let hello = ControlHello::host_rpc("insights-conformance", "localhost");
     let host = RemoteHost::connect_with(stdout, stdin, Some(closer), "stdio:insights", &hello)
         .expect("handshake with lyrel-server --stdio");
-    Some(host.into_shared())
+    host.into_shared()
 }
 
-fn case(name: &str) -> Case {
-    CASES
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, c)| *c)
-        .unwrap_or_else(|| panic!("case {name} missing from CASES"))
-}
-
-fn run_local(name: &str) {
+fn run_local(case: Case) {
     let sandbox = tempfile::tempdir().unwrap();
     let host = LocalHost::new();
-    case(name)(&host, sandbox.path());
+    case(&*host, sandbox.path());
 }
 
-fn run_stdio(name: &str) {
+#[cfg(unix)]
+fn run_stdio(case: Case) {
     let sandbox = tempfile::tempdir().unwrap();
-    let Some(host) = stdio_host(sandbox.path()) else {
-        eprintln!("skip stdio_{name}: set LYREL_TEST_LYREL_SERVER to a built lyrel-server binary");
-        return;
-    };
-    case(name)(&host, sandbox.path());
+    let host = stdio_host(sandbox.path());
+    case(&*host, sandbox.path());
 }
 
 #[test]
 fn local_statistics_native_overview() {
-    run_local("statistics_native_overview");
+    run_local(statistics_native_overview);
 }
 
+#[cfg(unix)]
 #[test]
 fn stdio_statistics_native_overview() {
-    run_stdio("statistics_native_overview");
+    run_stdio(statistics_native_overview);
 }
 
 #[test]
 fn local_statistics_kimi_native_overview() {
-    run_local("statistics_kimi_native_overview");
+    run_local(statistics_kimi_native_overview);
 }
 
+#[cfg(unix)]
 #[test]
 fn stdio_statistics_kimi_native_overview() {
-    run_stdio("statistics_kimi_native_overview");
+    run_stdio(statistics_kimi_native_overview);
 }
 
 #[test]
 fn local_skills_browse_is_readonly_and_host_bound() {
-    run_local("skills_browse_is_readonly_and_host_bound");
+    run_local(skills_browse_is_readonly_and_host_bound);
 }
 
+#[cfg(unix)]
 #[test]
 fn stdio_skills_browse_is_readonly_and_host_bound() {
-    run_stdio("skills_browse_is_readonly_and_host_bound");
-}
-
-#[test]
-fn every_case_is_registered() {
-    let src = include_str!("host_conformance.rs");
-    let defined: Vec<&str> = src
-        .lines()
-        .filter_map(|l| l.strip_prefix("pub fn "))
-        .filter(|l| l.contains("&Path)"))
-        .filter_map(|l| l.split('(').next())
-        .collect();
-
-    let registered: Vec<&str> = CASES.iter().map(|(n, _)| *n).collect();
-    for name in &defined {
-        assert!(
-            registered.contains(name),
-            "case `{name}` is defined but missing from CASES"
-        );
-    }
-    for name in &registered {
-        assert!(
-            defined.contains(name),
-            "case `{name}` is registered but has no `pub fn`"
-        );
-    }
-    assert_eq!(defined.len(), registered.len(), "duplicate registration");
-}
-
-#[test]
-fn the_whole_suite_has_three_cases() {
-    let names: Vec<&str> = CASES.iter().map(|(n, _)| *n).collect();
-    assert_eq!(
-        names,
-        [
-            "statistics_native_overview",
-            "statistics_kimi_native_overview",
-            "skills_browse_is_readonly_and_host_bound",
-        ],
-        "the insights conformance suite changed shape: {names:?}",
-    );
+    run_stdio(skills_browse_is_readonly_and_host_bound);
 }

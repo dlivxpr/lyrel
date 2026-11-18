@@ -6,20 +6,20 @@
 //! (`lyrel_core::daemon::control`) over a real socket — the same mechanism
 //! core's remote tests use.
 
+use std::io::Write as _;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use lyrel_core::core::cli_agent::CLIAgent;
 use lyrel_core::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlHelloOk, ControlReply,
-    ControlRequest, ControlServerMsg, ReplyOk, feature,
+    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlHelloOk, ControlReply, ControlRequest,
+    ControlServerMsg, ReplyOk, feature,
 };
 use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
+use lyrel_core::host::Host as _;
 use lyrel_core::host::remote::RemoteHost;
-use lyrel_core::host::session_operations::{
-    SessionOperation, SessionOperationKind, SessionScope,
-};
+use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, SessionScope};
 use lyrel_insights::statistics::{self, DateWindow, Source, StatisticsCache};
 
 fn hello_ok(separator: char) -> ControlHelloOk {
@@ -89,8 +89,12 @@ where
     });
 
     let sock = TcpStream::connect(addr).unwrap();
-    let host = RemoteHost::over_tcp(sock, "ssh-alias:testbox", &ControlHello::host_rpc("tok", "laptop"))
-        .unwrap();
+    let host = RemoteHost::over_tcp(
+        sock,
+        "ssh-alias:testbox",
+        &ControlHello::host_rpc("tok", "laptop"),
+    )
+    .unwrap();
     (host, seen_rx)
 }
 
@@ -111,35 +115,33 @@ fn skills_require_selected_peer_environment_before_reading_any_files() {
     let (host, seen) = host_with_peer_announcing('/', &[], |_| {
         panic!("old skill peer must not receive filesystem or command requests")
     });
-    let error =
-        lyrel_insights::skills::scan(&*host, &lyrel_insights::skills::ScanRequest::new("/peer/home"))
-            .unwrap_err();
+    let error = lyrel_insights::skills::scan(
+        &*host,
+        &lyrel_insights::skills::ScanRequest::new("/peer/home"),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
     assert!(seen.try_recv().is_err());
 }
 
 #[test]
 fn hermes_statistics_preserves_cost_kinds_and_window_completeness() {
-    let (host, _) = host_with_peer_announcing(
-        '/',
-        &[feature::HERMES_STATISTICS],
-        |request| {
-            let ControlRequest::HermesStatistics { request } = request else {
-                panic!("expected scoped statistics")
-            };
-            assert_eq!(request.expected_host, 0);
-            assert_eq!(request.scope.profile.as_deref(), Some("work"));
-            let rows = serde_json::json!({"projects":[{"path":"/work", "sessionCount":3,"sessionIds":["main","branch","continuation"],"previewSessions":[
+    let (host, _) = host_with_peer_announcing('/', &[feature::HERMES_STATISTICS], |request| {
+        let ControlRequest::HermesStatistics { request } = request else {
+            panic!("expected scoped statistics")
+        };
+        assert_eq!(request.expected_host, 0);
+        assert_eq!(request.scope.profile.as_deref(), Some("work"));
+        let rows = serde_json::json!({"projects":[{"path":"/work", "sessionCount":3,"sessionIds":["main","branch","continuation"],"previewSessions":[
                 {"id":"main","source":"cli","started_at":100,"last_active":90000,"input_tokens":10,"output_tokens":5,"actual_cost_usd":0,"estimated_cost_usd":0.8,"model":"native"},
                 {"id":"branch","source":"cli","parent_session_id":"main","_lineage_root_id":"main","_lineage_ids":["branch"],"started_at":300,"last_active":400,"input_tokens":7,"output_tokens":3,"estimated_cost_usd":0.2},
                 {"id":"continuation","source":"cli","_lineage_ids":["main","continuation"],"started_at":100,"last_active":90000,"input_tokens":100,"output_tokens":50,"actual_cost_usd":99}
             ]}],"scoped_session_ids":["main","branch","continuation"]});
-            Some((
-                ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(rows)))),
-                vec![],
-            ))
-        },
-    );
+        Some((
+            ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(rows)))),
+            vec![],
+        ))
+    });
     let mut request = session_request(host.id());
     request.agent = CLIAgent::Hermes;
     request.scope.profile = Some("work".into());
@@ -148,8 +150,7 @@ fn hermes_statistics_preserves_cost_kinds_and_window_completeness() {
         "hermes:work",
         request,
     );
-    let snapshot =
-        statistics::scan(&*host, &[source], &mut StatisticsCache::default()).unwrap();
+    let snapshot = statistics::scan(&*host, &[source], &mut StatisticsCache::default()).unwrap();
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.main_sessions(), 2);
     assert_eq!(totals.tokens().total(), Some(25));
@@ -197,16 +198,12 @@ fn hermes_statistics_marks_global_preview_and_ambiguous_empty_results() {
             "preview window",
         ),
     ] {
-        let (host, _) = host_with_peer_announcing(
-            '/',
-            &[feature::HERMES_STATISTICS],
-            move |_| {
-                Some((
-                    ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(value.clone())))),
-                    vec![],
-                ))
-            },
-        );
+        let (host, _) = host_with_peer_announcing('/', &[feature::HERMES_STATISTICS], move |_| {
+            Some((
+                ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(value.clone())))),
+                vec![],
+            ))
+        });
         let mut request = session_request(host.id());
         request.agent = CLIAgent::Hermes;
         let source = Source::hermes("/isolated".into(), "scope", request);
@@ -227,30 +224,28 @@ fn hermes_statistics_marks_global_preview_and_ambiguous_empty_results() {
 #[test]
 fn hermes_statistics_keeps_known_undated_fields_and_cached_values_on_failure() {
     let calls = std::sync::atomic::AtomicUsize::new(0);
-    let (host, _) = host_with_peer_announcing(
-        '/',
-        &[feature::HERMES_STATISTICS],
-        move |_| {
-            let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let result = if attempt == 0 {
-                Ok(
-                    serde_json::json!({"projects":[{"previewSessions":[{"id":"known","source":"cli","input_tokens":9,"actual_cost_usd":1.25}]}],"scoped_session_ids":["known"]}),
-                )
-            } else if attempt == 1 {
-                Err(lyrel_core::host::session_operations::SessionOperationError {
+    let (host, _) = host_with_peer_announcing('/', &[feature::HERMES_STATISTICS], move |_| {
+        let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let result = if attempt == 0 {
+            Ok(
+                serde_json::json!({"projects":[{"previewSessions":[{"id":"known","source":"cli","input_tokens":9,"actual_cost_usd":1.25}]}],"scoped_session_ids":["known"]}),
+            )
+        } else if attempt == 1 {
+            Err(
+                lyrel_core::host::session_operations::SessionOperationError {
                     kind: lyrel_core::host::session_operations::SessionErrorKind::Command,
                     message: "runtime failed".into(),
                     retained: None,
-                })
-            } else {
-                Ok(serde_json::json!({"projects":[],"active_id":null,"scoped_session_ids":[]}))
-            };
-            Some((
-                ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(result))),
-                vec![],
-            ))
-        },
-    );
+                },
+            )
+        } else {
+            Ok(serde_json::json!({"projects":[],"active_id":null,"scoped_session_ids":[]}))
+        };
+        Some((
+            ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(result))),
+            vec![],
+        ))
+    });
     let mut request = session_request(host.id());
     request.agent = CLIAgent::Hermes;
     let source = Source::hermes("/isolated".into(), "scope", request);

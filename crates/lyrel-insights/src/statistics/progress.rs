@@ -151,7 +151,9 @@ mod tests {
     use super::*;
     use lyrel_core::core::cli_agent::CLIAgent;
     use lyrel_core::host::local::LocalHost;
-    use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, SessionScope};
+    use lyrel_core::host::session_operations::{
+        SessionOperation, SessionOperationKind, SessionScope,
+    };
 
     #[test]
     fn local_usage_is_published_before_native_failures_without_claiming_complete_totals() {

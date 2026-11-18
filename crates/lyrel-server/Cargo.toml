@@ -27,6 +27,9 @@ lyrel-core = { path = "../lyrel-core" }
 # `test-support` feature; this crate's tests reach it from outside, so the
 # test graph turns the feature on here. Production builds are untouched.
 lyrel-core = { path = "../lyrel-core", features = ["test-support"] }
+# The real stdio server exercises insights' public skills/statistics consumers.
+lyrel-insights = { path = "../lyrel-insights" }
+chrono = "0.4.45"
 # Sandboxes for the suite: an empty directory per case, removed on drop. The
 # server is on this machine, so a local temp dir is a path in its namespace.
 tempfile = "3"

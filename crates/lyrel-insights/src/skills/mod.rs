@@ -7,11 +7,11 @@ pub mod install;
 pub mod maintenance;
 mod packages;
 mod provenance;
+use discovery::agent_roots;
 use lyrel_core::{
     core::agent_hooks::{HookAgent, HookTarget},
     host::{Host, HostId, MTime},
 };
-use discovery::agent_roots;
 pub use provenance::SkillOrigin;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},

@@ -154,7 +154,8 @@ fn unreadable_size_and_invalid_frontmatter_are_not_success_or_fake_metadata() {
 
 #[test]
 fn native_source_opt_out_and_flat_kimi_files_are_visible_without_enabling_them() {
-    use lyrel_core::{core::agent_hooks::HookAgent, skills::DiscoveryState};
+    use lyrel_core::core::agent_hooks::HookAgent;
+    use lyrel_insights::skills::DiscoveryState;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");
@@ -326,7 +327,8 @@ fn source_records_bind_to_shared_real_paths_not_same_named_private_copies() {
 
 #[test]
 fn pi_explicit_skill_remains_available_when_automatic_discovery_is_disabled() {
-    use lyrel_core::{core::agent_hooks::HookAgent, skills::DiscoveryState};
+    use lyrel_core::core::agent_hooks::HookAgent;
+    use lyrel_insights::skills::DiscoveryState;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");
@@ -401,7 +403,8 @@ fn unreadable_skill_preserves_other_results_and_reports_actual_permission_denial
 
 #[test]
 fn explicit_native_provider_policy_is_not_misreported_as_a_default_opt_out() {
-    use lyrel_core::{core::agent_hooks::HookAgent, skills::DiscoveryState};
+    use lyrel_core::core::agent_hooks::HookAgent;
+    use lyrel_insights::skills::DiscoveryState;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");

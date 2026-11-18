@@ -43,7 +43,7 @@ impl HookTarget<'_> {
             .and_then(|scope| scope.hermes_profile.as_deref())
     }
 
-    pub(crate) fn omp_session_dir(&self) -> io::Result<Option<&str>> {
+    pub fn omp_session_dir(&self) -> io::Result<Option<&str>> {
         self.launch_scopes
             .get(&HookAgent::OhMyPi)
             .map(|scope| {
@@ -56,10 +56,7 @@ impl HookTarget<'_> {
             .map(Option::flatten)
     }
 
-    pub(crate) fn agent_environment(
-        &self,
-        agent: HookAgent,
-    ) -> io::Result<BTreeMap<String, String>> {
+    pub fn agent_environment(&self, agent: HookAgent) -> io::Result<BTreeMap<String, String>> {
         let mut environment = self.host.agent_environment()?;
         if let Some(scope) = self.launch_scopes.get(&agent) {
             let scope = scope
@@ -76,7 +73,7 @@ impl HookTarget<'_> {
         Ok(environment)
     }
 
-    pub(crate) fn agent_home(&self, environment: &BTreeMap<String, String>) -> io::Result<PathBuf> {
+    pub fn agent_home(&self, environment: &BTreeMap<String, String>) -> io::Result<PathBuf> {
         let keys = if self.host.separator() == '\\' {
             ["USERPROFILE", "HOME"]
         } else {

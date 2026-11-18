@@ -4,8 +4,7 @@
 //! https://commandcode.ai/assets/use-legacy-pro-status-B1iLcEZv.js
 //! Identity baseURL + user.id: /assets/auth-client-DR7oY-YF.js and root-CycwDi3N.js.
 use super::*;
-pub const SESSION_ENDPOINT: &str =
-    "https://api.commandcode.ai/internal/billing/subscriptions";
+pub const SESSION_ENDPOINT: &str = "https://api.commandcode.ai/internal/billing/subscriptions";
 pub const IDENTITY_ENDPOINT: &str = "https://api.commandcode.ai/auth/get-session";
 fn data(value: &serde_json::Value) -> &serde_json::Value {
     value.get("data").unwrap_or(value)

@@ -168,10 +168,7 @@ pub struct ImportPermission {
     form: Option<(std::sync::Arc<std::sync::atomic::AtomicU64>, u64)>,
 }
 impl ImportPermission {
-    pub fn for_form(
-        form: std::sync::Arc<std::sync::atomic::AtomicU64>,
-        version: u64,
-    ) -> Self {
+    pub fn for_form(form: std::sync::Arc<std::sync::atomic::AtomicU64>, version: u64) -> Self {
         Self {
             form: Some((form, version)),
         }
@@ -359,10 +356,7 @@ impl BrowserReader {
         Ok((selection, material))
     }
 
-    pub fn resolve(
-        &self,
-        selection: &BrowserSelection,
-    ) -> Result<SessionMaterial, BrowserError> {
+    pub fn resolve(&self, selection: &BrowserSelection) -> Result<SessionMaterial, BrowserError> {
         self.resolve_for(selection, StorageSource::DeepSeek)
     }
 

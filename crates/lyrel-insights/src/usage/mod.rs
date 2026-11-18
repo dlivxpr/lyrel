@@ -7,7 +7,6 @@
 //! credential vault through [`accounts::SecretVault`].
 
 pub mod accounts;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod browser;
 pub mod platform;
 pub mod providers;

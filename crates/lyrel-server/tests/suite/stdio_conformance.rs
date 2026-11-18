@@ -108,10 +108,3 @@ fn dropping_the_host_reaps_the_server() {
     assert!(host.exists(sandbox.path()));
     drop(host);
 }
-
-// The statistics- and skills-shaped cases (`statistics_native_overview`,
-// `statistics_kimi_native_overview`, `skills_browse_is_readonly_and_host_bound`)
-// and the real-service OpenCode agreement case moved with their owner to
-// `lyrel-insights`' `host_conformance`/`opencode_native` integration tests,
-// which run the same factories against a real `lyrel-server --stdio` child.
-

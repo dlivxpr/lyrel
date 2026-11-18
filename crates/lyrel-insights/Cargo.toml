@@ -14,9 +14,8 @@ publish = false
 #
 # The crate is a production dependency of the root `lyrel` GUI package only;
 # `lyrel-server`, `lyrel-cli` and the static musl server never depend on it.
-# Desktop-only pieces (browser cookie/session readers and their SQLite,
-# LevelDB, AES-GCM and Snappy dependencies) are gated to macOS/Windows below:
-# Linux compiles the skills/statistics/github/usage-model modules only.
+# The usage module (models, provider scrapers and browser session readers)
+# is desktop-only. Linux builds the skills/statistics/github modules.
 
 [dependencies]
 # The Host seam: `&dyn Host` file/session/statistics operations plus the
@@ -86,10 +85,6 @@ windows-sys = { version = "0.61", features = [
 tempfile = "3"
 # Timezone-window cases in the statistics suite (same line as lyrel-core's).
 chrono-tz = "0.10"
-# The insights-owned Host conformance cases execute against a real
-# `lyrel-server --stdio` child when LYREL_TEST_LYREL_SERVER points at the
-# binary; without it the local/fake-peer suites still run.
-lyrel-server = { path = "../lyrel-server" }
 
 [lints]
 workspace = true

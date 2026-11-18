@@ -150,7 +150,7 @@ impl UsagePage {
     fn open_add(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
         self.open_edit(Edit::Add, window, cx);
         self.provider.update(cx, |state, cx| {
-            state.set_selected_value(&ProviderChoice(provider), window, cx)
+            state.set_selected_value(&provider, window, cx)
         });
         self.source.update(cx, |state, cx| {
             state.set_items(provider_sources(provider), window, cx);
@@ -874,7 +874,12 @@ impl UsagePage {
                             cx,
                         ))
                         .when(provider == Provider::DeepSeek, |form| {
-                            form.child(div().text_xs().text_color(muted).child(t(provider_help(provider))))
+                            form.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t(provider_help(provider))),
+                            )
                         });
                 } else {
                     form = form

@@ -13,13 +13,14 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::{
     Context, Entity, Focusable as _, Global, Subscription, Task, Window, div, prelude::*,
 };
-use lyrel_insights::usage::{
-    BalanceHttp, HttpSource, UsageRequest, accounts, browser, platform, providers, query,
-    query_provider,
-};
+#[cfg(test)]
+use lyrel_insights::usage::accounts;
 use lyrel_insights::usage::accounts::{
     Account, Accounts, Authentication, Balance, Snapshot, StoredAccounts, UsageError,
     VerifiedSource,
+};
+use lyrel_insights::usage::{
+    BalanceHttp, HttpSource, UsageRequest, browser, platform, providers, query, query_provider,
 };
 use providers::Provider;
 use std::{
@@ -57,7 +58,7 @@ impl DeepSeekHttp {
             builder = builder.proxy(Some(proxy));
         }
         let agent: ureq::Agent = builder.build().into();
-        let authorization = request.authorization_value();
+        let authorization = zeroize::Zeroizing::new(request.authorization_value());
         let mut response = if matches!(request.source, HttpSource::KimiWeb) {
             agent
                 .post(endpoint)
@@ -169,12 +170,16 @@ impl SelectItem for Cadence {
     }
 }
 enum Material {
-    ApiKey(String),
+    ApiKey(zeroize::Zeroizing<String>),
     Session(platform::SessionMaterial),
     Browser(browser::BrowserSelection, platform::SessionMaterial),
-    ProviderSession(Provider, String),
+    ProviderSession(Provider, zeroize::Zeroizing<String>),
     ProviderBrowser(browser::BrowserSelection, browser::SessionMaterial),
-    Cookies(Provider, browser::BrowserSelection, String),
+    Cookies(
+        Provider,
+        browser::BrowserSelection,
+        zeroize::Zeroizing<String>,
+    ),
 }
 impl Material {
     fn secret(&self) -> &str {
@@ -716,7 +721,7 @@ impl UsagePage {
             _ => Provider::DeepSeek,
         };
         self.provider
-            .update(cx, |s, cx| s.set_selected_value(&ProviderChoice(provider), window, cx));
+            .update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
         self.source.update(cx, |s, cx| {
             s.set_items(
                 if matches!(edit, Edit::Enhance(_)) {
@@ -824,7 +829,7 @@ impl UsagePage {
         .detach();
     }
     fn submit_enhancement(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        let input = self.key.read(cx).value().trim().to_owned();
+        let input = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_owned());
         self.key.update(cx, |s, cx| s.set_value("", window, cx));
         let from_browser = self.source.read(cx).selected_value() == Some(&Source::Browser);
         let cookie_name = self.cookie_name.read(cx).value().trim().to_owned();
@@ -848,7 +853,7 @@ impl UsagePage {
                         return Err(UsageError::Stale);
                     }
                     let ticket = accounts.begin_replace(id).ok_or(UsageError::Stale)?;
-                    (ticket, accounts.secret(id))
+                    (ticket, accounts.secret(id).map(zeroize::Zeroizing::new))
                 };
                 let verified = (|| {
                     let (selection, cookie) = if from_browser {
@@ -941,7 +946,7 @@ impl UsagePage {
             Edit::Remove(id) => self.work(window, cx, move |a| a.remove(id)),
             Edit::Enhance(id) => self.submit_enhancement(id, window, cx),
             Edit::Add | Edit::Replace(_) => {
-                let secret = self.key.read(cx).value().trim().to_string();
+                let secret = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_string());
                 let source = self
                     .source
                     .read(cx)
@@ -993,7 +998,7 @@ impl UsagePage {
                                 }
                                 (Provider::Kimi, Source::Session) => Material::ProviderSession(
                                     provider,
-                                    providers::kimi::session(&secret)?,
+                                    zeroize::Zeroizing::new(providers::kimi::session(&secret)?),
                                 ),
                                 (Provider::CommandCode, _) => {
                                     return Err(UsageError::Authentication);
@@ -1020,7 +1025,9 @@ impl UsagePage {
                                 }
                                 (_, Source::Session) => Material::ProviderSession(
                                     provider,
-                                    providers::parse_manual(provider, &secret)?,
+                                    zeroize::Zeroizing::new(providers::parse_manual(
+                                        provider, &secret,
+                                    )?),
                                 ),
                                 (_, Source::Browser) => {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
@@ -1038,7 +1045,10 @@ impl UsagePage {
                                     Material::Cookies(
                                         provider,
                                         selection,
-                                        providers::parse_session(provider, material.secret())?,
+                                        zeroize::Zeroizing::new(providers::parse_session(
+                                            provider,
+                                            material.secret(),
+                                        )?),
                                     )
                                 }
                                 (_, Source::ApiKey) => return Err(UsageError::Authentication),
@@ -1141,7 +1151,9 @@ impl UsagePage {
                         ) {
                             Ok(None)
                         } else {
-                            accounts.secret(id).map(Some)
+                            accounts
+                                .secret(id)
+                                .map(|s| Some(zeroize::Zeroizing::new(s)))
                         };
                         let enhancement = accounts.enhancement_secret(id);
                         let enhancement_browser =
@@ -1166,20 +1178,20 @@ impl UsagePage {
                         &*shared.http,
                         provider,
                         HttpSource::Official,
-                        secret.as_deref().unwrap_or(""),
+                        secret.as_deref().map_or("", String::as_str),
                         proxy.as_deref(),
                     ),
                     Authentication::ManualSession { kind, .. } => query(
                         &*shared.http,
                         HttpSource::Platform(kind),
-                        secret.as_deref().unwrap_or(""),
+                        secret.as_deref().map_or("", String::as_str),
                         proxy.as_deref(),
                     ),
                     Authentication::ProviderSession { provider, .. } => query_provider(
                         &*shared.http,
                         provider,
                         HttpSource::KimiWeb,
-                        secret.as_deref().unwrap_or(""),
+                        secret.as_deref().map_or("", String::as_str),
                         proxy.as_deref(),
                     ),
                     Authentication::BrowserLocalStorage { selection } => {

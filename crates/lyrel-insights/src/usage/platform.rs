@@ -13,6 +13,7 @@
 //! 此路径是私有接口兼容实现，不代表官方支持或已通过真实账号验证。
 use super::accounts::UsageError;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub const ENDPOINT: &str = "https://platform.deepseek.com/api/v0/users/get_user_summary";
 const ORIGIN: &str = "https://platform.deepseek.com";
@@ -43,7 +44,7 @@ impl SessionKind {
 /// 只保留请求所需秘密；不可调试输出或序列化整个粘贴材料。
 pub struct SessionMaterial {
     kind: SessionKind,
-    secret: String,
+    secret: Zeroizing<String>,
 }
 impl SessionMaterial {
     pub fn kind(&self) -> SessionKind {
@@ -80,7 +81,7 @@ fn material(kind: SessionKind, token: &str) -> Result<SessionMaterial, UsageErro
     }
     Ok(SessionMaterial {
         kind,
-        secret: token.to_owned(),
+        secret: Zeroizing::new(token.to_owned()),
     })
 }
 

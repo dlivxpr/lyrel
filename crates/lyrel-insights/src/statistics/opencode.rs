@@ -393,14 +393,17 @@ mod tests {
         );
 
         let mut mismatched = request.clone();
-        mismatched.scope.opencode =
-            Some(lyrel_core::host::session_operations::opencode::OpenCodeScope {
-                server: Some(lyrel_core::host::session_operations::opencode::OpenCodeServer {
-                    pid: 999,
-                    urls: vec!["http://127.0.0.1:12345/".into()],
-                }),
+        mismatched.scope.opencode = Some(
+            lyrel_core::host::session_operations::opencode::OpenCodeScope {
+                server: Some(
+                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                        pid: 999,
+                        urls: vec!["http://127.0.0.1:12345/".into()],
+                    },
+                ),
                 ..Default::default()
-            });
+            },
+        );
         assert_eq!(
             host.opencode_statistics(&mismatched).unwrap_err().kind,
             lyrel_core::host::session_operations::SessionErrorKind::Identity
@@ -452,13 +455,17 @@ mod tests {
         );
 
         let mut wrong = request;
-        wrong.scope.opencode = Some(lyrel_core::host::session_operations::opencode::OpenCodeScope {
-            server: Some(lyrel_core::host::session_operations::opencode::OpenCodeServer {
-                pid: 999,
-                urls: vec!["http://127.0.0.1:12345/".into()],
-            }),
-            ..Default::default()
-        });
+        wrong.scope.opencode = Some(
+            lyrel_core::host::session_operations::opencode::OpenCodeScope {
+                server: Some(
+                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                        pid: 999,
+                        urls: vec!["http://127.0.0.1:12345/".into()],
+                    },
+                ),
+                ..Default::default()
+            },
+        );
         let wrong_host = host
             .opencode_statistics(&SessionOperation {
                 expected_host: 77,

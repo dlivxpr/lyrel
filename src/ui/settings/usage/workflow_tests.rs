@@ -1,9 +1,10 @@
 use super::*;
-use crate::core::keychain::InMemoryCredentialStore;
+use crate::core::keychain::{CredentialStore as _, InMemoryCredentialStore};
 use crate::ui::app::{LyrelApp, test_window::harness};
 use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext, TestAppContext, VisualTestContext};
+use lyrel_insights::usage::accounts::{SecretVault, VaultError};
 use std::{collections::VecDeque, sync::mpsc};
 
 const BALANCE: &[u8] = br#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}"#;
@@ -66,7 +67,7 @@ impl BalanceHttp for Http {
 fn install(
     vcx: &mut VisualTestContext,
     path: std::path::PathBuf,
-    vault: Arc<dyn lyrel_insights::usage::SecretVault>,
+    vault: Arc<dyn SecretVault>,
     http: Arc<dyn BalanceHttp>,
     seed: bool,
 ) -> Option<Uuid> {
@@ -542,21 +543,17 @@ struct LockedVault {
     inner: InMemoryCredentialStore,
     locked: AtomicBool,
 }
-impl lyrel_insights::usage::SecretVault for LockedVault {
-    fn secret(
-        &self,
-        s: &str,
-        a: &str,
-    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
+impl SecretVault for LockedVault {
+    fn secret(&self, s: &str, a: &str) -> Result<Option<String>, VaultError> {
         self.inner.secret(s, a)
     }
-    fn set_secret(&self, s: &str, a: &str, v: &str) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn set_secret(&self, s: &str, a: &str, v: &str) -> Result<(), VaultError> {
         if self.locked.load(Ordering::SeqCst) {
-            return Err(lyrel_insights::usage::VaultError("locked".into()));
+            return Err(VaultError("locked".into()));
         }
         self.inner.set_secret(s, a, v)
     }
-    fn delete_secret(&self, s: &str, a: &str) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn delete_secret(&self, s: &str, a: &str) -> Result<(), VaultError> {
         self.inner.delete_secret(s, a)
     }
 }

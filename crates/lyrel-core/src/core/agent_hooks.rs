@@ -566,7 +566,7 @@ pub struct HookTarget<'a> {
 }
 
 impl<'a> HookTarget<'a> {
-    pub(crate) fn hermes_home(&self) -> io::Result<PathBuf> {
+    pub fn hermes_home(&self) -> io::Result<PathBuf> {
         hermes::home(self)
     }
     pub fn local(host: &'a dyn Host) -> Option<HookTarget<'a>> {
@@ -634,7 +634,7 @@ impl<'a> HookTarget<'a> {
         ))
     }
 
-    pub(crate) fn pi_agent_dir_checked(&self) -> io::Result<PathBuf> {
+    pub fn pi_agent_dir_checked(&self) -> io::Result<PathBuf> {
         let environment = self.agent_environment(HookAgent::Pi)?;
         let home = self.agent_home(&environment)?;
         let root = match environment
@@ -682,7 +682,7 @@ impl<'a> HookTarget<'a> {
         Ok(self.under(&base, &["opencode"]))
     }
 
-    pub(crate) fn kimi_config_path_checked(&self) -> io::Result<PathBuf> {
+    pub fn kimi_config_path_checked(&self) -> io::Result<PathBuf> {
         let environment = self.agent_environment(HookAgent::Kimi)?;
         if let Some(home) = environment.get("KIMI_CODE_HOME") {
             let home = Path::new(home);

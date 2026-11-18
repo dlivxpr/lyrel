@@ -80,10 +80,7 @@ fn native_hermes_statistics_reads_public_stored_usage() {
         "{{\"type\":\"session\",\"id\":\"main\",\"timestamp\":\"{timestamp}\"}}\n{{\"type\":\"model_usage\",\"id\":\"stored:main\",\"timestamp\":\"{timestamp}\",\"usage\":{{\"input\":1,\"output\":1,\"totalTokens\":2,\"cost\":{{\"total\":0}}}}}}\n"
     )).unwrap();
     let mut mixed = sources;
-    mixed.push(Source::omp(
-        omp.path().into(),
-        mixed[0].scope().to_owned(),
-    ));
+    mixed.push(Source::omp(omp.path().into(), mixed[0].scope().to_owned()));
     let snapshot = statistics::scan(&*host, &mixed, &mut StatisticsCache::default()).unwrap();
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
     assert_eq!(

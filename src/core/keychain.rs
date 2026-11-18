@@ -2,6 +2,7 @@ pub use lyrel_core::core::keychain::{
     CredentialKind, CredentialRef, SERVICE_KEY_PASSPHRASE, SERVICE_PASSWORD, endpoint_account,
     key_account_from_contents,
 };
+use lyrel_insights::usage::accounts::{SecretVault, VaultError};
 
 #[derive(Debug)]
 pub enum CredentialError {
@@ -103,33 +104,19 @@ impl CredentialStore for OsCredentialStore {
 /// The usage account manager in `lyrel-insights` persists its slot secrets
 /// through this narrow seam; the OS store already speaks the same three
 /// operations as `CredentialStore`, so this only adapts the error type.
-impl lyrel_insights::usage::SecretVault for OsCredentialStore {
-    fn secret(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
-        CredentialStore::get(self, service, account)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+impl SecretVault for OsCredentialStore {
+    fn secret(&self, service: &str, account: &str) -> Result<Option<String>, VaultError> {
+        CredentialStore::get(self, service, account).map_err(|error| VaultError(error.to_string()))
     }
 
-    fn set_secret(
-        &self,
-        service: &str,
-        account: &str,
-        secret: &str,
-    ) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn set_secret(&self, service: &str, account: &str, secret: &str) -> Result<(), VaultError> {
         CredentialStore::set(self, service, account, secret)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+            .map_err(|error| VaultError(error.to_string()))
     }
 
-    fn delete_secret(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn delete_secret(&self, service: &str, account: &str) -> Result<(), VaultError> {
         CredentialStore::delete(self, service, account)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+            .map_err(|error| VaultError(error.to_string()))
     }
 }
 
@@ -181,33 +168,19 @@ impl InMemoryCredentialStore {
 }
 
 #[cfg(test)]
-impl lyrel_insights::usage::SecretVault for InMemoryCredentialStore {
-    fn secret(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<Option<String>, lyrel_insights::usage::VaultError> {
-        CredentialStore::get(self, service, account)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+impl SecretVault for InMemoryCredentialStore {
+    fn secret(&self, service: &str, account: &str) -> Result<Option<String>, VaultError> {
+        CredentialStore::get(self, service, account).map_err(|error| VaultError(error.to_string()))
     }
 
-    fn set_secret(
-        &self,
-        service: &str,
-        account: &str,
-        secret: &str,
-    ) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn set_secret(&self, service: &str, account: &str, secret: &str) -> Result<(), VaultError> {
         CredentialStore::set(self, service, account, secret)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+            .map_err(|error| VaultError(error.to_string()))
     }
 
-    fn delete_secret(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<(), lyrel_insights::usage::VaultError> {
+    fn delete_secret(&self, service: &str, account: &str) -> Result<(), VaultError> {
         CredentialStore::delete(self, service, account)
-            .map_err(|error| lyrel_insights::usage::VaultError(error.to_string()))
+            .map_err(|error| VaultError(error.to_string()))
     }
 }
 

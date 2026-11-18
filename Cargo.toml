@@ -111,8 +111,11 @@ percent-encoding = "2"
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
 encoding_rs.workspace = true
 lsp-types = { version = "0.97.0", features = ["proposed"] }
-# Diff base decoding uses the opened file's selected encoding without changing its representation.
-encoding_rs.workspace = true
+# Clear transient form credentials when they leave scope.
+zeroize = "1"
+sha2 = "0.11.1"
+# Cross-process locking for graphics fixtures, also built by the native test feature.
+fs2 = "0.4"
 
 
 # SSH profile ids in the connection manager UI (`ui::ssh_connect`,
@@ -308,8 +311,6 @@ lyrel-document = { path = "crates/lyrel-document", features = ["test-fixtures"] 
 # the SQLite document fixtures still build real SQLite databases themselves —
 # a dev-only dependency, never linked into the released GUI.
 rusqlite = { version = "0.42.0", features = ["bundled"] }
-# Cross-process fixture-build locking in the terminal graphics consumer tests.
-fs2 = "0.4"
 
 [lints]
 workspace = true
@@ -323,7 +324,7 @@ native-markdown-tests = ["test-support"]
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor 与 updater helper；Linux 排除桌面包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"

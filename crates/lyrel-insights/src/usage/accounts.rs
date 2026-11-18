@@ -19,6 +19,12 @@ pub trait SecretVault: Send + Sync {
 /// Opaque vault backend failure; callers never inspect the reason.
 pub struct VaultError(pub String);
 
+impl std::fmt::Debug for VaultError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VaultError")
+    }
+}
+
 impl std::fmt::Display for VaultError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "secret vault error: {}", self.0)
@@ -41,10 +47,7 @@ impl InMemoryVault {
     }
 
     pub fn len(&self) -> usize {
-        self.entries
-            .lock()
-            .expect("secret vault poisoned")
-            .len()
+        self.entries.lock().expect("secret vault poisoned").len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -428,7 +431,12 @@ impl Accounts {
         };
         let slot = secret.map(|_| Uuid::new_v4());
         if let (Some(secret), Some(slot)) = (secret, slot) {
-            if secret.len() > 2560 || self.vault.set_secret(SERVICE, &slot.to_string(), secret).is_err() {
+            if secret.len() > 2560
+                || self
+                    .vault
+                    .set_secret(SERVICE, &slot.to_string(), secret)
+                    .is_err()
+            {
                 if let Some(query) = replace {
                     self.fail_replace(query, UsageError::Credentials);
                 }
@@ -574,7 +582,12 @@ impl Accounts {
             .ok_or(UsageError::Stale)?
             .enhancement_slot;
         let slot = Uuid::new_v4();
-        if secret.len() > 2560 || self.vault.set_secret(SERVICE, &slot.to_string(), secret).is_err() {
+        if secret.len() > 2560
+            || self
+                .vault
+                .set_secret(SERVICE, &slot.to_string(), secret)
+                .is_err()
+        {
             return Err(UsageError::Credentials);
         }
         let mut next = self.stored.clone();
@@ -703,7 +716,11 @@ impl Accounts {
             .chain(a.enhancement_slot)
             .collect::<Vec<_>>();
         for slot in slots {
-            if self.vault.delete_secret(SERVICE, &slot.to_string()).is_err() {
+            if self
+                .vault
+                .delete_secret(SERVICE, &slot.to_string())
+                .is_err()
+            {
                 self.account_mut(id).unwrap().error = Some(UsageError::Credentials);
                 return Err(UsageError::Credentials);
             }

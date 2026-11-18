@@ -305,7 +305,8 @@ fn statistics_pricing_cumulative_and_unknown_times_are_not_distributed_to_days()
                 .value(Metric::Cost),
             None
         );
-        let today = DateWindow::calendar(lyrel_insights::statistics::Period::Today, now, None).unwrap();
+        let today =
+            DateWindow::calendar(lyrel_insights::statistics::Period::Today, now, None).unwrap();
         assert_eq!(source.aggregate(&today).cost_in("USD"), None);
     }
 }

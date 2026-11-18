@@ -6304,7 +6304,6 @@ dependencies = [
 name = "lyrel"
 version = "0.3.5"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "base64 0.23.1",
  "chrono",
@@ -6325,6 +6324,7 @@ dependencies = [
  "lsp-types",
  "lyrel-core",
  "lyrel-document",
+ "lyrel-insights",
  "lyrel-markdown-editor",
  "lyrel-test-support",
  "lyrel-updater",
@@ -6345,7 +6345,6 @@ dependencies = [
  "rio-unicode",
  "rio-vt",
  "rusqlite",
- "rusty-leveldb",
  "semver",
  "serde",
  "serde_json",
@@ -6353,7 +6352,6 @@ dependencies = [
  "similar 3.2.1",
  "smallvec",
  "smol",
- "snap",
  "tempfile",
  "tiff",
  "tray-icon",
@@ -6403,7 +6401,6 @@ dependencies = [
  "gix-discover",
  "hmac 0.13.0",
  "http",
- "icu_collator",
  "ignore",
  "image",
  "libc",
@@ -6415,7 +6412,6 @@ dependencies = [
  "memchr",
  "miniz_oxide 0.9.1",
  "notify",
- "percent-encoding",
  "png 0.18.1",
  "portable-pty",
  "regex",
@@ -6437,7 +6433,6 @@ dependencies = [
  "tokio",
  "toml_edit 0.25.19+spec-1.1.0",
  "ureq",
- "url",
  "uuid",
  "windows-sys 0.61.2",
  "winreg 0.56.0",
@@ -6472,6 +6467,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "lyrel-insights"
+version = "0.3.5"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
+ "chrono",
+ "chrono-tz",
+ "fs2",
+ "http",
+ "icu_collator",
+ "log",
+ "lyrel-core",
+ "percent-encoding",
+ "regex",
+ "rusqlite",
+ "rusty-leveldb",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "snap",
+ "tempfile",
+ "toml_edit 0.25.19+spec-1.1.0",
+ "ureq",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+ "yaml_serde",
+ "zeroize",
+]
+
+[[package]]
 name = "lyrel-markdown-editor"
 version = "0.3.5"
 dependencies = [
@@ -6493,8 +6520,10 @@ dependencies = [
 name = "lyrel-server"
 version = "0.3.5"
 dependencies = [
+ "chrono",
  "libc",
  "lyrel-core",
+ "lyrel-insights",
  "lyrel-test-support",
  "png 0.18.1",
  "serde",

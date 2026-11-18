@@ -4,7 +4,7 @@
 //! workbench surfaces: Host-bound skill discovery/catalog/install/maintenance
 //! ([`skills`]), structured coding-agent session telemetry ([`statistics`]),
 //! read-only GitHub queries ([`github`]), and desktop usage account models,
-//! provider scrapers and browser cookie/session readers ([`usage`]).
+//! provider scrapers and browser cookie/session readers (`usage`).
 //!
 //! Everything here drives real `LocalHost`/`RemoteHost` work through
 //! `&dyn lyrel_core::host::Host`; nothing touches PTY, SSH setup, or GPUI.
@@ -14,4 +14,5 @@
 pub mod github;
 pub mod skills;
 pub mod statistics;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod usage;
