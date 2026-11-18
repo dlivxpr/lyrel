@@ -6,6 +6,7 @@ use std::os::unix::net::UnixStream;
 
 #[test]
 fn first_resize_always_syncs_then_dedups() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let mut term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -25,6 +26,7 @@ fn first_resize_always_syncs_then_dedups() {
 
 #[test]
 fn layout_resize_reasserts_geometry_after_a_late_size_frame() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let mut term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -65,6 +67,7 @@ fn layout_resize_reasserts_geometry_after_a_late_size_frame() {
 
 #[test]
 fn resize_updates_size_and_notifies_daemon() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let mut term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -80,6 +83,7 @@ fn resize_updates_size_and_notifies_daemon() {
 
 #[test]
 fn echoed_resize_defers_the_grid_reflow_to_the_daemons_size_frame() {
+    crate::core::config::pin_test_config_dir();
     use rio_vt::crosswords::pos::{Column, Line};
 
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
@@ -195,6 +199,7 @@ fn wait_for_columns(term: &RemoteTerminal, cols: usize) {
 /// the grid — and the child — at the old geometry for good.
 #[test]
 fn an_echoed_resize_whose_echo_never_came_is_asked_for_again() {
+    crate::core::config::pin_test_config_dir();
     let (mut term, mut daemon_side) = echoing_pair();
     term.resize(TermSize::new(120, 30), 8, 17);
     assert_eq!(next_resize(&mut daemon_side), Some((120, 30)));
@@ -252,6 +257,7 @@ fn an_echoed_resize_whose_echo_never_came_is_asked_for_again() {
 /// echoing one skipped it, since the request itself had not changed.
 #[test]
 fn an_echoed_resize_reasserts_geometry_after_a_late_size_frame() {
+    crate::core::config::pin_test_config_dir();
     let (mut term, mut daemon_side) = echoing_pair();
     term.resize(TermSize::new(120, 30), 8, 17);
     assert_eq!(next_resize(&mut daemon_side), Some((120, 30)));

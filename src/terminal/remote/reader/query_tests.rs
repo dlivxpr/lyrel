@@ -66,6 +66,7 @@ fn snapshot_replay_suppresses_query_replies_and_side_effects() {
 
 #[test]
 fn decrqm_probe_reports_sync_update_supported() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -95,6 +96,7 @@ fn decrqm_probe_reports_sync_update_supported() {
 
 #[test]
 fn sync_update_without_esu_flushes_after_the_deadline() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -126,6 +128,7 @@ fn sync_update_without_esu_flushes_after_the_deadline() {
 
 #[test]
 fn snapshot_replay_flushes_a_dangling_sync_frame_suppressed() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 

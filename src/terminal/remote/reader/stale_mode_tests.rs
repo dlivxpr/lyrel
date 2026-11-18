@@ -28,6 +28,7 @@ fn stale_mode_resets_target_only_the_dirty_bits() {
 
 #[test]
 fn prompt_report_scrubs_stale_tui_modes() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 

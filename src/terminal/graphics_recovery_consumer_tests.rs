@@ -787,6 +787,8 @@ fn graphics_consumer_fresh_restore_budget_refusal_disconnects_without_discarding
 fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_reviving_missing_text(
     cx: &mut TestAppContext,
 ) {
+    use std::io::Write as _;
+
     let (daemon, pane, prior, prior_window) = graphics_layout_harness(cx);
     graphics_send_fixture(&prior, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;1HLOST_ANCHOR\r\x1b_Ga=T,i=401,p=1,c=1,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
     graphics_layout_wait_image(&prior, cx, 401);
@@ -838,21 +840,30 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
         observer.detach().unwrap();
         bytes_seen
     });
-    for batch in 0..288 {
-        let mut output = Vec::new();
-        for line in 0..32 {
-            let row = batch * 32 + line;
-            output.extend_from_slice(&padding);
-            output.extend_from_slice(b"\r\n");
-            if row == 2048 {
-                output.extend_from_slice(b"RECOVERABLE_ANCHOR\r\x1b_Ga=T,i=402,p=2,c=1,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
-            } else {
-                output.extend_from_slice(format!("REPLAY_ROW_{row:05}").as_bytes());
-            }
+    // Use the existing file-backed PTY request: the payload and ring cap are
+    // unchanged, but we need only one fixture barrier, not 288 GUI round trips
+    // that each scan the growing scrollback for a completion marker.
+    let path = daemon.dir.path().join("ring-tail.bin");
+    let mut payload = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    for row in 0..9_216 {
+        payload.write_all(&padding).unwrap();
+        payload.write_all(b"\r\n").unwrap();
+        if row == 2048 {
+            payload.write_all(b"RECOVERABLE_ANCHOR\r\x1b_Ga=T,i=402,p=2,c=1,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\").unwrap();
+        } else {
+            write!(payload, "REPLAY_ROW_{row:05}").unwrap();
         }
-        graphics_send_fixture(&prior, cx, batch + 2, &output);
     }
-    graphics_send_fixture(&prior, cx, 899, b"RING_LOAD_DONE");
+    payload.write_all(b"RING_LOAD_DONE").unwrap();
+    payload.flush().unwrap();
+    drop(payload);
+    let request = format!(
+        "FILE_SEND 899 0 {} 65536\n",
+        graphics_pty_fixture::hex(path.to_str().unwrap().as_bytes())
+    );
+    let input_bytes = request.len();
+    prior.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    graphics_wait_fixture(&prior, cx, 899, input_bytes);
     let pty_bytes = monitor.join().unwrap();
     assert!(
         pty_bytes > 8 * 1024 * 1024,

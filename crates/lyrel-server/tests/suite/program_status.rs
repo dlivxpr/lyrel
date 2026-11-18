@@ -390,8 +390,9 @@ fn two_observers_share_exactly_one_daemon_query_reply() {
     // queued for the application. The bounded POSIX tty read returns zero
     // after 200 ms without bytes; raw mode also keeps a reply without a newline
     // readable. Only the od dump identifies the actual reply bytes.
+    // BSD wc pads the decimal byte count; discard that padding, not digits.
     let command = format!(
-        "LYREL_PS_TTY=$(stty -g); stty -echo -icanon min 1 time 0; printf '\\033]7501;?\\007'; dd bs=1 count={} 2>/dev/null | od -An -tx1 | tr -d ' \\n'; printf '\\nREMAINDER:'; stty min 0 time 2; dd bs=1 count=65536 2>/dev/null | wc -c; stty \"$LYREL_PS_TTY\"",
+        "LYREL_PS_TTY=$(stty -g); stty -echo -icanon min 1 time 0; printf '\\033]7501;?\\007'; dd bs=1 count={} 2>/dev/null | od -An -tx1 | tr -d ' \\n'; printf '\\nREMAINDER:'; stty min 0 time 2; dd bs=1 count=65536 2>/dev/null | wc -c | tr -d '[:blank:]'; stty \"$LYREL_PS_TTY\"",
         reply.len()
     );
     let controller_seen = support::run(&mut controller, &command);

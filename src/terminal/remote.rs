@@ -1852,6 +1852,7 @@ mod tests {
 
     #[test]
     fn kitty_keyboard_negotiation_reports_the_requested_mode() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1885,6 +1886,7 @@ mod tests {
 
     #[test]
     fn deep_keyboard_mode_pushes_leave_the_reader_alive() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1915,6 +1917,7 @@ mod tests {
 
     #[test]
     fn emoji_presentation_sequences_reserve_two_columns() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -1951,6 +1954,7 @@ mod tests {
 
     #[test]
     fn reader_feeds_local_grid() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
 
         let size = TermSize::new(80, 24);
@@ -2136,6 +2140,7 @@ mod tests {
 
     #[test]
     fn reader_surfaces_auth_prompt_and_status() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2172,6 +2177,7 @@ mod tests {
 
     #[test]
     fn child_exit_is_distinguished_from_daemon_disconnect() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         DaemonMsg::Exited { code: Some(0) }
@@ -2216,6 +2222,7 @@ mod tests {
 
     #[test]
     fn attach_replay_runs_at_the_daemon_reported_size() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2259,6 +2266,7 @@ mod tests {
 
     #[test]
     fn at_prompt_stays_false_while_shell_integration_is_inactive() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         assert!(!term.shell_active(), "no report yet → integration inactive");
@@ -2293,6 +2301,7 @@ mod tests {
 
     #[test]
     fn at_prompt_follows_daemon_prompt_reports() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2403,6 +2412,7 @@ mod tests {
 
     #[test]
     fn foreground_agent_follows_daemon_agent_reports() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -2553,6 +2563,7 @@ mod tests {
 
     #[test]
     fn agent_session_follows_daemon_status_reports() {
+        crate::core::config::pin_test_config_dir();
         use crate::core::cli_agent::{AgentSessionState, AgentStatus};
 
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
@@ -2662,6 +2673,7 @@ mod tests {
 
     #[test]
     fn zle_reading_follows_live_prompt_end_marks() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |want: bool| {
@@ -2764,6 +2776,7 @@ mod tests {
 
     #[test]
     fn shell_vi_mode_follows_live_prompt_mode_marks_without_disarming_zle() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |vi: bool, zle: bool| {
@@ -2812,6 +2825,7 @@ mod tests {
 
     #[test]
     fn shell_vi_mode_is_restored_from_snapshot_replay() {
+        crate::core::config::pin_test_config_dir();
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
         let poll = |vi: bool| {
@@ -2871,6 +2885,7 @@ mod tests {
 
     #[test]
     fn segmented_ring_replay_reproduces_live_rendering() {
+        crate::core::config::pin_test_config_dir();
         const MARK: &str = "DUPMARK";
         let frame_lines = |f: usize| -> Vec<String> {
             (0..10)
