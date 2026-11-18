@@ -1,6 +1,6 @@
 use super::*;
 use std::fs;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn temp_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();

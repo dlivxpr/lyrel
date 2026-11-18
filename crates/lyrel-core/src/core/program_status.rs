@@ -30,8 +30,8 @@
 //! not persisted.
 
 pub use lyrel_protocol::core::program_status::{
-    plain_program_text, BlockedKind, MAX_RECORDS, ProgramDelta, ProgramRecord, ProgramSnapshot,
-    ProgramState, ProgramStatusClient, ProgramStatusFrame,
+    BlockedKind, MAX_RECORDS, ProgramDelta, ProgramRecord, ProgramSnapshot, ProgramState,
+    ProgramStatusClient, ProgramStatusFrame, plain_program_text,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

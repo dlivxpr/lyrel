@@ -512,12 +512,12 @@ fn detect_windows() -> Vec<DetectedShell> {
     out
 }
 
-#[cfg(all(windows, test))]
+#[cfg(all(windows, any(test, feature = "test-support")))]
 pub fn git_bash_path() -> Option<PathBuf> {
     find_git_bash()
 }
 
-#[cfg(all(windows, test))]
+#[cfg(all(windows, any(test, feature = "test-support")))]
 pub fn nushell_path() -> Option<PathBuf> {
     find_in_path("nu.exe")
 }

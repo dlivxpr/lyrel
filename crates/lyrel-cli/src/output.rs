@@ -286,7 +286,7 @@ pub fn procs_tables(procs: &PaneProcs) -> String {
                 if p.foreground { "*" } else { "" }.to_string(),
                 p.rss.map_or_else(
                     || "-".to_string(),
-                    lyrel_protocol::daemon::procstat::compact_bytes,
+                    lyrel_protocol::core::proc::compact_bytes,
                 ),
             ]
         })

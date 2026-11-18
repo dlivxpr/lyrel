@@ -998,6 +998,26 @@ pub enum SshTestNeed {
 }
 
 impl NativeSshSpec {
+    /// Stable identity of the destination, proxy, and jump chain.
+    pub fn connection_key(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut hop = self;
+        let mut key = String::new();
+        loop {
+            write!(key, "{}@{}:{}", hop.user, hop.host, hop.port).unwrap();
+            match &hop.proxy {
+                SshProxy::None => {}
+                SshProxy::Command(command) => write!(key, "|cmd:{command}").unwrap(),
+                SshProxy::Socks { host, port } => write!(key, "|socks:{host}:{port}").unwrap(),
+                SshProxy::Http { host, port } => write!(key, "|http:{host}:{port}").unwrap(),
+            }
+            let Some(jump) = &hop.jump else { return key };
+            key.push_str("|jump:");
+            hop = jump;
+        }
+    }
+
     pub fn without_secrets(&self) -> NativeSshSpec {
         NativeSshSpec {
             password: None,

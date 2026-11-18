@@ -40,6 +40,7 @@ pub(crate) mod winproc;
 // spawn/singleton probes live in `lyrel-protocol`; these re-exports keep every
 // existing `lyrel_core::daemon::*` path working for the GUI, the CLI, and the
 // server tests.
+#[cfg(not(windows))]
 pub(crate) use lyrel_protocol::daemon::DETECTED_SHELL_ENV;
 #[cfg(windows)]
 pub use lyrel_protocol::daemon::update_guard;

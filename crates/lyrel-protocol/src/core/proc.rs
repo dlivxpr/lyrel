@@ -67,6 +67,39 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Vec<u8> {
     buf
 }
 
+/// `512 KB`, `38 MB`, `1.2 GB`: binary units under the short names `ps` and
+/// Activity Monitor print.
+pub fn compact_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64 / 1024.0;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    match v < 10.0 {
+        true => format!("{v:.1} {}", UNITS[unit]),
+        false => format!("{v:.0} {}", UNITS[unit]),
+    }
+}
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::compact_bytes;
+
+    #[test]
+    fn bytes_read_compactly() {
+        assert_eq!(compact_bytes(512), "512 B");
+        assert_eq!(compact_bytes(512 * 1024), "512 KB");
+        assert_eq!(compact_bytes(38 * 1024 * 1024), "38 MB");
+        assert_eq!(compact_bytes(1_288_490_189), "1.2 GB");
+        assert_eq!(compact_bytes(5 * 1024 * 1024 + 300 * 1024), "5.3 MB");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

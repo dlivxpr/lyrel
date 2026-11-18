@@ -63,7 +63,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         let used = sampler.system.used_memory();
         // sysinfo 0.40.1 refresh methods return (), so validate the exposed data.
         // Unsupported platforms already fail System::new() instead of yielding zeros.
-        sampler.snapshot.state = if sampler.system.cpus().is_empty()
+        let state = if sampler.system.cpus().is_empty()
             || total == 0
             || used > total
             || !cpu.is_finite()
@@ -84,6 +84,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                     .min(u128::from(u64::MAX)) as u64,
             ))
         };
+        sampler.snapshot.set_state(state);
         sampler.refreshed = now;
     }
     Ok(sampler.snapshot.clone())

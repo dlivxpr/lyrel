@@ -1,6 +1,6 @@
 //! 输入栏与 CLI 表格共用 Rio 默认 mode 2027 的占列规则。
 
-use rio_grapheme_width::emoji::Presentation;
+use rio_grapheme_width::emoji_variation::VARIATION_MAP;
 use rio_unicode::UnicodeWidthChar;
 use rio_unicode::grapheme::{BreakState, grapheme_class, is_break};
 use smallvec::SmallVec;
@@ -38,11 +38,8 @@ pub fn width(text: &str) -> usize {
 /// spans and how many terminal cells it occupies, following the same
 /// segmentation and width rules as Rio's mode-2027 print path.
 ///
-/// The rules are evaluated directly against the released registry primitives
-/// that path is built from — `rio-unicode`'s grapheme state machine and width
-/// tables plus `rio-grapheme-width`'s emoji variation table — so this helper
-/// cannot drift from the grid it is compared against in the dev-only test
-/// below. Behavior notes kept in parity with that path:
+/// Segmentation uses `rio-unicode`; emoji variation sequences use the released
+/// `rio-grapheme-width` table. The dev-only grid test checks their composition.
 ///
 /// - a variation selector flips the width of a valid emoji base (U+FE0F wide,
 ///   U+FE0E narrow) and is consumed without effect anywhere else;
@@ -53,47 +50,36 @@ pub fn width(text: &str) -> usize {
 /// - values that are not Unicode scalars measure as one single-width
 ///   codepoint when first and terminate the cluster when later.
 fn cluster_width(codepoints: &[u32]) -> (usize, usize) {
-    let Some(&first) = codepoints.first() else {
+    let Some((&first, rest)) = codepoints.split_first() else {
         return (0, 0);
     };
     let Some(base) = char::from_u32(first) else {
         return (1, 1);
     };
     let mut width = UnicodeWidthChar::width(base).unwrap_or(1);
-    let mut prev_class = grapheme_class(base);
-    let mut state = BreakState::start(prev_class);
-    let mut last_cp = base;
+    let mut previous = base;
+    let mut previous_class = grapheme_class(previous);
+    let mut breaks = BreakState::start(previous_class);
     let mut len = 1;
-    while len < codepoints.len() {
-        let Some(c) = char::from_u32(codepoints[len]) else {
+    for next in rest.iter().copied().map_while(char::from_u32) {
+        let next_class = grapheme_class(next);
+        let mut advanced = breaks;
+        if is_break(previous_class, next_class, &mut advanced) {
             break;
-        };
-        let class = grapheme_class(c);
-        let state_before = state;
-        if is_break(prev_class, class, &mut state) {
-            break;
-        }
-        match c {
-            '\u{FE0F}' | '\u{FE0E}' => {
-                if vs_is_valid_base(last_cp, c) {
-                    width = if c == '\u{FE0F}' { 2 } else { 1 };
-                    prev_class = class;
-                    last_cp = c;
-                } else {
-                    // Ignored selector: consumed without effect, exactly like
-                    // the released print path.
-                    state = state_before;
-                }
-            }
-            _ => {
-                if UnicodeWidthChar::width(c).unwrap_or(0) > 0 {
-                    width = 2;
-                }
-                prev_class = class;
-                last_cp = c;
-            }
         }
         len += 1;
+
+        if matches!(next, '\u{FE0E}' | '\u{FE0F}') {
+            if !is_emoji_variation(previous, next) {
+                // Consume the selector without advancing the break state.
+                continue;
+            }
+            width = if next == '\u{FE0E}' { 1 } else { 2 };
+        } else if UnicodeWidthChar::width(next).is_some_and(|columns| columns > 0) {
+            width = 2;
+        }
+
+        (previous, previous_class, breaks) = (next, next_class, advanced);
     }
     (len, width)
 }
@@ -101,11 +87,13 @@ fn cluster_width(codepoints: &[u32]) -> (usize, usize) {
 /// True when (`base`, `vs`) appears in Unicode's emoji-variation-sequences,
 /// i.e. the selector is defined to have an effect on this base. Queried
 /// through the same `rio-grapheme-width` table Rio's grid uses.
-fn vs_is_valid_base(base: char, vs: char) -> bool {
-    let mut sequence = String::with_capacity(base.len_utf8() + vs.len_utf8());
-    sequence.push(base);
-    sequence.push(vs);
-    Presentation::for_grapheme(&sequence).1.is_some()
+fn is_emoji_variation(base: char, selector: char) -> bool {
+    let mut utf8 = [0; 8];
+    let (first, second) = utf8.split_at_mut(base.len_utf8());
+    base.encode_utf8(first);
+    selector.encode_utf8(second);
+    let len = base.len_utf8() + selector.len_utf8();
+    std::str::from_utf8(&utf8[..len]).is_ok_and(|pair| VARIATION_MAP.contains_key(pair))
 }
 
 #[cfg(test)]

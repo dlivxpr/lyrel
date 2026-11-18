@@ -42,6 +42,11 @@ impl HostMetrics {
     pub fn state(&self) -> &MetricsState {
         &self.state
     }
+
+    /// Replace the reading without changing its host or server instance stamp.
+    pub fn set_state(&mut self, state: MetricsState) {
+        self.state = state;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -52,6 +52,17 @@ pub enum RouteTarget {
     LocalStdio { program: String, args: Vec<String> },
 }
 
+impl RouteTarget {
+    /// Connection identity shared by the control and pane routes to this host.
+    pub fn origin_key(&self) -> String {
+        match self {
+            Self::Ssh(spec) => spec.connection_key(),
+            Self::Wsl { distro } => format!("wsl:{distro}"),
+            Self::LocalStdio { program, .. } => format!("local-stdio:{program}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteAction {

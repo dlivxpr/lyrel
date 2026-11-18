@@ -14,30 +14,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lyrel_protocol::daemon::router as wire;
 pub use lyrel_protocol::daemon::router::*;
-use lyrel_protocol::daemon::router::{
-    self as wire, InstallRequestWire, MismatchedRemoteDaemon, ROUTE_PROMPT_KIND, ROUTE_REPLY_KIND,
-    RouteAck, RouteChannel, RoutePrompt, RouteReply, RouteTarget,
-};
 
 use crate::daemon::install::{InstallConfirm, InstallDecision, InstallProgress, InstallRequest};
-use crate::daemon::protocol::{self, AuthPromptKind, AuthResponse, DaemonMsg};
+use crate::daemon::protocol::{self, DaemonMsg};
 use crate::daemon::remote_link::RemoteLink;
-use crate::daemon::ssh::{ConnectionKey, PromptBroker, SshConnection, SshManager};
+use crate::daemon::ssh::{PromptBroker, SshConnection, SshManager};
 use crate::daemon::transport::Stream;
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(240);
-
-/// The connection-key spelling of a target's origin — the one SSH note the
-/// connection cache keeps for it. Route-target shaping is wire and lives in
-/// `lyrel-protocol`; this is its execution-side key.
-fn origin_key(target: &RouteTarget) -> String {
-    match target {
-        RouteTarget::Ssh(spec) => ConnectionKey::from_spec(spec).as_str().to_string(),
-        RouteTarget::Wsl { distro } => format!("wsl:{distro}"),
-        RouteTarget::LocalStdio { program, .. } => format!("local-stdio:{program}"),
-    }
-}
 
 fn install_request_to_wire(request: &InstallRequest) -> InstallRequestWire {
     InstallRequestWire {
@@ -564,8 +550,7 @@ fn into_async(local: Stream) -> io::Result<tokio::net::TcpStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(test)]
-    use crate::daemon::protocol::NativeSshSpec;
+    use crate::daemon::protocol::{AuthPromptKind, AuthResponse, NativeSshSpec};
 
     #[test]
     fn a_header_round_trips_through_a_frame() {
@@ -860,7 +845,7 @@ mod tests {
         struct Typed;
         impl RouteAuthResponder for Typed {
             fn respond(&self, machine: &RouteTarget, prompt: &AuthPromptKind) -> AuthResponse {
-                assert_eq!(origin_key(&machine), "local-stdio:x");
+                assert_eq!(machine.origin_key(), "local-stdio:x");
                 assert!(matches!(prompt, AuthPromptKind::Password { .. }));
                 AuthResponse::Secret("hunter2".into())
             }
@@ -1110,7 +1095,7 @@ mod tests {
         .expect("a minimal spec");
         let target = RouteTarget::Ssh(Box::new(spec.clone()));
         assert_eq!(
-            origin_key(&target),
+            target.origin_key(),
             crate::daemon::ssh::ConnectionKey::from_spec(&spec)
                 .as_str()
                 .to_string()
@@ -1124,12 +1109,13 @@ mod tests {
             program: "/opt/lyrel-server".into(),
             args: vec!["--stdio".into(), "--pane".into()],
         };
-        assert_eq!(origin_key(&control), origin_key(&pane));
+        assert_eq!(control.origin_key(), pane.origin_key());
         assert_ne!(
-            origin_key(&control),
-            origin_key(&RouteTarget::Wsl {
+            control.origin_key(),
+            RouteTarget::Wsl {
                 distro: "Ubuntu".into()
-            })
+            }
+            .origin_key()
         );
     }
 
@@ -1142,7 +1128,7 @@ mod tests {
         struct Recorder(Mutex<Vec<String>>);
         impl RouteAuthResponder for Recorder {
             fn respond(&self, machine: &RouteTarget, _: &AuthPromptKind) -> AuthResponse {
-                self.0.lock().unwrap().push(origin_key(machine));
+                self.0.lock().unwrap().push(machine.origin_key());
                 AuthResponse::Cancelled
             }
         }

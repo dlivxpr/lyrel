@@ -13,7 +13,6 @@
 use std::sync::{Arc, LazyLock};
 
 use lyrel_protocol::host::SharedHost;
-use lyrel_protocol::host::sqlite::SqliteEngine;
 
 pub use lyrel_protocol::host::local::LocalHost;
 

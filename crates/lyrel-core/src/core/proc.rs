@@ -4,7 +4,7 @@
 //! unchanged; the tokio variant stays in this crate because the SSH engine is
 //! the only caller and `lyrel-protocol` links no tokio.
 
-pub use lyrel_protocol::core::proc::{hide_console, output_within};
+pub use lyrel_protocol::core::proc::{compact_bytes, hide_console, output_within};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

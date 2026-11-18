@@ -7,6 +7,9 @@
 
 pub mod asset;
 
+/// Argument a client uses to probe the server's wire versions.
+pub const PROTOCOL_FLAG: &str = "--protocol";
+
 /// This build's version, as shipped in every version handshake and install
 /// request. One workspace version everywhere: `lyrel-protocol` shares the
 /// workspace `version`, so this is the same string the installer in core

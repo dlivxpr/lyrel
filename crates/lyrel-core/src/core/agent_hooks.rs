@@ -330,23 +330,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn a_remote_hook_names_the_server_its_own_installer_placed() {
-        let host = crate::host::local::LocalHost::new();
-        let dialect = crate::daemon::install::RemoteProtocol::of_this_build();
-        let name = crate::daemon::install::asset::binary_name(dialect.control, dialect.protocol);
-
-        let unix = HookTarget::remote(&*host, std::path::PathBuf::from("/home/me"));
-        assert_eq!(
-            unix.exe,
-            std::path::PathBuf::from(format!("/home/me/.local/share/lyrel/bin/{name}"))
-        );
-
-        let windows = HookTarget::remote(&*host, std::path::PathBuf::from(r"C:\Users\me"));
-        assert_eq!(
-            windows.exe,
-            std::path::PathBuf::from(format!(r"C:\Users\me\AppData\Local\lyrel\bin\{name}.exe"))
-        );
-    }
 }

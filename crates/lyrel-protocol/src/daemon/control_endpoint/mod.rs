@@ -20,8 +20,8 @@ pub const CONTROL_SOCK_ENV: &str = "LYREL_CONTROL_SOCK";
 
 #[cfg(unix)]
 pub use unix::{
-    connect_control, control_endpoint_answers, control_endpoint_display, control_socket_path,
-    remove_control_endpoint, socket_path_in,
+    connect_control, control_endpoint_answers, control_endpoint_display, control_socket_answers,
+    control_socket_path, remove_control_endpoint, socket_path_in,
 };
 
 #[cfg(windows)]

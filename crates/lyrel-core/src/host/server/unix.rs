@@ -12,7 +12,9 @@ use crate::host::SharedHost;
 
 use super::{Services, serve_with};
 use std::os::unix::fs::PermissionsExt as _;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
+
+use lyrel_protocol::daemon::control_endpoint::control_socket_answers;
 
 pub fn bind_control_socket(path: &Path) -> io::Result<UnixListener> {
     let parent = path.parent().unwrap_or(Path::new("."));
@@ -22,20 +24,16 @@ pub fn bind_control_socket(path: &Path) -> io::Result<UnixListener> {
     }
 
     if path.exists() {
-        match UnixStream::connect(path) {
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!(
-                        "a control server is already listening on {}",
-                        path.display()
-                    ),
-                ));
-            }
-            Err(_) => {
-                let _ = std::fs::remove_file(path);
-            }
+        if control_socket_answers(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!(
+                    "a control server is already listening on {}",
+                    path.display()
+                ),
+            ));
         }
+        let _ = std::fs::remove_file(path);
     }
 
     let listener = bind_private(path)?;

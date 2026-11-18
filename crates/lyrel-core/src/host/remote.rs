@@ -2820,7 +2820,6 @@ mod tests {
 
     #[test]
     fn opencode_statistics_transports_only_the_selected_host_scope() {
-        use crate::host::session_operations::opencode::OpenCodeStatistics;
         let (host, _) = host_with_peer_announcing(
             '/',
             &[crate::daemon::control::feature::OPENCODE_STATISTICS],
@@ -2835,11 +2834,12 @@ mod tests {
                 );
                 Some((
                     ControlReply::Ok(ReplyOk::OpenCodeStatistics(Box::new(Ok(
-                        OpenCodeStatistics {
-                            identity: "remote-service".into(),
-                            sessions: vec![],
-                            issues: vec!["native service offline".into()],
-                        },
+                        serde_json::from_value(serde_json::json!({
+                            "identity": "remote-service",
+                            "sessions": [],
+                            "issues": ["native service offline"],
+                        }))
+                        .unwrap(),
                     )))),
                     vec![],
                 ))

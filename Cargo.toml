@@ -344,8 +344,9 @@ gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
 # mode stacks the daemon folds for replay stay in `lyrel-protocol`'s `term_modes`.
 rio-vt = { version = "=0.5.32", default-features = false }
-# Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
+# Unicode segmentation and width primitives match the pinned Rio grid.
 rio-unicode = "=0.5.32"
+rio-grapheme-width = "=0.5.32"
 # Types plus the released `glyf` outline decoder and registry. `glyph` adds
 # skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
 # validates and retains registrations with it; the GUI decodes accepted bodies

@@ -88,7 +88,7 @@ fn fits(p: &Path) -> bool {
 /// matters to a daemon whose listener would not open. Those look exactly
 /// like a live server in the error, and nothing is listening behind either.
 /// Only a connect that completes tells them apart.
-pub(crate) fn control_socket_answers(path: &Path) -> bool {
+pub fn control_socket_answers(path: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
