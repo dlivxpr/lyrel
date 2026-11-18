@@ -10,7 +10,8 @@
 //! merges it into the on-disk update state and deletes it.
 //!
 //! Both sides live in different binaries (`lyrel-app` reads, `lyrel-updater`
-//! writes), so the schema lives here where neither can drift from the other.
+//! writes), so the schema lives in this crate — the library linked by both —
+//! where neither can drift from the other.
 
 use std::path::Path;
 
@@ -34,7 +35,7 @@ pub struct UpdateOutcome {
 /// Atomic so a GUI that launches mid-write never parses half a record.
 pub fn write_outcome(path: &Path, outcome: &UpdateOutcome) -> std::io::Result<()> {
     let json = serde_json::to_vec(outcome).map_err(std::io::Error::other)?;
-    crate::core::config::write_atomic(path, &json)
+    lyrel_core::core::config::write_atomic(path, &json)
 }
 
 /// `None` when no updater ran (the common case — the file only exists between

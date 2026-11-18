@@ -5,13 +5,13 @@
 dev = "run -- --config-dir .lyrel-dev"
 # Desktop selectors share the native/ordinary test feature set. Production
 # `dev` stays free of test support; headless aliases do not pull in the GUI.
-t-check = "check --locked --workspace --all-targets --features updater,native-markdown-tests,test-support"
+t-check = "check --locked --workspace --all-targets --features native-markdown-tests,test-support"
 t-core = "test --locked -p lyrel-core --features test-support"
-t-lib = "test --locked -p lyrel --features updater,native-markdown-tests,test-support --lib"
+t-lib = "test --locked -p lyrel --features native-markdown-tests,test-support --lib"
 t-editor = "test --locked -p lyrel-markdown-editor"
 t-cli = "test --locked -p lyrel-cli --features lyrel-core/test-support --test cli_e2e"
-t-native-md = "test --locked -p lyrel --features updater,native-markdown-tests,test-support --test native_markdown"
-t-native-term = "test --locked -p lyrel --features updater,native-markdown-tests,test-support --test native_terminal"
+t-native-md = "test --locked -p lyrel --features native-markdown-tests,test-support --test native_markdown"
+t-native-term = "test --locked -p lyrel --features native-markdown-tests,test-support --test native_terminal"
 
 # Link the Visual C++ runtime statically on Windows (#902).
 #

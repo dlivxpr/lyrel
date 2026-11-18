@@ -95,6 +95,7 @@ function isDesktopOnly(file) {
     file.startsWith('src/') ||
     file === 'build.rs' ||
     file.startsWith('crates/lyrel-markdown-editor/') ||
+    file.startsWith('crates/lyrel-updater/') ||
     file.startsWith('tests/') ||
     file.startsWith('assets/icons/') ||
     file.startsWith('assets/drawio/') ||

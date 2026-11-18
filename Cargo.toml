@@ -13,11 +13,6 @@ default-run = "lyrel-app"
 name = "lyrel-app"
 path = "src/main.rs"
 
-[[bin]]
-name = "lyrel-updater"
-path = "src/bin/lyrel-updater.rs"
-required-features = ["updater"]
-
 # AppKit initialization must run on the process main thread, not a libtest worker.
 [[test]]
 name = "native_markdown"
@@ -32,6 +27,12 @@ harness = false
 required-features = ["native-markdown-tests"]
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# The standalone updater's library half: the shared update contract (layout
+# markers, backup naming, the VerifyPlan/InstallPlan argv layouts, and the
+# UpdateOutcome record) consumed by this coordinator and by the
+# `lyrel-updater` executable, which lives in `crates/lyrel-updater`. GPUI-free,
+# like everything else at this seam.
+lyrel-updater = { path = "crates/lyrel-updater" }
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `lyrel-server` shares with
 # this GUI. Everything that does *not* need gpui lives there.
@@ -222,11 +223,6 @@ raw-window-handle = "0.6"
 webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
 jieba-rs = "0.11.0"
-# The standalone updater extracts only Windows release ZIPs. Reuse the async
-# reader already present in Cargo.lock and enable only the Deflate codec emitted
-# by PowerShell's Compress-Archive.
-async_zip = { version = "0.0.19", default-features = false, features = ["deflate"], optional = true }
-
 # COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
 # System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
 # before it honors an unpackaged app's toast identity (otherwise the toast
@@ -320,15 +316,14 @@ workspace = true
 
 [features]
 default = []
-updater = ["dep:async_zip"]
 test-support = ["lyrel-core/test-support", "gpui-kit/test-support"]
 native-markdown-tests = ["test-support"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
 members = ["crates/*"]
-# Windows/macOS 默认包含 editor；Linux 排除两个 desktop 包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+# Windows/macOS 默认包含 editor 与 updater helper；Linux 排除桌面包。
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"
