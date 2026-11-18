@@ -16,7 +16,6 @@ anyhow.workspace = true
 log.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-yaml_serde.workspace = true
 chrono = { version = "0.4.45", features = ["serde"] }
 # Whole-host CPU/RAM only; no process, disk or network refreshes. Already locked
 # through the desktop stack; shared here so headless daemons use the same APIs.
