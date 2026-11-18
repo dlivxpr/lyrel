@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
+use crate::core::agent_history::{PastSession, Roots};
 use crate::core::git;
 use crate::core::gitignore::GitignoreChain;
 use crate::host::file_version::FileVersion;
@@ -81,10 +82,8 @@ fn no_prompt_env() -> Vec<(&'static str, Option<&'static str>)> {
 /// search, watch and native agent-session request, and reports read-only
 /// SQLite browsing and whole-host metrics as `Unsupported`. `lyrel-core`
 /// builds the full local Host through [`LocalHost::with_capabilities`],
-/// injecting its read-only SQLite engine and its platform metrics sampler;
-/// the single `Host` implementation serves both shapes, so a caller can never
-/// silently receive a different `LocalHost` behaviour than the capabilities
-/// it attached.
+/// injecting the SQLite engine, platform metrics sampler, and history roots
+/// enriched with live pane scopes. Both shapes use the same `Host` implementation.
 pub struct LocalHost {
     gitignore: Arc<Mutex<GitignoreChain>>,
     /// Read-only SQLite views opened on this machine. One per Host so a
@@ -94,13 +93,14 @@ pub struct LocalHost {
     /// The whole-host metrics sampler, injected by the crate that owns the
     /// platform sampling dependencies. `None` reports `Unsupported`.
     metrics: Option<MetricsSampler>,
+    history_roots: fn() -> io::Result<Roots>,
 }
 
 impl LocalHost {
     /// The C-free base local Host: no SQLite engine, no metrics sampler.
     #[allow(clippy::new_ret_no_self)]
     pub fn new() -> SharedHost {
-        Self::with_capabilities(None, None)
+        Self::with_capabilities(None, None, Roots::local)
     }
 
     /// The base local Host's process-wide singleton.
@@ -112,15 +112,18 @@ impl LocalHost {
     /// The full local Host: the base implementation plus the capabilities
     /// this process can actually provide — a read-only SQLite browsing engine
     /// (`None` keeps the honest `Unsupported`) and a whole-host metrics
-    /// sampler (`None` likewise).
+    /// sampler (`None` likewise). The history roots callback lets the daemon
+    /// include live pane scopes without putting MachineStore in this crate.
     pub fn with_capabilities(
         sqlite: Option<Arc<dyn SqliteEngine>>,
         metrics: Option<MetricsSampler>,
+        history_roots: fn() -> io::Result<Roots>,
     ) -> SharedHost {
         Arc::new(LocalHost {
             gitignore: Arc::new(Mutex::new(GitignoreChain::default())),
             sqlite,
             metrics,
+            history_roots,
         })
     }
 
@@ -608,10 +611,9 @@ impl Host for LocalHost {
         Ok(crate::host::local_agent_environment())
     }
 
-    fn agent_sessions(&self) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+    fn agent_sessions(&self) -> io::Result<Vec<PastSession>> {
         guard_off_ui();
-        use crate::core::agent_history::{Roots, scan};
-        Ok(scan(&Roots::local()?))
+        Ok(crate::core::agent_history::scan(&(self.history_roots)()?))
     }
 
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {

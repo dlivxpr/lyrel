@@ -1,5 +1,5 @@
 //! The full local Host: `lyrel-protocol`'s C-free [`LocalHost`] with this
-//! crate's read-only SQLite engine and whole-host metrics sampler attached.
+//! crate's SQLite engine, whole-host metrics sampler and live agent scopes attached.
 //!
 //! [`new`] and [`shared`] are the constructors production entries must use:
 //! the GUI's `HostRegistry`, the Windows/Unix daemon entries and
@@ -17,12 +17,13 @@ use lyrel_protocol::host::sqlite::SqliteEngine;
 
 pub use lyrel_protocol::host::local::LocalHost;
 
-/// This machine's Host with every local capability attached: the read-only
-/// SQLite browsing engine and the whole-host metrics sampler.
+/// This machine's Host with its read-only SQLite browsing engine, whole-host
+/// metrics sampler, and active pane scopes for agent history.
 pub fn new() -> SharedHost {
     LocalHost::with_capabilities(
         Some(Arc::new(crate::host::sqlite::SqliteService::new())),
         Some(crate::host::metrics::sample_local),
+        crate::core::agent_history::local_roots,
     )
 }
 

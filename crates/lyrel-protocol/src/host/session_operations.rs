@@ -993,7 +993,7 @@ fn encode_command_line(
             restore.push_str("__LyrelScopeSet 'KITTY_WINDOW_ID' $__lyrelEnv['KITTY_WINDOW_ID']; ");
         }
         // Scriptblock-local bookkeeping, with restoration even on launch failure.
-        let setter = include_str!("../daemon/shell_integration/environment.ps1");
+        let setter = crate::core::POWERSHELL_ENVIRONMENT_SETTER;
         return Ok(format!(
             "& {{ {setter}$__lyrelEnv=@{{}}; {save}try {{ {apply}{command} }} finally {{ {restore} }} }}"
         ));

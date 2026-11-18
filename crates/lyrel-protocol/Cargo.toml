@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 base64 = "0.23.1"
-chrono = { version = "0.4.45", features = ["serde"] }
 gix-discover = { version = "0.57.0", features = ["sha1"] }
 hmac = "0.13.0"
 http = "1.5.0"

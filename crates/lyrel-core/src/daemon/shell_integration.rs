@@ -520,7 +520,7 @@ fi
 "#
 );
 
-const POWERSHELL_INTEGRATION: &str = concat!(
+const POWERSHELL_INTEGRATION_PREFIX: &str = concat!(
     r#"
 # --- lyrel shell integration (PowerShell) ---
 if (-not $env:LYREL_SHELL_INTEGRATION) {
@@ -529,7 +529,9 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
     env!("CARGO_PKG_VERSION"),
     r#"'
 "#,
-    include_str!("shell_integration/environment.ps1"),
+);
+
+const POWERSHELL_INTEGRATION_SUFFIX: &str = concat!(
     include_str!("shell_integration/agent_scope.ps1"),
     r#"
 
@@ -646,6 +648,27 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
 # --- end lyrel shell integration ---
 "#
 );
+
+// Assemble the shared setter into the bootstrap at compile time. Host's
+// command wrappers use the same script without the daemon's prompt hooks.
+const POWERSHELL_INTEGRATION: &str = {
+    use lyrel_protocol::core::POWERSHELL_ENVIRONMENT_SETTER as SETTER;
+    const PREFIX: &str = POWERSHELL_INTEGRATION_PREFIX;
+    const SUFFIX: &str = POWERSHELL_INTEGRATION_SUFFIX;
+    const BYTES: &[u8] = &{
+        let mut bytes = [0; PREFIX.len() + SETTER.len() + SUFFIX.len()];
+        let (prefix, rest) = bytes.split_at_mut(PREFIX.len());
+        let (setter, suffix) = rest.split_at_mut(SETTER.len());
+        prefix.copy_from_slice(PREFIX.as_bytes());
+        setter.copy_from_slice(SETTER.as_bytes());
+        suffix.copy_from_slice(SUFFIX.as_bytes());
+        bytes
+    };
+    match std::str::from_utf8(BYTES) {
+        Ok(script) => script,
+        Err(_) => panic!("PowerShell integration must be UTF-8"),
+    }
+};
 
 const NUSHELL_INTEGRATION: &str = concat!(
     r#"

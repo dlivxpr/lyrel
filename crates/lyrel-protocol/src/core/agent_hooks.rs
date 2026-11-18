@@ -1534,9 +1534,6 @@ mod tests {
         }
     }
 
-    #[test]
-    
-
     /// A Pi bridge written before Pi changed its package name is ours but
     /// stale, so launch's refresh rewrites it with the current import.
     #[test]

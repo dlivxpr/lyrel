@@ -16,7 +16,7 @@ pub use lyrel_protocol::core::codename;
 pub mod crash;
 pub use lyrel_protocol::core::config;
 pub use lyrel_protocol::core::git;
-pub mod gitignore;
+pub use lyrel_protocol::core::gitignore;
 pub mod glyph_protocol;
 pub mod graphics_state;
 pub use lyrel_protocol::core::group_key;

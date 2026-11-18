@@ -240,7 +240,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 - 消费者：Markdown 内联图片按段加载并显示进度；文档、所属 Host、连接代次或来源失效时取消在途读取，已读缓冲与远端会话随之释放；图片文档打开复用同一路径。无分段能力的 Host（例如 SFTP pane host 或未升级 peer）在既有 32 MiB 图片输入预算内沿用有上限的整文件读取，更大的输入仍显式失败。
 - 本切片只在内存中聚合与解码，不创建预览临时文件，因此缓存不会成为原件或新的保存目标，也不形成跨会话内容归档。
 
-预算单位与失败效果写在 `crates/lyrel-core/src/host/transfer/mod.rs` 的 `BUDGETS` 表；256 KiB／4 MiB／256 MiB 是设计边界，不是实测吞吐。真实 SSH、原生窗口与性能测量仍按各自验收边界单独记录。
+预算单位与失败效果写在 `crates/lyrel-protocol/src/host/transfer/mod.rs` 的 `BUDGETS` 表；256 KiB／4 MiB／256 MiB 是设计边界，不是实测吞吐。真实 SSH、原生窗口与性能测量仍按各自验收边界单独记录。
 
 SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。`lyrel-core/src/host/sqlite/` 移植 Glim `browser.rs` 的标识符引用、单绑定参数 predicate、稳定顺序、列窗、count、page 与 value 分块；`sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制被明确排除。
 

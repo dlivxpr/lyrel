@@ -449,11 +449,11 @@ Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；
 | 仅 CLI、`lyrel-document`、`lyrel-test-support` 源码或 `crates/lyrel-core/tests/`、`crates/lyrel-server/tests/` | 桌面与 Linux headless build & test；跳过独立 server release-profile 构建 |
 | 仅 `docs/**/*.md(x)` 或根级 `*.md` | `preflight`；该规则同时适用于 main push 和 PR |
 | 仅发布工作流、打包／汇总脚本及非编译文档 | `preflight` 加真实 Release 构建、打包与平台断言；不重复执行无关 Rust CI |
-| core/server 生产源码、任意 Cargo manifest／lockfile、嵌入资源或未知输入 | 完整 Rust CI；共享发布断言变化还验证 Release 流程 |
+| protocol/core/server 生产源码、任意 Cargo manifest／lockfile、嵌入资源或未知输入 | 完整 Rust CI；共享发布断言变化还验证 Release 流程 |
 
 分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
-CI 桌面生产图启用 `updater`，保留 Windows `+crt-static` 和 CRT 断言。普通桌面测试覆盖全 workspace，其中 `lyrel-document` 的格式引擎也随工作台编译；原生字体目标 `native_markdown` 与 `native_terminal` 独立执行。Linux headless 使用上文的 workspace 成员选择启用 `--all-features`，包含文档引擎与共享测试夹具。各平台实际结果分别记录。
+桌面发行构建独立的 `lyrel-updater` 包，保留 Windows `+crt-static` 和 CRT 断言。普通桌面测试覆盖全 workspace，其中 `lyrel-document` 的格式引擎也随工作台编译；原生字体目标 `native_markdown` 与 `native_terminal` 独立执行。Linux headless 使用上文的 workspace 成员选择启用 `--all-features`，包含文档引擎与共享测试夹具。各平台实际结果分别记录。
 
 普通桌面／headless 测试先以相同 package／feature 集合和 `--lib --no-run` 完成 library 单元测试编译，再以不带目标过滤的 `--no-run` 编译全部普通目标；后一步复用已有产物，保留 binary、integration test 与后续完整执行时的 doctest 范围。该调度避免同包的普通 library 与大型 libtest 同时争用资源，不改变编译 profile。普通完整目标、原生 Markdown 和原生 terminal 各有独立编译步骤，所有编译步骤仍为 30 分钟；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
 

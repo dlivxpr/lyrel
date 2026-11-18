@@ -33,6 +33,8 @@ pub(crate) mod shell_integration;
 /// semantics tested on every platform's CI runner rather than only on Windows.
 #[cfg(any(windows, test))]
 pub(crate) mod windows_env;
+#[cfg(windows)]
+pub(crate) mod winproc;
 
 // The wire protocols, client drivers, transports, endpoint discovery, and the
 // spawn/singleton probes live in `lyrel-protocol`; these re-exports keep every
@@ -41,6 +43,4 @@ pub(crate) mod windows_env;
 pub(crate) use lyrel_protocol::daemon::DETECTED_SHELL_ENV;
 #[cfg(windows)]
 pub use lyrel_protocol::daemon::update_guard;
-#[cfg(windows)]
-pub(crate) use lyrel_protocol::daemon::winproc;
 pub use lyrel_protocol::daemon::{control, pidfile, protocol, singleton, spawn, transport};

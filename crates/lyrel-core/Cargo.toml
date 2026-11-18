@@ -17,7 +17,6 @@ anyhow.workspace = true
 log.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-chrono = { version = "0.4.45", features = ["serde"] }
 # Whole-host CPU/RAM only; no process, disk or network refreshes. Already locked
 # through the desktop stack; shared here so headless daemons use the same APIs.
 sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
@@ -39,31 +38,8 @@ sysinfo = { version = "=0.40.1", default-features = false, features = ["system"]
 # which `config.json` parsing needs.
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
-# Two unrelated hashes, both server-side: `daemon::install::checksums` verifies a
-# downloaded `lyrel-server` asset against the release's sha256 manifest, and
-# `core::keychain::key_account_from_contents` derives the sha512-hex account key
-# a private key's passphrase is stored under (PRD §7.2) — the account *name* is
-# part of the persisted config contract, so it belongs next to `CredentialRef`
-# even though only the GUI computes one today.
+# Verify downloaded server assets and the pinned Windows ConPTY files.
 sha2 = "0.11.1"
-# Authenticate the OpenCode TUI private bridge without transmitting its capability.
-hmac = "0.13.0"
-# OpenCode service URL validation also runs in headless builds without installers.
-http = "1.5.0"
-
-# Finding the repository a pane's cwd is in (`core::git::head`) without a
-# `git` process: the sidebar asks it of every pane, and a spawn that fails —
-# `/usr/bin/git` on macOS is a shim that dies whenever the selected Xcode is
-# mid-switch — used to read as "not a repository" and ungroup the tab. Only the
-# discovery crate: counts, diffs and every write still go through the `git`
-# CLI, so what the sidebar says stays the same answer the diff views give.
-gix-discover = { version = "0.57.0", features = ["sha1"] }
-
-# The gitignore matcher chain (`core::gitignore`) the file tree dims entries
-# with — the same crate ripgrep uses. Lives here rather than in the GUI because
-# the remote server has to answer "is this path ignored?" with the identical
-# implementation.
-ignore = "0.4"
 
 # Read-only SQLite browsing (`host::sqlite`): the same registry crate and
 # bundled SQLite the GUI already links, so the headless server carries one
@@ -73,31 +49,8 @@ ignore = "0.4"
 # statement cache; the GUI crate's own declaration keeps its defaults.
 rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "hooks"] }
 
-# The matcher behind `Host::search_content` (the right panel's Search tab):
-# a literal, whole-word or regular-expression query compiled once and run over
-# each file the `ignore` walk above hands it. Lives here for the same reason
-# `ignore` does — a remote `lyrel-server` answers the search with the identical
-# implementation. Already in the tree via the GUI and `ignore`, so this pins no
-# new code.
-regex = "1"
-
-# Anonymous private files keep OpenCode's large CLI replies intact without
-# exposing session metadata or relying on its asynchronous stdout pipe flush.
+# Private temporary files for PTY fixtures and shell integration.
 tempfile = "3"
-
-# Format-preserving TOML editing for `core::agent_hooks`: Kimi Code takes its
-# hooks as `[[hooks]]` entries in the same `config.toml` that holds the user's
-# providers, models and comments, so installing must edit that file in place
-# without reformatting it — which rules out the plain `toml` crate's
-# parse-and-reserialize round trip. Already in the tree transitively, so this
-# pins no new code.
-toml_edit = "0.25.17"
-
-# Lane assignment for the commit graph (`core::git::log`) keeps a couple of
-# parents and a handful of edges per row; a SmallVec keeps those off the heap
-# for the shapes that make up almost all of a real history. Already in the tree
-# via the GUI, so this pins no new code.
-smallvec.workspace = true
 
 # daemon 的图片状态使用同一正式 VT 网格；不引入窗口、GPU 或 Rio 自有 PTY。
 rio-vt.workspace = true
@@ -162,16 +115,7 @@ tokio = { version = "1.53.3", features = [
     "fs",
 ] }
 
-# Filesystem watching for `host::local` (`Host::watch`): one non-recursive
-# watcher per expanded directory, coalesced into 100ms batches. Same crate and
-# version the GUI already used for the file tree, so the server watches a remote
-# tree exactly the way the client watched a local one.
-notify = "8"
-
-# `smol::channel` carries watch batches out of the coalescing thread. Only the
-# channel is used — the executor stays in the GUI — but taking it from `smol`
-# rather than `async-channel` directly keeps the `Receiver` type identical to the
-# one gpui code already awaits.
+# Channels bridge Host watch subscriptions and the daemon's threads.
 smol.workspace = true
 
 # SIMD byte search for the OSC tokenizer's Ground/Ignore fast paths — the
@@ -179,10 +123,7 @@ smol.workspace = true
 # where a per-byte state machine costs a measurable slice of the reader loop.
 memchr = "2"
 
-# Base64 for the byte fields that cross the control dialect's JSON wire
-# (`host::Output`'s stdout/stderr). JSON has no byte type — `serde_json` renders
-# a `Vec<u8>` as an array of decimal numbers, inflating a 1 MB `git diff` to
-# roughly 4 MB. Base64 costs 1.33× instead. Already in the tree via russh.
+# Graphics/clipboard payloads and shell bootstrap command encoding.
 base64 = "0.23.1"
 
 # zlib inflate for the kitty graphics protocol's `o=z` (compressed) pixel
@@ -262,7 +203,6 @@ serde_json.workspace = true
 sha2 = "0.11.1"
 
 [dev-dependencies]
-chrono-tz = "0.10"
 # Only the existing SSH transfer regression computes MD5 digests.
 md5 = "0.8"
 # Shared real-PTY producers for the graphics retention daemon regressions.

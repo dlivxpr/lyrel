@@ -15,6 +15,7 @@ pub mod cli_agent;
 pub mod codename;
 pub mod config;
 pub mod git;
+pub mod gitignore;
 pub mod group_key;
 pub mod keychain;
 pub mod machine;
@@ -26,11 +27,15 @@ pub mod path_spelling;
 pub mod proc;
 pub mod program_status;
 pub mod session;
-pub mod shells;
 pub mod shell_quote;
+pub mod shells;
 pub mod ssh_profile;
 pub mod tab_view;
 pub mod term_modes;
 pub mod window_state;
 pub mod worktree;
 pub mod xtgettcap;
+
+/// Shared setter that distinguishes an empty process variable from an unset one.
+#[doc(hidden)]
+pub const POWERSHELL_ENVIRONMENT_SETTER: &str = include_str!("powershell_environment.ps1");
