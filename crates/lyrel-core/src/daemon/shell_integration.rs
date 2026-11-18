@@ -2396,6 +2396,11 @@ mod tests {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         use std::io::{Read, Write};
 
+        // Match the daemon's pane setup: a detached Windows test runner can
+        // pass its inherited ignore-Ctrl+C bit on to the shell and its agent.
+        #[cfg(windows)]
+        crate::daemon::winproc::allow_ctrl_c_in_children();
+
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
