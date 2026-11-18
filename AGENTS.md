@@ -17,8 +17,9 @@ GUI/CLI 经共享 core 连接独立 Session Daemon，daemon 持有 PTY/shell/cod
 | `crates/lyrel-core/` | 无 GPUI 的领域模型、Host、daemon、PTY、SSH、IPC；共享逻辑在此修改 |
 | `src/daemon.rs`、`src/core/` | core 重导出与 GUI/系统适配，不复制共享实现 |
 | `crates/lyrel-cli/src/cli.rs`、`crates/lyrel-cli/src/backend.rs` | CLI 参数契约；依赖替换沿用 `Backend` trait 分层 |
-| `crates/lyrel-markdown-editor/`、`crates/lyrel-text/` | editor 源码适配；`lyrel-text` 保持 GUI-free，不反向依赖 editor |
+| `crates/lyrel-document/`、`crates/lyrel-markdown-editor/` | GUI-free 文本 codec 与 `formats` 引擎；Markdown editor 只启用 codec，不反向依赖工作台 |
 | `crates/lyrel-core/src/core/config.rs`、`src/core/config.rs` | 配置解析/进程覆盖；GUI 包装与测试写盘守卫 |
+| `crates/lyrel-test-support/` | 跨包 PTY、协议与 SSH 测试夹具及 `lyrel-graphics-fixture` 进程；测试以 dev-dependency 复用 |
 | `Cargo.toml`、`Cargo.lock`、`.cargo/config.toml` | workspace、统一版本、features、锁定依赖与开发别名 |
 | `scripts/`、`.github/`、`docs/docs.json` | 开发与平台脚本、CI/发布工作流、文档导航 |
 
