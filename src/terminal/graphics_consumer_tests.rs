@@ -1,3 +1,4 @@
+use lyrel_test_support::fixture_identity::fixture_source_identity;
 use lyrel_test_support::hex::{hex, unhex};
 use lyrel_test_support::synchronized_capture::{
     SYNC_CAPTURE_TEXT, SYNC_NEXT_TEXT, synchronized_capture_frame,
@@ -740,9 +741,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                     let reply_path = replies.path().join(format!("probe-{serial}"));
                     let request = format!(
                         "SEND_ANY {serial} 1 {} 0 {}\n",
-                        hex(
-                            b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"
-                        ),
+                        hex(b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"),
                         hex(reply_path.to_string_lossy().as_bytes()),
                     );
                     terminals[2].1.read_with(cx, |view, _| {
@@ -2182,12 +2181,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         source,
     );
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
-    graphics_send_fixture(
-        &view,
-        cx,
-        171,
-        &synchronized_capture_frame(),
-    );
+    graphics_send_fixture(&view, cx, 171, &synchronized_capture_frame());
     let visible_range = |view: &TerminalView, first: usize| {
         format!(
             "{}{}",
@@ -2200,8 +2194,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         std::time::Duration::from_secs(30),
         |cx| {
             view.read_with(cx, |view, _| {
-                view.grid_snap.is_some()
-                    && visible_range(view, 3) == SYNC_CAPTURE_TEXT
+                view.grid_snap.is_some() && visible_range(view, 3) == SYNC_CAPTURE_TEXT
             })
         },
         |cx| {
@@ -2236,11 +2229,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         &view,
         cx,
         173,
-        format!(
-            "\x1b[?2026h\x1b[8;1H{}\x1b[?2026l",
-            SYNC_NEXT_TEXT
-        )
-        .as_bytes(),
+        format!("\x1b[?2026h\x1b[8;1H{}\x1b[?2026l", SYNC_NEXT_TEXT).as_bytes(),
     );
     graphics_recovery_wait(
         cx,
@@ -3041,10 +3030,7 @@ fn glyph_daemon_frames_a_query_to_its_controller() {
     controller
         .set_read_timeout(Some(Duration::from_millis(250)))
         .unwrap();
-    let request = format!(
-        "SEND 1 1 {} 0\n",
-        hex(&glyph_query(0x100000))
-    );
+    let request = format!("SEND 1 1 {} 0\n", hex(&glyph_query(0x100000)));
     // A separate input connection can overtake Attach; this query requires
     // the pane's controller to be bound before the producer writes it.
     ClientMsg::Input(request.into_bytes())

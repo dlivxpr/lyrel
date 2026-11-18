@@ -22,6 +22,7 @@ pub const FIXTURE_IDENTITY_FILES: &[&str] = &[
     "crates/lyrel-test-support/src/theme_pty.rs",
     "crates/lyrel-test-support/src/mouse_pty.rs",
     "crates/lyrel-test-support/src/glyph_pty.rs",
+    "crates/lyrel-test-support/src/lib.rs",
     "crates/lyrel-test-support/src/main.rs",
     "crates/lyrel-test-support/build.rs",
     "crates/lyrel-test-support/Cargo.toml",

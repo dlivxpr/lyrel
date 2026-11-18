@@ -317,13 +317,13 @@ jobs:
       - name: Test desktop library and headless
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 25
-        run: cargo nextest run --locked --workspace --lib --bins --tests --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} nextest run --locked --workspace --lib --bins --tests --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
 
       # nextest 不跑 doctest；单独保留，避免文档示例随迁移悄悄变成 0 用例。
       - name: Test desktop doctests
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
         timeout-minutes: 20
-        run: cargo test --doc --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }}
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --doc --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }}
 
       # native_* 与 cli_e2e 都是 harness=false：进程 main 自己持有原生平台、驱动
       # 真实 daemon，不经过 libtest，所以既不进 nextest，也不做名称筛选。
@@ -333,21 +333,21 @@ jobs:
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
         # harness=false 的进程 main 持有原生字体平台；不使用 libtest worker 或名称筛选。
-        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_markdown -- --nocapture
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_markdown -- --nocapture
 
       # 与 native Markdown 相同：harness=false 的进程 main 持有原生字体平台。
       # 复用同一个已编译目标图，单独执行，避免一个目标失败吞掉另一个。
       - name: Test native terminal
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 10
-        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_terminal -- --nocapture
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test native_terminal -- --nocapture
 
       # cli_e2e 的 main 自己并行驱动相互隔离的 daemon/TempDir，并直接打印结果；
       # 输出本来就未捕获，不需要再追加 -- --nocapture。
       - name: Test CLI end-to-end harness
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.desktop_tests_compile.outcome == 'success' }}
         timeout-minutes: 15
-        run: cargo test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features updater,native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
 
       # Linux headless 只有 GUI-free 成员，生产图本身就是 --all-features；
       # 测试沿用同一选择，同样只把 harness=false 的 cli_e2e 排除在 nextest 之外。

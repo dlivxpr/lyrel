@@ -6,8 +6,35 @@ use crate::terminal::remote::PtySource;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
-use lyrel_test_support::hex::{hex, unhex};
-use lyrel_test_support::pty::pty_sender;
+use crate::NativeTerminalFixtureSupport;
+
+static FIXTURE_SUPPORT: std::sync::OnceLock<NativeTerminalFixtureSupport> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn set_fixture_support(fixture: NativeTerminalFixtureSupport) {
+    assert!(
+        FIXTURE_SUPPORT.set(fixture).is_ok(),
+        "native terminal suite already started"
+    );
+}
+
+fn fixture_support() -> &'static NativeTerminalFixtureSupport {
+    FIXTURE_SUPPORT
+        .get()
+        .expect("native terminal test binary supplies fixture support")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    (fixture_support().hex)(bytes)
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (fixture_support().unhex)(text)
+}
+
+fn fixture_source_identity(root: &std::path::Path) -> std::io::Result<String> {
+    (fixture_support().source_identity)(root)
+}
 
 include!("graphics_pty_consumer_support.rs");
 
@@ -15,7 +42,7 @@ include!("graphics_pty_consumer_support.rs");
 // `lyrel-graphics-fixture` process. Running this binary directly with one of
 // the selector arguments still starts the real daemon/sender in-process for
 // debugging that predates the fixture binary.
-pub(crate) fn run_fixture() -> Option<std::process::ExitCode> {
+pub(crate) fn run_fixture(pty_sender: fn()) -> Option<std::process::ExitCode> {
     let scope = module_path!().split_once("::").unwrap().1;
     let arguments: Vec<_> = std::env::args().collect();
     if arguments

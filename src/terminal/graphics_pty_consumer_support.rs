@@ -39,13 +39,12 @@ fn graphics_fixture_workspace_root() -> std::path::PathBuf {
 static GRAPHICS_FIXTURE_EXPECTED_IDENTITY: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| {
         let root = graphics_fixture_workspace_root();
-        lyrel_test_support::fixture_identity::fixture_source_identity(&root)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "cannot identify the graphics fixture sources under {}: {error}",
-                    root.display()
-                )
-            })
+        fixture_source_identity(&root).unwrap_or_else(|error| {
+            panic!(
+                "cannot identify the graphics fixture sources under {}: {error}",
+                root.display()
+            )
+        })
     });
 
 fn graphics_fixture_reported_identity(path: &std::path::Path) -> Option<String> {
@@ -556,10 +555,7 @@ fn graphics_send_fixture_with_replies(
     replies: usize,
 ) {
     let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
-    let request = format!(
-        "{operation} {serial} {replies} {} 0\n",
-        hex(bytes)
-    );
+    let request = format!("{operation} {serial} {replies} {} 0\n", hex(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     graphics_wait_fixture(view, cx, serial, input_bytes);
