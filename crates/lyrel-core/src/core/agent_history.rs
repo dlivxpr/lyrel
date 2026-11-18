@@ -16,7 +16,9 @@ pub fn local_roots() -> std::io::Result<Roots> {
     if let Some(store) = crate::core::machine::observed_store() {
         for pane in store.machine().panes {
             if let Some(agent) = pane.agent
-                && let Some(scope) = agent.session_scope.filter(|scope| scope.session_dir.is_some())
+                && let Some(scope) = agent
+                    .session_scope
+                    .filter(|scope| scope.session_dir.is_some())
             {
                 let scopes = match agent.agent {
                     crate::core::cli_agent::CLIAgent::OhMyPi => &mut roots.omp_scopes,

@@ -21,11 +21,7 @@ pub fn find_workspace(m: &mut Machine, id: WorkspaceId) -> io::Result<&mut Works
         .ok_or_else(|| not_found(format!("no workspace {id} on this machine")))
 }
 
-pub fn find_tab(
-    m: &mut Machine,
-    workspace: WorkspaceId,
-    tab: TabId,
-) -> io::Result<&mut Tab> {
+pub fn find_tab(m: &mut Machine, workspace: WorkspaceId, tab: TabId) -> io::Result<&mut Tab> {
     let ws = find_workspace(m, workspace)?;
     ws.tabs
         .iter_mut()

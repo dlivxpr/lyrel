@@ -13,8 +13,8 @@ mod store;
 #[cfg(test)]
 mod test_support;
 
-pub use lyrel_protocol::core::machine::*;
 pub use appearance::{Appearance, appearance, note_appearance};
+pub use lyrel_protocol::core::machine::*;
 pub use store::{
     FACT_FLUSH_INTERVAL, LivenessProbe, MachineStore, Notify, SubscriberId, Subscription,
     observe_pane, observed_store, publish_observations,

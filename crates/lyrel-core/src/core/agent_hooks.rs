@@ -346,9 +346,7 @@ mod tests {
         let windows = HookTarget::remote(&*host, std::path::PathBuf::from(r"C:\Users\me"));
         assert_eq!(
             windows.exe,
-            std::path::PathBuf::from(format!(
-                r"C:\Users\me\AppData\Local\lyrel\bin\{name}.exe"
-            ))
+            std::path::PathBuf::from(format!(r"C:\Users\me\AppData\Local\lyrel\bin\{name}.exe"))
         );
     }
 }

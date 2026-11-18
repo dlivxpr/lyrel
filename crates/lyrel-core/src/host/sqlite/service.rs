@@ -644,12 +644,7 @@ impl SqliteEngine for SqliteService {
         self.open(path, cancel)
     }
 
-    fn columns(
-        &self,
-        view: u64,
-        table: &str,
-        cancel: &SqliteCancel,
-    ) -> io::Result<SqliteColumns> {
+    fn columns(&self, view: u64, table: &str, cancel: &SqliteCancel) -> io::Result<SqliteColumns> {
         self.columns(view, table, cancel)
     }
 
