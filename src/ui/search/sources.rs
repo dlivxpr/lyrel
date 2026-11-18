@@ -8,10 +8,11 @@ use gpui_kit::{App, SharedString};
 
 use super::SearchTab;
 use super::command::{CommandGroup, CommandKind, Item};
-use super::files::{FileList, Files};
+use super::files::Files;
 use super::score::{frecency_bonus, item_score};
 use crate::core::config::Config;
 use crate::core::ssh_profile::parse_quick_connect;
+use crate::ui::file_search::FileList;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 /// How many recently used actions lead the Actions tab.
@@ -926,7 +927,7 @@ mod tests {
         );
         let root = std::path::PathBuf::from("/repo");
         let files = paths.iter().map(|p| root.join(p)).collect();
-        catalog.files = FileList::Ready(std::sync::Arc::new(super::super::files::build_index(
+        catalog.files = FileList::Ready(std::sync::Arc::new(crate::ui::file_search::build_index(
             &[root],
             files,
             false,

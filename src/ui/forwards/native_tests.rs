@@ -165,7 +165,9 @@ fn exercise(
         assert!(matches!(added.status, ForwardStatus::Listening));
         echo(added.bind_port);
         assert!(
-            other.list().expect("other registry answers").is_empty(),
+            ForwardClient::list(other)
+                .expect("other registry answers")
+                .is_empty(),
             "the other registry owner was not mutated"
         );
         app.remove_managed_forward(pane_id, added.id, cx);

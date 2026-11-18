@@ -17,9 +17,9 @@ mod score;
 mod sources;
 mod view;
 
+pub(crate) use crate::ui::file_search::FileList;
 pub(crate) use catalog::{ActionCatalog, SearchCatalog, TerminalCatalog};
 pub(crate) use command::{Avatar, ChromeState, CommandGroup, CommandKind, Item};
-pub(crate) use crate::ui::file_search::FileList;
 pub(crate) use history::SessionHistory;
 pub(crate) use lifecycle::SearchState;
 pub(crate) use score::fuzzy_score;

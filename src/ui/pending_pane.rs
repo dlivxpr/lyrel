@@ -9,8 +9,8 @@ use gpui_kit::{
 };
 
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::route::PaneWorkspace;
 use crate::ui::i18n::{L10nKey, t_fmt};
+use crate::ui::route::PaneWorkspace;
 mod creation;
 pub(crate) use creation::{PendingLaunch, SpawnFinished};
 

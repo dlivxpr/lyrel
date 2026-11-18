@@ -8,7 +8,7 @@ mod completion;
 mod composer;
 pub(crate) mod desktop_notification;
 pub mod element;
-mod forward_client;
+pub(crate) mod forward_client;
 pub mod fps;
 mod fuzzy;
 mod generator;
@@ -37,17 +37,13 @@ mod reverse_search;
 pub(crate) mod scrollbar;
 pub mod search;
 mod selection_scroll;
-mod sftp_client;
+pub(crate) mod sftp_client;
 mod signature;
 mod size;
 mod smart_select;
 mod typeahead;
 pub mod view;
 
-pub(crate) use remote::SpawnCancellation;
 pub use remote::RemoteTerminal;
-// The values themselves live in `crate::ui::route` (shared below the shell).
-// This pass-through is what editor test modules still import; the editor
-// slice migrates those call sites and this line goes away with them.
-pub use crate::ui::route::{PaneRoute, PaneWorkspace};
+pub(crate) use remote::SpawnCancellation;
 pub use size::TermSize;

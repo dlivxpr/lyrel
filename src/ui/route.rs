@@ -177,9 +177,7 @@ impl ForwardRoute {
     /// pane route or the workspace has no connection details — the caller
     /// addresses the pane itself then.
     pub fn workspace_request(&self, op: WorkspaceOp) -> Option<WorkspaceRequest> {
-        self.workspace
-            .as_ref()?
-            .workspace_request(self.pane_id, op)
+        self.workspace.as_ref()?.workspace_request(self.pane_id, op)
     }
 }
 
@@ -221,8 +219,6 @@ impl SftpRoute {
     /// The workspace-scoped request for `op`, or `None` when the op has to be
     /// addressed to the pane itself.
     pub fn workspace_request(&self, op: WorkspaceOp) -> Option<WorkspaceRequest> {
-        self.workspace
-            .as_ref()?
-            .workspace_request(self.pane_id, op)
+        self.workspace.as_ref()?.workspace_request(self.pane_id, op)
     }
 }

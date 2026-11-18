@@ -26,7 +26,9 @@ use crate::daemon::protocol::{
     WinSize, WorkspaceRequest,
 };
 use crate::daemon::transport::Stream;
-use crate::ui::route::{PaneRoute, PaneWorkspace};
+use crate::ui::route::PaneRoute;
+#[cfg(all(test, unix))]
+use crate::ui::route::PaneWorkspace;
 use lyrel_core::core::program_status::{ProgramStatusClient, ProgramStatusFrame};
 
 use super::size::TermSize;
@@ -1559,8 +1561,8 @@ fn win_size(size: TermSize, cell_w: u16, cell_h: u16) -> WinSize {
 /// on every platform, and so is the name the refusal carries.
 #[cfg(test)]
 mod route_header_tests {
-    use super::*;
     use crate::core::session::{RemoteTarget, WorkspaceId};
+    use crate::ui::route::PaneWorkspace;
 
     fn unroutable(target: RemoteTarget, label: Option<&str>) -> PaneWorkspace {
         PaneWorkspace {

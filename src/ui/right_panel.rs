@@ -1875,8 +1875,12 @@ impl LyrelApp {
                     fresh
                         .into_iter()
                         .map(|port| {
-                            let local = route
-                                .ensure_loopback("127.0.0.1", port)
+                            let local =
+                                crate::terminal::forward_client::ForwardClient::ensure_loopback(
+                                    &route,
+                                    "127.0.0.1",
+                                    port,
+                                )
                                 .map(|f| f.local_port);
                             (port, local)
                         })
@@ -1985,7 +1989,9 @@ impl LyrelApp {
                         Some(host) => host.pane_procs(pane_id),
                         None => Some(crate::terminal::RemoteTerminal::query_procs(pane_id)),
                     };
-                    let managed = route.and_then(|r| r.list());
+                    let managed = route
+                        .as_ref()
+                        .and_then(crate::terminal::forward_client::ForwardClient::list);
                     let link = match (want_link, &host) {
                         (true, Some(host)) => host.link_rtt(),
                         _ => None,

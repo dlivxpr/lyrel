@@ -78,34 +78,58 @@ pub fn reveal_file_path(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The spelling the OS opener expects: this machine's separators with a
-/// lowercase drive letter upper-cased. `IShellFolder::ParseDisplayName`
-/// rejects mixed-separator paths, and Explorer answers a lowercase drive by
-/// showing Documents — so the rewrite happens here, once, for every launcher
-/// above. The separator half lives in `lyrel-core` next to the storage
-/// spelling; only the drive-casing half is the shell's rule, kept here.
+/// The spelling the OS opener expects. POSIX paths are unchanged; on Windows
+/// the shell expects native separators and upper-case drive letters.
 fn spelled_for_shell(path: &std::path::Path) -> std::path::PathBuf {
-    let native = lyrel_core::core::path_spelling::native_separators(path);
     #[cfg(windows)]
-    {
-        use std::path::PathBuf;
-        let text = native.to_string_lossy().replace('/', "\\");
-        let mut chars = text.chars();
-        let drive = chars.next().filter(char::is_ascii_alphabetic);
-        let rooted = drive.is_some_and(|d| text[1..].starts_with(':') && {
-            text[2..].starts_with('\\') && d.is_ascii_lowercase()
-        });
-        match rooted {
-            true => {
-                let mut out = text;
-                out.replace_range(..1, &drive.unwrap().to_ascii_uppercase().to_string());
-                PathBuf::from(out)
-            }
-            false => PathBuf::from(text),
-        }
+    if let Some(text) = path.to_str() {
+        return windows_spelling(text).into();
     }
-    #[cfg(not(windows))]
+    // A Windows path can contain unpaired surrogates. Normalize separators
+    // without replacing any code units; a lossy conversion names another file.
+    lyrel_core::core::path_spelling::native_separators(path).into_owned()
+}
+
+/// A drive letter and everything after its colon, only for rooted paths.
+pub(crate) fn drive_root(path: &str) -> Option<(char, &str)> {
+    let drive = path.chars().next().filter(char::is_ascii_alphabetic)?;
+    let rest = path.strip_prefix(drive)?.strip_prefix(':')?;
+    rest.starts_with(['\\', '/']).then_some((drive, rest))
+}
+
+/// Native Windows spelling, also used to construct links for remote Windows panes.
+pub(crate) fn windows_spelling(path: &str) -> String {
+    let mut out = path.replace('/', "\\");
+    if let Some((drive, _)) = drive_root(&out)
+        && drive.is_ascii_lowercase()
     {
-        native.into_owned()
+        out.replace_range(..1, &drive.to_ascii_uppercase().to_string());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn a_path_handed_to_the_os_is_spelled_its_way() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                spelled_for_shell(Path::new("c:/Users/me/a b.png")).as_os_str(),
+                r"C:\Users\me\a b.png"
+            );
+            assert_eq!(
+                spelled_for_shell(Path::new(r"\\srv/share/x")).as_os_str(),
+                r"\\srv\share\x"
+            );
+        }
+        #[cfg(not(windows))]
+        assert_eq!(
+            spelled_for_shell(Path::new(r"/Users/me/a\b.png")).as_os_str(),
+            r"/Users/me/a\b.png"
+        );
     }
 }

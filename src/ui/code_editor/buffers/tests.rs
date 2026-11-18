@@ -85,8 +85,8 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
         use crate::core::session::{
             RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore,
         };
-        use crate::terminal::PaneWorkspace;
         use crate::ui::host_registry::HostRegistry;
+        use crate::ui::route::PaneWorkspace;
 
         let target = RemoteTarget::Alias {
             alias: "range-citation-fixture".into(),

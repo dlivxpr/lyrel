@@ -186,13 +186,6 @@ pub struct LaunchAgent {
     pub agent: lyrel_core::core::cli_agent::CLIAgent,
 }
 
-/// Find actions every surface answers — the terminal's search bar, the
-/// Markdown search, the PDF viewer. Declared in the shared actions module,
-/// under the original `terminal` namespace, so the editor and the terminal
-/// bind and dispatch the same action without either importing the other.
-/// The GPUI action names stay `terminal::FindInTerminal` and friends: the
-/// shipped keybindings and every custom binding on disk are keyed by them.
-actions!(
-    terminal,
-    [FindInTerminal, FindNext, FindPrevious]
-);
+// The terminal, Markdown search and the PDF viewer share these actions.
+// Keep the `terminal` namespace for existing custom bindings on disk.
+actions!(terminal, [FindInTerminal, FindNext, FindPrevious]);

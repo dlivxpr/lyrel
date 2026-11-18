@@ -179,15 +179,17 @@ impl Forwarding {
                 if let Some(old) = &previous {
                     let before: Vec<u64> = self.managed.iter().map(|m| m.id).collect();
                     let restored_rule = rule_of(old);
-                    let restored = ForwardClient::add(route, restored_rule.clone()).and_then(|list| {
-                        let mut candidates = list.iter().filter(|forward| {
-                            !before.contains(&forward.id) && matches_rule(&restored_rule, forward)
+                    let restored =
+                        ForwardClient::add(route, restored_rule.clone()).and_then(|list| {
+                            let mut candidates = list.iter().filter(|forward| {
+                                !before.contains(&forward.id)
+                                    && matches_rule(&restored_rule, forward)
+                            });
+                            let restored = candidates.next().cloned();
+                            let unique = candidates.next().is_none();
+                            self.managed = list;
+                            restored.filter(|_| unique)
                         });
-                        let restored = candidates.next().cloned();
-                        let unique = candidates.next().is_none();
-                        self.managed = list;
-                        restored.filter(|_| unique)
-                    });
                     if let Some(restored) = restored {
                         self.mf_editing = Some(restored);
                     } else {

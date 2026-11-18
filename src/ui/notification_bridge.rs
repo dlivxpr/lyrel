@@ -37,6 +37,7 @@ pub fn install(sender: smol::channel::Sender<PaneActivation>) {
 /// A sender for the activation channel, if the workbench has installed one.
 /// Cloning only — safe from any thread, including platform callback threads
 /// that may not touch GPUI.
+#[cfg(any(target_os = "macos", all(target_os = "windows", not(test))))]
 pub fn sender() -> Option<smol::channel::Sender<PaneActivation>> {
     ACTIVATION.lock().ok()?.clone()
 }

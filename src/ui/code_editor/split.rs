@@ -546,9 +546,9 @@ impl LyrelApp {
             EditorPeekChange,
             ToggleDocumentPreview,
             ToggleDocumentWrap,
-            crate::terminal::view::FindInTerminal,
-            crate::terminal::view::FindNext,
-            crate::terminal::view::FindPrevious,
+            crate::core::actions::FindInTerminal,
+            crate::core::actions::FindNext,
+            crate::core::actions::FindPrevious,
             gpui_kit::component::input::Search,
             gpui_kit::component::input::Replace,
         )

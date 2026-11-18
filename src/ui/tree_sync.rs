@@ -34,7 +34,7 @@ pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClien
     if host.is_local() {
         crate::ui::local_link::LocalLink::client(cx)
     } else {
-        crate::ui::remote_connect::HostLinks::get(cx, host)
+        crate::ui::desktop_lookups::HostLinks::get(cx, host)
             .map(|h| Arc::clone(h.client()))
             .filter(|c| c.is_connected())
     }
@@ -72,7 +72,7 @@ pub(crate) fn can_hibernate_on(cx: &App, client_ws: WorkspaceId) -> bool {
     let host = WorkspaceStore::host_of(cx, client_ws);
     match host.is_local() {
         true => crate::ui::local_link::LocalLink::supports(cx, feature),
-        false => crate::ui::remote_connect::HostLinks::peer_supports(cx, host, feature),
+        false => crate::ui::desktop_lookups::HostLinks::peer_supports(cx, host, feature),
     }
 }
 
@@ -85,7 +85,7 @@ pub(crate) fn keeps_closed_tabs_on(cx: &App, client_ws: WorkspaceId) -> bool {
     let host = WorkspaceStore::host_of(cx, client_ws);
     match host.is_local() {
         true => crate::ui::local_link::LocalLink::supports(cx, feature),
-        false => crate::ui::remote_connect::HostLinks::peer_supports(cx, host, feature),
+        false => crate::ui::desktop_lookups::HostLinks::peer_supports(cx, host, feature),
     }
 }
 

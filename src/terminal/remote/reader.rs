@@ -26,10 +26,10 @@ use rio_vt::event::EventListener;
 #[cfg(test)]
 use super::handshake::attach_reply_prefix;
 #[cfg(test)]
-use super::{
-    NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, test_term,
-};
+use super::{PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, test_term};
 use crate::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
+#[cfg(test)]
+use crate::daemon::protocol::NativeSshSpec;
 use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::terminal::prompt_reflow::{PromptBreak, PromptMark};

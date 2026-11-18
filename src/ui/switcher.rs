@@ -17,8 +17,9 @@ use crate::core::session::WorkspaceStore;
 use crate::daemon::install::InstallPhase;
 use crate::terminal::pane_liveness::Liveness;
 use crate::ui::app::LyrelApp;
+use crate::ui::desktop_lookups::{HostChoice, HostLinks, home_for_host, local_home};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
+use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
 use crate::ui::remote_workspace::connection::ConnectionState;
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
 
@@ -756,7 +757,7 @@ impl LyrelApp {
                 });
                 // A row's path is on the workspace's own machine, so that is
                 // the machine whose home may shorten it (#580).
-                let home = crate::ui::path_display::home_for_host(app, w.host_id());
+                let home = home_for_host(app, w.host_id());
                 groups[slot].rows.push(Row {
                     id: w.id,
                     name: crate::ui::machine_mirror::display_name(app, w)
@@ -875,7 +876,7 @@ impl LyrelApp {
             let app: &App = cx;
             // Unclaimed *local* workspaces: their paths are on this machine,
             // so this machine's home is the right one to measure them by.
-            let local_home = crate::ui::path_display::local_home();
+            let local_home = local_home();
             let rows: Vec<Row> = crate::ui::machine_mirror::unclaimed_local_workspaces(app)
                 .into_iter()
                 .filter(|ws| !listed.contains(&ws.id))
@@ -1057,7 +1058,7 @@ impl LyrelApp {
         };
         // These rows describe a workspace on `host`, and the cwds they carry
         // are that machine's. Only its home may shorten them (#580).
-        let home = host.and_then(|host| crate::ui::path_display::home_for_host(cx, host));
+        let home = host.and_then(|host| home_for_host(cx, host));
         views
             .into_iter()
             .enumerate()
@@ -1118,8 +1119,7 @@ impl LyrelApp {
         supervised: Option<&MachineStatus>,
         cx: &mut Context<Self>,
     ) -> Link {
-        let has_link =
-            crate::ui::desktop_lookups::HostLinks::get(cx, target.host_id()).is_some();
+        let has_link = crate::ui::desktop_lookups::HostLinks::get(cx, target.host_id()).is_some();
         link_from(self.connect.state(), target, supervised, has_link)
     }
 
@@ -1357,7 +1357,7 @@ impl LyrelApp {
                 self.switch_workspace(None, window, cx);
                 self.name_fresh_workspace(name, window, cx);
             }
-            Some(choice) => match remote_connect::HostLinks::home(cx, choice.target.host_id()) {
+            Some(choice) => match HostLinks::home(cx, choice.target.host_id()) {
                 Some(home) => {
                     self.close_switcher(window, cx);
                     self.create_remote_workspace(choice.target.clone(), home, window, cx);
@@ -2675,12 +2675,13 @@ impl LyrelApp {
             .map(|h| h.label.clone())
             .unwrap_or_else(|| t(L10nKey::SwitcherThisComputer).to_string());
         let chosen_local = form.chosen.is_none();
-        let chosen_dot: Option<gpui_kit::Hsla> = form.chosen.as_ref().map(|h| {
-            match remote_connect::HostLinks::get(cx, h.target.host_id()).is_some() {
-                true => gpui_kit::rgb(crate::ui::tab_strip::LIVE_DOT).into(),
-                false => gpui_kit::rgb(crate::ui::tab_strip::UNKNOWN_DOT).into(),
-            }
-        });
+        let chosen_dot: Option<gpui_kit::Hsla> =
+            form.chosen
+                .as_ref()
+                .map(|h| match HostLinks::get(cx, h.target.host_id()).is_some() {
+                    true => gpui_kit::rgb(crate::ui::tab_strip::LIVE_DOT).into(),
+                    false => gpui_kit::rgb(crate::ui::tab_strip::UNKNOWN_DOT).into(),
+                });
 
         let header = h_flex()
             .items_center()
@@ -2829,8 +2830,7 @@ impl LyrelApp {
                         )
                         .into_any_element(),
                     HostItem::Host(host) => {
-                        let lit =
-                            remote_connect::HostLinks::get(cx, host.target.host_id()).is_some();
+                        let lit = HostLinks::get(cx, host.target.host_id()).is_some();
                         base.child(host_glyph(
                             false,
                             Some(match lit {

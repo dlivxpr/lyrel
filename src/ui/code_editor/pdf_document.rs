@@ -2171,12 +2171,12 @@ impl Render for PdfView {
                         },
                     ))
                     .on_action(
-                        cx.listener(|this, _: &crate::terminal::view::FindNext, _, cx| {
+                        cx.listener(|this, _: &crate::core::actions::FindNext, _, cx| {
                             this.next_match(cx)
                         }),
                     )
                     .on_action(cx.listener(
-                        |this, _: &crate::terminal::view::FindPrevious, _, cx| {
+                        |this, _: &crate::core::actions::FindPrevious, _, cx| {
                             this.previous_match(cx)
                         },
                     ))

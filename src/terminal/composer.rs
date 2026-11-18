@@ -46,9 +46,9 @@ use super::paste::{clipboard_has_paths, pasted_paths_text};
 use super::prompt_input::bytes::types_cleanly;
 use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView};
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
+use crate::ui::file_search::{FileIndex, FileList, IndexedFile, rank, walk};
 use crate::ui::host_ops::{HostId, HostOps};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::file_search::{FileIndex, FileList, IndexedFile, rank, walk};
 
 /// How tall the text may grow, in lines, before it scrolls instead.
 const MAX_ROWS: usize = 8;

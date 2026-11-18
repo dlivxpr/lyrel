@@ -1,9 +1,9 @@
 use super::*;
 use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
-use crate::ui::route::PaneWorkspace;
 use crate::terminal::view::quiet_test_pane;
 use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::pane::{Pane, PaneSlot};
+use crate::ui::route::PaneWorkspace;
 use gpui_kit::{Focusable as _, TestAppContext};
 use lyrel_core::daemon::control::ControlHello;
 use lyrel_core::host::remote::RemoteHost;

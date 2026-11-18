@@ -16,9 +16,9 @@ use lyrel_core::host::{
 };
 
 use crate::ui::app::LyrelApp;
+use crate::ui::desktop_lookups::HostLinks;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::local_link::{LocalLink, LocalLinkStatus};
-use crate::ui::desktop_lookups::HostLinks;
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
 
 #[derive(Clone)]

@@ -325,9 +325,12 @@ fn remove_remote_tree(
     // one rather than any real one.
     const MAX_DEPTH: usize = 64;
     if kind != SftpEntryKind::Dir {
-        SftpClient::op(route, SftpOp::RemoveFile {
-            path: path.to_string(),
-        });
+        SftpClient::op(
+            route,
+            SftpOp::RemoveFile {
+                path: path.to_string(),
+            },
+        );
         return;
     }
     if depth < MAX_DEPTH
@@ -341,9 +344,12 @@ fn remove_remote_tree(
             remove_remote_tree(route, &child_path, child.kind, depth + 1);
         }
     }
-    SftpClient::op(route, SftpOp::RemoveDir {
-        path: path.to_string(),
-    });
+    SftpClient::op(
+        route,
+        SftpOp::RemoveDir {
+            path: path.to_string(),
+        },
+    );
 }
 
 /// One local path handed to the remote: where it went and the transfer
@@ -372,9 +378,12 @@ fn start_paste_uploads(
 ) -> Result<Vec<PasteUpload>, String> {
     use crate::daemon::protocol::{SftpOp, SftpOpResult, SftpTransferKind, SftpTransferSpec};
     let paste_dir = crate::daemon::ssh::sftp::remote_join(dir, &paste_dir_name());
-    if let SftpOpResult::Error(e) = SftpClient::op(route, SftpOp::Mkdir {
-        path: paste_dir.clone(),
-    }) {
+    if let SftpOpResult::Error(e) = SftpClient::op(
+        route,
+        SftpOp::Mkdir {
+            path: paste_dir.clone(),
+        },
+    ) {
         return Err(e);
     }
     Ok(sources
@@ -390,13 +399,16 @@ fn start_paste_uploads(
                     .map_err(|e| format!("{}: {e}", local.display()))?
                     .is_dir();
                 let remote = crate::daemon::ssh::sftp::remote_join(&paste_dir, &name);
-                let job = SftpClient::transfer_start(route, SftpTransferSpec {
-                    pane_id,
-                    kind: SftpTransferKind::Upload,
-                    local: local.clone(),
-                    remote: remote.clone(),
-                    recursive: is_dir,
-                })?;
+                let job = SftpClient::transfer_start(
+                    route,
+                    SftpTransferSpec {
+                        pane_id,
+                        kind: SftpTransferKind::Upload,
+                        local: local.clone(),
+                        remote: remote.clone(),
+                        recursive: is_dir,
+                    },
+                )?;
                 Ok(StartedUpload {
                     remote,
                     job,
@@ -435,9 +447,12 @@ fn staging_dir_is_safe(
 /// over the pane's SSH connection, so this only ever runs off the UI thread.
 fn prepare_remote_clipboard_dir(route: &crate::ui::route::SftpRoute) -> Result<String, String> {
     use crate::daemon::protocol::{SftpOp, SftpOpResult};
-    let home = match SftpClient::op(route, SftpOp::Realpath {
-        path: ".".to_string(),
-    }) {
+    let home = match SftpClient::op(
+        route,
+        SftpOp::Realpath {
+            path: ".".to_string(),
+        },
+    ) {
         SftpOpResult::Link(home) if home.starts_with('/') => home,
         SftpOpResult::Error(e) => return Err(e),
         other => {

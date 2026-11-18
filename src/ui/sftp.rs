@@ -517,7 +517,7 @@ impl LyrelApp {
 
         let list_path = path.clone();
         let route = self.sftp_route();
-        let key = (route.workspace.as_ref().map(|ws| ws.workspace), pane_id);
+        let key = (route.workspace().map(|ws| ws.workspace), pane_id);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { SftpClient::list(&route, &list_path) })
@@ -778,7 +778,9 @@ impl LyrelApp {
     ) {
         let route = self.sftp_route();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { SftpClient::op(&route, op) }).await;
+            let result = cx
+                .background_spawn(async move { SftpClient::op(&route, op) })
+                .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.sftp_panel.open_pane_id != Some(pane_id) {
                     return;

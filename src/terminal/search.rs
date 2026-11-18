@@ -13,6 +13,7 @@ use rio_vt::crosswords::search::{Match, RegexSearch};
 use rio_vt::event::EventListener;
 
 use super::view::TerminalView;
+use crate::ui::desktop_file::{drive_root, windows_spelling};
 use crate::ui::i18n::{L10nKey, t};
 
 const MAX_MATCHES: usize = 10_000;
@@ -1048,16 +1049,6 @@ impl PathStyle {
     }
 }
 
-/// The drive letter a path starts with, and everything after the colon — only
-/// when a separator follows it, which is what makes it absolute. `C:\x` and
-/// `c:/x` are; `C:x`, `C:` and `12:30` are not.
-fn drive_root(path: &str) -> Option<(char, &str)> {
-    let mut chars = path.chars();
-    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
-    let rest = path.strip_prefix(drive)?.strip_prefix(':')?;
-    rest.starts_with(['\\', '/']).then_some((drive, rest))
-}
-
 /// The part of a Windows path that names its drive or share: `C:` out of
 /// `C:\proj`, `\\server\share` out of `\\server\share\proj`. Empty when there
 /// is none to take.
@@ -1078,30 +1069,6 @@ fn windows_prefix(path: &str) -> &str {
         };
     }
     ""
-}
-
-/// `path` spelled the way `style`'s own tools want it — for handing a path to
-/// something outside lyrel, like the OS opener. Only a Windows spelling
-/// changes, and only a path that is valid UTF-8: rewriting anything else
-/// through a lossy string would name a different file.
-pub(super) fn spelled_for(style: PathStyle, path: &Path) -> PathBuf {
-    match (style, path.to_str()) {
-        (PathStyle::Windows, Some(text)) => PathBuf::from(windows_spelling(text)),
-        _ => path.to_path_buf(),
-    }
-}
-
-/// A Windows path the way Windows itself writes one: `\` throughout and an
-/// upper-case drive letter. Every Windows API takes `/` too, but Explorer —
-/// the system opener and the "Reveal" menu item — does not.
-fn windows_spelling(path: &str) -> String {
-    let mut out = path.replace('/', "\\");
-    if let Some((drive, _)) = drive_root(&out)
-        && drive.is_ascii_lowercase()
-    {
-        out.replace_range(..1, &drive.to_ascii_uppercase().to_string());
-    }
-    out
 }
 
 /// Where a relative path printed by a pane is measured from.
@@ -3274,23 +3241,6 @@ mod tests {
         assert_eq!(windows_prefix(r"\\srv\share"), r"\\srv\share");
         assert_eq!(windows_prefix("C:"), "C:");
         assert_eq!(windows_prefix("proj"), "");
-    }
-
-    #[test]
-    fn a_path_handed_to_the_os_is_spelled_its_way() {
-        assert_eq!(
-            spelled_for(PathStyle::Windows, Path::new("c:/Users/me/a b.png")),
-            PathBuf::from(r"C:\Users\me\a b.png")
-        );
-        assert_eq!(
-            spelled_for(PathStyle::Windows, Path::new(r"\\srv/share/x")),
-            PathBuf::from(r"\\srv\share\x")
-        );
-        assert_eq!(
-            spelled_for(PathStyle::Posix, Path::new("/Users/me/a\\b.png")),
-            PathBuf::from("/Users/me/a\\b.png"),
-            "a POSIX backslash is a filename character, not a separator"
-        );
     }
 
     fn posix_roots() -> LinkRoots {

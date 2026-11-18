@@ -89,21 +89,21 @@ pub(super) fn install(mut root: Stateful<Div>, cx: &mut Context<LyrelApp>) -> St
         }),
     )
     .on_action(cx.listener(
-        |app, _: &crate::terminal::view::FindInTerminal, window, cx| {
+        |app, _: &crate::core::actions::FindInTerminal, window, cx| {
             if !app.editor_markdown_search(false, window, cx) {
                 cx.propagate();
             }
         },
     ))
     .on_action(
-        cx.listener(|app, _: &crate::terminal::view::FindNext, window, cx| {
+        cx.listener(|app, _: &crate::core::actions::FindNext, window, cx| {
             if !app.editor_markdown_find_step(true, window, cx) {
                 cx.propagate();
             }
         }),
     )
     .on_action(
-        cx.listener(|app, _: &crate::terminal::view::FindPrevious, window, cx| {
+        cx.listener(|app, _: &crate::core::actions::FindPrevious, window, cx| {
             if !app.editor_markdown_find_step(false, window, cx) {
                 cx.propagate();
             }

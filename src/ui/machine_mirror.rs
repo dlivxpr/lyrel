@@ -470,8 +470,12 @@ pub fn display_name(cx: &App, entry: &crate::core::session::WindowView) -> Optio
 }
 
 pub fn display_name_of(ws: &Workspace, panes: &[PaneRecord]) -> String {
+    name_of(ws, panes).unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
+}
+
+fn name_of(ws: &Workspace, panes: &[PaneRecord]) -> Option<String> {
     if let Some(name) = ws.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        return name.to_string();
+        return Some(name.to_string());
     }
     subject_path_of(ws, panes)
         .and_then(|path| {
@@ -480,7 +484,6 @@ pub fn display_name_of(ws: &Workspace, panes: &[PaneRecord]) -> String {
                 .map(|n| n.to_string_lossy().into_owned())
         })
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
 }
 
 /// The read-only per-workspace projection the layers below the workbench read
@@ -497,10 +500,10 @@ fn mirror_snapshots(
             let pane_ids = ws.tabs.iter().flat_map(|t| t.root.pane_ids()).collect();
             (
                 ws.id,
-                crate::ui::desktop_lookups::WorkspaceMirror {
+                crate::ui::desktop_lookups::WorkspaceMirror::new(
                     pane_ids,
-                    display_name: Some(display_name_of(ws, &machine.panes)),
-                },
+                    name_of(ws, &machine.panes),
+                ),
             )
         })
         .collect()
@@ -752,6 +755,44 @@ mod tests {
                 Some("web"),
                 "which is what the next save stamps"
             );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_unnamed_workspace_follows_the_current_language_without_a_new_pull(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::core::session::{WindowView, WindowViews, WorkspaceStore};
+        use crate::ui::{desktop_lookups, i18n};
+
+        cx.update(|cx| {
+            let view = WindowView::default();
+            let id = view.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                WindowViews {
+                    views: vec![view],
+                    active: None,
+                },
+            );
+            i18n::set_locale("en");
+            MachineMirrors::install(
+                cx,
+                HostId::LOCAL,
+                machine_with(Workspace {
+                    id,
+                    ..Workspace::default()
+                }),
+            );
+            assert_eq!(
+                desktop_lookups::display_name_for(cx, id).as_deref(),
+                Some("Untitled")
+            );
+
+            i18n::set_locale("zh-CN");
+            let renamed = desktop_lookups::display_name_for(cx, id);
+            i18n::set_locale("en");
+            assert_eq!(renamed.as_deref(), Some("未命名"));
         });
     }
 

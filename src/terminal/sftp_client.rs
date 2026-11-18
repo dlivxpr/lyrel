@@ -46,9 +46,9 @@ impl SftpClient {
     }
 
     pub fn transfer_start(route: &SftpRoute, spec: SftpTransferSpec) -> Result<u64, String> {
-        let Some(req) = route.workspace_request(WorkspaceOp::SftpTransferStart {
-            spec: spec.clone(),
-        }) else {
+        let Some(req) =
+            route.workspace_request(WorkspaceOp::SftpTransferStart { spec: spec.clone() })
+        else {
             return RemoteTerminal::sftp_transfer_start(spec);
         };
         match RemoteTerminal::on_workspace(req) {

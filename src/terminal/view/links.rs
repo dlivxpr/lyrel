@@ -284,9 +284,13 @@ impl TerminalView {
         }
 
         let forwarded = match &plan {
-            LoopbackPlan::ForwardOnPane(_) | LoopbackPlan::ForwardOnWorkspace(_) => self
-                .forward_route()
-                .ensure_loopback(loopback.forward_host(), loopback.port),
+            LoopbackPlan::ForwardOnPane(_) | LoopbackPlan::ForwardOnWorkspace(_) => {
+                crate::terminal::forward_client::ForwardClient::ensure_loopback(
+                    &self.forward_route(),
+                    loopback.forward_host(),
+                    loopback.port,
+                )
+            }
             LoopbackPlan::Direct | LoopbackPlan::NoForwardNeeded => unreachable!("handled above"),
         };
         match forwarded {

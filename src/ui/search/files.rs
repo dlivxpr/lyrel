@@ -10,8 +10,7 @@
 //! than a spinner, and the one that replaces it lands under the cursor
 //! without moving the highlighted row.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Context, Window};
 
@@ -19,11 +18,8 @@ use super::SearchTab;
 use super::command::{CommandKind, Item};
 use super::sources::{Row, Section, Source};
 use crate::ui::app::LyrelApp;
-use crate::ui::file_search::{
-    self, FileIndex, FileList, IndexKey, INDEX_LIMIT, build_index, parse_query, rank,
-    searchable_roots, walk,
-};
-use crate::ui::host_ops::{Host, HostOps};
+use crate::ui::file_search::{FileList, IndexKey, IndexedFile, parse_query, rank, walk};
+use crate::ui::host_ops::HostOps;
 use crate::ui::i18n::{L10nKey, t_fmt};
 
 #[cfg(test)]
@@ -236,6 +232,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::ui::file_search::{
+        FileIndex, FileQuery, INDEX_LIMIT, build_index, searchable_roots,
+    };
 
     fn index(paths: &[&str]) -> FileIndex {
         build_index(

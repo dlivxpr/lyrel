@@ -2,8 +2,7 @@
 //! execute navigation; they never manipulate cache or operation bookkeeping.
 
 use super::*;
-use crate::ui::file_search::{IndexKey, searchable_roots};
-use crate::ui::file_search::FileList;
+use crate::ui::file_search::{FileList, IndexKey};
 use std::time::{Duration, Instant};
 
 const REVALIDATE_AFTER: Duration = std::time::Duration::from_secs(5);
@@ -278,7 +277,7 @@ impl FileTreeState {
     }
 
     pub(crate) fn file_list(&self, key: &IndexKey) -> FileList {
-        if key.cwds.is_empty() {
+        if key.cwds().is_empty() {
             return FileList::NoRoots;
         }
         match &self.quick_open.last {
@@ -289,7 +288,7 @@ impl FileTreeState {
 
     pub(crate) fn begin_file_index(&mut self, key: &IndexKey) -> Option<u64> {
         let store = &mut self.quick_open;
-        if key.cwds.is_empty()
+        if key.cwds().is_empty()
             || store
                 .walking
                 .as_ref()
@@ -337,6 +336,7 @@ impl FileTreeState {
 mod tests {
     use super::*;
     use crate::ui::app::test_window;
+    use crate::ui::file_search::searchable_roots;
     use gpui_kit::TestAppContext;
 
     fn entry(name: &str) -> TreeEntry {

@@ -534,7 +534,7 @@ mod tests {
         });
         vcx.update(|window, cx| {
             assert_eq!(window.find("markdown-match-count").label(), Some("1/3"));
-            window.dispatch_action(Box::new(crate::terminal::view::FindNext), cx);
+            window.dispatch_action(Box::new(crate::core::actions::FindNext), cx);
         });
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
@@ -549,7 +549,7 @@ mod tests {
             )
         });
         vcx.update(|window, cx| {
-            window.dispatch_action(Box::new(crate::terminal::view::FindPrevious), cx);
+            window.dispatch_action(Box::new(crate::core::actions::FindPrevious), cx);
             window.click("markdown-match-case", cx);
         });
         settle(&mut vcx);

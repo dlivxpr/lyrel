@@ -12,8 +12,8 @@ use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore}
 use crate::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
 use crate::daemon::install::InstallDecision;
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::desktop_lookups;
+use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
 
 pub(crate) mod connection;

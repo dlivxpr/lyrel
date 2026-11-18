@@ -4,11 +4,11 @@ pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
 pub mod code_editor;
+pub mod desktop_file;
+pub mod desktop_lookups;
 pub mod dialog;
 pub mod diff_list;
 pub mod diff_overlay;
-pub mod desktop_file;
-pub mod desktop_lookups;
 pub mod diff_rows;
 pub mod document_column;
 pub mod editor_session;
@@ -32,8 +32,8 @@ pub mod machine_mirror;
 pub(crate) mod motion;
 #[cfg(test)]
 mod navigation_consumer_tests;
-pub mod notification_bridge;
 pub mod notice;
+pub mod notification_bridge;
 pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;

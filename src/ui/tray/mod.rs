@@ -3,23 +3,12 @@ mod native;
 
 use native::Backend;
 
-use std::sync::Mutex;
-
 use crate::core::cli_agent::AgentStatus;
 use crate::core::config::{Config, NotifyMode};
 use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::{App, AppContext};
 
 const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
-
-/// Handed out to callers that live outside the UI thread — notification click
-/// handlers, which run on a platform callback thread and can only enqueue.
-///
-/// The dispatch loop is created once, for the whole process. A window can be
-/// built and retired many times (the tray keeps the app alive windowless), so
-/// the channel must survive as long as the app does — it does, because the
-/// loop outlives every window.
-static SENDER: Mutex<Option<smol::channel::Sender<TrayAction>>> = Mutex::new(None);
 
 /// Whether an icon is actually on the bar right now.
 ///
@@ -33,12 +22,6 @@ static ICON_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// Whether the app still has a visible presence once its last window closes.
 pub(crate) fn icon_is_up() -> bool {
     ICON_UP.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// A sender for the current tray dispatch loop, if one is running.
-#[cfg(any(target_os = "macos", all(target_os = "windows", not(test))))]
-pub(crate) fn sender() -> Option<smol::channel::Sender<TrayAction>> {
-    SENDER.lock().ok()?.clone()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -461,9 +444,6 @@ pub(crate) fn init(cx: &mut App) {
     }
 
     let (tx, rx) = smol::channel::unbounded::<TrayAction>();
-    if let Ok(mut slot) = SENDER.lock() {
-        *slot = Some(tx.clone());
-    }
 
     // The notification-click bridge: platform activation callbacks enqueue a
     // typed `PaneActivation` on a process-wide channel (they may run on a COM

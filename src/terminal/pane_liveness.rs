@@ -6,8 +6,8 @@ use gpui_kit::{App, AppContext as _, BorrowAppContext as _};
 
 use crate::core::session::{WindowView, WorkspaceId, WorkspaceStore};
 use crate::terminal::RemoteTerminal;
-use crate::ui::route::PaneRoute;
 use crate::ui::host_ops::{HostId, InFlight};
+use crate::ui::route::PaneRoute;
 
 const LOCAL_TTL: Duration = Duration::from_millis(2_000);
 

@@ -359,7 +359,7 @@ impl LyrelApp {
 mod strip_layout_tests {
     use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceStore};
     use crate::daemon::install::{InstallPhase, InstallProgress as _};
-    use crate::ui::remote_connect::HostChoice;
+    use crate::ui::desktop_lookups::HostChoice;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 
     fn box_at(port: u16) -> RemoteTarget {

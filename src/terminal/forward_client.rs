@@ -24,11 +24,9 @@ impl ForwardClient {
     }
 
     pub fn add(route: &ForwardRoute, rule: SshForwardRule) -> Option<Vec<ManagedForward>> {
-        let Some(req) =
-            route.workspace_request(crate::daemon::protocol::WorkspaceOp::AddForward {
-                rule: rule.clone(),
-            })
-        else {
+        let Some(req) = route.workspace_request(crate::daemon::protocol::WorkspaceOp::AddForward {
+            rule: rule.clone(),
+        }) else {
             return RemoteTerminal::add_forward(route.pane_id(), rule);
         };
         Self::forwards(RemoteTerminal::on_workspace(req))
@@ -55,7 +53,11 @@ impl ForwardClient {
                 remote_port,
             })
         else {
-            return RemoteTerminal::ensure_loopback_forward(route.pane_id(), remote_host, remote_port);
+            return RemoteTerminal::ensure_loopback_forward(
+                route.pane_id(),
+                remote_host,
+                remote_port,
+            );
         };
         match RemoteTerminal::on_workspace(req)? {
             DaemonMsg::LoopbackForward(f) => Ok(f),
@@ -87,10 +89,8 @@ impl ForwardClient {
     }
 
     pub fn remove(route: &ForwardRoute, forward_id: u64) -> Option<Vec<ManagedForward>> {
-        let Some(req) =
-            route.workspace_request(crate::daemon::protocol::WorkspaceOp::RemoveForward {
-                forward_id,
-            })
+        let Some(req) = route
+            .workspace_request(crate::daemon::protocol::WorkspaceOp::RemoveForward { forward_id })
         else {
             return RemoteTerminal::remove_forward(route.pane_id(), forward_id);
         };

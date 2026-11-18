@@ -1,9 +1,9 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use gpui_kit::{App, AppContext as _, BorrowAppContext as _};
+use gpui_kit::App;
 
 use crate::core::config::Config;
 use crate::core::session::{RemoteTarget, WorkspaceId};
@@ -14,6 +14,7 @@ use crate::daemon::install::{
 };
 use crate::daemon::protocol::{AuthPromptKind, AuthResponse, NativeSshSpec};
 use crate::daemon::router::RouteHeader;
+use crate::ui::desktop_lookups::HostLinks;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use lyrel_core::host::remote::RemoteHost;
 use lyrel_core::host::{Host as _, HostId};
@@ -639,36 +640,7 @@ pub fn restart_server_blocking(header: RouteHeader, label: &str) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The one rule for "what do we call a target we cannot resolve" (#485),
-    /// pinned where both `target_label` and the switcher's group listing read
-    /// it from.
-    #[test]
-    fn an_unresolvable_profile_is_named_never_spelled_as_its_uuid() {
-        let id = uuid::Uuid::new_v4();
-        let gone = RemoteTarget::Profile { id };
-
-        let label = label_from_hosts(&[], &gone);
-        assert!(
-            !label.contains(&id.to_string()),
-            "a bare profile UUID reached the UI: {label}"
-        );
-        assert_eq!(label, t(L10nKey::RemoteProfileGone));
-
-        // While the profile is configured, its own name wins.
-        let listed = vec![HostChoice {
-            target: gone.clone(),
-            label: "lager".into(),
-            detail: "qhw@222.29.101.16".into(),
-        }];
-        assert_eq!(label_from_hosts(&listed, &gone), "lager");
-
-        // Targets that spell themselves readably never need the placeholder.
-        let alias = RemoteTarget::Alias {
-            alias: "build-box".into(),
-        };
-        assert_eq!(label_from_hosts(&[], &alias), "build-box");
-    }
+    use std::time::Instant;
 
     fn request() -> InstallRequest {
         InstallRequest {
@@ -1053,13 +1025,6 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_labels_hide_the_default_port() {
-        assert_eq!(endpoint_label("me", "box.local", 22), "me@box.local");
-        assert_eq!(endpoint_label("me", "box.local", 2222), "me@box.local:2222");
-        assert_eq!(endpoint_label("", "box.local", 22), "box.local");
-    }
-
-    #[test]
     fn rows_from_the_tree_sort_newest_first_and_derive_names() {
         use lyrel_core::core::machine::{Machine, PaneRecord, Tab, Workspace};
         let older = WorkspaceId::new();
@@ -1098,111 +1063,5 @@ mod tests {
         );
         assert_eq!(rows[0].panes, 1);
         assert_eq!(rows[1].name, "api", "a user-set name wins");
-    }
-
-    fn host(label: &str, detail: &str) -> HostChoice {
-        HostChoice {
-            target: RemoteTarget::Alias {
-                alias: label.to_string(),
-            },
-            label: label.to_string(),
-            detail: detail.to_string(),
-        }
-    }
-
-    #[test]
-    fn an_empty_query_keeps_every_machine_in_order() {
-        let hosts = vec![
-            host("gate2jup", "root@18.143.92.244"),
-            host("aws-xy", "root@52.199.113.213"),
-        ];
-        let all = filter_hosts(&hosts, "   ");
-        assert_eq!(all, hosts);
-    }
-
-    #[test]
-    fn a_query_matches_the_name_or_the_endpoint() {
-        let hosts = vec![
-            host("gate2jup", "root@18.143.92.244"),
-            host("aws-xy", "root@52.199.113.213"),
-            host("orb", "default@127.0.0.1:32222"),
-        ];
-
-        let by_name = filter_hosts(&hosts, "jup");
-        assert_eq!(by_name.len(), 1);
-        assert_eq!(by_name[0].label, "gate2jup");
-
-        let by_address = filter_hosts(&hosts, "52.199");
-        assert_eq!(by_address.len(), 1);
-        assert_eq!(by_address[0].label, "aws-xy");
-
-        let mixed = filter_hosts(&hosts, "or");
-        assert_eq!(mixed[0].label, "orb", "a name match beats an endpoint one");
-    }
-
-    #[test]
-    fn a_query_nothing_matches_returns_nothing() {
-        let hosts = vec![host("gate2jup", "root@18.143.92.244")];
-        assert!(filter_hosts(&hosts, "zzz").is_empty());
-    }
-
-    #[test]
-    fn a_wsl_row_names_the_distro_verbatim() {
-        let rows = wsl_choices(&["Ubuntu-22.04".to_string(), "Arch".to_string()]);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].label, "Ubuntu-22.04");
-        assert_eq!(
-            rows[0].target,
-            RemoteTarget::Wsl {
-                distro: "Ubuntu-22.04".to_string()
-            }
-        );
-        assert_eq!(rows[0].target.connection_key(), "wsl:Ubuntu-22.04");
-        assert_eq!(rows[1].label, "Arch");
-    }
-
-    #[test]
-    fn no_distros_is_no_rows() {
-        assert!(wsl_choices(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_distro_is_found_by_name_or_by_wsl() {
-        let mut hosts = vec![host("gate2jup", "root@18.143.92.244")];
-        hosts.extend(wsl_choices(&["Ubuntu".to_string()]));
-
-        let by_name = filter_hosts(&hosts, "ubun");
-        assert_eq!(by_name.len(), 1);
-        assert_eq!(by_name[0].label, "Ubuntu");
-
-        let by_kind = filter_hosts(&hosts, "wsl");
-        assert_eq!(by_kind.len(), 1);
-        assert_eq!(by_kind[0].label, "Ubuntu");
-    }
-
-    #[test]
-    fn a_failed_probe_keeps_the_distros_it_already_had() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, None);
-
-        assert_eq!(state.names, vec!["Ubuntu-24.04".to_string()]);
-        assert!(state.probed_at.is_some(), "the TTL still restarts");
-        assert!(!state.in_flight, "the next sweep is allowed to run");
-    }
-
-    #[test]
-    fn an_answered_probe_replaces_the_list_even_when_it_is_empty() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, Some(Vec::new()));
-        assert!(state.names.is_empty());
-
-        adopt_probe(&mut state, Some(vec!["Arch".to_string()]));
-        assert_eq!(state.names, vec!["Arch".to_string()]);
     }
 }

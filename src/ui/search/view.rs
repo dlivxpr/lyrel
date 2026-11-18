@@ -1706,7 +1706,7 @@ mod tests {
         assert_eq!(first_kind(&view, &mut vcx), None);
 
         let root = std::path::PathBuf::from("/repo");
-        let index = super::super::files::build_index(
+        let index = crate::ui::file_search::build_index(
             std::slice::from_ref(&root),
             vec![root.join("src/lib.rs")],
             false,

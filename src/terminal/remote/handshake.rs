@@ -1,10 +1,10 @@
 //! 连接路由、协议协商、Spawn/Attach 判定与接入前图形 admission。
 //! reader 接管之后不再读取此流；attach 预读字节完整移交单一 reader。
 use super::{
-    NativeSshSpec, PaneRoute, PtySource, RemoteTerminal, RestoreFrom, ShellSpec, SpawnCancellation,
-    TermSize, win_size,
+    PaneRoute, PtySource, RemoteTerminal, RestoreFrom, ShellSpec, SpawnCancellation, TermSize,
+    win_size,
 };
-use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion};
+use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, NativeSshSpec};
 use crate::daemon::transport::{self, Stream};
 #[cfg(test)]
 use std::io::Read as _;

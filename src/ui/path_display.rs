@@ -25,9 +25,8 @@
 //! is where that question is answered — the same borrow #568 took out of the
 //! file-link resolver.
 
-use gpui_kit::App;
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// `/`-spelled, case-folded, trailing separators dropped — the form two
 /// paths are compared in, never the form either is shown in. Case folding is
@@ -278,6 +277,7 @@ mod tests {
     fn native_separators_keeps_a_name_a_string_cannot_hold() {
         use std::ffi::OsString;
         use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use std::path::PathBuf;
 
         // `0xD800` is a lone high surrogate — legal in an NTFS name, and not
         // representable in a Rust `str`. Rewriting through

@@ -1,5 +1,6 @@
 use crate::core::session::RemoteTarget;
-use crate::ui::remote_connect::{Connected, HostChoice};
+use crate::ui::desktop_lookups::HostChoice;
+use crate::ui::remote_connect::Connected;
 
 /// One window's manual connection and creation flow, not machine authority.
 #[derive(Default)]

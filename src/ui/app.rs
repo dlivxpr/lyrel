@@ -23,9 +23,9 @@ use crate::terminal::forward_client::ForwardClient;
 use crate::terminal::view::{ChildExited, TerminalView};
 use crate::ui::forwards::Forwarding;
 use crate::ui::host_registry::HostId;
-use crate::ui::route::ForwardRoute;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
+use crate::ui::route::ForwardRoute;
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
     ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,

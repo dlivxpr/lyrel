@@ -957,7 +957,7 @@ fn open_in_browser(path: &Path) -> std::io::Result<()> {
             .spawn()?;
         return Ok(());
     }
-    crate::terminal::view::open_file_path(path)
+    crate::ui::desktop_file::open_file_path(path)
 }
 
 /// The app that handles `https:` links — the default browser.
@@ -1429,7 +1429,7 @@ impl LyrelApp {
             );
             return;
         }
-        Self::open_with(path, crate::terminal::view::open_file_path, window, cx);
+        Self::open_with(path, crate::ui::desktop_file::open_file_path, window, cx);
     }
 
     /// Runs one of the desktop openers on a local file, and says so when it
@@ -2599,7 +2599,7 @@ impl LyrelApp {
             };
             let opener: fn(&Path) -> std::io::Result<()> = match browser {
                 true => open_in_browser,
-                false => crate::terminal::view::open_file_path,
+                false => crate::ui::desktop_file::open_file_path,
             };
             menu = menu.item(PopupMenuItem::new(label).on_click({
                 let app = app.clone();
