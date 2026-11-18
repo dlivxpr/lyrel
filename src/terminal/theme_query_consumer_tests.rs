@@ -23,7 +23,7 @@ fn theme_wait_result(
         if let Some((_, tail)) = text.split_once(&marker)
             && let Some((reply, _)) = tail.split_once(" END")
         {
-            assert_eq!(reply, graphics_pty_fixture::hex(expected), "{text}");
+            assert_eq!(reply, hex(expected), "{text}");
             return;
         }
         assert!(
@@ -139,7 +139,7 @@ fn theme_fixture_send(
             pane,
             format!(
                 "{serial} {replies} {}{}",
-                graphics_pty_fixture::hex(bytes),
+                hex(bytes),
                 if cfg!(windows) { "\r" } else { "\n" }
             )
             .as_bytes(),

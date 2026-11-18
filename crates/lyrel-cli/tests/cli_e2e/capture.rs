@@ -75,7 +75,7 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     let mut serial = 0;
     let mut send = |pane: &mut lyrel_core::client::PaneSession, bytes: &[u8]| {
         serial += 1;
-        pane.input(format!("SEND {serial} 0 {} 1\n", terminal_pty_fixture::hex(bytes)).as_bytes())
+        pane.input(format!("SEND {serial} 0 {} 1\n", hex(bytes)).as_bytes())
             .unwrap();
         // The child completes a daemon query/reply barrier before DONE. This
         // establishes received/parsed output without a wall-clock sleep, and
@@ -84,10 +84,10 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         collect_pane_output_until(pane, format!("KITTY_DONE_{serial};\r").as_bytes());
     };
 
-    let text = terminal_pty_fixture::SYNC_CAPTURE_TEXT;
+    let text = SYNC_CAPTURE_TEXT;
     send(
         &mut pane,
-        &terminal_pty_fixture::synchronized_capture_frame(),
+        &synchronized_capture_frame(),
     );
     let raw = daemon.run_ok(&["capture", &address, "--scrollback"]);
     // Unix PTYs preserve the marker. ConPTY can consume/rewrite terminal
@@ -136,7 +136,7 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         .expect("capture after quiet resize");
     assert!(resized.lines().any(|line| line == text), "{resized:?}");
 
-    let next = terminal_pty_fixture::SYNC_NEXT_TEXT;
+    let next = SYNC_NEXT_TEXT;
     send(
         &mut pane,
         format!("\x1b[?2026h\x1b[8;1H{next}\x1b[?2026l\r\nafter_sync").as_bytes(),

@@ -145,7 +145,7 @@ fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_curre
     // paint-driver machinery and would conceal a hidden-output invalidation.
     let request = format!(
         "SEND 2 0 {} 0\n",
-        graphics_pty_fixture::hex(
+        hex(
             b"\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\"
         )
     );
@@ -208,7 +208,7 @@ fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_curre
     survivor_painted.store(false, std::sync::atomic::Ordering::Release);
     let request = format!(
         "SEND 3 0 {} 0\n",
-        graphics_pty_fixture::hex(b"\x1b_Ga=d,d=I,i=8\x1b\\")
+        hex(b"\x1b_Ga=d,d=I,i=8\x1b\\")
     );
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     while view.read_with(cx, |view, _| {

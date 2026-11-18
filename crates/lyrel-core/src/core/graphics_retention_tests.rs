@@ -2,15 +2,9 @@ use super::*;
 use crate::client::{ControlClient, PaneClient, PaneSession};
 use crate::daemon::control::ControlHello;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, ShellSpec};
+use lyrel_test_support::pty as fixture;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-mod fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/support/kitty_pty.rs"
-    ));
-}
 
 #[test]
 #[ignore = "private production daemon child with deterministic retention limits"]

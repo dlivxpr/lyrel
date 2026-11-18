@@ -58,7 +58,7 @@ fn send_title_fixture(
     serial: usize,
     bytes: &[u8],
 ) {
-    let request = format!("TITLE {serial} 0 {} 0\n", graphics_pty_fixture::hex(bytes));
+    let request = format!("TITLE {serial} 0 {} 0\n", hex(bytes));
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let marker = format!("TITLE_DONE_{serial}");
     let deadline = std::time::Instant::now() + Duration::from_secs(30);

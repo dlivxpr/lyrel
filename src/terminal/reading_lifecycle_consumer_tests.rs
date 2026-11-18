@@ -319,7 +319,7 @@ fn reading_lifecycle_hidden_output_releases_pixels_without_window_notifications(
     cx.run_until_parked();
     let baseline = renders.get();
     let bytes = b"\x1b_Ga=d,d=I,i=7\x1b\\\x1b[8;1H\x1b[2KLIVE-WHILE-HIDDEN\x1b[8;30H\x1b_Ga=T,i=7,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[24;1H\r\nHIDDEN-PROGRESS";
-    let request = format!("SEND 262 0 {} 0\n", graphics_pty_fixture::hex(bytes));
+    let request = format!("SEND 262 0 {} 0\n", hex(bytes));
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     // No refresh_windows, graphics_send_fixture or paint helper while hidden:
     // those intentionally invalidate windows and would mask the gate.

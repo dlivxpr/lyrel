@@ -4,11 +4,9 @@ mod terminal;
 mod ui;
 
 #[cfg(test)]
-#[path = "../tests/support/native_ssh_graphics.rs"]
-pub mod native_ssh_graphics_fixture;
+pub use lyrel_test_support::native_ssh as native_ssh_graphics_fixture;
 
 #[cfg(feature = "native-markdown-tests")]
-#[path = "../tests/support/native_markdown.rs"]
 mod native_markdown;
 
 /// 在进程主线程上运行真实字体 Markdown consumer。

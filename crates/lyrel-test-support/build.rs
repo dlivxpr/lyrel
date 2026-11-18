@@ -1,11 +1,11 @@
-//! Embeds which sources this fixture binary was built from.
+//! Embeds which sources this fixture package was built from.
 //!
 //! The desktop consumer tests hash the same files at run time. A binary from
 //! another revision therefore cannot silently serve the current protocol: the
 //! tests rebuild it before spawning a daemon or PTY producer.
 
 mod identity {
-    include!("../../tests/support/fixture_identity.rs");
+    include!("src/fixture_identity.rs");
 }
 
 fn main() {
@@ -21,7 +21,6 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=../../tests/support");
     println!("cargo:rerun-if-changed=../lyrel-core");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     println!("cargo:rerun-if-changed=../../assets/windows/conpty/manifest.json");

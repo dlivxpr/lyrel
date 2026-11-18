@@ -269,6 +269,8 @@ sha2 = "0.11.1"
 chrono-tz = "0.10"
 # Only the existing SSH transfer regression computes MD5 digests.
 md5 = "0.8"
+# Shared real-PTY producers for the graphics retention daemon regressions.
+lyrel-test-support = { path = "../lyrel-test-support" }
 
 # This crate's own tests with `remote-install` on: the Windows install suite
 # exercises the real ZIP unpack path, which is compiled only under that

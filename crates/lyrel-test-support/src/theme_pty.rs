@@ -1,3 +1,6 @@
+use crate::hex::{hex, unhex};
+use crate::pty::raw_pty;
+
 // Shared real-PTY application for daemon and rooted GUI theme-query consumers.
 // Input is a serial, expected CSI reply count, then hex-encoded output bytes.
 pub fn theme_query_sender() {

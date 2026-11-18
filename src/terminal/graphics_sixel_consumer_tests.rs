@@ -9,7 +9,7 @@ fn sixel_reply_bytes(text: &str, serial: usize) -> Option<Vec<u8>> {
     text.lines().find_map(|line| {
         line.trim()
             .strip_prefix(prefix.as_str())
-            .map(graphics_pty_fixture::unhex)
+            .map(unhex)
     })
 }
 
@@ -20,7 +20,7 @@ fn sixel_exchange(
     serial: usize,
     bytes: &[u8],
 ) -> Vec<u8> {
-    let request = format!("SEND {serial} 1 {} 0\n", graphics_pty_fixture::hex(bytes));
+    let request = format!("SEND {serial} 1 {} 0\n", hex(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     // The fixture cannot finish until the real reply reaches its stdin, so the
@@ -90,7 +90,7 @@ fn sixel_send_file(
 ) {
     let request = format!(
         "FILE_SEND {serial} 0 {} 65536\n",
-        graphics_pty_fixture::hex(path.to_str().unwrap().as_bytes())
+        hex(path.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));

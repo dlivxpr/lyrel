@@ -1,7 +1,6 @@
 //! The checked-in terminal producer runs on a Linux PTY reached through the
 //! production native SSH router, not a desktop-local protocol simulation.
-#[path = "../../../../tests/support/native_ssh_graphics.rs"]
-pub mod fixture;
+use lyrel_test_support::native_ssh as fixture;
 
 use std::path::Path;
 

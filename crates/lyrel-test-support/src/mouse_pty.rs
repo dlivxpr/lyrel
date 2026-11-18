@@ -1,7 +1,10 @@
+use crate::pty::raw_pty;
+
 // Real raw-mode PTY observers for the mouse ownership consumer tests.
 //
-// The lightweight fixture process embeds this file; expected reports are still
-// asserted from the production terminal handlers on the other end of the PTY.
+// The lightweight fixture process embeds this module; expected reports are
+// still asserted from the production terminal handlers on the other end of
+// the PTY.
 
 pub fn mouse_reporting_fixture_recorder() {
     use std::io::{Read as _, Write as _};

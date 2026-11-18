@@ -1,5 +1,5 @@
 // Shared identity of every input that shapes the lightweight graphics fixture
-// process (`crates/lyrel-graphics-fixture`).
+// process (`lyrel-graphics-fixture` binary in `crates/lyrel-test-support`).
 //
 // The desktop consumer tests compare this identity with the one the fixture
 // embeds at build time, so a binary left over from another revision — or
@@ -16,15 +16,15 @@ use sha2::Digest as _;
 /// protocol. Core sources are hashed recursively by
 /// [`fixture_source_identity`], because the daemon the fixture hosts is core.
 pub const FIXTURE_IDENTITY_FILES: &[&str] = &[
-    "tests/support/fixture_identity.rs",
-    "tests/support/hex.rs",
-    "tests/support/kitty_pty.rs",
-    "tests/support/theme_pty.rs",
-    "tests/support/mouse_pty.rs",
-    "tests/support/glyph_pty.rs",
-    "crates/lyrel-graphics-fixture/build.rs",
-    "crates/lyrel-graphics-fixture/Cargo.toml",
-    "crates/lyrel-graphics-fixture/src/main.rs",
+    "crates/lyrel-test-support/src/fixture_identity.rs",
+    "crates/lyrel-test-support/src/hex.rs",
+    "crates/lyrel-test-support/src/pty.rs",
+    "crates/lyrel-test-support/src/theme_pty.rs",
+    "crates/lyrel-test-support/src/mouse_pty.rs",
+    "crates/lyrel-test-support/src/glyph_pty.rs",
+    "crates/lyrel-test-support/src/main.rs",
+    "crates/lyrel-test-support/build.rs",
+    "crates/lyrel-test-support/Cargo.toml",
     "Cargo.lock",
     "assets/windows/conpty/manifest.json",
 ];

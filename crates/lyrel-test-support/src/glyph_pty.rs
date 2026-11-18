@@ -1,6 +1,8 @@
+use crate::hex::unhex;
+
 // Real PTY producer for the retained-glyph consumer tests.
 //
-// The lightweight fixture process embeds this file. It deliberately does not
+// The lightweight fixture process embeds this module. It deliberately does not
 // emulate a terminal: the old-client regression reads raw daemon frames, and
 // the recovery consumer only needs the original registration bytes to leave
 // the ring before it attaches.

@@ -33,20 +33,12 @@ mod workspace;
 #[path = "cli_e2e/worktree.rs"]
 mod worktree;
 
-mod terminal_pty_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/support/kitty_pty.rs"
-    ));
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/support/synchronized_capture.rs"
-    ));
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/support/theme_pty.rs"
-    ));
-}
+use lyrel_test_support::hex::hex;
+use lyrel_test_support::pty::pty_sender;
+use lyrel_test_support::synchronized_capture::{
+    SYNC_CAPTURE_TEXT, SYNC_NEXT_TEXT, synchronized_capture_frame,
+};
+use lyrel_test_support::theme_pty::theme_query_sender;
 
 const DAEMON_ENV: &str = "LYREL_CLI_E2E_DAEMON";
 const PASTE_AWARE_FIXTURE_ARG: &str = "--lyrel-e2e-paste-aware-fixture";
@@ -65,11 +57,11 @@ fn main() {
         return;
     }
     if std::env::args().any(|arg| arg == THEME_PTY_FIXTURE_ARG) {
-        terminal_pty_fixture::theme_query_sender();
+        theme_query_sender();
         return;
     }
     if std::env::args().any(|arg| arg == TERMINAL_PTY_FIXTURE_ARG) {
-        terminal_pty_fixture::pty_sender();
+        pty_sender();
         return;
     }
     if std::env::args().any(|arg| arg == CAPTURE_TAIL_FIXTURE_ARG) {

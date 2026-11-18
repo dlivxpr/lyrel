@@ -9,7 +9,7 @@ fn xtgettcap_consumer_exchange(
     let request = format!(
         "SEND {serial} {} {} 1\n",
         expected.len(),
-        graphics_pty_fixture::hex(bytes)
+        hex(bytes)
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -50,7 +50,7 @@ fn xtgettcap_consumer_exchange(
         assert!(
             text.contains(&format!(
                 "KITTY_REPLY {serial} {}",
-                graphics_pty_fixture::hex(reply)
+                hex(reply)
             )),
             "actual application reply: {text}"
         );

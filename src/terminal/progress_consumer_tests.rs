@@ -96,7 +96,7 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
     std::fs::write(&file, b"replay filler\r\n".repeat(700_000)).unwrap();
     let request = format!(
         "FILE_SEND 27105 0 {} 8192\n",
-        graphics_pty_fixture::hex(file.to_str().unwrap().as_bytes())
+        hex(file.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));

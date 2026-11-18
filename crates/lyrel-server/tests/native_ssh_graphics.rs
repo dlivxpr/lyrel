@@ -1,7 +1,6 @@
 //! Explicit live-endpoint coverage: production local router -> pinned native SSH
 //! -> Linux daemon -> real Linux PTY. This is not native-window/GPU evidence.
-#[path = "../../../tests/support/native_ssh_graphics.rs"]
-pub mod fixture;
+use lyrel_test_support::native_ssh as fixture;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
@@ -1120,7 +1119,7 @@ fn native_ssh_media_case(nested: bool) {
     let shell = fixture.install_script(
         &host,
         "kitty_ssh_media.mjs",
-        include_bytes!("../../../tests/support/kitty_ssh_media.mjs"),
+        lyrel_test_support::KITTY_SSH_MEDIA_MJS,
         args,
     );
     let shell = if nested {
@@ -1429,7 +1428,7 @@ fn native_ssh_pane_colors_projection_survives_ring_eviction_and_fresh_consumer()
     let flood = fixture.install_script(
         &host,
         "ring_flood.mjs",
-        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        lyrel_test_support::RING_FLOOD_MJS,
         Vec::new(),
     );
     pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
@@ -1590,7 +1589,7 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     let flood = fixture.install_script(
         &host,
         "ring_flood.mjs",
-        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        lyrel_test_support::RING_FLOOD_MJS,
         Vec::new(),
     );
     pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
@@ -1772,7 +1771,7 @@ fn native_ssh_recorded_iterm2_survives_ring_eviction_and_fresh_consumer() {
     let flood = fixture.install_script(
         &host,
         "ring_flood.mjs",
-        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        lyrel_test_support::RING_FLOOD_MJS,
         Vec::new(),
     );
     pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
@@ -1926,7 +1925,7 @@ fn native_ssh_glyphs_survive_sender_exit_ring_eviction_and_fresh_consumer() {
     let flood = fixture.install_script(
         &host,
         "ring_flood.mjs",
-        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        lyrel_test_support::RING_FLOOD_MJS,
         Vec::new(),
     );
     pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());

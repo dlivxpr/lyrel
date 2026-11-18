@@ -971,7 +971,7 @@ fn native_ssh_consumer_linux_file_temp_shm_pixels_and_silent_recovery(cx: &mut T
     let shell = fixture.install_script(
         &host,
         "kitty_ssh_media.mjs",
-        include_bytes!("../../tests/support/kitty_ssh_media.mjs"),
+        lyrel_test_support::KITTY_SSH_MEDIA_MJS,
         vec![
             "--desktop-path".into(),
             sentinel.to_string_lossy().into_owned(),

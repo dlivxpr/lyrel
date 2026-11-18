@@ -2,8 +2,7 @@
 //!
 //! 只在显式提供本轮私有 fixture（`LYREL_TEST_SSH_*`）并传入 `--ignored` 时
 //! 运行；没有 fixture 的常规测试不会连接任何真实主机。
-#[path = "../../../../tests/support/native_ssh_graphics.rs"]
-pub mod fixture;
+use lyrel_test_support::native_ssh as fixture;
 
 use std::path::Path;
 

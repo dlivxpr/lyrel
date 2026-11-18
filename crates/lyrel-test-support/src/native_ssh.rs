@@ -1,4 +1,6 @@
-// Shared real native-SSH fixture. No parent environment or installed daemon is changed.
+// Shared real native-SSH fixture. No parent environment or installed daemon is
+// changed. Consumed by lyrel-server integration targets and the rooted GUI
+// consumers through the `lyrel-test-support` library interface.
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -555,7 +557,7 @@ impl NativeSshFixture {
         self.install_script(
             host,
             "kitty_remote_sender.mjs",
-            include_bytes!("kitty_remote_sender.mjs"),
+            crate::KITTY_REMOTE_SENDER_MJS,
             Vec::new(),
         )
     }
@@ -576,7 +578,7 @@ impl NativeSshFixture {
         // Kitty scripts import the same checked-in utility locally and over SSH.
         let helper = name.starts_with("kitty-").then_some((
             "graphics-fixture-utils.mjs",
-            include_bytes!("../../scripts/graphics-fixture-utils.mjs").as_slice(),
+            crate::GRAPHICS_FIXTURE_UTILS_MJS,
         ));
         for (name, body) in helper.into_iter().chain(std::iter::once((name, body))) {
             let script = self.remote_path(name);

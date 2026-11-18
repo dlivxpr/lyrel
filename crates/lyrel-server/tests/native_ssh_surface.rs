@@ -1,7 +1,6 @@
 //! Opt-in native acceptance driver. The GUI is the unmodified production app:
 //! standard config -> remote workspace -> machine tree -> rooted TerminalViews.
-#[path = "../../../tests/support/native_ssh_graphics.rs"]
-pub mod fixture;
+use lyrel_test_support::native_ssh as fixture;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -258,14 +257,14 @@ fn native_ssh_graphics_standard_app_surface() {
         "keyboard" => "kitty_keyboard_boundary.mjs",
         _ => panic!("unknown native SSH graphics/terminal scene: {scene}"),
     };
-    let directory = if matches!(scene.as_str(), "pointer" | "mouse" | "keyboard") {
-        "../../tests/support"
+    let directory: PathBuf = if matches!(scene.as_str(), "pointer" | "mouse" | "keyboard") {
+        lyrel_test_support::support_dir()
     } else {
-        "../../scripts"
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("scripts")
     };
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(directory)
-        .join(script);
+    let source = directory.join(script);
     let body = std::fs::read(&source).unwrap_or_else(|error| {
         panic!(
             "same-integration workload {} unavailable: {error}",

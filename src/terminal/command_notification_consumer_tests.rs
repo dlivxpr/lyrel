@@ -125,7 +125,7 @@ fn command_notification_prime_prompt(daemon: &GraphicsDaemonProcess, pane: u64) 
     // reply path exercised before the GUI joins.
     let request = format!(
         "SEND 1 0 {} 0\n",
-        graphics_pty_fixture::hex(COMMAND_NOTIFICATION_PROMPT)
+        hex(COMMAND_NOTIFICATION_PROMPT)
     );
     ClientMsg::Input(request.into_bytes())
         .encode(&mut stream)

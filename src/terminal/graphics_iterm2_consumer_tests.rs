@@ -32,7 +32,7 @@ fn iterm2_send_fragmented(
 ) {
     let request = format!(
         "SEND {serial} 0 {} {fragment}\n",
-        graphics_pty_fixture::hex(bytes)
+        hex(bytes)
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));

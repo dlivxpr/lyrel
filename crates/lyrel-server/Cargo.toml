@@ -36,6 +36,9 @@ png = "0.18"
 # a pid needs `kill(2)`, which `Child` cannot express once ownership has moved
 # to the thread collecting the exit.
 libc = "0.2.191"
+# Shared PTY producers and the pinned native-SSH fixture for the integration
+# and live-endpoint targets.
+lyrel-test-support = { path = "../lyrel-test-support" }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61.2", features = [

@@ -334,7 +334,7 @@ fn graphics_recovery_exchange(
     observer
         .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
         .unwrap();
-    let hex = graphics_pty_fixture::hex(bytes);
+    let hex = hex(bytes);
     let request = format!("{operation} {serial} {replies} {hex} 0\n");
     daemon.panes().send_input(pane, request.as_bytes()).unwrap();
     graphics_recovery_collect(observer, serial)
@@ -414,7 +414,7 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
         assert!(
             detached.contains(&format!(
                 "KITTY_REPLY 202 {}",
-                graphics_pty_fixture::hex(reply)
+                hex(reply)
             )),
             "detached uploads must be admitted before they can be claimed as restoration: {detached}"
         );
@@ -447,7 +447,7 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
         assert!(
             admitted.contains(&format!(
                 "KITTY_REPLY 203 {}",
-                graphics_pty_fixture::hex(reply)
+                hex(reply)
             )),
             "concurrent replay uploads must be accepted with their own image and placement identities: {admitted}"
         );
@@ -859,7 +859,7 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     drop(payload);
     let request = format!(
         "FILE_SEND 899 0 {} 65536\n",
-        graphics_pty_fixture::hex(path.to_str().unwrap().as_bytes())
+        hex(path.to_str().unwrap().as_bytes())
     );
     let input_bytes = request.len();
     prior.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -1266,7 +1266,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
         .unwrap();
     view.read_with(cx, |view, _| {
         view.terminal.write(
-            format!("SEND {serial} 1 {} 0\n", graphics_pty_fixture::hex(corrupt)).into_bytes(),
+            format!("SEND {serial} 1 {} 0\n", hex(corrupt)).into_bytes(),
         )
     });
     graphics_recovery_wait(cx, "corrupt PNG edit response", |cx| {
@@ -1276,7 +1276,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
     assert!(
         text.contains(&format!(
             "KITTY_REPLY {serial} {}",
-            graphics_pty_fixture::hex(b"\x1b_Gi=142;EINVAL:")
+            hex(b"\x1b_Gi=142;EINVAL:")
         )),
         "corrupt frame refusal PTY output={text:?}"
     );
@@ -1308,7 +1308,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
         );
         let request = format!(
             "SEND {serial} 1 {} 0\n",
-            graphics_pty_fixture::hex(request.as_bytes())
+            hex(request.as_bytes())
         );
         view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
         let marker = format!("KITTY_DONE_{serial};");
@@ -1324,7 +1324,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
         assert!(
             text.contains(&format!(
                 "KITTY_REPLY {serial} {}",
-                graphics_pty_fixture::hex(status)
+                hex(status)
             )),
             "serial={serial}, controls={controls}; PTY output={text:?}"
         );
@@ -1467,7 +1467,7 @@ fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(
             view.terminal.write(
                 format!(
                     "SEND {serial} 1 {} 0\n",
-                    graphics_pty_fixture::hex(request.as_bytes())
+                    hex(request.as_bytes())
                 )
                 .into_bytes(),
             )
@@ -1477,7 +1477,7 @@ fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(
         });
         let (text, _) = graphics_recovery_collect(observer, serial);
         let expected =
-            graphics_pty_fixture::hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
+            hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
         assert!(
             text.contains(&format!("KITTY_REPLY {serial} {expected}")),
             "{text}"
