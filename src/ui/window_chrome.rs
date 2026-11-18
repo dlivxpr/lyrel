@@ -1011,7 +1011,7 @@ mod gpui_tests {
                 settle(&mut vcx);
                 let ready = app.read_with(&vcx, |app, cx| {
                     app.scm.pane_repo().is_some_and(|repo| {
-                        crate::ui::scm_snapshot::status_of(cx, repo.host, &repo.root)
+                        crate::ui::scm::data::status_of(cx, repo.host, &repo.root)
                             .is_some_and(|status| status.total_entries == expected)
                     })
                 });

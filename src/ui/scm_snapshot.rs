@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::git::GitStatus;
-use crate::core::git::status::{StatusIndex, WorkingTreeStatus};
+use crate::core::git::status::StatusIndex;
 use crate::ui::host_ops::HostId;
 
 /// How long a pane with an unknown or negative repository answer waits before
@@ -40,17 +40,8 @@ pub const GIT_RETRY_GAP: Duration = Duration::from_secs(10);
 /// waits out before the controller will run another one for the same cwd.
 pub const OPPORTUNISTIC_GIT_GAP: Duration = Duration::from_millis(1500);
 
-/// The working-tree status the SCM panel, the file tree decorations and the
-/// gutter markers draw from, or `None` until the first probe lands. The `Arc`
-/// identity is the controller's change-detection: the same pointer means
-/// "nothing moved", so callers must not copy out of this.
-pub fn status_of(cx: &gpui_kit::App, host: HostId, root: &Path) -> Option<Arc<WorkingTreeStatus>> {
-    cx.try_global::<crate::ui::scm::data::ScmData>()?
-        .status_for(host, root)
-}
-
-/// The per-path decoration index for a repository, derived from
-/// [`status_of`]. Same identity rules as the status it was built from.
+/// The per-path decoration index for a repository. Its `Arc` identity is
+/// stable until the underlying working-tree status changes.
 pub fn index_of(cx: &gpui_kit::App, host: HostId, root: &Path) -> Option<Arc<StatusIndex>> {
     cx.try_global::<crate::ui::scm::data::ScmData>()?
         .index_for(host, root)
