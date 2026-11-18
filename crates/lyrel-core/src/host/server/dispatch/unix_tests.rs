@@ -443,7 +443,7 @@ fn sqlite_views_belong_to_the_connection_that_opened_them() {
     use crate::host::sqlite::{SqliteCancel, SqliteQuery, is_stale_view};
     let dir = tempfile::TempDir::new().unwrap();
     let (path, _writer) = sqlite_fixture(dir.path(), "shared.sqlite");
-    let host = crate::host::local::LocalHost::new();
+    let host = crate::host::local::new();
     let first = pair_with(Arc::clone(&host));
     let second = pair_with(host);
     let cancel = SqliteCancel::default();

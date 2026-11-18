@@ -67,7 +67,7 @@ mod tests {
     fn xtgettcap_discovers_only_verified_capabilities_in_request_order() {
         let mut state = state();
         assert_eq!(replies(&mut state, b"\x1bP+q436f;544e;524742;736978656c;697465726d32;636f;6c69;4d73;53756c78;756e6b6e6f776e\x1b\\"),
-            b"\x1bP1+r436F=323536\x1b\\\x1bP0+r544E\x1b\\\x1bP1+r524742=382F382F38\x1b\\\x1bP0+r736978656C\x1b\\\x1bP0+r697465726D32\x1b\\\x1bP0+r636F\x1b\\\x1bP0+r6C69\x1b\\\x1bP0+r4D73\x1b\\\x1bP0+r53756C78\x1b\\\x1bP0+r756e6B6E6F776E\x1b\\");
+            b"\x1bP1+r436F=323536\x1b\\\x1bP0+r544E\x1b\\\x1bP1+r524742=382F382F38\x1b\\\x1bP0+r736978656C\x1b\\\x1bP0+r697465726D32\x1b\\\x1bP0+r636F\x1b\\\x1bP0+r6C69\x1b\\\x1bP0+r4D73\x1b\\\x1bP0+r53756C78\x1b\\\x1bP0+r756E6B6E6F776E\x1b\\");
     }
 
     fn consume(chunks: impl IntoIterator<Item = Vec<u8>>) -> (Vec<u8>, Vec<u8>) {

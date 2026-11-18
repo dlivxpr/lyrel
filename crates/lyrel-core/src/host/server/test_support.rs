@@ -1,7 +1,7 @@
 //! Narrow Unix consumer fixtures shared by negotiation, lifecycle, and request tests.
 use super::*;
 use crate::daemon::control::{ControlHello, ControlHelloOk};
-use crate::host::local::LocalHost;
+use crate::host::local;
 use crate::host::remote::RemoteHost;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -21,7 +21,7 @@ pub(super) fn pair_with(server_host: SharedHost) -> Pair {
 }
 
 pub(super) fn pair() -> Pair {
-    pair_with(LocalHost::new())
+    pair_with(local::new())
 }
 
 pub(super) fn raw() -> (UnixStream, ControlHelloOk) {
@@ -38,7 +38,7 @@ pub(super) fn raw_hello(
 ) -> ((UnixStream, ControlHelloOk), std::thread::JoinHandle<()>) {
     let (server, mut client) = UnixStream::pair().unwrap();
     let served = std::thread::spawn(move || {
-        let _ = serve_with(server, LocalHost::new(), services);
+        let _ = serve_with(server, local::new(), services);
     });
     ControlClientMsg::Hello(hello).encode(&mut client).unwrap();
     client.flush().unwrap();
