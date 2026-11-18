@@ -267,6 +267,7 @@ chrono-tz = "0.10"
 md5 = "0.8"
 # Shared real-PTY producers for the graphics retention daemon regressions.
 lyrel-test-support = { path = "../lyrel-test-support" }
+lyrel-protocol = { path = "../lyrel-protocol", features = ["test-support"] }
 
 # This crate's own tests with `remote-install` on: the Windows install suite
 # exercises the real ZIP unpack path, which is compiled only under that

@@ -56,5 +56,9 @@ windows-sys = { version = "0.61.2", features = [
 # The width test compares the public helper to the actual VT grid.
 rio-vt.workspace = true
 
+[features]
+# Internal fault injection for daemon graphics-retention tests.
+test-support = []
+
 [lints]
 workspace = true
