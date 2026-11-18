@@ -1,6 +1,6 @@
 //! 共享文档是唯一可编辑权威；presentation 只持有不可变 revision 快照。
 use gpui_kit::{Context, EntityId, EventEmitter, WeakEntity};
-use lyrel_text::{EncodeError, LineEnding, TextFormat};
+use lyrel_document::text::{EncodeError, LineEnding, TextFormat};
 use std::{ops::Range, sync::Arc};
 
 #[derive(Clone)]
@@ -36,7 +36,7 @@ impl SourceSnapshot {
                 represented.push_str(part);
             }
         }
-        lyrel_text::encode(
+        lyrel_document::text::encode(
             &represented,
             &TextFormat {
                 line_ending: LineEnding::Lf,

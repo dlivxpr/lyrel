@@ -18,7 +18,7 @@
 - 初始加载/外部重载明确调用 `Document::new` / `reload`；不是普通编辑协议。加载不整理公式、不补换行、不重写未知构造。
 - splice 在同一操作中修改原文与对应行尾；未涉及的行尾保留。新增 LF 使用当前文档的首选行尾；显式 CRLF 输入保留 CRLF。删除换行同时删除它的表示；拆行新增表示；重排整行携带原行尾。Undo/Redo 原子恢复文本和表示。
 - preedit 是 Document 持有的单一 composition lease，view 只持有本地 marked range；切换输入所有者先结束原 lease。关闭 presentation 仅提交它自己持有的 preedit，不结束另一个存活 view 的 lease；保存等文档级显式 finalize 仍处理当前 owner。若所有者已销毁，后续 claim 将其原子提交为可撤销 history 并发布通知，不将过期 lease 留给后续 edit。
-- 工作台保留 `BufferId`、Host/path identity、dirty、save/save-as/conflict/close、tabs/groups、导航与状态栏。`lyrel-text` 是两个真实消费者共用的 GUI-free Apache-2.0 codec/EditorConfig 策略；editor 不依赖 app 或 `lyrel-core`。I/O 通过工作台捕获的 owning Host 在 worker 执行。
+- 工作台保留 `BufferId`、Host/path identity、dirty、save/save-as/conflict/close、tabs/groups、导航与状态栏。`lyrel-document`（`default-features = false`）的 `text` 模块是两个真实消费者共用的 GUI-free Apache-2.0 codec/EditorConfig 策略；editor 不依赖 app 或 `lyrel-core`。I/O 通过工作台捕获的 owning Host 在 worker 执行。
 - 保存捕获共享文档原文、表示、格式以及 Host/path；晚到完成不能将较新的编辑标为 clean，也不能改变另一个 group 的 close intent。
 - 显式格式转换是独立 history 事务，紧随的 typing 不并入转换；没有真实修改的 range batch（包括 no-op Trim）不改变前一事务的 Undo 选区。正文菜单的完整 `Labels` 由应用双语注入，语言切换同步既有 view，不依赖重新打开。
 - 图片源从权威 `SourceSnapshot` 按与 renderer 相同的语法扫描，不从任意 view 的延迟缓存推断新 revision。cache 与 preview 共用实体释放 lease，最后一个消费者释放时才 `drop_image`；Mermaid 替换、移除与 host 释放显式回收 atlas tile，异步旧 lease 不发布。
@@ -43,7 +43,7 @@
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT `ratex-gpui 0.4.1` + Lyrel `markdown_formula` Host，#241 | `src/math` 保留 9 个 pinned source 摘要；renderer 为 registry RaTeX 0.1.15。每 presentation 独立异步 bitmap/seat，版本、document identity、原选区与原 range 校验后通过 `replace_ranges` 提交 body/对齐 batch。Enter/箭头退出应用、Escape 取消、Ctrl/Cmd+S 先提交再走原 Host 保存；Kit palette、native copy/export/块对齐菜单和焦点返回已接线。原生与参考实窗对照尚待集中执行。 |
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | `markdown::mermaid_host::install` 在所有 presentation 的共同 configure 入口安装真实 Merman `0.9.2` → `resvg_safe` → Kit `SvgRenderer` provider；caret/selection 进入块即显露原始 fenced source，正常输入与 Undo/Redo 使用同一 Document。loading/失败在块首行显示，正文源码仍可编辑；错误修复触发新 request，不显示假图或无限等待。见下方所有权与消费者边界。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | `MarkdownPresentations` 按稳定 TabId/GroupId 保留 view/search/observer；新 split 从实际来源 view 继承模式、选区与滚动。每个 view 的通知刷新工作台状态；输入及搜索焦点参与命令捕获阶段的组定位。MDX 路径身份变化只改变 source-only 能力，不替换文档/history。生产与 native 消费者入口见下方；实际原生窗口验收仍由集成者执行。 |
-| 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | `saving::fidelity::SaveContent` 从同一 Document snapshot 捕获源文/表示/格式/字节；成功才采用另存为目标；新编辑退休旧close。消费者覆盖 UTF-8 BOM、UTF-16LE/BE、GB18030、Windows-1252、显式转换/稀疏cleanup与Undo、失败/冲突/取消/扩展名、第二呈现在途快照。沿用全部原保存消费者；真实local/SSH与native结果由集成者另记，不以mapped Host或历史结果冒充。 |
+| 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-document` text codec，#243 | `saving::fidelity::SaveContent` 从同一 Document snapshot 捕获源文/表示/格式/字节；成功才采用另存为目标；新编辑退休旧close。消费者覆盖 UTF-8 BOM、UTF-16LE/BE、GB18030、Windows-1252、显式转换/稀疏cleanup与Undo、失败/冲突/取消/扩展名、第二呈现在途快照。沿用全部原保存消费者；真实local/SSH与native结果由集成者另记，不以mapped Host或历史结果冒充。 |
 | extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。caret 几何以整数视觉行号乘一次行高，不能逐行累加 `f32` 后再让 native hit-testing 除行高反解。#235 的 not_planned 不是 SDK 修复证据。 |
 | imported bidi 映射 | 上游保留，#237/#244 | 保留 `bidi/` 与 source/display/native position mapping。完整 RTL 仍在已批准验收范围之外，不能由普通 Unicode 成功推导 RTL parity。 |
 
@@ -58,11 +58,11 @@
 ## 测试与证据入口
 
 - editor 全部回归：`cargo test --locked -p lyrel-markdown-editor`，包含 upstream-derived unit、结构公式和 `--test foundation`；只跑 foundation 不代表整个 crate。
-- GUI-free codec：`cargo test --locked -p lyrel-text`。
+- GUI-free codec：`cargo test --locked -p lyrel-document`（default features 只编译 text 模块）。
 - 工作台：`cargo test --locked -p lyrel --lib`；`src/ui/code_editor/markdown/foundation.rs` 经生产 lifecycle 运行 shared Host 与 composition 场景，不依赖旧 Markdown 内核。
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
 - #238 工作台窄入口：`cargo test --locked -p lyrel --lib ui::code_editor::markdown::resources_tests`；native registry 包含 owning-Host paste/history/save-reopen、三项 wrapped link 消费者、native preview/zoom/resize/drop，以及完整3768 B resources fixture（固定SHA）live尾部输入/保存/Undo。插图由#244的插入命令/slash派发真实`InsertImage`，不增加常驻整行图片工具栏。`#241` 的完整400034 B mixed-tall 及 hard-break formula 消费者同时使用真实 ImageHost，不能以无bitmap源文测试代替。所有新命令在分票阶段按约定未执行，Windows实窗、真实local/SSH、macOS与最终checks由集成者验收。
-- Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-text` 可参与，GUI crate 不被选入 headless 范围。
+- Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-document` 可参与，GUI crate 不被选入 headless 范围。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
 - 文件保真专项：`cargo test --locked -p lyrel --lib ui::code_editor::saving`；native selector `saving::fidelity` 包括编码往返、显式策略、第二视图在途快照、首次保存失败、编码取消/转换和目标冲突/重命名。Markdown普通保存不执行EditorConfig代码清理；显式去尾空白只删对应字节，Undo恢复原表示。另存为写入失败不改变原path/untitled，转换到MDX仅改变各view源码策略，不重建Document。
 

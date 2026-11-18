@@ -8,7 +8,7 @@
 use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
-// The decoders live in `lyrel-code-editor`; these explicit imports keep the
+// The decoders live in `lyrel-document`; these explicit imports keep the
 // fixture encoders pointing at the registry crates.
 use crate::ui::app::test_window::harness_with_tabs;
 #[rustfmt::skip]

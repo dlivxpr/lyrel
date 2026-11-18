@@ -22,7 +22,7 @@ use gpui_kit::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
     SharedString, Size, Subscription, TestSupportExt as _, Window, div, px, rems,
 };
-use lyrel_core::host::transfer::CancelToken;
+use lyrel_document::CancelToken;
 
 use super::markdown;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -63,7 +63,7 @@ const MAX_SWEPT_TEXT_PAGES: usize = TEXT_CACHE_PAGES;
 enum TextSlot {
     /// 已排队或在后台提取中。
     Loading,
-    Ready(Arc<lyrel_pdf::PageText>),
+    Ready(Arc<lyrel_document::pdf::PageText>),
     /// 页面存在但没有文本层（纯扫描页）。
     Empty,
     /// 解释过程失败；搜索明确报告该页无法读取。
@@ -73,13 +73,13 @@ enum TextSlot {
 /// 一次全文搜索命中：所在页与每行一个归一化高亮矩形。
 struct SearchMatch {
     page: usize,
-    rects: Vec<lyrel_pdf::NormRect>,
+    rects: Vec<lyrel_document::pdf::NormRect>,
 }
 
 /// 后台搜索扫掠的结果：命中、预算信息与要并入缓存的文本层。
 struct SweepResult {
     matches: Vec<SearchMatch>,
-    texts: Vec<(usize, Arc<lyrel_pdf::PageText>)>,
+    texts: Vec<(usize, Arc<lyrel_document::pdf::PageText>)>,
     text_pages: usize,
     failed_pages: usize,
     truncated: bool,
@@ -88,7 +88,7 @@ struct SweepResult {
 
 /// 一次 Host 读取的结果；解析在 Host 线程完成，锁定与格式错误是文档状态。
 pub(super) enum PdfLoaded {
-    Ready(Arc<lyrel_pdf::PdfDocument>),
+    Ready(Arc<lyrel_document::pdf::PdfDocument>),
     Locked(Arc<Vec<u8>>),
     Failed(SharedString),
 }
@@ -96,14 +96,14 @@ pub(super) enum PdfLoaded {
 /// 文档此刻的解析状态。密码只在提交时短暂经过，不作为文档状态保存。
 #[derive(Clone)]
 pub(crate) enum PdfContent {
-    Ready(Arc<lyrel_pdf::PdfDocument>),
+    Ready(Arc<lyrel_document::pdf::PdfDocument>),
     Locked { wrong: bool },
     Unlocking,
     Failed(SharedString),
 }
 
 impl PdfContent {
-    pub(crate) fn ready(&self) -> Option<&Arc<lyrel_pdf::PdfDocument>> {
+    pub(crate) fn ready(&self) -> Option<&Arc<lyrel_document::pdf::PdfDocument>> {
         match self {
             Self::Ready(document) => Some(document),
             _ => None,
@@ -172,7 +172,7 @@ impl PdfDocument {
         &self.content
     }
 
-    pub(crate) fn ready(&self) -> Option<Arc<lyrel_pdf::PdfDocument>> {
+    pub(crate) fn ready(&self) -> Option<Arc<lyrel_document::pdf::PdfDocument>> {
         self.content.ready().cloned()
     }
 
@@ -208,7 +208,7 @@ impl PdfDocument {
                     if let Some(gate) = gate.as_ref() {
                         gate.block().await;
                     }
-                    let result = lyrel_pdf::PdfDocument::load(bytes, &password);
+                    let result = lyrel_document::pdf::PdfDocument::load(bytes, &password);
                     #[cfg(test)]
                     if let Some(gate) = gate {
                         gate.finish();
@@ -226,10 +226,10 @@ impl PdfDocument {
                         document.content = PdfContent::Ready(Arc::new(parsed));
                         document.revision = document.revision.wrapping_add(1);
                     }
-                    Err(lyrel_pdf::LoadError::Locked) => {
+                    Err(lyrel_document::pdf::LoadError::Locked) => {
                         document.content = PdfContent::Locked { wrong: true };
                     }
-                    Err(lyrel_pdf::LoadError::Other(message)) => {
+                    Err(lyrel_document::pdf::LoadError::Other(message)) => {
                         document.bytes = None;
                         document.content = PdfContent::Failed(SharedString::from(message));
                         document.revision = document.revision.wrapping_add(1);
@@ -287,8 +287,8 @@ pub(crate) struct PdfView {
     text_queue: VecDeque<usize>,
     text_jobs: usize,
     // 拖拽选区：进行中的 (页, 起点, 当前点)，完成后只留 (页, 起点, 终点)。
-    sel_drag: Option<(usize, lyrel_pdf::NormPoint, lyrel_pdf::NormPoint)>,
-    text_sel: Option<(usize, lyrel_pdf::NormPoint, lyrel_pdf::NormPoint)>,
+    sel_drag: Option<(usize, lyrel_document::pdf::NormPoint, lyrel_document::pdf::NormPoint)>,
+    text_sel: Option<(usize, lyrel_document::pdf::NormPoint, lyrel_document::pdf::NormPoint)>,
     // 文档内查找：输入框、结果、当前命中与扫掠身份。
     find_open: bool,
     find_input: Entity<InputState>,
@@ -362,7 +362,7 @@ impl PdfView {
             viewport: None,
             generation: 1,
             next_attempt: 1,
-            cancel: CancelToken::default(),
+            cancel: CancelToken::new(),
             password,
             toc_open: false,
             toc_index: 0,
@@ -380,7 +380,7 @@ impl PdfView {
             search_text_pages: 0,
             search_failed_pages: 0,
             search_truncated: false,
-            text_cancel: CancelToken::default(),
+            text_cancel: CancelToken::new(),
             _find_sub: find_sub,
             _password_sub: password_sub,
             _observe: observe,
@@ -452,7 +452,7 @@ impl PdfView {
     }
 
     #[cfg(test)]
-    pub(crate) fn text_page(&self, index: usize) -> Option<Arc<lyrel_pdf::PageText>> {
+    pub(crate) fn text_page(&self, index: usize) -> Option<Arc<lyrel_document::pdf::PageText>> {
         self.page_text.get(&index).and_then(|slot| match slot {
             TextSlot::Ready(text) => Some(text.clone()),
             _ => None,
@@ -465,7 +465,7 @@ impl PdfView {
     }
 
     pub(crate) fn zoom_label(&self) -> SharedString {
-        format!("{:.0}%", self.page_width() / lyrel_pdf::PAGE_WIDTH * 100.).into()
+        format!("{:.0}%", self.page_width() / lyrel_document::pdf::PAGE_WIDTH * 100.).into()
     }
 
     pub(crate) fn status_text(&self, cx: &App) -> SharedString {
@@ -516,7 +516,7 @@ impl PdfView {
         let viewport = self
             .viewport
             .map(|size| f32::from(size.width))
-            .unwrap_or(lyrel_pdf::PAGE_WIDTH);
+            .unwrap_or(lyrel_document::pdf::PAGE_WIDTH);
         let available_width = (viewport - 2. * PAGE_PAD_X).max(32.);
         let width = match self.fit {
             Some(Fit::Width) => available_width,
@@ -530,10 +530,10 @@ impl PdfView {
                     .viewport
                     .map(|size| f32::from(size.height))
                     .unwrap_or(900.);
-                let available_height = (viewport_height - 2. * lyrel_pdf::PAGE_PAD_Y).max(32.);
+                let available_height = (viewport_height - 2. * lyrel_document::pdf::PAGE_PAD_Y).max(32.);
                 available_width.min(available_height * page_width / page_height.max(1.))
             }
-            None => lyrel_pdf::PAGE_WIDTH * self.zoom,
+            None => lyrel_document::pdf::PAGE_WIDTH * self.zoom,
         };
         width.clamp(32., MAX_PAGE_WIDTH)
     }
@@ -541,7 +541,7 @@ impl PdfView {
     fn bump_generation(&mut self, cx: &mut Context<Self>) {
         self.generation = self.generation.wrapping_add(1);
         self.cancel.cancel();
-        self.cancel = CancelToken::default();
+        self.cancel = CancelToken::new();
         // 缩放／适应改变页面像素后，命中的归一化矩形仍指向同一段文字；
         // 重新走一次跳转把当前命中所在的页与位置放回视野，而不是停在旧
         // 页宽算出的滚动位置。
@@ -557,17 +557,17 @@ impl PdfView {
         if let Some(&dim) = self.dims.get(self.current) {
             let offset = self.scroll.offset();
             let page_fraction = (f32::from(-offset.y)
-                - lyrel_pdf::page_top_y(&self.dims, previous_width, self.current))
-                / lyrel_pdf::display_height(dim, previous_width).max(1.);
+                - lyrel_document::pdf::page_top_y(&self.dims, previous_width, self.current))
+                / lyrel_document::pdf::display_height(dim, previous_width).max(1.);
             let width = self.page_width();
             let viewport = self.viewport.unwrap_or_else(|| self.scroll.bounds().size);
             let max_y =
-                (lyrel_pdf::content_height(&self.dims, width) - f32::from(viewport.height)).max(0.);
+                (lyrel_document::pdf::content_height(&self.dims, width) - f32::from(viewport.height)).max(0.);
             let max_x = (width + 2. * PAGE_PAD_X - f32::from(viewport.width)).max(0.);
             // 保留当前页内的阅读锚点，包括查找定位在页顶之前留下的少量留边。
             // 旧像素偏移不能直接用于新页宽，否则长文档会退回前面数页。
-            let y = lyrel_pdf::page_top_y(&self.dims, width, self.current)
-                + page_fraction * lyrel_pdf::display_height(dim, width);
+            let y = lyrel_document::pdf::page_top_y(&self.dims, width, self.current)
+                + page_fraction * lyrel_document::pdf::display_height(dim, width);
             self.scroll.set_offset(Point {
                 x: px((f32::from(offset.x) * width / previous_width).clamp(-max_x, 0.)),
                 y: px(-y.clamp(0., max_y)),
@@ -595,17 +595,17 @@ impl PdfView {
     }
 
     pub(crate) fn zoom_in(&mut self, cx: &mut Context<Self>) {
-        let current = self.page_width() / lyrel_pdf::PAGE_WIDTH;
+        let current = self.page_width() / lyrel_document::pdf::PAGE_WIDTH;
         self.fit = None;
         self.zoom = (current * ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX);
-        self.rescale(current * lyrel_pdf::PAGE_WIDTH, cx);
+        self.rescale(current * lyrel_document::pdf::PAGE_WIDTH, cx);
     }
 
     pub(crate) fn zoom_out(&mut self, cx: &mut Context<Self>) {
-        let current = self.page_width() / lyrel_pdf::PAGE_WIDTH;
+        let current = self.page_width() / lyrel_document::pdf::PAGE_WIDTH;
         self.fit = None;
         self.zoom = (current / ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX);
-        self.rescale(current * lyrel_pdf::PAGE_WIDTH, cx);
+        self.rescale(current * lyrel_document::pdf::PAGE_WIDTH, cx);
     }
 
     pub(crate) fn fit_width(&mut self, cx: &mut Context<Self>) {
@@ -637,12 +637,12 @@ impl PdfView {
         }
         let index = index.min(self.dims.len() - 1);
         let page_width = self.page_width();
-        let top = lyrel_pdf::page_top_y(&self.dims, page_width, index);
+        let top = lyrel_document::pdf::page_top_y(&self.dims, page_width, index);
         let viewport_height = self
             .viewport
             .map(|size| f32::from(size.height))
             .unwrap_or(900.);
-        let content = lyrel_pdf::content_height(&self.dims, page_width);
+        let content = lyrel_document::pdf::content_height(&self.dims, page_width);
         let max_scroll = (content - viewport_height).max(0.);
         let y = (-top).clamp(-max_scroll, 0.);
         self.scroll.set_offset(Point {
@@ -682,19 +682,19 @@ impl PdfView {
 
     /// 跳到一个大纲／链接目的地：带坐标时把目标点放到视口顶部留边，
     /// 否则整页对齐；x 坐标只在页面比视口宽时水平居中该点。
-    fn go_to_destination(&mut self, destination: &lyrel_pdf::Destination, cx: &mut Context<Self>) {
+    fn go_to_destination(&mut self, destination: &lyrel_document::pdf::Destination, cx: &mut Context<Self>) {
         if self.dims.is_empty() {
             return;
         }
         let page = destination.page.min(self.dims.len() - 1);
         let page_width = self.page_width();
-        let display = lyrel_pdf::display_height(self.dims[page], page_width);
+        let display = lyrel_document::pdf::display_height(self.dims[page], page_width);
         let viewport = self.scroll.bounds().size;
         let viewport_h = f32::from(viewport.height).max(1.);
         let viewport_w = f32::from(viewport.width).max(1.);
-        let content = lyrel_pdf::content_height(&self.dims, page_width);
+        let content = lyrel_document::pdf::content_height(&self.dims, page_width);
         let max_scroll = (content - viewport_h).max(0.);
-        let point_y = lyrel_pdf::page_top_y(&self.dims, page_width, page)
+        let point_y = lyrel_document::pdf::page_top_y(&self.dims, page_width, page)
             + destination.y.unwrap_or(0.) * display;
         // 无 y 的目的地整页对齐；有 y 的留一点上缘，让跳转点在视野里。
         let y = if destination.y.is_some() {
@@ -797,7 +797,7 @@ impl PdfView {
         self.search_seq = self.search_seq.wrapping_add(1);
         self.search_running = false;
         self.text_cancel.cancel();
-        self.text_cancel = CancelToken::default();
+        self.text_cancel = CancelToken::new();
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -816,7 +816,7 @@ impl PdfView {
         self.search_seq = self.search_seq.wrapping_add(1);
         let seq = self.search_seq;
         self.text_cancel.cancel();
-        self.text_cancel = CancelToken::default();
+        self.text_cancel = CancelToken::new();
         self.matches.clear();
         self.current_match = None;
         self.search_running = false;
@@ -955,8 +955,8 @@ impl PdfView {
         let scroll_y = f32::from(-self.scroll.offset().y).max(0.);
         let index = self.matches.iter().position(|m| {
             let rect_y = m.rects.first().map(|rect| rect.y).unwrap_or(0.);
-            lyrel_pdf::page_top_y(&self.dims, page_width, m.page)
-                + rect_y * lyrel_pdf::display_height(self.dims[m.page], page_width)
+            lyrel_document::pdf::page_top_y(&self.dims, page_width, m.page)
+                + rect_y * lyrel_document::pdf::display_height(self.dims[m.page], page_width)
                 >= scroll_y
         });
         Some(index.unwrap_or(0))
@@ -998,8 +998,8 @@ impl PdfView {
         let rect_y = m.rects.first().map(|rect| rect.y).unwrap_or(0.);
         let rect_h = m.rects.first().map(|rect| rect.h).unwrap_or(0.);
         let page_width = self.page_width();
-        let display = lyrel_pdf::display_height(self.dims[page], page_width);
-        let top = lyrel_pdf::page_top_y(&self.dims, page_width, page) + rect_y * display;
+        let display = lyrel_document::pdf::display_height(self.dims[page], page_width);
+        let top = lyrel_document::pdf::page_top_y(&self.dims, page_width, page) + rect_y * display;
         let bottom = top + rect_h * display;
         let scroll_y = f32::from(-self.scroll.offset().y).max(0.);
         let viewport_h = f32::from(self.scroll.bounds().size.height).max(1.);
@@ -1081,7 +1081,7 @@ impl PdfView {
         page: usize,
         document_id: gpui_kit::EntityId,
         revision: u64,
-        extracted: Option<lyrel_pdf::PageText>,
+        extracted: Option<lyrel_document::pdf::PageText>,
         cx: &mut Context<Self>,
     ) {
         self.text_jobs = self.text_jobs.saturating_sub(1);
@@ -1106,7 +1106,7 @@ impl PdfView {
 
     /// 窗口坐标点到 (页, 归一化页内坐标)。页面在滚动列里的实际几何由
     /// scroll bounds、偏移和纯布局函数推出，不依赖该页是否已光栅化。
-    fn point_to_page(&self, position: Point<Pixels>) -> Option<(usize, lyrel_pdf::NormPoint)> {
+    fn point_to_page(&self, position: Point<Pixels>) -> Option<(usize, lyrel_document::pdf::NormPoint)> {
         if self.dims.is_empty() {
             return None;
         }
@@ -1119,12 +1119,12 @@ impl PdfView {
         let column_y = f32::from(bounds.origin.y) + f32::from(offset.y);
         let probe = f32::from(position.y) - column_y;
         for index in 0..self.dims.len() {
-            let top = lyrel_pdf::page_top_y(&self.dims, page_width, index);
-            let height = lyrel_pdf::display_height(self.dims[index], page_width);
+            let top = lyrel_document::pdf::page_top_y(&self.dims, page_width, index);
+            let height = lyrel_document::pdf::display_height(self.dims[index], page_width);
             if probe >= top && probe < top + height {
                 return Some((
                     index,
-                    lyrel_pdf::NormPoint::new(
+                    lyrel_document::pdf::NormPoint::new(
                         ((f32::from(position.x) - column_x) / page_width).clamp(0., 1.),
                         ((probe - top) / height.max(1.)).clamp(0., 1.),
                     ),
@@ -1197,7 +1197,7 @@ impl PdfView {
         cx.notify();
     }
 
-    fn sync_document(&mut self, cx: &mut Context<Self>) -> Option<Arc<lyrel_pdf::PdfDocument>> {
+    fn sync_document(&mut self, cx: &mut Context<Self>) -> Option<Arc<lyrel_document::pdf::PdfDocument>> {
         let (revision, ready) = {
             let document = self.document.read(cx);
             (document.revision(), document.ready())
@@ -1243,12 +1243,12 @@ impl PdfView {
         let viewport_height = f32::from(self.scroll.bounds().size.height);
         let scroll_y = f32::from(-self.scroll.offset().y);
         let (start, end) =
-            lyrel_pdf::keep_window(&self.dims, page_width, scroll_y, viewport_height);
+            lyrel_document::pdf::keep_window(&self.dims, page_width, scroll_y, viewport_height);
         // current 只在视口真正滚到别处时才从 scroll_y 反推,避免 go_to_destination
         // 显式钉住的页在 scroll 被 clamp(如视口比内容大)时被旧 offset 覆盖。
         if (scroll_y - self.last_scroll_y).abs() > 0.5 {
             self.last_scroll_y = scroll_y;
-            self.current = lyrel_pdf::current_page(&self.dims, page_width, scroll_y)
+            self.current = lyrel_document::pdf::current_page(&self.dims, page_width, scroll_y)
                 .min(self.dims.len().saturating_sub(1));
         }
 
@@ -1294,7 +1294,7 @@ impl PdfView {
         let document_id = self.document.entity_id();
         let revision = self.revision;
         for (index, attempt) in to_render {
-            let scale = lyrel_pdf::render_scale(page_width, scale_factor, self.dims[index].0);
+            let scale = lyrel_document::pdf::render_scale(page_width, scale_factor, self.dims[index].0);
             let document = document.clone();
             let cancel = self.cancel.clone();
             #[cfg(test)]
@@ -1343,7 +1343,7 @@ impl PdfView {
         document_id: gpui_kit::EntityId,
         revision: u64,
         generation: u64,
-        rendered: Result<lyrel_pdf::RenderedPage, lyrel_pdf::RenderError>,
+        rendered: Result<lyrel_document::pdf::RenderedPage, lyrel_document::pdf::RenderError>,
         cx: &mut Context<Self>,
     ) {
         // A newer attempt for the same page owns the slot now; this result is
@@ -1368,7 +1368,7 @@ impl PdfView {
         let viewport_height = f32::from(self.scroll.bounds().size.height);
         let scroll_y = f32::from(-self.scroll.offset().y);
         let (start, end) =
-            lyrel_pdf::keep_window(&self.dims, page_width, scroll_y, viewport_height);
+            lyrel_document::pdf::keep_window(&self.dims, page_width, scroll_y, viewport_height);
         if index < start || index > end {
             if let Some(slot) = self.slots.get_mut(index) {
                 slot.image = None;
@@ -1391,7 +1391,7 @@ impl PdfView {
                     None => slot.failed = true,
                 }
             }
-            Err(lyrel_pdf::RenderError::Cancelled) => {
+            Err(lyrel_document::pdf::RenderError::Cancelled) => {
                 if let Some(slot) = self.slots.get_mut(index) {
                     slot.attempted = 0;
                 }
@@ -1547,15 +1547,15 @@ impl PdfView {
 
     fn render_ready(
         &self,
-        document: Arc<lyrel_pdf::PdfDocument>,
+        document: Arc<lyrel_document::pdf::PdfDocument>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let page_width = self.page_width();
         let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
-        let content_height = lyrel_pdf::content_height(&self.dims, page_width);
-        let (start, end) = lyrel_pdf::keep_window(
+        let content_height = lyrel_document::pdf::content_height(&self.dims, page_width);
+        let (start, end) = lyrel_document::pdf::keep_window(
             &self.dims,
             page_width,
             f32::from(-self.scroll.offset().y),
@@ -1570,14 +1570,14 @@ impl PdfView {
             let Some(dim) = self.dims.get(index) else {
                 break;
             };
-            let height = lyrel_pdf::display_height(*dim, page_width);
+            let height = lyrel_document::pdf::display_height(*dim, page_width);
             let slot = &self.slots[index];
             let image = slot.image.as_ref().map(markdown::images::Bitmap::image);
             let mut page = div()
                 .id(SharedString::from(format!("pdf-page-{index}")))
                 .test_support()
                 .absolute()
-                .top(px(lyrel_pdf::page_top_y(&self.dims, page_width, index)))
+                .top(px(lyrel_document::pdf::page_top_y(&self.dims, page_width, index)))
                 .left(gpui_kit::relative(0.5))
                 .ml(px(-page_width / 2.))
                 .w(px(page_width))
@@ -1648,10 +1648,10 @@ impl PdfView {
                             .cursor_pointer()
                             .hover(|link| link.bg(cx.theme().primary.opacity(0.12)))
                             .on_click(cx.listener(move |this, _, _window, cx| match &target {
-                                lyrel_pdf::LinkTarget::Page(destination) => {
+                                lyrel_document::pdf::LinkTarget::Page(destination) => {
                                     this.go_to_destination(destination, cx)
                                 }
-                                lyrel_pdf::LinkTarget::Uri(uri) => cx.open_url(uri),
+                                lyrel_document::pdf::LinkTarget::Uri(uri) => cx.open_url(uri),
                             })),
                     );
                 }
@@ -1881,7 +1881,7 @@ impl PdfView {
 
     /// 大纲面板：缩进的书签列表，点击或键盘 Enter 跳到各自目的地。
     /// 没有目的地的条目灰显且不可点，不假装能导航。
-    fn render_toc(&self, document: &lyrel_pdf::PdfDocument, cx: &mut Context<Self>) -> AnyElement {
+    fn render_toc(&self, document: &lyrel_document::pdf::PdfDocument, cx: &mut Context<Self>) -> AnyElement {
         let mut column = div()
             .id("pdf-toc")
             .test_support()
@@ -1973,14 +1973,14 @@ impl PdfView {
 /// rectangle. Coordinates are normalized page fractions; font size is in PDF
 /// points and scales with the current page width.
 fn field_overlay(
-    field: &lyrel_pdf::FormField,
+    field: &lyrel_document::pdf::FormField,
     page_width: f32,
     page_dim: (f32, f32),
 ) -> AnyElement {
     let scale = page_width / page_dim.0.max(1.);
     let rect = field.rect;
     let width = (rect.w * page_width).max(1.);
-    let height = (rect.h * lyrel_pdf::display_height(page_dim, page_width)).max(1.);
+    let height = (rect.h * lyrel_document::pdf::display_height(page_dim, page_width)).max(1.);
     let font_size = (field.font_size.unwrap_or(11.) * scale).clamp(1., height);
     let line_height = font_size * 1.2;
     let lines: Vec<&str> = match field.multiline {
@@ -1997,9 +1997,9 @@ fn field_overlay(
     }
     for line in lines {
         let row = match field.alignment {
-            lyrel_pdf::FieldAlignment::Left => h_flex().justify_start(),
-            lyrel_pdf::FieldAlignment::Center => h_flex().justify_center(),
-            lyrel_pdf::FieldAlignment::Right => h_flex().justify_end(),
+            lyrel_document::pdf::FieldAlignment::Left => h_flex().justify_start(),
+            lyrel_document::pdf::FieldAlignment::Center => h_flex().justify_center(),
+            lyrel_document::pdf::FieldAlignment::Right => h_flex().justify_end(),
         };
         text = text.child(
             row.w_full().child(
@@ -2017,7 +2017,7 @@ fn field_overlay(
         .aria_label(field.value.clone())
         .absolute()
         .left(px(rect.x * page_width))
-        .top(px(rect.y * lyrel_pdf::display_height(page_dim, page_width)))
+        .top(px(rect.y * lyrel_document::pdf::display_height(page_dim, page_width)))
         .w(px(width))
         .h(px(height))
         .px(px((scale * 2.).min(6.)))

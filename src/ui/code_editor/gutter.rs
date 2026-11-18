@@ -31,7 +31,7 @@ use super::{BufferId, TabCode};
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::HostOps;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use lyrel_text::TextFormat;
+use lyrel_document::text::TextFormat;
 
 /// How long typing has to pause before the buffer is diffed again.
 const DIFF_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn the_base_is_decoded_the_way_the_buffer_was() {
-        use lyrel_text::{LineEnding, TextFormat};
+        use lyrel_document::text::{LineEnding, TextFormat};
 
         let crlf = TextFormat {
             line_ending: LineEnding::CrLf,

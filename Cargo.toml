@@ -51,11 +51,11 @@ lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install
 
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
-lyrel-code-editor = { path = "crates/lyrel-code-editor" }
-lyrel-text = { path = "crates/lyrel-text" }
-lyrel-epub = { path = "crates/lyrel-epub" }
-# GUI-free PDF reading backend adapted from the pinned Zorite MIT viewer.
-lyrel-pdf = { path = "crates/lyrel-pdf" }
+# All GUI-free document engines (text codec, structured projections, CSV,
+# GIF/TIFF, draw.io probe, EPUB reading + full-book search, read-only PDF) in
+# one crate. The workbench enables `formats`; `lyrel-markdown-editor` depends
+# on it with default features off so it never compiles the format parsers.
+lyrel-document = { path = "crates/lyrel-document", features = ["formats"] }
 base64 = "0.23.1"
 # Session and shell tokens are 128-bit OS entropy, never a timestamp or a
 # hash of the document. `getrandom` is already in the tree.
@@ -115,7 +115,8 @@ percent-encoding = "2"
 # gpui-component's LSP hooks take their types from.
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 # Diff base decoding uses the opened file's selected encoding without changing its representation.
-encoding_rs = "0.8.35"
+# Same pin as `lyrel-document`'s text codec (unified workspace declaration).
+encoding_rs = "0.8.44"
 
 
 # SSH profile ids in the connection manager UI (`ui::ssh_connect`,
@@ -309,7 +310,7 @@ tiff = "0.11.3"
 yaml-edit = { version = "=0.3.6", default-features = false }
 # Self-made PDF fixtures for the production workbench seam; never linked into
 # the released library.
-lyrel-pdf = { path = "crates/lyrel-pdf", features = ["test-fixtures"] }
+lyrel-document = { path = "crates/lyrel-document", features = ["test-fixtures"] }
 
 [lints]
 workspace = true
@@ -324,7 +325,7 @@ native-markdown-tests = ["test-support"]
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor；Linux 排除两个 desktop 包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-code-editor", "crates/lyrel-text", "crates/lyrel-epub", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
 
 [workspace.package]
 edition = "2024"

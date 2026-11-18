@@ -908,7 +908,7 @@ mod gpui_tests {
 
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-    use lyrel_text::{EditorConfig, TextFormat};
+    use lyrel_document::text::{EditorConfig, TextFormat};
 
     use super::super::nav::gpui_tests::open_rs;
     use super::super::{BufferKind, test_host};
@@ -1371,7 +1371,7 @@ mod gpui_tests {
                 "fn main() {}\n".into(),
                 TextFormat::default(),
                 EditorConfig::default(),
-                lyrel_text::detect_indent("", "rust"),
+                lyrel_document::text::detect_indent("", "rust"),
                 None,
                 window,
                 cx,

@@ -102,15 +102,12 @@ function isDesktopOnly(file) {
   );
 }
 
-// GUI-free 也进 Linux headless 图的成员：CLI、文本/PDF/EPUB 后端、纯模型 crate
+// GUI-free 也进 Linux headless 图的成员：CLI、lyrel-document 的全部文档引擎
 // 以及它们的集成测试。lyrel-core 源码仍按保守分支计入 server。
 function isDesktopAndLinuxOnly(file) {
   return (
     file.startsWith('crates/lyrel-cli/') ||
-    file.startsWith('crates/lyrel-code-editor/') ||
-    file.startsWith('crates/lyrel-text/') ||
-    file.startsWith('crates/lyrel-epub/') ||
-    file.startsWith('crates/lyrel-pdf/') ||
+    file.startsWith('crates/lyrel-document/') ||
     /^crates\/lyrel-(core|server)\/tests\//.test(file)
   );
 }

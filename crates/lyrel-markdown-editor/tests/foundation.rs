@@ -12,7 +12,7 @@ fn two_presentations_share_host_edits_and_history_without_sharing_selection(
         let document = cx.new(|_| {
             Document::new(
                 "one\r\n中🎉two\nlast".into(),
-                lyrel_text::TextFormat::default(),
+                lyrel_document::text::TextFormat::default(),
             )
         });
         let first = cx.new(|cx| EditorState::for_document(document.clone(), cx));
@@ -83,7 +83,9 @@ fn two_presentations_share_host_edits_and_history_without_sharing_selection(
 #[gpui_kit::test]
 fn source_representation_is_atomic_for_batch_edits_and_native_undo(cx: &mut TestAppContext) {
     let original = b"\xef\xbb\xbfalpha  \r\nbeta\ngamma\r\nattached$$x$$literal\n<Unknown />";
-    let decoded = lyrel_text::decode_source(original).unwrap().unwrap();
+    let decoded = lyrel_document::text::decode_source(original)
+        .unwrap()
+        .unwrap();
     let document = cx.update(|cx| cx.new(|_| Document::new(decoded.text, decoded.format)));
     let editor = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {

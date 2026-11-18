@@ -25,10 +25,9 @@ use crate::ui::editor_session::{self, TabEditor};
 use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
-use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
+use lyrel_document::text::{EditorConfig, Indent, LineEnding, TextFormat};
 
 mod book_document;
-mod book_search;
 mod book_view;
 mod buffers;
 pub(crate) mod commands;
@@ -1660,7 +1659,7 @@ impl LyrelApp {
         };
         self.raise_code_overlay();
         let n = self.editor.buffers.next_untitled();
-        let indent = lyrel_text::detect_indent("", "text");
+        let indent = lyrel_document::text::detect_indent("", "text");
         let id = self.editor_new_buffer(
             host,
             PathBuf::new(),
@@ -1690,7 +1689,7 @@ impl LyrelApp {
         };
         let host: SharedHost = lyrel_core::host::local::LocalHost::new();
         let n = self.editor.buffers.next_untitled();
-        let indent = lyrel_text::detect_indent(&text, "text");
+        let indent = lyrel_document::text::detect_indent(&text, "text");
         let dirty = !text.is_empty();
         let id = self.editor_new_buffer(
             host,

@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use lyrel_code_editor::drawio::MAX_DOCUMENT_BYTES;
+use lyrel_document::drawio::MAX_DOCUMENT_BYTES;
 
 use super::session::SessionId;
 

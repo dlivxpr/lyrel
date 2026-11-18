@@ -15,14 +15,14 @@
 
 use super::markdown::images::Bitmap;
 use super::*;
-use crate::ui::code_editor::book_search::BookText;
 use gpui_kit::{App, Context, SharedString};
 use lyrel_core::host::transfer::SEGMENT_BYTES;
 use lyrel_core::host::{Host, HostId, MTime, Meta};
-use lyrel_epub::{
-    Bookmark, CancellationToken, Chapter, EpubBook, EpubError, ImageMode, Limits, ReaderPrefs,
+use lyrel_document::epub::{
+    Bookmark, CancelToken, Chapter, EpubBook, EpubError, ImageMode, Limits, ReaderPrefs,
     ReaderRecord, ReadingPosition, TocEntry, locate, validate_record,
 };
+use lyrel_document::epub::BookText;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
@@ -165,7 +165,7 @@ pub(crate) fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Resul
             ),
         ));
     }
-    let mut temp = tempfile::Builder::new().prefix("lyrel-epub-").tempfile()?;
+    let mut temp = tempfile::Builder::new().prefix("lyrel-document-epub-").tempfile()?;
     let mut hasher = Sha256::new();
     let mut read = 0u64;
     while read < bound.len {
@@ -203,12 +203,12 @@ pub(crate) fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Resul
         .to_string_lossy()
         .into_owned();
     let source = temp.reopen()?;
-    let result = lyrel_epub::open_book(
+    let result = lyrel_document::epub::open_book(
         source,
         fingerprint.clone(),
         &fallback,
         &limits,
-        &CancellationToken::new(),
+        &CancelToken::new(),
     );
     let mtime = bound.mtime.or(meta.mtime);
     let record = read_record(host.id(), &path, &fingerprint);
@@ -329,12 +329,12 @@ pub(crate) struct BookDocument {
     limits: Limits,
     cache: HashMap<usize, Arc<ChapterData>>,
     order: VecDeque<usize>,
-    pending: HashMap<usize, (u64, CancellationToken)>,
+    pending: HashMap<usize, (u64, CancelToken)>,
     chapter_errors: HashMap<usize, SharedString>,
     generation: u64,
     index: IndexState,
     index_generation: u64,
-    index_cancel: CancellationToken,
+    index_cancel: CancelToken,
     record: ReaderRecord,
     record_path: Option<PathBuf>,
     writer: Option<ReaderWriter>,
@@ -358,7 +358,7 @@ impl BookDocument {
             generation: 0,
             index: IndexState::Idle,
             index_generation: 0,
-            index_cancel: CancellationToken::new(),
+            index_cancel: CancelToken::new(),
             record: loaded.record,
             record_path,
             writer,
@@ -452,7 +452,7 @@ impl BookDocument {
             return;
         };
         let generation = self.generation;
-        let token = CancellationToken::new();
+        let token = CancelToken::new();
         self.pending.insert(index, (generation, token.clone()));
         let limits = self.limits;
         cx.spawn(async move |this, cx| {
@@ -461,7 +461,7 @@ impl BookDocument {
                     let file = std::fs::File::open(&temp).map_err(|error| EpubError::Io {
                         detail: error.to_string(),
                     })?;
-                    lyrel_epub::read_chapter(
+                    lyrel_document::epub::read_chapter(
                         &book,
                         file,
                         index,
@@ -522,7 +522,7 @@ impl BookDocument {
 
     fn decode_images(
         mut chapter: Chapter,
-        token: &CancellationToken,
+        token: &CancelToken,
     ) -> Result<PreparedChapter, EpubError> {
         let mut decoded = HashMap::new();
         let mut unavailable = Vec::new();
@@ -608,7 +608,7 @@ impl BookDocument {
         let total = book.chapter_count();
         let generation = self.index_generation.wrapping_add(1);
         self.index_generation = generation;
-        let token = CancellationToken::new();
+        let token = CancelToken::new();
         self.index_cancel = token.clone();
         self.index = IndexState::Building { done: 0, total };
         cx.spawn(async move |this, cx| {
@@ -626,7 +626,7 @@ impl BookDocument {
                         let file = std::fs::File::open(&path).map_err(|error| EpubError::Io {
                             detail: error.to_string(),
                         })?;
-                        lyrel_epub::read_chapter(
+                        lyrel_document::epub::read_chapter(
                             &book,
                             file,
                             index,

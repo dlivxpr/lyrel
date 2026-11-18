@@ -1,7 +1,7 @@
 //! #284 的生产工作台接缝：PDF 作为真实文档打开、翻页、缩放、密码、既有外观。
 //!
 //! 这些测试只走工作台入口（`open_file_in_editor`、`editor_open_on_host`、
-//! 键位、按钮与真实 gpui 测试平台窗口），夹具由 `lyrel-pdf` 的自有生成器在
+//! 键位、按钮与真实 gpui 测试平台窗口），夹具由 `lyrel-document` 的自有生成器在
 //! 测试进程内构造，不依赖协调目录或任何下载资源。它们不是原生 OS 窗口；
 //! 真实桌面、SSH、系统 IME 与性能仍由单独验收覆盖。
 
@@ -11,7 +11,7 @@ use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
-use lyrel_pdf::fixtures;
+use lyrel_document::pdf::fixtures;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -464,7 +464,10 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
         assert_eq!(fields[0].value, "中文表单279");
         assert_eq!(fields[1].value, "第一行\n第二行");
         assert!(fields[1].multiline);
-        assert_eq!(fields[1].alignment, lyrel_pdf::FieldAlignment::Right);
+        assert_eq!(
+            fields[1].alignment,
+            lyrel_document::pdf::FieldAlignment::Right
+        );
         assert!(fields.iter().all(|field| field.needs_text_overlay()));
     });
     cx.update(|window, _| {

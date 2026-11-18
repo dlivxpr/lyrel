@@ -15,7 +15,6 @@
 //! external URL.
 
 use super::book_document::{BookDocument, BookState, ChapterData, IndexState};
-use super::book_search::{self, SearchHit};
 use super::*;
 use gpui_kit::base::Selectable as _;
 use gpui_kit::base::{TextView, TextViewState, TextViewStyle};
@@ -25,8 +24,10 @@ use gpui_kit::{
     AnyElement, App, Context, ElementId, Entity, FocusHandle, Focusable, ListState, Render,
     SharedString, Subscription, Task, Window, div, px, relative, rems,
 };
-use lyrel_epub::{
-    CancellationToken, Limits, ReaderPrefs, ReaderTheme, ReadingPosition, html_with_marks,
+use lyrel_document::epub::search as book_search;
+use lyrel_document::epub::search::SearchHit;
+use lyrel_document::epub::{
+    CancelToken, Limits, ReaderPrefs, ReaderTheme, ReadingPosition, html_with_marks,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -82,7 +83,7 @@ struct BookmarkKey {
 }
 
 impl BookmarkKey {
-    fn of(bookmark: &lyrel_epub::Bookmark) -> Self {
+    fn of(bookmark: &lyrel_document::epub::Bookmark) -> Self {
         Self {
             chapter: bookmark.chapter,
             block: bookmark.block,
@@ -149,7 +150,7 @@ pub(crate) struct BookView {
     search_open: bool,
     search_input: Entity<InputState>,
     search_generation: u64,
-    search_cancel: CancellationToken,
+    search_cancel: CancelToken,
     search_query: String,
     results: Vec<SearchHit>,
     results_truncated: bool,
@@ -243,7 +244,7 @@ impl BookView {
             search_open: false,
             search_input,
             search_generation: 0,
-            search_cancel: CancellationToken::new(),
+            search_cancel: CancelToken::new(),
             search_query: String::new(),
             results: Vec::new(),
             results_truncated: false,
@@ -556,7 +557,7 @@ impl BookView {
         let resolved = if href.starts_with('#') {
             let current = self.document.read(cx).chapter_href(self.chapter);
             current
-                .and_then(|base| lyrel_epub::resolve(&base, href))
+                .and_then(|base| lyrel_document::epub::resolve(&base, href))
                 .unwrap_or_else(|| href.to_owned())
         } else {
             href.to_owned()
@@ -895,7 +896,7 @@ impl BookView {
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
         self.search_cancel.cancel();
-        let cancel = CancellationToken::new();
+        let cancel = CancelToken::new();
         self.search_cancel = cancel.clone();
         let limits = Limits::default();
         let query_for_task = query.clone();

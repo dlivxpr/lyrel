@@ -1124,7 +1124,9 @@ struct EditingInline {
 
 impl EditorState {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let document = cx.new(|_| Document::new(String::new(), lyrel_text::TextFormat::default()));
+        let document = cx.new(|_| {
+            Document::new(String::new(), lyrel_document::text::TextFormat::default())
+        });
         Self::for_document(document, cx)
     }
 

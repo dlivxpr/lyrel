@@ -11,7 +11,7 @@
 //! 只持有 Document 和最新的投影。
 
 use std::ops::Range;
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use gpui_kit::ScrollStrategy;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -27,13 +27,13 @@ use gpui_kit::{
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 
-use lyrel_code_editor::json::mutation::{self, Mutation, MutationError, NodeTarget};
-use lyrel_code_editor::json::projection::{
+use lyrel_document::json::mutation::{self, Mutation, MutationError, NodeTarget};
+use lyrel_document::json::projection::{
     self, JsonFormat, JsonNodeKind, JsonProjection, ProjectionFailure, STRUCTURE_INPUT_BYTES,
     STRUCTURE_NODES, STRUCTURE_RECORDS,
 };
-use lyrel_code_editor::state::{ProjectionResult, ProjectionState};
-use lyrel_code_editor::tree::{self, SourceLocation, Treelike, VisibleRow};
+use lyrel_document::tree::{self, SourceLocation, Treelike, VisibleRow};
+use lyrel_document::{ProjectionResult, ProjectionState};
 
 use super::structure_edit::{EditField, StructureEditEvent, StructureEditPanel};
 use super::structure_rows::{
@@ -156,11 +156,11 @@ impl JsonDocument {
                     break;
                 };
                 let generation = job.generation();
-                let cancel = Arc::clone(job.cancel());
+                let cancel = job.cancel().clone();
                 #[cfg(test)]
                 let gate = test_support::take_next_parse();
                 let result = crate::ui::host_ops::off_thread(move || {
-                    if cancel.load(Ordering::Acquire) {
+                    if cancel.is_cancelled() {
                         return None;
                     }
                     #[cfg(test)]
@@ -568,7 +568,7 @@ impl JsonView {
             .update(cx, |source, cx| source.set_soft_wrap(wrap, cx));
     }
 
-    pub(crate) fn set_format(&mut self, format: lyrel_text::TextFormat, cx: &mut Context<Self>) {
+    pub(crate) fn set_format(&mut self, format: lyrel_document::text::TextFormat, cx: &mut Context<Self>) {
         self.source
             .update(cx, |source, cx| source.set_format(format, cx));
     }

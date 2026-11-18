@@ -303,8 +303,8 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 密码：加密 PDF 显示密码提示；缺失或错误密码保留可重试的锁定状态并显示错误，不出现无限 spinner。输入框为掩码，提交后立即清空；密码只存在于这次解析调用中，不写入文档状态、标签页、日志或磁盘。正确密码恢复页数、文本与大纲；现代 AES 的工程实现仍按实际候选记录，当前夹具只覆盖公开测试值的 Standard R2／RC4-40。
 - 既有外观：hayro 0.8 原生渲染 `/AP /N` 与 `/AS` 状态字典，因此保留既有批注外观与勾选框状态；不导入上游写值、高亮编辑或 `resolve_state_dict` 字节归一化。无 `/AP` 的文本／选项字段用解密后的真实字符串、字体大小、多行与 `/Q` 对齐，在字段几何上叠加只读文本；Unicode 保持原文，不变成 `?`。叠加层没有编辑控件，源 PDF 从不重写或重新序列化。
 - 状态与命令：PDF 文档显示格式、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符；保存、另存为、撤销、行号跳转、符号、LSP 与文本查找按 `EditorInput::is_text()` 让行，不写盘也不弹永久无效的输入条；PDF 自己的查找与复制是 PDF 上下文内的独立动作。外部重写重新读取并替换文档；删除显示既有无保存关闭提示。
-- 复用记录：GUI-free `crates/lyrel-pdf` 保留 pinned Zorite MIT parse／password／单页渲染／`keep_window`／缩放／文本／outline／只读表单枚举算法，换成 hayro 0.8 与 Lyrel 自己的文档身份、Host 字节和呈现；`UPSTREAM.toml` 记录逐文件原始摘要与适配，MIT notice 位于 crate 的 `licenses/` 并进入根 `LICENSE`。同一导入还修复了文本 `locate` 的多字节字节推进、裁剪栈、单栏阅读顺序、Type3 前进宽度与 CJK 空格，并补齐 named destination／目的地坐标与旋转页链接。#285 直接消费这些文本几何、`select`/`selected_text`/`find_matches`、大纲与链接；上游 GPUI 交互不导入，Lyrel `PdfView` 以归一化几何重实现选择、高亮与导航。
-- 证据边界：生产工作台接缝测试覆盖打开与页身份、翻页／缩放／分屏、密码错误与正确恢复、既有外观与无 AP 中文／多行叠加、页窗口淘汰与位图释放、迟到结果防护、malformed／超预算、外部重写、owning Host／映射 Host 字节归属、版本化读取与读取迟到时标签页已关闭；#285 另覆盖大纲点击与键盘导航（命名与坐标目的地）、页内／旋转页链接与旋转页选区复制、搜索计数与 Enter／Shift+Enter 步进、末页 Unicode 命中、CJK 搜索与拖拽复制、连字展开后的复制、扫描页如实提示、扫掠迟到不串文档、分屏各自选区。夹具由 `lyrel-pdf` 自身生成，不依赖协调目录。真实产品窗口、真实 SSH 图像、macOS、系统剪贴板／IME、原生 DPI 与性能不在本切片的后台证据内，不能由 headless 测试或编译成功代替。
+- 复用记录：GUI-free `crates/lyrel-document` 的 `pdf` 模块保留 pinned Zorite MIT parse／password／单页渲染／`keep_window`／缩放／文本／outline／只读表单枚举算法，换成 hayro 0.8 与 Lyrel 自己的文档身份、Host 字节和呈现；`UPSTREAM-pdf.toml` 记录逐文件原始摘要与适配，MIT notice 位于 crate 的 `licenses/` 并进入根 `LICENSE`。同一导入还修复了文本 `locate` 的多字节字节推进、裁剪栈、单栏阅读顺序、Type3 前进宽度与 CJK 空格，并补齐 named destination／目的地坐标与旋转页链接。#285 直接消费这些文本几何、`select`/`selected_text`/`find_matches`、大纲与链接；上游 GPUI 交互不导入，Lyrel `PdfView` 以归一化几何重实现选择、高亮与导航。
+- 证据边界：生产工作台接缝测试覆盖打开与页身份、翻页／缩放／分屏、密码错误与正确恢复、既有外观与无 AP 中文／多行叠加、页窗口淘汰与位图释放、迟到结果防护、malformed／超预算、外部重写、owning Host／映射 Host 字节归属、版本化读取与读取迟到时标签页已关闭；#285 另覆盖大纲点击与键盘导航（命名与坐标目的地）、页内／旋转页链接与旋转页选区复制、搜索计数与 Enter／Shift+Enter 步进、末页 Unicode 命中、CJK 搜索与拖拽复制、连字展开后的复制、扫描页如实提示、扫掠迟到不串文档、分屏各自选区。夹具由 `lyrel-document` 的 `pdf` fixtures 自身生成，不依赖协调目录。真实产品窗口、真实 SSH 图像、macOS、系统剪贴板／IME、原生 DPI 与性能不在本切片的后台证据内，不能由 headless 测试或编译成功代替。
 
 <a id="svg-documents"></a>
 #### SVG 源码与安全原生预览（#283 已实现）
@@ -417,7 +417,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 | 全书搜索文本 | 32 MiB | 索引明确报告预算失败 |
 | 单次查询命中 | 5,000 条 | 明示结果受限，不宣称完整 |
 
-完整解析预算见 `crates/lyrel-epub/src/limits.rs`。解析／阅读状态的固定来源与原始摘要见该 crate 的 `UPSTREAM.toml`，GUI 交互的适配记录见 `src/ui/code_editor/book_view/UPSTREAM.toml`；Glim MIT notice 随根 `LICENSE` 分发。
+完整解析预算见 `crates/lyrel-document/src/epub/limits.rs`。解析／阅读状态的固定来源与原始摘要见 crate 根部的 `UPSTREAM-epub.toml`，GUI 交互的适配记录见 `src/ui/code_editor/book_view/UPSTREAM.toml`；Glim MIT notice 随根 `LICENSE` 分发。
 
 证据范围：Windows 生产工作台的完整章节末尾搜索、偏好／书签／阅读位置保存重开和损坏／不支持状态三项通过，原件未写；同次编译零 warning。另由 GUI-free 消费者通过新增的 Unicode 搜索范围与有界上下文回归。上述不代替最终组合候选的原生窗口、真实 SSH、macOS、显示缩放、系统 IME 或性能验收。
 
@@ -448,7 +448,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 
 参考与 MIT 来源固定为 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`，不沿用下方 #204 的旧基线。独立 `lyrel-markdown-editor` 已接入共享 Document、所有 presentation 的写作/图片/链接/表格/code/二维公式/Mermaid provider 与原工作台文件生命周期；没有旧 WYSIWYG fallback 或产品双编辑器开关。独立导入限于 MIT editor/bidi/ratex 16 文件，`zorite-markdown =0.10.1` 仍为关闭默认 view feature 的正式语法依赖，不复制 GPL 应用、笔记数据库或只读 renderer。
 
-工作台继续拥有 Host/path、dirty、save/save-as/conflict/close、tabs/groups 与全局状态；GUI-free `lyrel-text` 复用 Apache-2.0 codec/EditorConfig。Document 在同一事务内更新 LF 原文与逐行原始表示，Undo/Redo 同时恢复两者。保存捕获原 Document、Host/path、源文、编码/BOM 和逐行表示；完成不能把新编辑标为 clean，焦点变化不能重定向保存或关闭。
+工作台继续拥有 Host/path、dirty、save/save-as/conflict/close、tabs/groups 与全局状态；GUI-free `lyrel-document`（default-features off）的 `text` 模块复用 Apache-2.0 codec/EditorConfig。Document 在同一事务内更新 LF 原文与逐行原始表示，Undo/Redo 同时恢复两者。保存捕获原 Document、Host/path、源文、编码/BOM 和逐行表示；完成不能把新编辑标为 clean，焦点变化不能重定向保存或关闭。
 
 能力责任、生产接线、排除构造的源码访问、原14项 native 消费者逐项迁移及最终证据入口见 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。`UPSTREAM.toml` 记录 pinned Git blob 摘要与本地适配；MIT 与字体 notices 保存在 crate 的 `licenses/` 及随平台包分发的根 `LICENSE`。代码与测试交付不是 #245 最终 native、实窗、SSH、平台、产物许可证或用户接受通过。
 
@@ -936,7 +936,7 @@ Markdown/MDX 保留以下适用的源码命令；文本变更直接提交到共�
 - Markdown/MDX 的源码保真优先于 `.editorconfig` 自动保存整理：不自动执行去尾空白、补末尾换行或换行转换，避免移除双空格硬换行等有效语法。配置仍可指导新输入的缩进；其他代码文件保持现有规则。
 - 解析、公式与图形渲染不阻塞输入；异步结果必须匹配文档身份与版本，过期结果不得覆盖新内容。
 
-Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 与各行终止符，经同一文档表示元数据编码，再执行所属 Host 的既有写入与冲突检测。支持 UTF-8（含 BOM）、UTF-16LE/BE BOM、GB18030 和 Windows-1252；无 BOM 的旧编码沿现有可逆探测策略，不把猜测当作编码声明。损坏的声明编码拒绝打开；不可编码输入保留未保存状态，仅明确选择转换 UTF-8 才改变编码，转换可撤销。状态栏换行切换是显式整篇转换，可撤销回各行原有终止符；显式去尾空白使用稀疏区间事务，不改变未涉及的行尾。普通代码文件继续调用 `lyrel_text::apply_save_rules`，Markdown 的双空格硬换行、未知构造和附着公式不因配置被动整理。
+Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 与各行终止符，经同一文档表示元数据编码，再执行所属 Host 的既有写入与冲突检测。支持 UTF-8（含 BOM）、UTF-16LE/BE BOM、GB18030 和 Windows-1252；无 BOM 的旧编码沿现有可逆探测策略，不把猜测当作编码声明。损坏的声明编码拒绝打开；不可编码输入保留未保存状态，仅明确选择转换 UTF-8 才改变编码，转换可撤销。状态栏换行切换是显式整篇转换，可撤销回各行原有终止符；显式去尾空白使用稀疏区间事务，不改变未涉及的行尾。普通代码文件继续调用 `lyrel_document::text::apply_save_rules`，Markdown 的双空格硬换行、未知构造和附着公式不因配置被动整理。
 
 另存为在所属 Host 写入成功后才采用新路径；取消、目标已打开或写入失败均保留原路径／未命名身份、内容与历史。更改扩展名不替换编辑内核；改为 `.mdx` 时现有各组均进入只读组件语义的源码呈现，不执行 JSX，也不清空撤销。保存前从同一 `Document::snapshot()` 捕获源文、编码/BOM 与逐行表示，再绑定当时的 BufferId、Document、Host 与路径；完成只确认这份快照，后续编辑仍为未保存。如果保存期间发生新编辑或表示转换，原关闭意图退役，后来单独保存不会重新触发旧关闭。保存中排队的另存为保留显式目标，不借用后来焦点。
 

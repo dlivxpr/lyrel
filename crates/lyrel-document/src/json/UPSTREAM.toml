@@ -1,0 +1,102 @@
+# #289 的 JSON 家族源码／依赖记录。
+#
+# 本模块没有复制 Glim 源文件：解析改由 registry 的无损 `jsonc-parser` 承担，
+# 只适配 Glim reader 已经验证过的树展开／完整值交互。下面逐文件固定上游
+# revision、原始 blob SHA-256 与保留／替换范围；sha256 是上游原始字节摘要，
+# 不是本地文件摘要。Glim MIT 正文与本地通知见根 LICENSE。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+ticket = "#289"
+maintainer = "Lyrel"
+license_notice = "LICENSE 的 Glim-derived JSON structure inspection 附录与既有 Glim MIT 正文"
+
+[[dependency]]
+name = "jsonc-parser"
+version = "=0.34.0"
+registry = "crates.io"
+license = "MIT"
+copyright = "Copyright (c) 2020 David Sherret"
+source = "https://github.com/dprint/jsonc-parser"
+scope = "带源码偏移的 JSON／JSONC AST 与 token；对象属性保持 Vec 顺序，重复键不被合并，NumberLit.value 保留原拼写"
+adaptation = "JSON 与 JSONC 分开设置 ParseOptions；JSONC 只放开注释与尾随逗号，其余 JSON5 扩展全部关闭。AST 只用于一次投影，节点保存源码范围与显示文本，不保存 Value"
+
+[[source]]
+upstream = "crates/glim-services/src/json.rs"
+sha256 = "fb8377f60b705be73052d1ec1ae3772bff871a2b55b335acc8bbb475db36cee5"
+bytes = 11481
+local = "crates/lyrel-document/src/json/projection.rs"
+status = "adapted semantics, parser replaced"
+retained = "JSONC 词法边界：字符串内的 `//`／`/*` 不是注释，块注释必须闭合，尾随逗号只在不进入字符串时生效；输入大小与节点数有界，取消检查贯穿投影"
+adapted = "注释／尾随逗号规则由 jsonc-parser 的 ParseOptions 表达，不再复制字节遮盖缓冲区；结构投影保留源码偏移与 occurrence，JSONL 逐行建立记录 identity"
+replaced = "上游 serde_json::Value 树会丢重复键、数字原拼写和源码范围，与 #279 的保真要求冲突；Value 构造与 nodes_for_value 不导入"
+not_imported = "format_document 整篇空白重排、JSON5 分支、Glim ResourcePool/Cancellation 类型"
+
+[[source]]
+upstream = "crates/glim-core/src/structured.rs"
+sha256 = "dc13ac6263f807fe5c8f6e06a7251d585d402ce39466452359d4b28e5a5abfac"
+bytes = 6247
+local = "crates/lyrel-document/src/tree.rs"
+status = "interaction logic adapted"
+retained = "可见行按深度优先展开、折叠状态与行索引分离、根节点默认可见；节点只保存父到子的索引，树遍历由调用方投影提供"
+adapted = "节点模型换成各格式自己的投影；`Node` 的显示字符串／children 结构不再统一住在一个 Value 树里。可见行、行选择上下移动与源码行列计算成为不依赖 GPUI 的共享模块"
+replaced = "TreeBuilder 的 Glim WorkingReservation 记账与 `kind: &'static str` 显示列；Lyrel 用输入字节／节点数／记录数／路径文本合计预算与每格式 kind 枚举，预算错误明确显示且不截断源文"
+not_imported = "ResourcePool、WorkingReservation、Tree Deref 作为文件内容模型"
+
+[[source]]
+upstream = "crates/glim-app/src/views/reader/json.rs"
+sha256 = "2ac9faeaaa08c43865b290a8428b1f42a97b931565658dff797286157b34c5e8"
+bytes = 5032
+local = "src/ui/code_editor/json_document.rs"
+status = "scheduling and failure interaction adapted"
+retained = "同一输入不重复解析；加载与失败状态不摧毁源码；阅读器只在成功投影上构建树；suspend／resume 时保留必要的呈现状态"
+adapted = "Glim reader job/cancellation 换成 Lyrel 每文档单 worker、revision/generation 校验和 `host_ops::off_thread`；同一共享 Document 驱动源码与结构，失败保留源码访问。不可变投影由 Arc 共享，分屏同步不复制整棵树"
+replaced = "TextSnapshot/ResourcePool/reader_jobs 类型与 Glim 应用的 ReaderHost；不复制 Glim 的应用壳、任务调度器或缓存"
+not_imported = "Glim reader session、文件读取和全局资源池"
+
+[[source]]
+upstream = "crates/glim-app/src/views/reader/json/view.rs"
+sha256 = "bb7f7e5cf52fa64ae3ade9b9943dc5d57858eb028221308b9a6b5ea5d785e05b"
+bytes = 10632
+local = "src/ui/code_editor/json_document.rs"
+status = "tree/full-value interaction adapted"
+retained = "展开向量、可见行重建、`UniformListScrollHandle` 行列表、按 kind 的颜色、双击完整值的交互、折叠状态在 suspension 中的保留思路"
+adapted = "GPUI Kit/Fast 组件与 Lyrel presentation 生命周期；结构视图改为源码面旁的同一文档呈现，新增键盘选择、`Enter` 精确定位源码 occurrence、JSONL 记录行与行号、完整值面板的复制／关闭。工作台分屏保持物理group的元素身份，焦点切换不丢工具栏首击；叶节点不保留虚假的展开状态"
+replaced = "`show_detail` 回调与 Glim ReaderHost／action 串；完整值在文档内面板显示，选中节点的源码范围直接从当前快照读取，避免第二份可变值"
+not_imported = "Glim 的 detail 浮层、应用动作记录、菜单与 reader contract 模块"
+
+# 明确不导入的相邻文件：Glim `json.rs` 的 format_document 会重排整篇源码；
+# `graph.rs` 的 YAML/XML 分支和 `xml.rs` 是有损只读投影，留给 #292–#294
+# 各自用格式专用无损库处理，不能经 JSON 语义。
+[[evaluated]]
+upstream = "crates/glim-services/src/json.rs::format_document"
+status = "not imported"
+reason = "#279 要求打开、切换视图和普通保存不得规范化未修改内容；整篇格式化不能替代局部格式编辑"
+
+[[evaluated]]
+upstream = "crates/glim-services/src/graph.rs / xml.rs"
+status = "not imported"
+reason = "有损 YAML/XML 投影；不属于本票，也不能作为 JSON 结构模型或 JSON mutation 的依赖"
+
+# #290：同一模块的局部编辑扩展。上游没有任何可编辑的重复键树或局部
+# mutation API，因此这里记录“保留什么、补什么、拒绝什么”，而不是伪装成
+# 新增的 Glim 源文件导入。
+[[extension]]
+ticket = "#290"
+status = "added missing mutation layer over the #289 source-linked projection"
+retained = "#289 的 JSONC 词法边界、逐 occurrence 源码范围、可见行/键盘/完整值交互、每文档单 worker 与 revision/generation 安装；共享 Document 的 history、保存、另存为、冲突与关闭"
+adapted = "`crates/lyrel-document/src/json/mutation.rs` 在调用时重新取得当前 LF 源码的 jsonc-parser token 结构，按 `(path, range, key_range)` 重新解析选中 occurrence，规划最小替换清单；新值片段必须恰好是一个 JSON 值，新键由标准 JSON 转义生成并复核，写入前再解析整个结果。清单交给共享 `EditorState::replace_ranges`，一次命令一条 history；结构树焦点下的撤销／重做复用同一源码 presentation 的 `EditorState::undo_document`／`redo_document`，不另建 history 或可写内容。`structure_edit.rs` 是单/双字段共享编辑面板，后续 YAML/TOML/XML 可复用。"
+replaced = "没有可移植的上游 mutation；不采用 `serde_json::Value` 序列化、Glim `format_document` 整篇空白重排或 jsonc-parser CST 的整篇 `to_string()` 作为写回路径。注释、键序、未选中转义与数字拼写只受最小 splice 影响。"
+not_imported = "JSON5、JSONL 记录插入/删除（#291）、通用 Value 文档、整篇格式化与第二份可写内容"
+
+# #291：同一模块补 JSONL／NDJSON 的逐行记录编辑。上游没有一行一记录的
+# 可写模型；Glim 的 NDJSON-to-Value::Array 投影只服务阅读，不能作为写入
+# 权威，因此这里记录本票补的局部层及明确拒绝的上游做法。
+[[extension]]
+ticket = "#291"
+status = "added source-preserving JSONL／NDJSON line-record editing over #289/#290"
+retained = "#289 的逐非空行记录 identity、1-based 行号、无效行可见错误与源码范围；#290 的共享 tree／structure_edit 面板、`(path, range, key_range)` occurrence 身份、共享 Document 的 replace_ranges／history／保存／另存为／冲突／关闭生命周期"
+adapted = "`crates/lyrel-document/src/json/mutation.rs` 为 JSONL 单独规划：嵌套值／键／数组成员按目标记录自己的 jsonc-parser token 结构计算最小替换，插入记录只写一条带缩进的新行，删除记录只移除该物理行；新值必须是单行、恰好一个严格 JSON 值。修改后只重新解析目标行，邻近无效记录不参与校验。`JsonView` 复用同一面板与工具栏，新增记录根改值、添加记录、删除记录；所有命令都要求已安装投影的 revision 仍等于共享源码权威。"
+replaced = "不把 JSONL 投影成 JSON 数组，不把 Value 序列化回写，不对整篇 JSONL 做解析/格式化，不以无效邻居阻塞合法记录编辑。记录插入换行使用 Document 的现存主行尾 representation；未触及行的逐行 endings 仍由 Document 保存。"
+not_imported = "Glim NDJSON 数组预览作为编辑存储、JSON5、整篇格式化、第二份可写内容与跨行记录值"

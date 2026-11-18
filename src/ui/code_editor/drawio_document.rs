@@ -27,7 +27,7 @@ use super::drawio_engine::session::PreviewTheme;
 use super::drawio_engine::surface::{ParentWindow, SurfaceError};
 use super::drawio_engine::surface::{SurfaceEvent, SurfaceHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use lyrel_code_editor::drawio::{DrawioError, DrawioSource, MAX_DOCUMENT_BYTES, parse};
+use lyrel_document::drawio::{DrawioError, DrawioSource, MAX_DOCUMENT_BYTES, parse};
 
 gpui_kit::actions!(
     drawio_document,

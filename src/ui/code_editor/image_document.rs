@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use super::markdown::images::{self, Bitmap, ImageFormat};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use lyrel_code_editor::image::{GifError, GifPlayback, TiffError, TiffPageError, TiffPages};
+use lyrel_document::image::{GifError, GifPlayback, TiffError, TiffPageError, TiffPages};
 
 gpui_kit::actions!(
     image,

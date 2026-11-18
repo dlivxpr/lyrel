@@ -14,7 +14,7 @@
 //! - `session`: session/token identities and the preview theme.
 //!
 //! The page/page-count facts Lyrel reads before rendering live in the
-//! GUI-free `lyrel_code_editor::drawio` engine.
+//! GUI-free `lyrel_document::drawio` engine.
 //!
 //! The engine is the official draw.io viewer bundle: it renders the graph
 //! with draw.io's own shapes, stencils and layout, and its own Graph/Editor

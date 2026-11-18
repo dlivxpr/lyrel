@@ -1126,7 +1126,11 @@ mod integrated_acceptance {
             fixture(dir, "animated.gif", &gif_bytes()),
             fixture(dir, "pages.tiff", &tiff_bytes()),
             fixture(dir, "vector.svg", SVG_SOURCE),
-            fixture(dir, "reading.pdf", &lyrel_pdf::fixtures::reading_document()),
+            fixture(
+                dir,
+                "reading.pdf",
+                &lyrel_document::pdf::fixtures::reading_document(),
+            ),
             fixture(dir, "book.epub", &epub_bytes()),
             fixture(dir, "table.csv", CSV_SOURCE),
             fixture(dir, "config.jsonc", JSONC_SOURCE),
