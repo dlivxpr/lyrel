@@ -3048,7 +3048,11 @@ fn glyph_daemon_frames_a_query_to_its_controller() {
         "SEND 1 1 {} 0\n",
         graphics_pty_fixture::hex(&glyph_query(0x100000))
     );
-    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+    // A separate input connection can overtake Attach; this query requires
+    // the pane's controller to be bound before the producer writes it.
+    ClientMsg::Input(request.into_bytes())
+        .encode(&mut controller)
+        .unwrap();
     // CI's capacity-constrained macOS runners stretch a real daemon+PTY
     // round trip well past a local machine's seconds.
     let deadline = Instant::now() + Duration::from_secs(120);
