@@ -274,6 +274,13 @@ impl LyrelApp {
             },
         )
         .detach();
+        Self::watch_terminal_scm(view, cx);
+        Self::watch_open_file_requests(&view, window, cx);
+        let handle = view.read(cx).focus_handle.clone();
+        Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
+    }
+
+    pub(super) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
         cx.subscribe(
             view,
             |_app, _view, ev: &crate::terminal::view::ScmRepoChanged, cx| {
@@ -282,25 +289,20 @@ impl LyrelApp {
             },
         )
         .detach();
-        cx.subscribe_in(
+        cx.subscribe(
             view,
-            window,
-            |app, view, ev: &crate::terminal::view::ScmStatusRefreshRequested, _window, cx| {
+            |app, view, ev: &crate::terminal::view::ScmStatusRefreshRequested, cx| {
                 app.scm_badge_probe(ev.host_id, ev.cwd.clone(), ev.trigger, view.downgrade(), cx);
             },
         )
         .detach();
-        cx.subscribe_in(
+        cx.subscribe(
             view,
-            window,
-            |app, view, ev: &crate::terminal::view::ScmRootRecheckRequested, _window, cx| {
+            |app, view, ev: &crate::terminal::view::ScmRootRecheckRequested, cx| {
                 app.scm_recheck_root(ev.host_id, ev.cwd.clone(), view.downgrade(), cx);
             },
         )
         .detach();
-        Self::watch_open_file_requests(&view, window, cx);
-        let handle = view.read(cx).focus_handle.clone();
-        Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
 
     /// Authoritative program frames reach every window independently. The

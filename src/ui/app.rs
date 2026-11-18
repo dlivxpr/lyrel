@@ -5350,6 +5350,7 @@ pub(crate) mod test_window {
         let stream = app.update_in(&mut vcx, |app, window, cx| {
             let (view, stream) = quiet_test_pane(1, window, cx);
             LyrelApp::watch_pane_focus(&view.focus_handle(cx), view.entity_id(), window, cx);
+            LyrelApp::watch_terminal_scm(&view, cx);
             app.tabs
                 .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
             app.tabs.select(0);
