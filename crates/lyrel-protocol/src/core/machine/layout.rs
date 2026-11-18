@@ -257,14 +257,14 @@ impl<K: Copy + Eq> Tab<K> {
         }
     }
 
-    pub(in crate::core) fn forget_presentation(&mut self, pane: K) {
+    pub fn forget_presentation(&mut self, pane: K) {
         if self.presentation.pip().is_some_and(|pip| pip.pane == pane) {
             self.presentation.pip = None;
         }
         self.presentation.parked.retain(|entry| entry.pane != pane);
     }
 
-    pub(super) fn replace_pane(&mut self, old: K, new: K) {
+    pub fn replace_pane(&mut self, old: K, new: K) {
         self.root.replace_leaf(old, new);
         self.presentation
             .remap_panes(|pane| Some(if pane == old { new } else { pane }));

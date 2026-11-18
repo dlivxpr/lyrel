@@ -29,7 +29,9 @@ fn the_tree_lives_in_the_config_directory() {
     // path this call passed in: `set_config_dir` is first-wins and
     // process-wide, so the pin only guarantees *a* scratch directory is in
     // force — which test put it there depends on the order they ran in.
-    let _ = crate::core::session::test_support::pin_config_dir();
+    let dir = std::env::temp_dir().join(format!("lyrel-covtest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+    crate::core::config::set_config_dir(dir);
     let config_dir = crate::core::config::config_dir_path();
     assert!(config_dir.is_some(), "the pin puts one in force");
     assert_eq!(

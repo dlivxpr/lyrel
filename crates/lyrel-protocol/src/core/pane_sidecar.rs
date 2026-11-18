@@ -104,7 +104,7 @@ impl ForeignWorkspace {
         &self.tabs
     }
 
-    pub(crate) fn remove_pane(&mut self, pane: ScopedPane) {
+    pub fn remove_pane(&mut self, pane: ScopedPane) {
         self.tabs.retain_mut(|tab| {
             if !tab.root.contains(pane) {
                 return true;

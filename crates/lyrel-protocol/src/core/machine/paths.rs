@@ -79,7 +79,7 @@ fn legacy_data_dir() -> Option<PathBuf> {
 /// accident this whole change is about.
 ///
 /// The appearance hint rides along, and it does have a second writer: the GUI
-/// records it whenever it applies a theme ([`super::note_appearance`]). Both writers
+/// records it whenever it applies a theme (`lyrel_core::core::machine::note_appearance`). Both writers
 /// land their file with a rename, so the worst a collision costs is one of two
 /// booleans, and the next theme the GUI applies overwrites it either way.
 pub fn adopt_legacy_data_dir() {
@@ -124,7 +124,7 @@ fn adopt_into(current: Option<&Path>, legacy: Option<&Path>, machines_instance: 
 /// an empty tree.
 ///
 /// Comparing paths rather than asking whether `--config-dir` was passed is what
-/// makes the ordinary install work: [`daemon::spawn`](crate::daemon::spawn)
+/// makes the ordinary install work: `daemon::spawn`
 /// hands the daemon an explicit `--config-dir` every time, its own resolved
 /// directory included, so "was the flag given" is true for everybody and would
 /// decline for everybody.

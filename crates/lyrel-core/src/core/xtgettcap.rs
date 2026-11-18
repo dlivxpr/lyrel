@@ -1,4 +1,14 @@
 //! XTGETTCAP discovery policy; the upstream parser owns request decoding.
+//!
+//! The pure response policy and the wire-facing segment values live in
+//! `lyrel-protocol` and are re-exported here unchanged. The sniffer engine
+//! stays in this crate: it shares the daemon's graphics APC framing
+//! ([`crate::core::kitty_graphics::ApcTokenizer`]), which is terminal-image
+//! authority and does not move to `lyrel-protocol`.
+
+pub use lyrel_protocol::core::xtgettcap::{Segment, Sniffed, response};
+
+use super::kitty_graphics::ApcTokenizer;
 
 /// A non-owning terminal mirror consumes text, never XTGETTCAP. This also
 /// bounds legacy snapshots saved before the daemon extracted discovery.
@@ -25,77 +35,6 @@ impl MirrorProcessor {
             }
         }
     }
-}
-
-/// Rio has already decoded the names and generated one DCS segment per name.
-/// Never inherit its values, product identity or capability table: decide by
-/// decoded name and generate only values whose full product path is verified.
-pub(crate) fn response(generated: &str) -> Vec<u8> {
-    let mut reply = Vec::with_capacity(generated.len());
-    for segment in generated.split_terminator("\x1b\\") {
-        let Some(fields) = segment
-            .strip_prefix("\x1bP1+r")
-            .or_else(|| segment.strip_prefix("\x1bP0+r"))
-        else {
-            continue;
-        };
-        let name = fields.split('=').next().unwrap_or_default();
-        let mut decoded = [0; 6];
-        let bytes = name.as_bytes();
-        let valid = bytes.len().is_multiple_of(2)
-            && bytes.len() <= decoded.len() * 2
-            && bytes
-                .chunks_exact(2)
-                .zip(decoded.iter_mut())
-                .all(|(pair, slot)| {
-                    let digit = |byte: u8| match byte {
-                        b'0'..=b'9' => Some(byte - b'0'),
-                        b'a'..=b'f' => Some(byte - b'a' + 10),
-                        b'A'..=b'F' => Some(byte - b'A' + 10),
-                        _ => None,
-                    };
-                    match (digit(pair[0]), digit(pair[1])) {
-                        (Some(hi), Some(lo)) => {
-                            *slot = hi * 16 + lo;
-                            true
-                        }
-                        _ => false,
-                    }
-                });
-        let value: Option<&[u8]> = if valid {
-            match &decoded[..bytes.len() / 2] {
-                b"Co" | b"colors" => Some(b"323536"),
-                b"RGB" => Some(b"382F382F38"),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        reply.extend_from_slice(if value.is_some() {
-            b"\x1bP1+r"
-        } else {
-            b"\x1bP0+r"
-        });
-        reply.extend_from_slice(name.as_bytes());
-        if let Some(value) = value {
-            reply.push(b'=');
-            reply.extend_from_slice(value);
-        }
-        reply.extend_from_slice(b"\x1b\\");
-    }
-    reply
-}
-
-use super::kitty_graphics::ApcTokenizer;
-
-pub(crate) enum Segment {
-    Output(Vec<u8>),
-    Query(Vec<u8>),
-}
-
-pub(crate) enum Sniffed<'a> {
-    Plain(&'a [u8]),
-    Segments(Vec<Segment>),
 }
 
 /// Strip complete, cancelled and oversized discovery requests before *any*
@@ -175,7 +114,7 @@ mod tests {
     fn xtgettcap_discovers_only_verified_capabilities_in_request_order() {
         let mut state = state();
         assert_eq!(replies(&mut state, b"\x1bP+q436f;544e;524742;736978656c;697465726d32;636f;6c69;4d73;53756c78;756e6b6e6f776e\x1b\\"),
-            b"\x1bP1+r436F=323536\x1b\\\x1bP0+r544E\x1b\\\x1bP1+r524742=382F382F38\x1b\\\x1bP0+r736978656C\x1b\\\x1bP0+r697465726D32\x1b\\\x1bP0+r636F\x1b\\\x1bP0+r6C69\x1b\\\x1bP0+r4D73\x1b\\\x1bP0+r53756C78\x1b\\\x1bP0+r756E6B6E6F776E\x1b\\");
+            b"\x1bP1+r436F=323536\x1b\\\x1bP0+r544E\x1b\\\x1bP1+r524742=382F382F38\x1b\\\x1bP0+r736978656C\x1b\\\x1bP0+r697465726D32\x1b\\\x1bP0+r636F\x1b\\\x1bP0+r6C69\x1b\\\x1bP0+r4D73\x1b\\\x1bP0+r53756C78\x1b\\\x1bP0+r756e6B6E6F776E\x1b\\");
     }
 
     fn consume(chunks: impl IntoIterator<Item = Vec<u8>>) -> (Vec<u8>, Vec<u8>) {

@@ -1404,7 +1404,7 @@ pub fn strip_bom(text: &str) -> &str {
 
 /// Sets a corrupt state file aside (copied, the original left in place) so the
 /// caller can fall back to defaults without silently destroying what was there.
-pub(crate) fn quarantine(path: &std::path::Path) {
+pub fn quarantine(path: &std::path::Path) {
     // A broken file is read again and again — `Config::load` alone runs on
     // every pane spawn and every palette command — so this is reached over
     // and over for the same contents. A sibling already holding those bytes
@@ -1430,7 +1430,7 @@ fn already_kept(path: &std::path::Path, bytes: &[u8]) -> bool {
 
 /// Like [`quarantine`], but moves the file out of the way — for files that
 /// cannot even be read, where copying would fail too.
-pub(crate) fn quarantine_by_rename(path: &std::path::Path) {
+pub fn quarantine_by_rename(path: &std::path::Path) {
     let aside = quarantine_path(path);
     match std::fs::rename(path, &aside) {
         Ok(()) => log::warn!("the previous contents were moved to {}", aside.display()),

@@ -126,7 +126,7 @@ pub struct ClosedTab {
     pub closed_at: u64,
 }
 
-/// What [`super::MachineStore::tab_reopen`] hands back: the closed tab and the
+/// What `lyrel_core::core::machine::MachineStore::tab_reopen` hands back: the closed tab and the
 /// records of the panes it held, which are what its layout is rebuilt from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReopenedTab {
@@ -138,7 +138,7 @@ pub struct ReopenedTab {
 }
 
 /// What closing a tab into the recently-closed list leaves for the caller to
-/// do to the processes — see [`super::MachineStore::tab_close_remembered`].
+/// do to the processes — see `lyrel_core::core::machine::MachineStore::tab_close_remembered`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Remembered {
     /// The tab's panes. Their processes are to be stopped with their screens

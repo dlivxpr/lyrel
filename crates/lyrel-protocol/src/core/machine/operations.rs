@@ -6,22 +6,22 @@ use crate::core::session::WorkspaceId;
 
 use super::{CLOSED_TAB_TTL, MAX_CLOSED_TABS, MAX_PANES, Machine, PaneSeed, Tab, TabId, Workspace};
 
-pub(super) fn refuse(msg: impl Into<String>) -> io::Error {
+pub fn refuse(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, msg.into())
 }
 
-pub(super) fn not_found(msg: impl Into<String>) -> io::Error {
+pub fn not_found(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, msg.into())
 }
 
-pub(super) fn find_workspace(m: &mut Machine, id: WorkspaceId) -> io::Result<&mut Workspace> {
+pub fn find_workspace(m: &mut Machine, id: WorkspaceId) -> io::Result<&mut Workspace> {
     m.workspaces
         .iter_mut()
         .find(|w| w.id == id)
         .ok_or_else(|| not_found(format!("no workspace {id} on this machine")))
 }
 
-pub(super) fn find_tab(
+pub fn find_tab(
     m: &mut Machine,
     workspace: WorkspaceId,
     tab: TabId,
@@ -33,7 +33,7 @@ pub(super) fn find_tab(
         .ok_or_else(|| not_found(format!("workspace {workspace} has no tab {tab}")))
 }
 
-pub(super) fn heal_active_tab(ws: &mut Workspace, removed: usize) -> Option<TabId> {
+pub fn heal_active_tab(ws: &mut Workspace, removed: usize) -> Option<TabId> {
     let named = ws
         .active_tab
         .is_some_and(|active| ws.tabs.iter().any(|t| t.id == active));
@@ -48,9 +48,9 @@ pub(super) fn heal_active_tab(ws: &mut Workspace, removed: usize) -> Option<TabI
 
 /// A pane registers once: a second tab, a second split, a second seed for the
 /// same id is refused. The exception is a record nothing names any more — left
-/// by a reopened tab ([`super::MachineStore::tab_reopen`]) — which the pane it was
+/// by a reopened tab (`lyrel_core::core::machine::MachineStore::tab_reopen`) — which the pane it was
 /// kept for claims back, taking over what the tree still knew about it.
-pub(super) fn register_pane(m: &mut Machine, seed: PaneSeed, live: bool) -> io::Result<()> {
+pub fn register_pane(m: &mut Machine, seed: PaneSeed, live: bool) -> io::Result<()> {
     if references(m, seed.pane) {
         return Err(refuse(format!(
             "pane {} is already part of this machine's tree",
@@ -84,14 +84,14 @@ pub(super) fn register_pane(m: &mut Machine, seed: PaneSeed, live: bool) -> io::
 /// Whether a tab names `pane` — an open one, or one a workspace keeps to
 /// reopen. A closed tab's panes are still the tree's: their records and stored
 /// screens are what the reopen is made of.
-pub(super) fn references(m: &Machine, pane: u64) -> bool {
+pub fn references(m: &Machine, pane: u64) -> bool {
     m.workspaces.iter().any(|w| {
         w.tabs.iter().any(|t| t.root.contains(pane))
             || w.closed.iter().any(|c| c.tab.root.contains(pane))
     })
 }
 
-pub(super) fn collect_orphan_panes(m: &Machine) -> Vec<u64> {
+pub fn collect_orphan_panes(m: &Machine) -> Vec<u64> {
     m.panes
         .iter()
         .map(|p| p.id)
@@ -106,7 +106,7 @@ pub(super) fn collect_orphan_panes(m: &Machine) -> Vec<u64> {
 /// An entry stamped in the future — a clock set back since it closed — counts
 /// as just closed rather than as expired: losing it to a clock change would be
 /// a surprise, keeping it a little longer is not.
-pub(super) fn prune_closed(m: &mut Machine, now: u64) -> Vec<u64> {
+pub fn prune_closed(m: &mut Machine, now: u64) -> Vec<u64> {
     let ttl = CLOSED_TAB_TTL.as_secs();
     let mut dropped = Vec::new();
     for ws in &mut m.workspaces {
@@ -125,7 +125,7 @@ pub(super) fn prune_closed(m: &mut Machine, now: u64) -> Vec<u64> {
     dropped
 }
 
-pub(super) fn clamp_ratio(ratio: f32) -> io::Result<f32> {
+pub fn clamp_ratio(ratio: f32) -> io::Result<f32> {
     if !ratio.is_finite() {
         return Err(refuse("a split ratio must be a finite number"));
     }

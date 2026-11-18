@@ -6,8 +6,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use super::paths::APPEARANCE_FILE;
-use super::paths::appearance_path;
+use super::APPEARANCE_FILE;
+use super::appearance_path;
 
 /// The light/dark mode the GUI last applied, cached beside the machine tree.
 ///
