@@ -1401,7 +1401,7 @@ impl PendingUpdate {
                 // whole 15-minute grace waiting for a chain that will never
                 // report, while the app it was to relaunch is still running.
                 let _ = watcher.kill();
-                let _ = std::fs::remove_file(&status);
+                let _ = std::fs::remove_file(&stage_plan.status_file);
                 if code == ERROR_CANCELLED {
                     return Ok(ElevationStart::Declined);
                 }
