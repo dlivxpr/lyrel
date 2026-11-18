@@ -427,7 +427,6 @@ fn a_cancelled_query_stops_and_a_later_query_on_the_same_view_still_runs() {
     let fresh = SqliteCancel::default();
     let items = query(&service, view, "items");
     assert!(service.page(view, &items, &fresh).is_ok());
-    assert_eq!(fresh.hook_count(), 0, "the finished operation left no hook");
     // Cancelling the old token afterwards cannot reach the new operation.
     page_cancel.cancel();
     assert!(service.page(view, &items, &fresh).is_ok());

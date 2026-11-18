@@ -72,22 +72,12 @@ pub trait SqliteEngine: Send + Sync {
     fn open(&self, path: &Path, cancel: &SqliteCancel) -> io::Result<SqliteOpened>;
 
     /// The columns of one table or view in an open read view's version.
-    fn columns(
-        &self,
-        view: u64,
-        table: &str,
-        cancel: &SqliteCancel,
-    ) -> io::Result<SqliteColumns>;
+    fn columns(&self, view: u64, table: &str, cancel: &SqliteCancel) -> io::Result<SqliteColumns>;
 
-    fn count(&self, view: u64, query: &SqliteQuery, cancel: &SqliteCancel)
-    -> io::Result<u64>;
+    fn count(&self, view: u64, query: &SqliteQuery, cancel: &SqliteCancel) -> io::Result<u64>;
 
-    fn page(
-        &self,
-        view: u64,
-        query: &SqliteQuery,
-        cancel: &SqliteCancel,
-    ) -> io::Result<SqlitePage>;
+    fn page(&self, view: u64, query: &SqliteQuery, cancel: &SqliteCancel)
+    -> io::Result<SqlitePage>;
 
     /// One complete cell value, in a bounded chunk. TEXT and BLOB return raw
     /// bytes from `offset`; INTEGER and REAL come back whole and exact.
@@ -415,15 +405,6 @@ impl SqliteCancel {
             id: Some(id),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn hook_count(&self) -> usize {
-        self.inner
-            .hooks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
-    }
 }
 
 impl fmt::Debug for SqliteCancel {
@@ -449,5 +430,24 @@ impl Drop for CancelHook {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|(hook_id, _)| *hook_id != id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SqliteCancel;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn cancellation_only_reaches_registered_operations() {
+        let token = SqliteCancel::new();
+        let (send, receive) = channel();
+        let ended = send.clone();
+        drop(token.on_cancel(move || ended.send("finished").unwrap()));
+        let _live = token.on_cancel(move || send.send("active").unwrap());
+
+        token.cancel();
+
+        assert_eq!(receive.try_iter().collect::<Vec<_>>(), ["active"]);
     }
 }
