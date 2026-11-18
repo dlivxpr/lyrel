@@ -19,10 +19,13 @@ workspace 按生产能力与测试夹具拆分；桌面 GUI、CLI 和 headless s
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
 | `lyrel-document` | GUI-free 文档引擎：`default-features = false` 只编译编码/BOM/逐行行尾/EditorConfig 的 text codec；`formats` 解锁 JSON／JSONL、TOML、YAML、XML 的保真投影／局部 mutation、CSV 表格、GIF／TIFF 解码、draw.io 文档探测、EPUB 容器／章节清洗／阅读状态／全书搜索与只读 PDF 页度量／栅格化／文本层／大纲／表单描述，全部共享一个 `CancelToken`／`ProjectionState` 取消与 revision／generation guard | 不依赖 GPUI、`lyrel-core` 或 `lyrel-protocol`，不持有 Host/path、Document、history、保存或 UI 本地化，不写回任何格式 |
 | `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
-| 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
+| `lyrel-updater` | Windows／macOS 的独立更新程序与共享库：安装布局标记、验证／安装计划及更新结果；Windows 复用 core 的 ConPTY 清单校验 | 不依赖 GPUI，不负责下载检查、界面或会话 |
+| `lyrel-insights` | 无 GPUI 的 skills、agent 统计和 GitHub 查询；桌面另含用量提供方与显式选择浏览器 profile 的会话导入 | 经 `Host` 执行工作区操作，不进入 CLI 或 server 的生产依赖图，不拥有 GPUI 或系统凭据存储 |
 | `lyrel-test-support`（仅测试） | 共享 GPUI-free 测试夹具库（真实 PTY／protocol producer、native-SSH 夹具）与轻量 `lyrel-graphics-fixture` daemon／PTY producer 进程 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
+
+`Host` 共用契约测试仅在 `lyrel-core` 自身测试或启用 `test-support` 时编译。`lyrel-server` 的 `insights_conformance` 通过 `lyrel-insights` 的公开接口验证 skills 与统计：所有平台运行本地适配器，Unix 另运行真实 `lyrel-server --stdio`。这个测试依赖不进入 server 的生产依赖图。
 
 结构化文档纯引擎的实现与模型测试集中在 `crates/lyrel-document/src/`，工作台的
 `src/ui/code_editor/*_document.rs` 仅保留 Document／Host 适配、异步调度与呈现；引擎级来源
