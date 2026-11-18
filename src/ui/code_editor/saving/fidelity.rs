@@ -12,7 +12,7 @@ impl SaveContent {
     pub(super) fn capture(
         file: &OpenFile,
         cx: &gpui_kit::App,
-    ) -> Result<Self, lyrel_text::EncodeError> {
+    ) -> Result<Self, lyrel_document::text::EncodeError> {
         if let Some(document) = file.input.source_document(cx) {
             // Source, every terminator, encoding and BOM come from this same snapshot;
             // never read a presentation's possibly stale cached text to acknowledge a save.
@@ -59,7 +59,7 @@ impl SaveContent {
             };
             let format = file.format(cx).expect("save only runs on text documents");
             Ok(Self {
-                bytes: lyrel_text::encode(&text, &format)?,
+                bytes: lyrel_document::text::encode(&text, &format)?,
                 written: Fingerprint::of_str(&text),
                 format,
                 representation: None,

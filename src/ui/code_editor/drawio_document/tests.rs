@@ -911,7 +911,7 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut T
             .bytes()
             .expect("ready bytes");
         let source =
-            lyrel_code_editor::drawio::parse(&bytes).expect("the committed file still parses");
+            lyrel_document::drawio::parse(&bytes).expect("the committed file still parses");
         assert_eq!(source.pages.len(), 2, "independent decode sees two pages");
     });
 }
@@ -1485,7 +1485,7 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
         "the owning Host wrote the commit"
     );
     let source =
-        lyrel_code_editor::drawio::parse(&reopened).expect("the saved remote file still parses");
+        lyrel_document::drawio::parse(&reopened).expect("the saved remote file still parses");
     assert_eq!(source.pages.len(), 2);
     // A second control client proves the bytes are on the remote, and the
     // local decoy is untouched.

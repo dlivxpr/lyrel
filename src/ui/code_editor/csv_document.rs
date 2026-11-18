@@ -1,7 +1,7 @@
 //! CSV／TSV 文档：一份逐行保真的共享源码，加上从它派生的虚拟化表格。
 //!
 //! 表格不是第二份文档：`CsvDocument` 只按当前 `Document` revision 解析一份
-//! 完整逻辑表（记录／字段源区间与稳定身份在 `lyrel_code_editor::csv::table`），
+//! 完整逻辑表（记录／字段源区间与稳定身份在 `lyrel_document::csv::table`），
 //! 每个分组各有自己的选择、列窗口、筛选、排序、滚动与焦点。筛选和排序只
 //! 重排视图里的记录编号；打开、导航、排序、筛选和复制都不修改源文。
 //!
@@ -23,20 +23,18 @@ use gpui_kit::{
     Point, Render, ScrollHandle, ScrollStrategy, SharedString, Subscription, TestSupportExt as _,
     UniformListScrollHandle, Window, div, px, rems, uniform_list,
 };
-use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-
-use crate::ui::i18n::{L10nKey, t, t_fmt};
-use lyrel_code_editor::csv::CsvDocumentState;
-use lyrel_code_editor::csv::TableInstall;
-use lyrel_code_editor::csv::edit::{self, CsvEdit};
-use lyrel_code_editor::csv::table;
-use lyrel_code_editor::csv::table::{
+use lyrel_document::CancelToken;
+use lyrel_document::csv::CsvDocumentState;
+use lyrel_document::csv::TableInstall;
+use lyrel_document::csv::edit::{self, CsvEdit};
+use lyrel_document::csv::table;
+use lyrel_document::csv::table::{
     CsvCellId, CsvSort, CsvTable, CsvTableError, DEFAULT_LIMITS, DETAIL_CHARS,
 };
+use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
+use std::sync::Arc;
+
+use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 gpui_kit::actions!(
     csv_document,
@@ -177,7 +175,7 @@ impl CsvDocument {
             let gate = test_support::take_next_parse();
             let limits = DEFAULT_LIMITS;
             let outcome = crate::ui::host_ops::off_thread(move || {
-                if cancel.load(Ordering::Acquire) {
+                if cancel.is_cancelled() {
                     return None;
                 }
                 #[cfg(test)]
@@ -231,7 +229,7 @@ pub(crate) struct CsvView {
     query_generation: u64,
     query_running: bool,
     query_pending: bool,
-    query_cancel: Arc<AtomicBool>,
+    query_cancel: CancelToken,
     queried_revision: Option<u64>,
     table_revision_seen: Option<u64>,
     _query: Option<gpui_kit::Task<()>>,
@@ -292,7 +290,7 @@ impl CsvView {
             query_generation: 0,
             query_running: false,
             query_pending: false,
-            query_cancel: Arc::default(),
+            query_cancel: CancelToken::new(),
             queried_revision: None,
             table_revision_seen: None,
             _query: None,
@@ -473,7 +471,7 @@ impl CsvView {
             .update(cx, |source, cx| source.set_soft_wrap(wrap, cx));
     }
 
-    pub(crate) fn set_format(&mut self, format: lyrel_text::TextFormat, cx: &mut Context<Self>) {
+    pub(crate) fn set_format(&mut self, format: TextFormat, cx: &mut Context<Self>) {
         self.source
             .update(cx, |source, cx| source.set_format(format, cx));
     }
@@ -858,7 +856,7 @@ impl CsvView {
 
     fn restart_query(&mut self, cx: &mut Context<Self>) {
         self.query_generation = self.query_generation.wrapping_add(1);
-        self.query_cancel.store(true, Ordering::Release);
+        self.query_cancel.cancel();
         self.query_pending = false;
         self.queried_revision = None;
         let Some(table) = self.table(cx) else {
@@ -890,14 +888,14 @@ impl CsvView {
         let generation = self.query_generation;
         let filter = self.filter.clone();
         let sort = self.sort;
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancelToken::new();
         self.query_cancel = cancel.clone();
         self.query_running = true;
         #[cfg(test)]
         let gate = test_support::take_next_query();
         self._query = Some(cx.spawn(async move |this, cx| {
             let outcome = crate::ui::host_ops::off_thread(move || {
-                if cancel.load(Ordering::Acquire) {
+                if cancel.is_cancelled() {
                     return None;
                 }
                 #[cfg(test)]

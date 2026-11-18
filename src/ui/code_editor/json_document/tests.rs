@@ -12,7 +12,7 @@ use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
-use lyrel_code_editor::json::projection;
+use lyrel_document::json::projection;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

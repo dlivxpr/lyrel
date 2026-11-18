@@ -295,7 +295,7 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
             String::new(),
             TextFormat::default(),
             EditorConfig::default(),
-            lyrel_text::detect_indent("", "markdown"),
+            lyrel_document::text::detect_indent("", "markdown"),
             None,
             window,
             cx,

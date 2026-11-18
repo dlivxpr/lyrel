@@ -1,0 +1,69 @@
+# #294 的 XML 源码／依赖记录。
+#
+# 本模块没有复制 Glim 源文件。固定 Glim 树的 XML 分支把
+# `roxmltree` 节点压成 `(attribute, first text)` 的只读列表：local name 丢掉
+# 限定名与命名空间，属性先于全部文本、元素子节点最后，mixed content 顺序与
+# CDATA／comment 边界消失；`xml.rs` 只是 `quick-xml` 事件文本的实体解码。
+# 两者都不足以作为可写的 XML 模型，明确拒绝。真正的有序 token 范围来自
+# registry `xmlparser`，良构与命名空间绑定来自 registry `roxmltree`；
+# #289 已移植的树交互、共享 `StructureEditPanel` 与共享 Document/history
+# 继续复用。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+ticket = "#294"
+maintainer = "Lyrel"
+license_notice = "root LICENSE 的 Apache-2.0／MIT Rust 组件清单（xmlparser 0.13.6、roxmltree 0.21.2）与既有 Glim MIT 正文；没有导入 Glim XML 源文件，因此没有新增 Glim 正文"
+
+[[dependency]]
+name = "xmlparser"
+version = "=0.13.6"
+registry = "crates.io"
+license = "MIT OR Apache-2.0"
+copyright = "Copyright (c) 2018 Reizner Evgeniy"
+source = "https://github.com/RazrFalcon/xmlparser"
+scope = "low-level, pull tokenizer with byte spans for element starts/ends, attributes, text, CDATA, comments, PI, declaration and DTD/entity declarations"
+adaptation = "crates/lyrel-document/src/xml/projection.rs walks the token stream once to build ordered nodes; it does not resolve entities, load a DTD or assemble a DOM. Attribute value ranges, quote style and mixed-content order come from these tokens."
+not_imported = "the parser's DTD/entity resolver semantics; no entity expansion is performed"
+
+[[dependency]]
+name = "roxmltree"
+version = "=0.21.2"
+registry = "crates.io"
+license = "MIT OR Apache-2.0"
+copyright = "Copyright (c) 2018 Reizner Evgeniy"
+source = "https://github.com/RazrFalcon/roxmltree"
+scope = "well-formedness validation, namespace/prefix resolution and attribute qname ranges"
+adaptation = "Validation uses `ParsingOptions { allow_dtd: false, nodes_limit }`; DTD documents are rejected before either parser can resolve an external id. The namespace result is mapped back to xmlparser byte ranges for display and editing."
+not_imported = "roxmltree's flattened text tree as the writable model; its DTD parser; external entity resolution"
+
+[[source]]
+upstream = "crates/glim-services/src/graph.rs"
+sha256 = "9f8a4fc013d5c76cfefac2e9246d5de551e6094c72b2dcc7b843a129abbb1d23"
+bytes = 4961
+local = "crates/lyrel-document/src/xml/projection.rs"
+status = "evaluated, not imported"
+retained = "只有通用树／reader 交互思路由 #289 保留；XML 分支本身不作为模型"
+reason = "`xml_nodes` 使用 `element.tag_name().name()`（丢前缀／命名空间），先全部 attributes，再全部非空 text，最后 element children；CDATA 被 roxmltree 合并进文本，comment 被丢弃。mixed content 顺序和原拼写无法保留"
+not_imported = "Glim 的 local-name 树、属性先序列表、文本合并、`TreeBuilder` 节点、reader session"
+
+[[source]]
+upstream = "crates/glim-services/src/xml.rs"
+sha256 = "d9c3dc23c0eec82eaa40ea79c92714fe2be0d63c994ec5d56459bc30d11d5021"
+bytes = 876
+local = "crates/lyrel-document/src/xml/projection.rs"
+status = "evaluated, not imported"
+retained = "没有代码保留；只确认了它也不做 DTD／外部实体访问"
+reason = "只把 `quick-xml` 的 Text／CData／GeneralRef 转成字符串，没有源码 span、命名空间、属性顺序或可写 occurrence；不能作为 #294 的编辑模型，也不提供预算／取消"
+not_imported = "`quick-xml`、`event_text`、Text→String 的 lossy 投影"
+
+# 固定上游没有 XML 结构树或局部 mutation。以下记录本票实际补缺，而不是把
+# 新写的解析／编辑层伪装成上传导入。
+[[extension]]
+ticket = "#294"
+status = "added the missing ordered XML semantic and mutation layer over the shared tree interaction"
+retained = "#289 的 `Treelike`／`visible_rows`／行选择／源码行列定位；#290 的 `StructureEditPanel`（本工作树已接入 #292 的多行与 notice 扩展）与共享 `Document` 的 history、保存、另存为、冲突和关闭；#292 的 `structure_rows` 共享行呈现"
+adapted = "`crates/lyrel-document/src/xml/projection.rs` 一次读取当前 LF 源码：元素、属性、文本、CDATA、注释、PI 与声明各自保留 byte range；属性中的单／双引号、周围空白与实体拼写保持原样；元素与属性按源码顺序成为同一棵树。`crates/lyrel-document/src/xml/mutation.rs` 用 `(path, kind, range, key_range, value_range)` 重新解析目标，只规划最小 splice：改属性值／文本／CDATA／注释、重命名元素／属性、加属性、加子元素、加文本、删除节点。每次写入前用同一投影复核整篇结果的良构性、命名空间绑定与结构预算，不整篇序列化。"
+replaced = "Glim 的 local-name／属性先序／文本合并模型；`quick-xml` 的无 span 文本事件；任何整篇 DOM/Value 序列化回写、全 source 格式化或外部 DTD/entity 解析"
+not_imported = "外部 DTD 加载、实体展开、第二份可写文档、XML 转 JSON、XPath/XSLT、schema 校验、脚本或网络解析"

@@ -407,7 +407,7 @@ impl EditorState {
             size(px(1.), lh),
         ))
     }
-    pub fn set_format(&mut self, format: lyrel_text::TextFormat, cx: &mut Context<Self>) {
+    pub fn set_format(&mut self, format: lyrel_document::text::TextFormat, cx: &mut Context<Self>) {
         self.finish_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id();

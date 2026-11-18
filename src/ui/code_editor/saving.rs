@@ -250,7 +250,7 @@ impl EditorPanelState {
         // not apply code cleanup. Explicit workbench cleanup remains undoable.
         if file.input.code().is_some() {
             let text = file.input.text().unwrap().read(cx).text().to_string();
-            if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
+            if let Some(fixed) = lyrel_document::text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
             }

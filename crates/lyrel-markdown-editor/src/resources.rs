@@ -78,7 +78,7 @@ mod tests {
                 "```text\n<img src=\"not-a-resource.png\">\n```\n"
             )
             .into(),
-            lyrel_text::TextFormat::default(),
+            lyrel_document::text::TextFormat::default(),
         );
         assert_eq!(
             document.snapshot().image_sources(),

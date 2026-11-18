@@ -403,7 +403,7 @@ impl LiveSession {
                     .get("text")
                     .and_then(serde_json::Value::as_str)
                     .ok_or(Reject("clipboard-text"))?;
-                if text.is_empty() || text.len() > lyrel_code_editor::drawio::MAX_DOCUMENT_BYTES {
+                if text.is_empty() || text.len() > lyrel_document::drawio::MAX_DOCUMENT_BYTES {
                     return Err(Reject("clipboard-text"));
                 }
                 BridgeEvent::Clipboard {
@@ -440,7 +440,7 @@ impl LiveSession {
         if !self.ready || self.failed {
             return Err(Reject("not-ready"));
         }
-        if seq == 0 || body.is_empty() || body.len() > lyrel_code_editor::drawio::MAX_DOCUMENT_BYTES
+        if seq == 0 || body.is_empty() || body.len() > lyrel_document::drawio::MAX_DOCUMENT_BYTES
         {
             return Err(Reject("commit-size"));
         }

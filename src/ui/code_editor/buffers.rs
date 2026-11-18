@@ -9,7 +9,7 @@ const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::book_document::{self, BookDocument, BookOpen, LoadedBook};
 use super::book_view::BookView;
 use super::drawio_document::{DrawioDocument, DrawioView};
-use lyrel_code_editor::drawio;
+use lyrel_document::drawio;
 use std::sync::Arc;
 /// PDFs share the owning Host's bounded versioned read and the same 32 MiB
 /// input ceiling; parsing never raises the text or control-frame limits.
@@ -18,7 +18,7 @@ use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use super::toml_document::{TomlDocument, TomlMode, TomlView};
 use super::xml_document::{XmlDocument, XmlMode, XmlView};
 use super::yaml_document::{YamlDocument, YamlMode, YamlView};
-use lyrel_code_editor::json::projection::JsonFormat;
+use lyrel_document::json::projection::JsonFormat;
 use markdown::images;
 use markdown::images::ImageFormat;
 
@@ -591,7 +591,7 @@ impl EditorBuffers {
                 config,
             } => {
                 let language = language_for_path(&path);
-                let indent = config.indent(lyrel_text::detect_indent(&text, language));
+                let indent = config.indent(lyrel_document::text::detect_indent(&text, language));
                 (
                     self.create(
                         host,
@@ -651,7 +651,7 @@ impl EditorBuffers {
             saved_format: TextFormat::default(),
             saved_representation: None,
             config: EditorConfig::default(),
-            indent: lyrel_text::detect_indent("", "text"),
+            indent: lyrel_document::text::detect_indent("", "text"),
             disk_mtime: mtime,
             saving: false,
             save_pending: false,
@@ -706,7 +706,7 @@ impl EditorBuffers {
             saved_format: TextFormat::default(),
             saved_representation: None,
             config: EditorConfig::default(),
-            indent: lyrel_text::detect_indent("", "text"),
+            indent: lyrel_document::text::detect_indent("", "text"),
             disk_mtime: mtime,
             saving: false,
             save_pending: false,
@@ -760,7 +760,7 @@ impl EditorBuffers {
             saved_format: TextFormat::default(),
             saved_representation: None,
             config: EditorConfig::default(),
-            indent: lyrel_text::detect_indent("", "text"),
+            indent: lyrel_document::text::detect_indent("", "text"),
             disk_mtime: mtime,
             saving: false,
             save_pending: false,
@@ -810,7 +810,7 @@ impl EditorBuffers {
             saved_format: TextFormat::default(),
             saved_representation: None,
             config: EditorConfig::default(),
-            indent: lyrel_text::detect_indent("", "text"),
+            indent: lyrel_document::text::detect_indent("", "text"),
             disk_mtime: mtime,
             saving: false,
             save_pending: false,
@@ -860,7 +860,7 @@ impl EditorBuffers {
             saved_format: TextFormat::default(),
             saved_representation: None,
             config: EditorConfig::default(),
-            indent: lyrel_text::detect_indent("", "text"),
+            indent: lyrel_document::text::detect_indent("", "text"),
             disk_mtime: mtime,
             saving: false,
             save_pending: false,
@@ -1470,9 +1470,9 @@ impl EditorBuffers {
                 }
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
                 let decoded = if source_reload {
-                    lyrel_text::decode_source(&bytes)?
+                    lyrel_document::text::decode_source(&bytes)?
                 } else {
-                    lyrel_text::decode(&bytes)
+                    lyrel_document::text::decode(&bytes)
                 }
                 .ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
@@ -1752,7 +1752,7 @@ impl Loaded {
 
 /// 一次重新读取在 Host 线程上得到的东西。
 enum Reloaded {
-    Text(lyrel_text::Decoded, Option<MTime>),
+    Text(lyrel_document::text::Decoded, Option<MTime>),
     Image(LoadedImage),
     Drawio(LoadedDrawio),
     Sqlite(LoadedSqlite),
@@ -2065,7 +2065,7 @@ fn read_pdf(
         h,
         &path,
         PDF_MAX_BYTES,
-        &lyrel_core::host::transfer::CancelToken::default(),
+        &lyrel_document::CancelToken::new(),
         |_| {},
     )?;
     mtime = bound.mtime;
@@ -2074,10 +2074,10 @@ fn read_pdf(
 
 fn pdf_content(bytes: Vec<u8>) -> PdfLoaded {
     let bytes = Arc::new(bytes);
-    match lyrel_pdf::PdfDocument::load(bytes.clone(), "") {
+    match lyrel_document::pdf::PdfDocument::load(bytes.clone(), "") {
         Ok(document) => PdfLoaded::Ready(Arc::new(document)),
-        Err(lyrel_pdf::LoadError::Locked) => PdfLoaded::Locked(bytes),
-        Err(lyrel_pdf::LoadError::Other(message)) => PdfLoaded::Failed(message.into()),
+        Err(lyrel_document::pdf::LoadError::Locked) => PdfLoaded::Locked(bytes),
+        Err(lyrel_document::pdf::LoadError::Other(message)) => PdfLoaded::Failed(message.into()),
     }
 }
 
@@ -2098,7 +2098,7 @@ fn read_image(
             h,
             &path,
             IMAGE_MAX_BYTES,
-            &lyrel_core::host::transfer::CancelToken::default(),
+            &lyrel_document::CancelToken::new(),
             |_| {},
         )?;
         // The picture and the mtime recorded for later external-change
@@ -2114,7 +2114,7 @@ fn read_image(
     })
 }
 
-fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
+fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_document::text::Decoded>> {
     if is_markdown_path(path)
         || is_svg_path(path)
         || is_json_path(path)
@@ -2123,9 +2123,9 @@ fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::
         || is_csv_path(path)
         || is_xml_path(path)
     {
-        lyrel_text::decode_source(bytes)
+        lyrel_document::text::decode_source(bytes)
     } else {
-        Ok(lyrel_text::decode(bytes))
+        Ok(lyrel_document::text::decode(bytes))
     }
 }
 
@@ -2134,18 +2134,18 @@ fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::
 fn read_editorconfig(h: &dyn lyrel_core::host::Host, path: &Path) -> EditorConfig {
     let mut configs = Vec::new();
     for dir in path.ancestors().skip(1).take(EDITORCONFIG_DEPTH) {
-        let file = h.join(dir, lyrel_text::EDITORCONFIG);
+        let file = h.join(dir, lyrel_document::text::EDITORCONFIG);
         let Ok(bytes) = h.read_file(&file, 64 * 1024) else {
             continue;
         };
         let contents = String::from_utf8_lossy(&bytes).into_owned();
-        let root = lyrel_text::is_root(&contents);
+        let root = lyrel_document::text::is_root(&contents);
         configs.push((dir.to_path_buf(), contents));
         if root {
             break;
         }
     }
-    lyrel_text::editorconfig_for(path, &configs)
+    lyrel_document::text::editorconfig_for(path, &configs)
 }
 /// What a watcher saw at a path: the file's modification time, or that it
 /// is not there any more.

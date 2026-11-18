@@ -1,0 +1,42 @@
+# #292 的 YAML 源码／依赖记录。
+#
+# 本模块没有复制 Glim 源文件：Glim `graph.rs` 的 YAML 分支是
+# `serde_yaml_ng` → `serde_json::Value` 的有损只读投影，会丢锚点／别名／tag／
+# 注释／标量样式并把多文档压成数组，明确拒绝。真正的解析与编辑使用 registry
+# 的无损 `yaml-edit`；#289 已移植的树展开／可见行／源码定位继续复用。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+ticket = "#292"
+maintainer = "Lyrel"
+license_notice = "root LICENSE 的 Apache-2.0 Rust 组件清单（yaml-edit 0.3.6）；没有导入 Glim YAML 源码，因此没有新增 Glim 正文"
+
+[[dependency]]
+name = "yaml-edit"
+version = "=0.3.6"
+registry = "crates.io"
+license = "Apache-2.0"
+copyright = "Copyright (c) Jelmer Vernooĳ"
+source = "https://github.com/jelmer/yaml-edit"
+scope = "rowan 无损 YAML CST；多文档、mapping／sequence、scalar 原拼写、anchor／alias／tag／comment 与 byte range"
+adaptation = "只启用 `default-features = false`（关闭 base64／regex 辅助）；CST 仅在 `host_ops::off_thread` 的后台闭包内存在，跨线程返回拥有型的节点范围与显示文本。树内编辑只规划 byte splice，新片段在探针中由同一 parser 校验；不把整棵 CST 序列化回写，也不经 `YamlValue`／JSON。"
+not_imported = "yaml-edit 的 `binary`／`regex` feature、`YamlValue` 语义模型、整篇 `to_string()` 写回、migrate／schema 工具"
+
+[[source]]
+upstream = "crates/glim-services/src/graph.rs"
+sha256 = "9f8a4fc013d5c76cfefac2e9246d5de551e6094c72b2dcc7b843a129abbb1d23"
+bytes = 4961
+local = "crates/lyrel-document/src/yaml/projection.rs"
+status = "evaluated, not imported"
+retained = "只把它作为输入／展示差异的参考：Glim 也区分 object／array／scalar 行，并用统一树视图呈现"
+reason = "YAML 分支 L35–48 经 `serde_yaml_ng::Deserializer` → `serde_json::Value` → `nodes_for_value`；锚点、别名、tag、注释与标量样式全部丢失，多文档被投影成数组。与 #279 的 source fidelity、#292 的 anchor/tag 要求直接冲突，不能作为编辑模型"
+not_imported = "Glim YAML→JSON 投影、`serde_yaml_ng` 依赖、`nodes_for_value`、Glim reader／resource session"
+
+[[extension]]
+ticket = "#292"
+status = "added the missing YAML semantic and mutation layer over #289's shared tree interaction"
+retained = "#289 的 `Treelike`／`visible_rows`／行选择／源码行列定位、共享 `StructureEditPanel`、同一源 Document 的 history／保存／另存为／冲突／关闭；`structure_rows.rs` 的共享行呈现由 JSON 与本格式共同消费"
+adapted = "`crates/lyrel-document/src/yaml/projection.rs` 把 `YamlFile::parse` 的一次 CST 读成纯数据：多文档、mapping entry、sequence item、scalar 原拼写、anchor 名称、alias 目标、tag、block scalar 与 complex key 均保留 byte range。`crates/lyrel-document/src/yaml/mutation.rs` 用同一 parser 校验单标量、多行 block scalar 或 flow collection key 片段，规划最小替换／插入／删除；block scalar 的原始头部与正文在共享多行面板内编辑。删除若会悬空外部 alias 则在写入前拒绝；anchor 被编辑时在共享面板显示引用数量并在提交后说明新解析结果"
+replaced = "没有可移植的 Glim YAML 编辑实现；不采用 `serde_json::Value`、整篇 CST 序列化、Glim `graph.rs` 的展开副本，也不把 YAML 转成 JSON 结构"
+not_imported = "anchors／aliases 的自动展开副本、anchor 重命名／retarget、整篇格式化、第二份可写文档"

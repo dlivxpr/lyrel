@@ -228,7 +228,7 @@ pub(super) fn follow(
             cx,
             move |h| -> io::Result<Position> {
                 let bytes = h.read_file(&requested, 4 * 1024 * 1024)?;
-                let source = lyrel_text::decode_source(&bytes)?.ok_or_else(|| {
+                let source = lyrel_document::text::decode_source(&bytes)?.ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         t(L10nKey::MarkdownLinkInvalidDestination),

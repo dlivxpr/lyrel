@@ -276,7 +276,7 @@ jobs:
       # 测试图统一 updater,native-markdown-tests,test-support，并且所有编译/执行
       # 步骤共用同一 --workspace 选择：windows-sys 与 tokio 的 dev-dependency
       # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
-      # （含 GUI-free 的 lyrel-code-editor），新增成员自动进入门禁。
+      # （含 GUI-free 的 lyrel-document），新增成员自动进入门禁。
       #
       # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
       # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；

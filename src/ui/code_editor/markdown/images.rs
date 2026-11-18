@@ -3,8 +3,9 @@ use super::super::*;
 use super::links::{self, Target};
 use gpui_kit::component::{WindowExt as _, button::Button};
 use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
-use lyrel_code_editor::image::MAX_PIXELS;
 use lyrel_core::host::Host;
+use lyrel_document::CancelToken;
+use lyrel_document::image::MAX_PIXELS;
 use lyrel_markdown_editor::{
     Document, DocumentEvent, EditorEvent as NativeEvent, EditorState as MarkdownEditor,
 };
@@ -64,7 +65,7 @@ pub(crate) struct ImageHost {
     scanned_revision: Option<u64>,
     images: Images,
     states: HashMap<String, State>,
-    transfers: HashMap<String, (u64, lyrel_core::host::transfer::CancelToken)>,
+    transfers: HashMap<String, (u64, CancelToken)>,
     progress: HashMap<String, (u64, u64)>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
     hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
@@ -365,7 +366,7 @@ impl ImageHost {
             .clone();
         let generation = self.generation;
         let signature = self.signature.clone();
-        let cancel = lyrel_core::host::transfer::CancelToken::default();
+        let cancel = CancelToken::new();
         if let Some((_, superseded)) = self
             .transfers
             .insert(source.clone(), (generation, cancel.clone()))
@@ -782,10 +783,14 @@ pub(crate) fn read_bytes(
     host: &dyn Host,
     path: &std::path::Path,
     budget: u64,
-    cancel: &lyrel_core::host::transfer::CancelToken,
+    cancel: &CancelToken,
     mut progress: impl FnMut(lyrel_core::host::read::ReadProgress),
 ) -> io::Result<(lyrel_core::host::Meta, Vec<u8>)> {
-    match lyrel_core::host::read::read_file_segmented(host, path, budget, cancel, &mut progress) {
+    // The document task owns cancellation; the Host transfer checks the same
+    // flag, so superseding or closing the consumer stops the segment read.
+    let transfer = lyrel_core::host::transfer::CancelToken::from_flag(cancel.shared_flag());
+    match lyrel_core::host::read::read_file_segmented(host, path, budget, &transfer, &mut progress)
+    {
         Ok(outcome) => Ok((outcome.meta, outcome.bytes)),
         Err(error) if error.kind() == io::ErrorKind::Unsupported => {
             let meta = host.stat(path)?;

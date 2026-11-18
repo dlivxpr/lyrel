@@ -220,7 +220,7 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     assert!(chosen.font_scale > before.font_scale);
     assert_ne!(chosen.line_height, before.line_height);
     assert_ne!(chosen.page_width_rem, before.page_width_rem);
-    assert_eq!(chosen.theme, lyrel_epub::ReaderTheme::Dark);
+    assert_eq!(chosen.theme, lyrel_document::epub::ReaderTheme::Dark);
     click_side_item(&app, &mut cx, "Final chapter");
     until(&mut cx, |cx| {
         active(&app, cx).read_with(cx, |view, _| {
@@ -233,11 +233,11 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok())
             .is_some_and(|record| {
                 record.reading.chapter == 1
                     && record.bookmarks.len() == 1
-                    && record.prefs.theme == lyrel_epub::ReaderTheme::Dark
+                    && record.prefs.theme == lyrel_document::epub::ReaderTheme::Dark
             })
     });
     app.update_in(&mut cx, |app, window, cx| {
@@ -391,7 +391,7 @@ fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut T
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok())
             .is_some_and(|record| {
                 record.reading.chapter == 0
                     && record.reading.fraction > 0.99

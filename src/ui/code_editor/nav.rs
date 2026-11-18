@@ -1679,7 +1679,7 @@ pub(super) mod gpui_tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-    use lyrel_text::{EditorConfig, TextFormat};
+    use lyrel_document::text::{EditorConfig, TextFormat};
 
     /// `alpha` on line 0, `beta` on 30, `gamma` on 50.
     pub(crate) fn source() -> String {
@@ -1704,7 +1704,7 @@ pub(super) mod gpui_tests {
         app.update_in(vcx, |app, window, cx| {
             let host = app.active_host(cx).expect("a host");
             let tab = app.nav_tab().expect("a tab");
-            let indent = lyrel_text::detect_indent("", "rust");
+            let indent = lyrel_document::text::detect_indent("", "rust");
             let id = app.editor_new_buffer(
                 host,
                 path,
@@ -1872,7 +1872,7 @@ pub(super) mod gpui_tests {
             source.into(),
             TextFormat::default(),
             EditorConfig::default(),
-            lyrel_text::detect_indent(source, "markdown"),
+            lyrel_document::text::detect_indent(source, "markdown"),
             None,
             window,
             cx,

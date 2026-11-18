@@ -11,8 +11,8 @@ use std::sync::Arc;
 use super::assets::{self, ENGINE_URL, EngineBody, SHELL_URL};
 use super::bridge::{BridgeEvent, Command, LiveSession, MAX_MESSAGE_BYTES};
 use super::session::{DocumentSession, PreviewTheme, SessionId, SessionToken};
-use lyrel_code_editor::drawio;
-use lyrel_code_editor::drawio::{DiagramContent, MAX_DOCUMENT_BYTES, RootKind};
+use lyrel_document::drawio;
+use lyrel_document::drawio::{DiagramContent, MAX_DOCUMENT_BYTES, RootKind};
 
 fn asset_bytes(path: &str) -> &'static [u8] {
     assets::asset_manifest()

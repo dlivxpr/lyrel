@@ -19,7 +19,7 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
             "# Author text\n".into(),
             TextFormat::default(),
             EditorConfig::default(),
-            lyrel_text::detect_indent("", "markdown"),
+            lyrel_document::text::detect_indent("", "markdown"),
             None,
             window,
             cx,
