@@ -354,7 +354,7 @@ fn native_fork(
         .current_dir(cwd)
         .envs(&scope.environment)
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
+        .env_remove(crate::daemon::LYREL_PANE_ENV);
     crate::core::proc::hide_console(&mut command);
     let (output, timed_out) = rpc_output(&mut command)
         .map_err(|e| failure(SessionErrorKind::Command, format!("Pi native fork: {e}")))?;

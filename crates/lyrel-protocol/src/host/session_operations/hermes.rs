@@ -530,7 +530,7 @@ fn runtime_command(
         .current_dir(cwd)
         .envs(&scope.environment)
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
+        .env_remove(crate::daemon::LYREL_PANE_ENV);
     crate::core::proc::hide_console(&mut command);
     let output =
         crate::core::proc::output_within(&mut command, Duration::from_secs(30)).map_err(|e| {
@@ -583,7 +583,7 @@ fn rpc(
         .current_dir(cwd)
         .envs(&scope.environment)
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV)
+        .env_remove(crate::daemon::LYREL_PANE_ENV)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

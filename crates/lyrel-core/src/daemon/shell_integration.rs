@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::core::shell_quote::nu_string_literal;
+
 const ZSH_INTEGRATION: &str = concat!(
     r#"
 # --- lyrel shell integration (zsh) ---
@@ -1004,20 +1006,6 @@ fn platform_config_dir() -> Option<PathBuf> {
 fn platform_config_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join(".config"))
-}
-
-/// A Nushell string literal for `path`. Single quotes are fully literal in
-/// Nushell, so they are the default; a path that contains an apostrophe (legal
-/// on Windows) falls back to double quotes with backslash escaping.
-pub(crate) fn nu_string_literal(path: &str) -> String {
-    if !path.contains('\'') {
-        return format!("'{path}'");
-    }
-    let escaped = path
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('$', "\\$");
-    format!("\"{escaped}\"")
 }
 
 fn powershell_encoded_command(script: &str) -> String {

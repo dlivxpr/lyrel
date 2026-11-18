@@ -379,7 +379,7 @@ fn output(
         .envs(&scope.environment)
         .current_dir(cwd)
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV)
+        .env_remove(crate::daemon::LYREL_PANE_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

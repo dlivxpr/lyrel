@@ -102,6 +102,20 @@ pub fn quote_for_shell(path: &str, shell_program: Option<&str>) -> String {
     quote_as(path, quoting_for(shell_program))
 }
 
+/// A Nushell string literal for `path`. Single quotes are fully literal in
+/// Nushell, so they are the default; a path that contains an apostrophe (legal
+/// on Windows) falls back to double quotes with backslash escaping.
+pub fn nu_string_literal(path: &str) -> String {
+    if !path.contains('\'') {
+        return format!("'{path}'");
+    }
+    let escaped = path
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$");
+    format!("\"{escaped}\"")
+}
+
 /// [`quote_for_shell`] with the dialect already decided.
 fn quote_as(path: &str, quoting: Quoting) -> String {
     if path.is_empty() {

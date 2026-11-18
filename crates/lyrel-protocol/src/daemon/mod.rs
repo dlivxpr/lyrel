@@ -28,3 +28,6 @@ pub mod winproc;
 /// Names the shell a pane was spawned with, so a later pane in the same
 /// session reuses it without re-detecting.
 pub const DETECTED_SHELL_ENV: &str = "LYREL_DETECTED_SHELL";
+
+/// Identifies the pane inherited by a process started inside its shell.
+pub const LYREL_PANE_ENV: &str = "LYREL_PANE";

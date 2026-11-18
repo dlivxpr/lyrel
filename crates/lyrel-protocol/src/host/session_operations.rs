@@ -923,7 +923,7 @@ fn encode_command_line(
     if shell.is_some_and(|shell| {
         crate::core::shell_quote::shell_base_name(shell).eq_ignore_ascii_case("nu")
     }) {
-        let quote = crate::daemon::shell_integration::nu_string_literal;
+        let quote = crate::core::shell_quote::nu_string_literal;
         let command = format!(
             "^{}",
             argv.iter()
@@ -1092,7 +1092,7 @@ fn omp_state(
     // Never attribute a background preparation process to its source pane.
     command
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
+        .env_remove(crate::daemon::LYREL_PANE_ENV);
     let (output, timed_out) = rpc_output(&mut command).map_err(|e| {
         failure(
             SessionErrorKind::Command,
@@ -2035,7 +2035,7 @@ mod tests {
             .current_dir(&cwd)
             .envs(&request.scope.environment)
             .env_remove("LYREL")
-            .env_remove(crate::daemon::pane::LYREL_PANE_ENV)
+            .env_remove(crate::daemon::LYREL_PANE_ENV)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

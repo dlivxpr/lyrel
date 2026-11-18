@@ -33,8 +33,8 @@ use facts::{FactReader, ForegroundProbes, MetadataRequest, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
-pub(crate) use launch::LYREL_PANE_ENV;
 use launch::build_spawn_config;
+pub(crate) use lyrel_protocol::daemon::LYREL_PANE_ENV;
 #[cfg(test)]
 use replay::RING_CAP;
 use replay::ReplayRing;

@@ -1551,7 +1551,7 @@ fn api(
         .stderr(Stdio::piped());
     command
         .env_remove("LYREL")
-        .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
+        .env_remove(crate::daemon::LYREL_PANE_ENV);
     crate::core::proc::hide_console(&mut command);
     let mut child = command.spawn().map_err(|error| {
         failure(
