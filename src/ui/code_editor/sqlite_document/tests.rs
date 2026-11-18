@@ -299,10 +299,9 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
                     .is_some_and(|(host, _)| host == HostId(69))
         })
     });
-    assert!(
-        cells_contain(&dump(&sqlite_view(&app, &cx), &cx), "local"),
-        "the plain host's own copy"
-    );
+    until_named(&mut cx, "plain Host rows", |cx| {
+        cells_contain(&dump(&sqlite_view(&app, cx), cx), "local")
+    });
 
     // 映射 Host 的根在另一个目录：读它自己的库，不是本机同名文件。
     let decoy = super::super::test_host::canonical_tempdir();

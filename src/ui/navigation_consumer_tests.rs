@@ -122,14 +122,29 @@ fn panel_navigation_new_request_replaces_the_pending_origin(cx: &mut TestAppCont
 fn panel_navigation_owner_replacement_cancels_pending_entry(cx: &mut TestAppContext) {
     let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
     vcx.simulate_resize(size(px(1000.), px(720.)));
+    settle(&mut vcx);
     let content = app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.right_panel_open(cx));
         app.focus_active(window, cx);
         window.focused(cx).expect("terminal content owns focus")
     });
-    vcx.dispatch_action(FocusRightPanelNavigation);
-    vcx.dispatch_action(ShowRightPanelFiles);
+    // Each VisualTestContext::dispatch_action drains work and may draw enough
+    // frames to complete entry. Queue both actions before GPUI draws the panel.
+    vcx.update(|window, cx| {
+        window.dispatch_action(Box::new(FocusRightPanelNavigation), cx);
+        window.defer(cx, {
+            let app = app.clone();
+            let content = content.clone();
+            move |window, cx| {
+                assert!(app.read(cx).right_panel_open(cx));
+                assert!(content.is_focused(window), "entry is still pending");
+            }
+        });
+        window.dispatch_action(Box::new(ShowRightPanelFiles), cx);
+    });
     settle(&mut vcx);
     app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.right_panel_tab, RightPanelTab::Files);
         assert!(content.is_focused(window));
         assert!(!app.right_panel_nav_focus.contains_focused(window, cx));
     });
