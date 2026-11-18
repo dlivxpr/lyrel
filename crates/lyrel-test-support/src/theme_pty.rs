@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+
 use crate::hex::{hex, unhex};
 use crate::pty::raw_pty;
 

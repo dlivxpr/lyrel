@@ -33,5 +33,7 @@ pub const RING_FLOOD_MJS: &[u8] = include_bytes!("../support/ring_flood.mjs");
 /// The shared Kitty helper uploaded next to every `kitty-*` script
 /// (`scripts/graphics-fixture-utils.mjs` stays the single source of truth in
 /// the workspace root).
-pub const GRAPHICS_FIXTURE_UTILS_MJS: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/graphics-fixture-utils.mjs"));
+pub const GRAPHICS_FIXTURE_UTILS_MJS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../scripts/graphics-fixture-utils.mjs"
+));

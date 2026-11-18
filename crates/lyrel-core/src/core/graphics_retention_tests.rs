@@ -2,6 +2,7 @@ use super::*;
 use crate::client::{ControlClient, PaneClient, PaneSession};
 use crate::daemon::control::ControlHello;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, ShellSpec};
+use lyrel_test_support::hex::{hex, unhex};
 use lyrel_test_support::pty as fixture;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -216,7 +217,7 @@ impl Consumer {
         self.updates.clear();
         self.text.clear();
         self.session
-            .input(format!("SEND {} {replies} {} 0\n", self.serial, fixture::hex(bytes)).as_bytes())
+            .input(format!("SEND {} {replies} {} 0\n", self.serial, hex(bytes)).as_bytes())
             .unwrap();
         self.finish_exchange(bytes)
     }
@@ -255,11 +256,7 @@ impl Consumer {
         std::str::from_utf8(&self.text)
             .unwrap()
             .lines()
-            .filter_map(|line| {
-                line.trim()
-                    .strip_prefix(prefix.as_str())
-                    .map(fixture::unhex)
-            })
+            .filter_map(|line| line.trim().strip_prefix(prefix.as_str()).map(unhex))
             .collect()
     }
     fn exit(&mut self) {
@@ -412,7 +409,7 @@ fn unfinished_synchronized_output_keeps_daemon_queries_and_image_anchors_live() 
                     format!(
                         "SEND {} 2 {} {fragment}\n",
                         consumer.serial,
-                        fixture::hex(bytes.as_bytes())
+                        hex(bytes.as_bytes())
                     )
                     .as_bytes(),
                 )
@@ -487,7 +484,7 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
         }));
     let pane = a.session.pane_id();
     a.session.detach().unwrap();
-    let detached = fixture::hex(b"\x1b_Ga=T,i=99,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\detached_tail");
+    let detached = hex(b"\x1b_Ga=T,i=99,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\detached_tail");
     daemon
         .panes()
         .send_input(pane, format!("SEND 1000 1 {detached} 0\n").as_bytes())
@@ -505,14 +502,7 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
     // Retain both phases so the fresh marker also fences all graphics replay.
     a.serial += 1;
     a.session
-        .input(
-            format!(
-                "SEND {} 0 {} 0\n",
-                a.serial,
-                fixture::hex(b"reconnected_shell")
-            )
-            .as_bytes(),
-        )
+        .input(format!("SEND {} 0 {} 0\n", a.serial, hex(b"reconnected_shell")).as_bytes())
         .unwrap();
     assert!(a.finish_exchange(b"reconnected_shell").is_empty());
     assert!(
@@ -1436,7 +1426,7 @@ fn retention_daemon_offer_replay_refusal_live_cancel_and_pressure_keep_authority
             format!(
                 "SEND {} 1 {} 0\n",
                 a.serial,
-                fixture::hex(b"\x1b_Ga=T,i=3,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\")
+                hex(b"\x1b_Ga=T,i=3,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\")
             )
             .as_bytes(),
         )
@@ -1701,8 +1691,8 @@ fn retention_daemon_recovery_fresh_subscribers_keep_refusal_notices_and_detached
             pane,
             format!(
                 "WAIT 1000 0 {} 0 {}\n",
-                fixture::hex(&detached),
-                fixture::hex(gate.to_str().unwrap().as_bytes())
+                hex(&detached),
+                hex(gate.to_str().unwrap().as_bytes())
             )
             .as_bytes(),
         )
@@ -1819,7 +1809,7 @@ fn retention_daemon_large_outer_zlib_png_uses_bounded_live_work_and_recovers() {
                 format!(
                     "FILE_SEND {} 1 {} {fragment}\n",
                     consumer.serial,
-                    fixture::hex(file.to_str().unwrap().as_bytes()),
+                    hex(file.to_str().unwrap().as_bytes()),
                 )
                 .as_bytes(),
             )
@@ -2472,7 +2462,7 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
                 format!(
                     "FILE_SEND {} 1 {} 65521\n",
                     consumer.serial,
-                    fixture::hex(path.to_str().unwrap().as_bytes())
+                    hex(path.to_str().unwrap().as_bytes())
                 )
                 .as_bytes(),
             )

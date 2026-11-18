@@ -66,11 +66,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
             if let Some((_, result)) = output.split_once(&marker)
                 && let Some((reply, _)) = result.split_once(" END")
             {
-                assert_eq!(
-                    reply,
-                    hex(expected),
-                    "serial {serial}: {output}"
-                );
+                assert_eq!(reply, hex(expected), "serial {serial}: {output}");
                 break;
             }
             assert!(

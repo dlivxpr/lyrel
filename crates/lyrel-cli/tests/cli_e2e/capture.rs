@@ -85,10 +85,7 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     };
 
     let text = SYNC_CAPTURE_TEXT;
-    send(
-        &mut pane,
-        &synchronized_capture_frame(),
-    );
+    send(&mut pane, &synchronized_capture_frame());
     let raw = daemon.run_ok(&["capture", &address, "--scrollback"]);
     // Unix PTYs preserve the marker. ConPTY can consume/rewrite terminal
     // controls before lyrel receives them, so its text result alone is not
