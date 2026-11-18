@@ -14,8 +14,8 @@ use gpui_kit::{
 use crate::core::config::{Config, DiffViewMode};
 use crate::core::git::status::DecoStatus;
 use crate::ui::scm::diff::{
-    self, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus, LineKind,
-    Truncation,
+    self as git_diff, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus,
+    LineKind, Truncation,
 };
 
 /// How much of an untracked file the preview will read. Past this the card
@@ -2178,10 +2178,10 @@ fn probe_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::scm::diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
     use crate::ui::diff_list::{build_rows, file_expanded};
     use crate::ui::diff_rows::split_hunk;
     use crate::ui::i18n::set_locale;
+    use crate::ui::scm::diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
 
     #[test]
     fn full_window_diff_background_is_opaque_with_or_without_a_preset() {
@@ -3431,9 +3431,9 @@ mod overlay_gpui_tests {
 #[cfg(all(test, unix))]
 mod render_idle_gpui_tests {
     use super::*;
-    use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
     use crate::ui::app::{render_probe, test_window};
     use crate::ui::host_ops::HostId;
+    use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
     use gpui_kit::TestAppContext;
 
     const BUDGET: u64 = 200;
@@ -3665,11 +3665,11 @@ mod render_idle_gpui_tests {
 #[cfg(test)]
 mod selection_gpui_tests {
     use super::*;
-    use crate::ui::scm::diff::{DiffLine, LineKind};
     use crate::ui::app::test_window;
     use crate::ui::diff_rows::RowId;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
+    use crate::ui::scm::diff::{DiffLine, LineKind};
     use gpui_kit::{Entity, MouseButton, TestAppContext, VisualTestContext};
 
     const PATH: &str = "src/a.rs";

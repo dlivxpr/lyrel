@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use crate::core::git::{GitStatus, RepoProbe, RepoSnapshot, probe_repo};
-use gpui_kit::{Context, WeakEntity};
+use gpui_kit::{BorrowAppContext as _, Context, WeakEntity};
 
 use crate::terminal::view::{GitRefresh, TerminalView};
 use crate::ui::app::LyrelApp;
@@ -466,10 +466,11 @@ impl LyrelApp {
         if !host.is_connected() {
             return;
         }
-        let Some(request) = cx
-            .global::<GitStatusCache>()
-            .begin_root_check(host_id, &cwd, scm_snapshot::GIT_RETRY_GAP)
-        else {
+        let Some(request) = cx.global::<GitStatusCache>().begin_root_check(
+            host_id,
+            &cwd,
+            scm_snapshot::GIT_RETRY_GAP,
+        ) else {
             return;
         };
         let probe_cwd = cwd.clone();

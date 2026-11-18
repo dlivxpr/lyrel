@@ -135,13 +135,11 @@ pub struct OpenFileRequested {
 
 impl gpui_kit::EventEmitter<OpenFileRequested> for TerminalView {}
 
-/// The pane's command boundary may have changed its repository's content.
-/// Carries only the identity of the claim; the shell resolves the repo root
-/// and bumps the SCM epoch. Emitting never repaints by itself — the panel's
-/// next scheduled read is what notices the epoch moved.
+/// A command boundary may have changed a known repository. The shell bumps
+/// its epoch without scheduling a second read alongside the badge refresh.
 pub struct ScmRepoChanged {
     pub host_id: crate::ui::host_ops::HostId,
-    pub cwd: std::path::PathBuf,
+    pub root: std::path::PathBuf,
 }
 
 impl gpui_kit::EventEmitter<ScmRepoChanged> for TerminalView {}
@@ -1827,16 +1825,17 @@ impl TerminalView {
     /// the tree is not looking. A command boundary is the cheapest honest
     /// signal that that may have happened.
     ///
-    /// Only the claim leaves the pane, as [`ScmRepoChanged`]: the shell
-    /// resolves the repo root and moves the epoch. No notify here — the
-    /// badge probe this edge also requests writes the cheap cache, the app
-    /// observes that global, and the panel's next render finds the repository
-    /// stale and asks. One notify, not two.
+    /// Mark only known repositories; the panel's next render sees the stale
+    /// epoch when the badge probe notifies the shell.
     fn mark_repo_changed(&self, cwd: Option<&std::path::Path>, cx: &mut Context<Self>) {
-        let Some(cwd) = cwd else { return };
+        let Some(root) =
+            cwd.and_then(|cwd| crate::ui::scm_snapshot::repo_root_for(cx, self.host_id, cwd))
+        else {
+            return;
+        };
         cx.emit(ScmRepoChanged {
             host_id: self.host_id,
-            cwd: cwd.to_path_buf(),
+            root,
         });
     }
 

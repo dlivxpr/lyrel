@@ -274,15 +274,11 @@ impl LyrelApp {
             },
         )
         .detach();
-        cx.subscribe_in(
+        cx.subscribe(
             view,
-            window,
-            |app, _view, ev: &crate::terminal::view::ScmRepoChanged, _window, cx| {
-                // Only the epoch moves here — no notify, on purpose: the
-                // badge probe the same boundary requests writes the cheap
-                // cache, and the app's observer of that global is what
-                // repaints.
-                app.scm_invalidate_cwd(ev.host_id, &ev.cwd, cx);
+            |_app, _view, ev: &crate::terminal::view::ScmRepoChanged, cx| {
+                cx.default_global::<crate::ui::scm::data::ScmData>()
+                    .bump(ev.host_id, &ev.root);
             },
         )
         .detach();
