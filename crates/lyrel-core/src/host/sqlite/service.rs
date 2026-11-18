@@ -27,9 +27,9 @@ use rusqlite::{
 };
 
 use super::{
-    MAX_VIEWS, QUERY_SECONDS, QUERY_SECONDS_MAX, SqliteCancel, SqliteColumns, SqliteObject,
-    SqliteOpened, SqlitePage, SqliteQuery, SqliteValue, VALUE_CHUNK_BYTES, VIEW_IDLE, VIEW_MAX_AGE,
-    browser, stale_view,
+    MAX_VIEWS, QUERY_SECONDS, QUERY_SECONDS_MAX, SqliteCancel, SqliteColumns, SqliteEngine,
+    SqliteObject, SqliteOpened, SqlitePage, SqliteQuery, SqliteValue, VALUE_CHUNK_BYTES, VIEW_IDLE,
+    VIEW_MAX_AGE, browser, stale_view,
 };
 
 /// Lifetime knobs for read views. Production uses [`SqliteLimits::default`];
@@ -637,4 +637,51 @@ fn reaper() -> &'static Arc<Reaper> {
             });
         reaper
     })
+}
+
+impl SqliteEngine for SqliteService {
+    fn open(&self, path: &Path, cancel: &SqliteCancel) -> io::Result<SqliteOpened> {
+        self.open(path, cancel)
+    }
+
+    fn columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &SqliteCancel,
+    ) -> io::Result<SqliteColumns> {
+        self.columns(view, table, cancel)
+    }
+
+    fn count(&self, view: u64, query: &SqliteQuery, cancel: &SqliteCancel) -> io::Result<u64> {
+        self.count(view, query, cancel)
+    }
+
+    fn page(
+        &self,
+        view: u64,
+        query: &SqliteQuery,
+        cancel: &SqliteCancel,
+    ) -> io::Result<SqlitePage> {
+        self.page(view, query, cancel)
+    }
+
+    fn value(
+        &self,
+        view: u64,
+        query: &SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &SqliteCancel,
+    ) -> io::Result<SqliteValue> {
+        self.value(view, query, row, column, offset, max_bytes, cancel)
+    }
+
+    fn close(&self, view: u64) {
+        // The boolean reports whether a view was actually retired; the Host
+        // seam only promises the idempotent, non-blocking close.
+        let _ = self.close(view);
+    }
 }
