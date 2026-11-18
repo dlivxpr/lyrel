@@ -118,8 +118,7 @@ fn run_stdio(args: &[String]) -> io::Result<()> {
     {
         use lyrel_core::daemon::duplex::StdioDuplex;
         use lyrel_core::daemon::spawn;
-        use lyrel_core::host::local::LocalHost;
-        use lyrel_core::host::server;
+        use lyrel_core::host::{local, server};
         use std::os::unix::net::UnixStream;
 
         let force_serve = args.iter().any(|a| a == "--serve");
@@ -187,7 +186,7 @@ fn run_stdio(args: &[String]) -> io::Result<()> {
                 let link = StdioDuplex::take()?;
                 server::serve_with(
                     link,
-                    LocalHost::shared(),
+                    local::shared(),
                     lyrel_core::daemon::server::control_services(),
                 )
             }

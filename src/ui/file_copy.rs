@@ -70,7 +70,7 @@ pub(crate) fn copy_into_dir(
     dir: &Path,
     overwrite: bool,
 ) -> DropReport {
-    let local = lyrel_core::host::local::LocalHost::shared();
+    let local = lyrel_core::host::local::shared();
     copy_between_hosts(local.as_ref(), host, sources, dir, overwrite)
 }
 

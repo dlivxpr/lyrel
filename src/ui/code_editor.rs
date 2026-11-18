@@ -1687,7 +1687,7 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
             return;
         };
-        let host: SharedHost = lyrel_core::host::local::LocalHost::new();
+        let host = lyrel_core::host::local::new();
         let n = self.editor.buffers.next_untitled();
         let indent = lyrel_document::text::detect_indent(&text, "text");
         let dirty = !text.is_empty();

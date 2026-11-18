@@ -465,7 +465,7 @@ fn run_daemon_inner() -> anyhow::Result<()> {
         let mut services = control_services();
         services.panes = Some(registry.clone());
         match crate::host::server::spawn_control_listener_with(
-            crate::host::local::LocalHost::shared(),
+            crate::host::local::shared(),
             services,
         ) {
             Ok(path) => startup_note!("lyrel-server: control socket at {}", path.display()),
@@ -559,7 +559,7 @@ fn run_adopting(inheritance: crate::daemon::handoff::Inheritance) -> anyhow::Res
         let mut services = control_services();
         services.panes = Some(registry.clone());
         match crate::host::server::spawn_control_listener_with(
-            crate::host::local::LocalHost::shared(),
+            crate::host::local::shared(),
             services,
         ) {
             Ok(path) => startup_note!("lyrel-server: control socket at {}", path.display()),

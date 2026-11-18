@@ -27,8 +27,7 @@ impl HostServer {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let thread = std::thread::spawn(move || {
-            lyrel_core::host::server::serve(server, lyrel_core::host::local::LocalHost::new())
-                .unwrap();
+            lyrel_core::host::server::serve(server, lyrel_core::host::local::new()).unwrap();
         });
         let client = Arc::new(
             ControlClient::over_tcp(
@@ -225,8 +224,7 @@ impl RemoteServer {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let thread = std::thread::spawn(move || {
-            lyrel_core::host::server::serve(server, lyrel_core::host::local::LocalHost::new())
-                .unwrap();
+            lyrel_core::host::server::serve(server, lyrel_core::host::local::new()).unwrap();
         });
         let host = lyrel_core::host::remote::RemoteHost::over_tcp(
             stream,
