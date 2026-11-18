@@ -1,12 +1,19 @@
 //! The source control panel's data pipeline: one cache of what each repository
 //! looks like, one way to change it, and one way to say "that is now stale".
 //!
-//! Deliberately separate from [`super::git_status`]. That cache answers a
+//! Deliberately separate from [`super::status_cache`]. That cache answers a
 //! cheap question — branch name and a `+N −M` for a tab badge — on every cwd
 //! change and every command boundary, for every pane. This one answers the
 //! expensive question (`status --porcelain=v2 -uall`, seconds on a large
 //! repository) and only while something is actually looking. Folding the two
 //! would put the expensive probe on the cheap trigger.
+//!
+//! The pane-side half of the cheap probe is told, not asked: the production
+//! terminal emits typed events ([`crate::terminal::view::ScmStatusRefreshRequested`],
+//! [`crate::terminal::view::ScmRootRecheckRequested`],
+//! [`crate::terminal::view::ScmRepoChanged`]) and the shell wiring answers
+//! them here and in [`super::status_cache`], so the terminal never imports
+//! the controller.
 //!
 //! Invalidation is by epoch rather than by key. Working out which cache
 //! entries a `git add` touched is a losing game; bumping a counter for the
@@ -24,6 +31,8 @@ use crate::core::git::ops::{GitOp, GitOpError, GitOpErrorKind, GitOpOutcome, run
 use crate::core::git::status::{StatusIndex, StatusProbe, WorkingTreeStatus, probe_status};
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, WatchSub};
+
+use super::status_cache::GitStatusCache;
 
 /// One process-wide scalar, not a tombstone per visited repository. Both a
 /// new subscription lifetime and a refresh receive a never-reused identity.
@@ -862,7 +871,7 @@ impl LyrelApp {
     /// rather than a repository — which is every caller outside this module.
     pub(crate) fn scm_invalidate_cwd(&mut self, host: HostId, cwd: &Path, cx: &mut Context<Self>) {
         let Some(root) = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<GitStatusCache>()
             .and_then(|cache| cache.repo_root_for(host, cwd))
             .map(Path::to_path_buf)
         else {
@@ -943,7 +952,7 @@ impl LyrelApp {
         } else {
             &[]
         };
-        let git_cache = cx.try_global::<crate::terminal::git_status::GitStatusCache>();
+        let git_cache = cx.try_global::<GitStatusCache>();
         let repository_roots = || {
             tree_roots.iter().filter_map(move |root| {
                 git_cache.and_then(|cache| cache.repo_root_for(tree_host, root))
@@ -1048,7 +1057,7 @@ impl LyrelApp {
         let view = leaf.read(cx);
         let host = view.host_id();
         let root = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()?
+            .try_global::<GitStatusCache>()?
             .repo_root_for(host, view.git_status_cwd()?)?;
         Some((host, root.to_path_buf()))
     }
@@ -1069,7 +1078,7 @@ impl LyrelApp {
         // it against a local repository that merely shares the path.
         let (host, path) = self.editor_active_location()?;
         let root = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<GitStatusCache>()
             .and_then(|cache| cache.repo_root_for(host, path.parent()?))
             // The gutter's own base read finds the repository of a file no
             // terminal has been in, and its markers need this watch to
@@ -1091,7 +1100,7 @@ impl LyrelApp {
             .unwrap_or_default();
         for host in held.into_iter().filter(|host| !live.contains(host)) {
             cx.default_global::<ScmData>().clear_host(host);
-            cx.default_global::<crate::terminal::git_status::GitStatusCache>()
+            cx.default_global::<GitStatusCache>()
                 .clear_host(host);
         }
         // Derived panel state has its own owner and can outlive the last
@@ -1426,7 +1435,7 @@ pub(crate) fn shell_quote(argv: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[path = "git_data/lifetime_tests.rs"]
+#[path = "data/lifetime_tests.rs"]
 mod lifetime_tests;
 
 #[cfg(test)]

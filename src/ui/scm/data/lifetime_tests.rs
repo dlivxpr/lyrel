@@ -707,15 +707,15 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
 fn discover_repository(vcx: &mut VisualTestContext, host: &dyn Host, root: &Path) {
     let probe = std::thread::scope(|scope| {
         scope
-            .spawn(|| crate::terminal::git_status::probe_repo(host, root))
+            .spawn(|| crate::ui::scm::status_cache::probe_repo(host, root))
             .join()
             .unwrap()
     });
-    let crate::terminal::git_status::RepoProbe::Repo(snapshot) = probe else {
+    let crate::ui::scm::status_cache::RepoProbe::Repo(snapshot) = probe else {
         panic!("the real Host must discover this test repository");
     };
     vcx.update(|_, cx| {
-        cx.default_global::<crate::terminal::git_status::GitStatusCache>()
+        cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .finish_probe(host.id(), root, Some(snapshot));
     });
 }
@@ -736,7 +736,7 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     for known_negative in [false, true] {
         app.update_in(&mut vcx, |app, window, cx| {
             if known_negative {
-                cx.default_global::<crate::terminal::git_status::GitStatusCache>()
+                cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>()
                     .finish_probe(host.id(), &root, None);
             }
             app.right_panel_visible = true;

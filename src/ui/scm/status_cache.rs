@@ -1,10 +1,29 @@
+//! The cheap per-pane repository badge cache: the branch name and `+N −M`
+//! counts a tab wears, probed on cwd changes and command boundaries.
+//!
+//! This is the pane-facing half of SCM state. Panes ask for probes with typed
+//! events ([`crate::terminal::view::ScmStatusRefreshRequested`] and
+//! [`crate::terminal::view::ScmRootRecheckRequested`]); the shell wiring in
+//! [`super::status_cache`]'s `impl LyrelApp` claims against this cache,
+//! dispatches the `HostOps` work and lands the answer. Reads during render
+//! and the pane's poll gates go through the read-only seam
+//! [`crate::ui::scm_snapshot`], never straight at this module.
+//!
+//! Deliberately separate from [`super::data`], which owns the expensive
+//! `status --porcelain=v2 -uall` read the panel watches.
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use crate::core::git::{GitStatus, RepoProbe, RepoSnapshot, probe_repo};
-use crate::ui::host_ops::{ByHost, Host, HostId, InFlight};
+use gpui_kit::{Context, WeakEntity};
+
+use crate::terminal::view::{GitRefresh, TerminalView};
+use crate::ui::app::LyrelApp;
+use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight};
+use crate::ui::scm_snapshot;
 
 /// The spelling a directory is keyed by in here.
 ///
@@ -166,6 +185,32 @@ impl GitStatusCache {
             .checked
             .insert(host, cwd.into_owned(), (Instant::now(), Some(request)));
         Some(request)
+    }
+
+    /// The read-only early-out of [`GitStatusCache::begin_root_check`], asked
+    /// without claiming anything.
+    ///
+    /// The pane's steady-state poll uses this to decide whether its
+    /// `recheck_git_root` transition has anything to say for itself: without
+    /// it the poll would emit a typed event (and allocate its cwd) on every
+    /// quiet tick, only for the controller's claim to decline it. Same answer
+    /// as the claim's gate, recorded nothing.
+    pub(crate) fn root_recheck_due(
+        &self,
+        host: HostId,
+        cwd: &Path,
+        min_interval: Duration,
+    ) -> bool {
+        if self.repo_root_for(host, cwd).is_none() {
+            return false;
+        }
+        let cwd = key(host, cwd);
+        let checks = self.root_checks.borrow();
+        !checks
+            .checked
+            .get(host, &*cwd)
+            .is_some_and(|(at, pending)| pending.is_some() || at.elapsed() < min_interval)
+            && !self.probes.is_pending(&(host, cwd.to_path_buf()))
     }
 
     /// Whether a current, successful root check requires a full status probe.
@@ -335,6 +380,123 @@ impl GitStatusCache {
             .checked
             .insert(host, cwd.to_path_buf(), (Instant::now(), None));
         rerun
+    }
+}
+
+impl LyrelApp {
+    /// Answer a pane's `ScmStatusRefreshRequested`: claim the cheap badge
+    /// probe against this cache, dispatch it on the pane's host, and land the
+    /// answer where the tab badge renders from.
+    ///
+    /// The shell half of what used to live on `TerminalView`. The budgets are
+    /// exactly the ones the pane's trigger names: an `Edge` claim is
+    /// immediate; `Opportunistic` and `Retry` wait out their gaps. The pane
+    /// keeps its cwd bookkeeping — all that crosses the event boundary is
+    /// host, cwd and trigger.
+    pub(crate) fn scm_badge_probe(
+        &mut self,
+        host_id: HostId,
+        cwd: PathBuf,
+        trigger: GitRefresh,
+        pane: WeakEntity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
+            return;
+        };
+        if !host.is_connected() {
+            return;
+        }
+        cx.default_global::<GitStatusCache>();
+        let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
+            GitRefresh::Edge => cache.begin_probe(host_id, &cwd),
+            GitRefresh::Opportunistic => {
+                cache.begin_probe_throttled(host_id, &cwd, scm_snapshot::OPPORTUNISTIC_GIT_GAP)
+            }
+            GitRefresh::Retry => {
+                cache.begin_probe_throttled(host_id, &cwd, scm_snapshot::GIT_RETRY_GAP)
+            }
+        });
+        if !claimed {
+            return;
+        }
+        let probe_cwd = cwd.clone();
+        let app = cx.weak_entity();
+        HostOps::run_detached(
+            host,
+            cx,
+            move |h| probe_repo(h, &probe_cwd),
+            move |cx, result| {
+                let rerun = cx.update_global::<GitStatusCache, _>(|cache, _| match result {
+                    RepoProbe::Repo(snap) => cache.finish_probe(host_id, &cwd, Some(snap)),
+                    RepoProbe::NotARepo => cache.finish_probe(host_id, &cwd, None),
+                    RepoProbe::Failed => cache.fail_probe(host_id, &cwd),
+                });
+                // Superseded means the single-flight moved while this ran;
+                // re-ask only for the pane still sitting in this cwd.
+                if rerun
+                    && pane
+                        .update(cx, |view, _| {
+                            view.git_status_cwd().as_deref() == Some(cwd.as_path())
+                        })
+                        .unwrap_or(false)
+                {
+                    let _ = app.update(cx, |app, cx| {
+                        app.scm_badge_probe(host_id, cwd, GitRefresh::Edge, pane.clone(), cx)
+                    });
+                }
+            },
+        );
+    }
+
+    /// Answer a pane's `ScmRootRecheckRequested`: claim the root
+    /// revalidation, dispatch discovery, and follow a changed answer with an
+    /// edge badge probe — the shell half of the pane's old
+    /// `recheck_git_root`, display gate included.
+    pub(crate) fn scm_recheck_root(
+        &mut self,
+        host_id: HostId,
+        cwd: PathBuf,
+        pane: WeakEntity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
+            return;
+        };
+        if !host.is_connected() {
+            return;
+        }
+        let Some(request) = cx
+            .global::<GitStatusCache>()
+            .begin_root_check(host_id, &cwd, scm_snapshot::GIT_RETRY_GAP)
+        else {
+            return;
+        };
+        let probe_cwd = cwd.clone();
+        let app = cx.weak_entity();
+        HostOps::run_detached(
+            host,
+            cx,
+            move |h| discover_root(h, &probe_cwd),
+            move |cx, result| {
+                let changed = cx
+                    .global::<GitStatusCache>()
+                    .finish_root_check(host_id, &cwd, request, result);
+                if changed
+                    && pane
+                        .update(cx, |view, _| {
+                            view.host_id() == host_id
+                                && view.git_status_cwd().as_deref() == Some(cwd.as_path())
+                                && view.scm_displayed()
+                        })
+                        .unwrap_or(false)
+                {
+                    let _ = app.update(cx, |app, cx| {
+                        app.scm_badge_probe(host_id, cwd, GitRefresh::Edge, pane.clone(), cx)
+                    });
+                }
+            },
+        );
     }
 }
 
