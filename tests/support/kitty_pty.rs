@@ -90,9 +90,20 @@ pub fn pty_sender() {
     let mut stats = OutputStats::default();
     output.write_all(b"\r\nKITTY_READY\r\n").unwrap();
     output.flush().unwrap();
+    // Bytes a stream barrier consumed ahead of the request they belong to.
+    // Another writer (a pane on a different daemon, or a replayed input) can
+    // land a request line inside an earlier request's barrier read; keeping
+    // it here replays the line instead of panicking or losing the request.
+    let mut pending: Vec<u8> = Vec::new();
     loop {
         let mut line = Vec::new();
         loop {
+            if let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                line.extend(pending.drain(..=newline));
+                line.pop();
+                break;
+            }
+            line.append(&mut pending);
             let mut byte = [0];
             if input.read(&mut byte).unwrap() == 0 {
                 return;
@@ -226,22 +237,35 @@ pub fn pty_sender() {
             .write_all(b"\x1b_Ga=q,i=4294967294,f=7\x1b\\")
             .unwrap();
         output.flush().unwrap();
+        const UNSUPPORTED: &[u8] = b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\";
         let mut barrier = Vec::new();
-        while !barrier.ends_with(b"\x1b\\") {
-            let mut byte = [0];
-            input.read_exact(&mut byte).unwrap();
-            barrier.push(byte[0]);
+        loop {
+            if let Some(at) = pending.iter().position(|byte| *byte == b'\\') {
+                barrier.extend(pending.drain(..=at));
+            }
+            barrier.append(&mut pending);
+            while !barrier.ends_with(b"\x1b\\") {
+                let mut byte = [0];
+                input.read_exact(&mut byte).unwrap();
+                barrier.push(byte[0]);
+            }
+            if barrier == UNSUPPORTED {
+                break;
+            }
+            // A TITLE request's certificate must not exist before this
+            // barrier is consumed. The test sends the next request the
+            // moment it sees the certificate, and a replayed input or a
+            // concurrent writer can land that line inside this read.
+            // Requeue complete request lines instead of asserting away
+            // the whole request.
+            if !barrier.contains(&b'\n') {
+                panic!(
+                    "unexpected kitty barrier: {:?}",
+                    String::from_utf8_lossy(&barrier)
+                );
+            }
+            pending = std::mem::take(&mut barrier);
         }
-        assert_eq!(
-            barrier,
-            b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\"
-        );
-        // A TITLE request's certificate must not exist before this barrier is
-        // consumed. The test sends the next request the moment it sees the
-        // certificate, and those bytes would land in the barrier read above
-        // (`while !ends_with(ST)` consumes whatever arrives), failing this
-        // assertion and losing the next request entirely. Every other
-        // operation already writes its marker after the barrier.
         if operation == "TITLE" {
             write!(output, "\r\nTITLE_DONE_{serial}\r\n").unwrap();
             output.flush().unwrap();

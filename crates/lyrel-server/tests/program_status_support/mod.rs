@@ -133,13 +133,56 @@ fn barrier(session: &mut PaneSession, command: &str) -> Pumped {
 /// frames the settle must collect. The reader publishes one read's text and
 /// then its frames before it reads the next chunk, and both travel on the same
 /// ordered connection, so a later echo cannot overtake those frames.
+///
+/// Echo is byte traffic like any other input: a busy pane (a shell printing a
+/// fresh prompt, job notices, a relayed writer) can interleave its own bytes
+/// inside the echoed line and cut the token, so the settle resends a fresh
+/// comment on a slow cadence until one echo survives whole. Comment lines are
+/// idempotent; a retry is bounded by the same wedged-stream deadline.
 pub fn settle(session: &mut PaneSession) -> Pumped {
-    let token = format!(
-        "lyrel_ps_settle_{}",
-        SETTLE_SEQ.fetch_add(1, Ordering::Relaxed)
-    );
-    send_line(session, &format!("#{token}"));
-    pump_until_text(session, token.as_bytes())
+    const RETRY: Duration = Duration::from_secs(5);
+    let deadline = Instant::now() + STREAM_WITHIN;
+    let mut pumped = Pumped::default();
+    session
+        .set_recv_timeout(Some(POLL))
+        .expect("bound the stream reads");
+    let mut token = String::new();
+    let mut sent = Instant::now() - RETRY;
+    loop {
+        if !token.is_empty() && pumped.contains(token.as_bytes()) {
+            return pumped;
+        }
+        if sent.elapsed() >= RETRY {
+            token = format!(
+                "lyrel_ps_settle_{}",
+                SETTLE_SEQ.fetch_add(1, Ordering::Relaxed)
+            );
+            send_line(session, &format!("#{token}"));
+            sent = Instant::now();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane stream did not echo a whole settle line within {STREAM_WITHIN:?}; \
+             frames {:?} text {:?}",
+            pumped.frames,
+            String::from_utf8_lossy(&pumped.text)
+        );
+        match session.recv() {
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => {
+                pumped.text.extend_from_slice(&bytes)
+            }
+            Ok(DaemonMsg::ProgramStatus(frame)) => pumped.frames.push(frame),
+            Ok(DaemonMsg::Exited { code }) => panic!("the pane exited early: {code:?}"),
+            Ok(DaemonMsg::Error(message)) => panic!("the daemon reported: {message}"),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("the pane stream failed: {error}"),
+        }
+    }
 }
 
 /// Run `command` in the pane's shell and collect every frame it produced.
