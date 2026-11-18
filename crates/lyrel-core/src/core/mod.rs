@@ -31,7 +31,7 @@ pub use lyrel_protocol::core::pane_sidecar;
 pub use lyrel_protocol::core::paste;
 pub use lyrel_protocol::core::path_spelling;
 pub mod proc;
-pub use lyrel_protocol::core::program_status;
+pub mod program_status;
 pub use lyrel_protocol::core::session;
 pub use lyrel_protocol::core::shell_quote;
 pub use lyrel_protocol::core::shells;

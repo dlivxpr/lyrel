@@ -1,12 +1,17 @@
 //! 输入栏与 CLI 表格共用 Rio 默认 mode 2027 的占列规则。
 
+use rio_grapheme_width::emoji::Presentation;
+use rio_unicode::UnicodeWidthChar;
+use rio_unicode::grapheme::{BreakState, grapheme_class, is_break};
 use smallvec::SmallVec;
 
 /// 依次返回 `(字符数, 列宽)`，不分配内存。
 ///
-/// 分段和 emoji 占列直接调用正式 Rio API；这里只保留应用自己的两项
-/// 编辑契约：换行单独结束一行，无 base 的 mark 仍占一列以便显示和定位。
-/// CR 不与 LF 合并，保证输入栏的字符索引和硬换行保持一一对应。
+/// 分段和 emoji 占列直接驱动 Rio 同款锁定注册表原语（`rio-unicode` 的
+/// UAX #29 状态机与 EastAsianWidth 表、`rio-grapheme-width` 的 emoji
+/// variation 表），与 released parser 的 mode-2027 打印路径一致；这里只保留
+/// 应用自己的两项编辑契约：换行单独结束一行，无 base 的 mark 仍占一列以便
+/// 显示和定位。CR 不与 LF 合并，保证输入栏的字符索引和硬换行保持一一对应。
 pub fn cells(mut codepoints: &[u32]) -> impl Iterator<Item = (usize, usize)> + '_ {
     std::iter::from_fn(move || {
         let &first = codepoints.first()?;
@@ -14,8 +19,8 @@ pub fn cells(mut codepoints: &[u32]) -> impl Iterator<Item = (usize, usize)> + '
             0x0A => (1, 0),
             0x0D => (1, 1),
             _ => {
-                let (len, width) = rio_vt::grapheme_lut::cluster_width(codepoints);
-                (len, usize::from(width).max(1))
+                let (len, width) = cluster_width(codepoints);
+                (len, width.max(1))
             }
         };
         codepoints = &codepoints[len..];
@@ -27,6 +32,80 @@ pub fn cells(mut codepoints: &[u32]) -> impl Iterator<Item = (usize, usize)> + '
 pub fn width(text: &str) -> usize {
     let codepoints: SmallVec<[u32; 64]> = text.chars().map(u32::from).collect();
     cells(&codepoints).map(|(_, width)| width).sum()
+}
+
+/// Measure the first grapheme cluster in `codepoints`: how many codepoints it
+/// spans and how many terminal cells it occupies, following the same
+/// segmentation and width rules as Rio's mode-2027 print path.
+///
+/// The rules are evaluated directly against the released registry primitives
+/// that path is built from — `rio-unicode`'s grapheme state machine and width
+/// tables plus `rio-grapheme-width`'s emoji variation table — so this helper
+/// cannot drift from the grid it is compared against in the dev-only test
+/// below. Behavior notes kept in parity with that path:
+///
+/// - a variation selector flips the width of a valid emoji base (U+FE0F wide,
+///   U+FE0E narrow) and is consumed without effect anywhere else;
+/// - any other width-bearing continuation makes the whole cluster wide;
+/// - zero-width continuations change nothing;
+/// - this is not a streaming call: the slice must contain a complete first
+///   cluster or the logical end of the text;
+/// - values that are not Unicode scalars measure as one single-width
+///   codepoint when first and terminate the cluster when later.
+fn cluster_width(codepoints: &[u32]) -> (usize, usize) {
+    let Some(&first) = codepoints.first() else {
+        return (0, 0);
+    };
+    let Some(base) = char::from_u32(first) else {
+        return (1, 1);
+    };
+    let mut width = UnicodeWidthChar::width(base).unwrap_or(1);
+    let mut prev_class = grapheme_class(base);
+    let mut state = BreakState::start(prev_class);
+    let mut last_cp = base;
+    let mut len = 1;
+    while len < codepoints.len() {
+        let Some(c) = char::from_u32(codepoints[len]) else {
+            break;
+        };
+        let class = grapheme_class(c);
+        let state_before = state;
+        if is_break(prev_class, class, &mut state) {
+            break;
+        }
+        match c {
+            '\u{FE0F}' | '\u{FE0E}' => {
+                if vs_is_valid_base(last_cp, c) {
+                    width = if c == '\u{FE0F}' { 2 } else { 1 };
+                    prev_class = class;
+                    last_cp = c;
+                } else {
+                    // Ignored selector: consumed without effect, exactly like
+                    // the released print path.
+                    state = state_before;
+                }
+            }
+            _ => {
+                if UnicodeWidthChar::width(c).unwrap_or(0) > 0 {
+                    width = 2;
+                }
+                prev_class = class;
+                last_cp = c;
+            }
+        }
+        len += 1;
+    }
+    (len, width)
+}
+
+/// True when (`base`, `vs`) appears in Unicode's emoji-variation-sequences,
+/// i.e. the selector is defined to have an effect on this base. Queried
+/// through the same `rio-grapheme-width` table Rio's grid uses.
+fn vs_is_valid_base(base: char, vs: char) -> bool {
+    let mut sequence = String::with_capacity(base.len_utf8() + vs.len_utf8());
+    sequence.push(base);
+    sequence.push(vs);
+    Presentation::for_grapheme(&sequence).1.is_some()
 }
 
 #[cfg(test)]
