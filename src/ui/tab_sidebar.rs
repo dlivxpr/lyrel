@@ -284,7 +284,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs.is_empty() || self.sidebar_nav_overlay_open(window) {
+        if self.tabs.is_empty() || self.sidebar_nav_overlay_open(window, cx) {
             return;
         }
         let targets = self.sidebar_nav_targets(cx);
@@ -468,7 +468,7 @@ impl LyrelApp {
 
     /// Modal surfaces above workbench navigation. A visible code panel is
     /// ordinary content; a diff, picker, or document prompt is not.
-    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window) -> bool {
+    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window, cx: &gpui_kit::App) -> bool {
         let settings_here = self.settings.as_ref().is_some_and(|_| {
             self.settings_window
                 .is_none_or(|(settings, _)| settings == window.window_handle())
@@ -478,7 +478,7 @@ impl LyrelApp {
             || self.close_prompt_open
             || self.switcher.is_some()
             || self.worktree_prompt.is_some()
-            || self.document_navigation_overlay_open()
+            || self.document_navigation_overlay_open(cx)
             || self
                 .tabs
                 .get(self.tabs.active_index())
@@ -522,7 +522,7 @@ impl LyrelApp {
                 true
             }
             "escape" => {
-                if self.sidebar_nav_overlay_open(window) {
+                if self.sidebar_nav_overlay_open(window, cx) {
                     false
                 } else {
                     self.sidebar_nav_leave(window, cx);

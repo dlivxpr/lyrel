@@ -39,6 +39,7 @@ use crate::ui::settings_window::SettingsWindow;
 use crate::ui::tab::presentation::{OpenedFrom, SpawnAs, inherited_start_dir};
 mod actions;
 mod composition;
+mod editor_panel;
 mod initialization;
 mod pane_binding;
 mod settings_bridge;
@@ -263,7 +264,9 @@ pub struct LyrelApp {
         std::collections::HashSet<(crate::ui::host_ops::HostId, std::path::PathBuf)>,
     pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
-    pub(crate) editor: crate::ui::code_editor::EditorPanelState,
+    pub(crate) editor: Entity<crate::ui::code_editor::EditorPanelState>,
+    _editor_events: Subscription,
+    _editor_observer: Subscription,
     pub(crate) sidebar_width: Rc<Cell<f32>>,
     pub(crate) sidebar_dragging: Rc<Cell<bool>>,
     last_settings_location: (SettingsSection, gpui_kit::Point<gpui_kit::Pixels>),
@@ -563,7 +566,7 @@ impl LyrelApp {
     }
 
     fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let unsaved = self.editor_unsaved();
+        let unsaved = self.editor_unsaved(cx);
         if self.editor_guard_unsaved(
             unsaved,
             crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
@@ -1011,7 +1014,7 @@ impl LyrelApp {
         // holds them. Quitting ends every window, so another window's
         // buffers count as much as this one's: hand the quit over to it, and
         // it asks about its own before carrying the quit on.
-        let unsaved = self.editor_unsaved();
+        let unsaved = self.editor_unsaved(cx);
         if self.editor_guard_unsaved(
             unsaved,
             crate::ui::code_editor::saving::AfterUnsaved::Quit,
@@ -1024,7 +1027,7 @@ impl LyrelApp {
         let elsewhere = crate::ui::windows::WindowRegistry::open_windows(cx)
             .into_iter()
             .filter_map(|(ws, app)| Some((ws, app.upgrade()?)))
-            .find(|(_, app)| app.entity_id() != me && !app.read(cx).editor_unsaved().is_empty());
+            .find(|(_, app)| app.entity_id() != me && !app.read(cx).editor_unsaved(cx).is_empty());
         if let Some((ws, app)) = elsewhere
             && let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, ws)
         {
@@ -2472,7 +2475,7 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .is_some_and(|tab| tab.pane.leaves().len() <= 1)
         {
-            let unsaved = self.editor_unsaved_in_tab(self.tabs.active_index());
+            let unsaved = self.editor_unsaved_in_tab(self.tabs.active_index(), cx);
             if self.editor_guard_unsaved(
                 unsaved,
                 crate::ui::code_editor::saving::AfterUnsaved::ClosePane(pane),
@@ -3326,7 +3329,7 @@ impl LyrelApp {
         }
         if !confirmed {
             let id = self.tabs[index].id();
-            let unsaved = self.editor_unsaved_in_tab(index);
+            let unsaved = self.editor_unsaved_in_tab(index, cx);
             if self.editor_guard_unsaved(
                 unsaved,
                 crate::ui::code_editor::saving::AfterUnsaved::CloseTab(id),
@@ -3557,7 +3560,9 @@ impl LyrelApp {
     /// files — see [`Self::close_other_tabs_inner`].
     fn bulk_closable(&self, indices: impl Iterator<Item = usize>, cx: &App) -> Vec<usize> {
         indices
-            .filter(|&i| !self.tab_has_warn_ssh(i, cx) && self.editor_unsaved_in_tab(i).is_empty())
+            .filter(|&i| {
+                !self.tab_has_warn_ssh(i, cx) && self.editor_unsaved_in_tab(i, cx).is_empty()
+            })
             .collect()
     }
 
@@ -3611,7 +3616,7 @@ impl LyrelApp {
             // cannot ask about them one tab at a time, and must not lose them.
             if i == index
                 || self.tab_has_warn_ssh(i, cx)
-                || !self.editor_unsaved_in_tab(i).is_empty()
+                || !self.editor_unsaved_in_tab(i, cx).is_empty()
             {
                 continue;
             }
@@ -3644,7 +3649,7 @@ impl LyrelApp {
         }
         // Same bargain as `close_other_tabs`.
         for i in ((index + 1)..self.tabs.len()).rev() {
-            if self.tab_has_warn_ssh(i, cx) || !self.editor_unsaved_in_tab(i).is_empty() {
+            if self.tab_has_warn_ssh(i, cx) || !self.editor_unsaved_in_tab(i, cx).is_empty() {
                 continue;
             }
             self.close_tab_inner(i, true, window, cx);
@@ -4139,7 +4144,7 @@ impl LyrelApp {
                 .is_some_and(|w| w.is_remote()),
             self.unsaved_ssh_session(window, cx).is_some(),
         )
-        .with_editor(self.editor_palette_items(), self.editor_can_dispatch());
+        .with_editor(self.editor_palette_items(), self.editor_can_dispatch(cx));
         let agents = self.offered_agents(cx);
         let terminals = TerminalCatalog::new(self.workspace, &self.shells, &agents)
             .items(|id| self.tab_rows_for(id, true, cx), cx);

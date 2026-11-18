@@ -28,7 +28,7 @@ pub(super) struct SaveWaiter {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum BarKind {
+pub(crate) enum BarKind {
     GoToLine { id: BufferId },
     SaveAs { id: BufferId },
     Rename { id: BufferId, offset: usize },
@@ -39,41 +39,6 @@ pub(super) struct EditorBar {
     identity: SaveIdentity,
     input: Entity<InputState>,
     _sub: Subscription,
-}
-
-pub(super) enum EditorEvent {
-    Saved {
-        id: BufferId,
-        host: HostId,
-        directory: Option<PathBuf>,
-    },
-    Continue(AfterUnsaved),
-    Discard(Vec<BufferId>),
-    IdentityChanged,
-    Focus,
-    GoToLine {
-        id: BufferId,
-        line: u32,
-        column: u32,
-    },
-    Rename {
-        id: BufferId,
-        offset: usize,
-        name: String,
-    },
-}
-
-/// Typed adapter into the retained workbench entity; implementation only gets
-/// editor state. Cross-feature effects leave through semantic events.
-pub(super) struct EditorBridge<E> {
-    pub(super) access: fn(&mut E) -> &mut EditorPanelState,
-    pub(super) event: fn(&mut E, EditorEvent, &mut Window, &mut Context<E>),
-}
-impl<E> Copy for EditorBridge<E> {}
-impl<E> Clone for EditorBridge<E> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 #[derive(Clone)]
@@ -142,34 +107,32 @@ impl EditorPanelState {
         valid
     }
 
-    pub(super) fn retire_prompts(&mut self) {
+    pub(crate) fn retire_prompts(&mut self) {
         self.prompt_epoch = self.prompt_epoch.wrapping_add(1);
         self.unsaved_prompt_open = false;
         self.waiters.clear();
         self.dismiss_bar();
     }
 
-    pub(super) fn save<E: 'static>(
+    pub(crate) fn save(
         &mut self,
         id: BufferId,
         force: bool,
         root: &Path,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
-        self.save_at(id, force, None, root, window, cx, bridge);
+        self.save_at(id, force, None, root, window, cx);
     }
 
-    pub(super) fn save_at<E: 'static>(
+    pub(crate) fn save_at(
         &mut self,
         id: BufferId,
         force: bool,
         save_as: Option<PathBuf>,
         root: &Path,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
         // Read-only content — a picture, database, book or PDF — has no bytes
         // the workbench may write back, so Save and Save As do nothing here.
@@ -195,7 +158,7 @@ impl EditorPanelState {
             return;
         }
         if file.untitled.is_some() && save_as.is_none() {
-            self.save_as(id, root, window, cx, bridge);
+            self.save_as(id, root, window, cx);
             return;
         }
         // A diagram save must write the engine's live model, not the last
@@ -258,7 +221,7 @@ impl EditorPanelState {
         let captured = match fidelity::SaveContent::capture(self.buffers.get(id).unwrap(), cx) {
             Ok(captured) => captured,
             Err(error) => {
-                self.offer_utf8(id, error.unmappable, save_as, window, cx, bridge);
+                self.offer_utf8(id, error.unmappable, save_as, window, cx);
                 return;
             }
         };
@@ -284,8 +247,7 @@ impl EditorPanelState {
             window,
             cx,
             move |host| write_checked(host, &target, &bytes, expect),
-            move |view, outcome, window, cx| {
-                let editor = (bridge.access)(view);
+            move |editor, outcome, window, cx| {
                 let Some(file) = editor.buffers.get_mut(id) else {
                     return;
                 };
@@ -349,35 +311,25 @@ impl EditorPanelState {
                             // A later save is not consent to close that newer work.
                             editor.saves_failed(id);
                         }
-                        (bridge.event)(
-                            view,
-                            EditorEvent::Saved {
-                                id,
-                                host: identity.host,
-                                directory,
-                            },
-                            window,
-                            cx,
-                        );
+                        editor.on_saved(id, identity.host, directory, cx);
                         if save_as.is_some() {
-                            (bridge.event)(view, EditorEvent::IdentityChanged, window, cx);
+                            cx.emit(EditorPanelEvent::IdentityChanged);
                         }
-                        let editor = (bridge.access)(view);
                         if let Some(target) = next_target {
-                            editor.save_to(id, target, window, cx, bridge);
+                            editor.save_to(id, target, window, cx);
                         } else if pending {
-                            editor.save(id, false, Path::new(""), window, cx, bridge);
+                            editor.save(id, false, Path::new(""), window, cx);
                         } else {
                             let ready = editor.take_saved_intents();
                             for intent in ready {
-                                (bridge.event)(view, EditorEvent::Continue(intent), window, cx);
+                                cx.emit(EditorPanelEvent::Continue(intent));
                             }
                         }
                     }
                     SaveOutcome::Conflict(observed) => {
                         file.conflict = Some(DiskConflict::Changed(observed));
                         editor.saves_failed(id);
-                        editor.ask_overwrite(id, window, cx, bridge);
+                        editor.ask_overwrite(id, window, cx);
                     }
                     SaveOutcome::Failed(error) => {
                         let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &file.label())]);
@@ -391,13 +343,25 @@ impl EditorPanelState {
         cx.notify();
     }
 
-    fn ask_overwrite<E: 'static>(
+    /// A finished save: the gutter re-fetches, the panel re-derives its edit
+    /// state, and the shell hears about it for LSP and SCM.
+    fn on_saved(
         &mut self,
         id: BufferId,
-        window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        host: HostId,
+        directory: Option<PathBuf>,
+        cx: &mut Context<Self>,
     ) {
+        self.gutter_refetch(id);
+        self.buffer_changed(id, cx);
+        cx.emit(EditorPanelEvent::BufferSaved {
+            id,
+            host,
+            directory,
+        });
+    }
+
+    fn ask_overwrite(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
@@ -411,29 +375,27 @@ impl EditorPanelState {
         );
         cx.spawn_in(window, async move |view, cx| {
             let choice = answer.await;
-            let _ = view.update_in(cx, |view, window, cx| {
-                let editor = (bridge.access)(view);
+            let _ = view.update_in(cx, |editor, window, cx| {
                 if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
                 if matches!(choice, Ok(0)) {
-                    editor.save(id, true, Path::new(""), window, cx, bridge);
+                    editor.save(id, true, Path::new(""), window, cx);
                 } else {
-                    (bridge.event)(view, EditorEvent::Focus, window, cx);
+                    cx.emit(EditorPanelEvent::FocusDocument);
                 }
             });
         })
         .detach();
     }
 
-    fn offer_utf8<E: 'static>(
+    fn offer_utf8(
         &mut self,
         id: BufferId,
         unmappable: char,
         target: Option<PathBuf>,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
         let Some(identity) = self.save_identity(id, cx) else {
             return;
@@ -458,8 +420,7 @@ impl EditorPanelState {
         );
         cx.spawn_in(window, async move |view, cx| {
             let choice = answer.await;
-            let _ = view.update_in(cx, |view, window, cx| {
-                let editor = (bridge.access)(view);
+            let _ = view.update_in(cx, |editor, window, cx| {
                 if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
@@ -472,22 +433,21 @@ impl EditorPanelState {
                         },
                         cx,
                     );
-                    editor.save_at(id, false, target, Path::new(""), window, cx, bridge);
+                    editor.save_at(id, false, target, Path::new(""), window, cx);
                 } else {
-                    (bridge.event)(view, EditorEvent::Focus, window, cx);
+                    cx.emit(EditorPanelEvent::FocusDocument);
                 }
             });
         })
         .detach();
     }
 
-    pub(super) fn save_as<E: 'static>(
+    pub(crate) fn save_as(
         &mut self,
         id: BufferId,
         root: &Path,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
         // A read-only picture must not open a path picker it can never write
         // through: Save As is about bytes this document does not have.
@@ -535,7 +495,6 @@ impl EditorPanelState {
                 initial.display().to_string(),
                 window,
                 cx,
-                bridge,
             );
             return;
         }
@@ -547,29 +506,27 @@ impl EditorPanelState {
         let answer = cx.prompt_for_new_path(&dir, suggested.to_str());
         cx.spawn_in(window, async move |view, cx| {
             let result = answer.await;
-            let _ = view.update_in(cx, |view, window, cx| {
-                let editor = (bridge.access)(view);
+            let _ = view.update_in(cx, |editor, window, cx| {
                 if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
                 if let Ok(Ok(Some(path))) = result {
-                    editor.save_to(id, path, window, cx, bridge);
+                    editor.save_to(id, path, window, cx);
                 } else {
                     editor.saves_failed(id);
-                    (bridge.event)(view, EditorEvent::Focus, window, cx);
+                    cx.emit(EditorPanelEvent::FocusDocument);
                 }
             });
         })
         .detach();
     }
 
-    fn save_to<E: 'static>(
+    fn save_to(
         &mut self,
         id: BufferId,
         path: PathBuf,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
         let Some(file) = self.buffers.get(id) else {
             return;
@@ -589,16 +546,15 @@ impl EditorPanelState {
             );
             return;
         }
-        self.save_at(id, true, Some(path), Path::new(""), window, cx, bridge);
+        self.save_at(id, true, Some(path), Path::new(""), window, cx);
     }
 
-    pub(super) fn open_bar<E: 'static>(
+    pub(crate) fn open_bar(
         &mut self,
         kind: BarKind,
         initial: String,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) {
         let id = match kind {
             BarKind::GoToLine { id } | BarKind::SaveAs { id } | BarKind::Rename { id, .. } => id,
@@ -627,13 +583,12 @@ impl EditorPanelState {
                 .placeholder(placeholder)
                 .default_value(initial)
         });
-        let sub = cx.subscribe_in(&input, window, move |view, _, event, window, cx| {
-            let editor = (bridge.access)(view);
-            match event {
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            move |editor, _, event, window, cx| match event {
                 InputEvent::PressEnter { .. } => {
-                    if let Some(event) = editor.submit_bar(window, cx, bridge) {
-                        (bridge.event)(view, event, window, cx);
-                    }
+                    editor.submit_bar(window, cx);
                 }
                 InputEvent::Blur
                     if editor
@@ -645,8 +600,8 @@ impl EditorPanelState {
                     cx.notify();
                 }
                 _ => {}
-            }
-        });
+            },
+        );
         input.update(cx, |input, cx| input.focus(window, cx));
         self.bar = Some(EditorBar {
             kind,
@@ -657,18 +612,15 @@ impl EditorPanelState {
         cx.notify();
     }
 
-    pub(super) fn dismiss_bar(&mut self) {
-        if let Some(bar) = self.bar.take()
-            && let BarKind::SaveAs { id } = bar.kind
-        {
-            self.saves_failed(id);
-        }
+    pub(crate) fn dismiss_bar(&mut self) {
+        self.bar = None;
     }
-    pub(super) fn has_bar(&self) -> bool {
+
+    pub(crate) fn has_bar(&self) -> bool {
         self.bar.is_some()
     }
 
-    pub(super) fn bar_has_focus(&self, window: &Window, cx: &gpui_kit::App) -> bool {
+    pub(crate) fn bar_has_focus(&self, window: &Window, cx: &gpui_kit::App) -> bool {
         self.bar.as_ref().is_some_and(|bar| {
             bar.input
                 .read(cx)
@@ -677,40 +629,42 @@ impl EditorPanelState {
         })
     }
 
-    fn submit_bar<E: 'static>(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
-    ) -> Option<EditorEvent> {
-        let bar = self.bar.as_ref()?;
+    fn submit_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = self.bar.as_ref() else {
+            return;
+        };
         let identity = bar.identity.clone();
         if !self.accepts_prompt(&identity, cx) {
             self.dismiss_bar();
-            return Some(EditorEvent::Focus);
+            cx.emit(EditorPanelEvent::FocusDocument);
+            return;
         }
-        let bar = self.bar.as_ref()?;
         let text = bar.input.read(cx).value().to_string();
         match bar.kind {
             BarKind::GoToLine { id } => {
-                let (line, column) = parse_line_target(&text)?;
+                let Some((line, column)) = parse_line_target(&text) else {
+                    return;
+                };
                 self.bar = None;
-                Some(EditorEvent::GoToLine { id, line, column })
+                cx.emit(EditorPanelEvent::GoToLineRequested { id, line, column });
             }
             BarKind::Rename { id, offset } => {
                 let name = text.trim().to_string();
                 if name.is_empty() {
-                    return None;
+                    return;
                 }
                 self.bar = None;
-                Some(EditorEvent::Rename { id, offset, name })
+                cx.emit(EditorPanelEvent::RenameRequested { id, offset, name });
             }
             BarKind::SaveAs { id } => {
                 let path = PathBuf::from(text.trim());
                 let identity = bar.identity.clone();
-                let host = self.buffers.get(id)?.host.clone();
+                let Some(file) = self.buffers.get(id) else {
+                    return;
+                };
+                let host = file.host.clone();
                 if path.as_os_str().is_empty() || !host.is_absolute(&path) {
-                    return None;
+                    return;
                 }
                 self.bar = None;
                 let check = path.clone();
@@ -719,13 +673,12 @@ impl EditorPanelState {
                     window,
                     cx,
                     move |host| host.exists(&check),
-                    move |view, exists, window, cx| {
-                        let editor = (bridge.access)(view);
+                    move |editor, exists, window, cx| {
                         if !editor.accepts_prompt(&identity, cx) {
                             return;
                         }
                         if !exists {
-                            editor.save_to(id, path, window, cx, bridge);
+                            editor.save_to(id, path, window, cx);
                             return;
                         }
                         let answer = window.prompt(
@@ -743,16 +696,15 @@ impl EditorPanelState {
                         );
                         cx.spawn_in(window, async move |view, cx| {
                             let choice = answer.await;
-                            let _ = view.update_in(cx, |view, window, cx| {
-                                let editor = (bridge.access)(view);
+                            let _ = view.update_in(cx, |editor, window, cx| {
                                 if !editor.accepts_prompt(&identity, cx) {
                                     return;
                                 }
                                 if matches!(choice, Ok(0)) {
-                                    editor.save_to(id, path, window, cx, bridge);
+                                    editor.save_to(id, path, window, cx);
                                 } else {
                                     editor.saves_failed(id);
-                                    (bridge.event)(view, EditorEvent::Focus, window, cx);
+                                    cx.emit(EditorPanelEvent::FocusDocument);
                                 }
                             });
                         })
@@ -760,19 +712,22 @@ impl EditorPanelState {
                     },
                 );
                 cx.notify();
-                Some(EditorEvent::Focus)
+                cx.emit(EditorPanelEvent::FocusDocument);
             }
         }
     }
 
-    pub(super) fn guard_unsaved<E: 'static>(
+    /// Asks about unsaved buffers before `then` goes ahead. Returns `true`
+    /// when there was something to ask about: the caller stops there, and the
+    /// answer carries the close on — after saving, after discarding, or not
+    /// at all.
+    pub(crate) fn guard_unsaved(
         &mut self,
         ids: Vec<BufferId>,
         then: AfterUnsaved,
-        root: PathBuf,
+        root: &Path,
         window: &mut Window,
-        cx: &mut Context<E>,
-        bridge: EditorBridge<E>,
+        cx: &mut Context<Self>,
     ) -> bool {
         if ids.is_empty() {
             return false;
@@ -802,6 +757,7 @@ impl EditorPanelState {
             body.push("…".into());
         }
         let body = (names.len() > 1).then(|| body.join("\n"));
+        let root = root.to_path_buf();
         let answer = window.prompt(
             PromptLevel::Warning,
             &title,
@@ -819,8 +775,7 @@ impl EditorPanelState {
         );
         cx.spawn_in(window, async move |view, cx| {
             let choice = answer.await;
-            let _ = view.update_in(cx, |view, window, cx| {
-                let editor = (bridge.access)(view);
+            let _ = view.update_in(cx, |editor, window, cx| {
                 if editor.prompt_epoch != epoch {
                     return;
                 }
@@ -840,15 +795,15 @@ impl EditorPanelState {
                             then,
                         });
                         for id in ids {
-                            (bridge.access)(view).save(id, false, &root, window, cx, bridge);
+                            editor.save(id, false, &root, window, cx);
                         }
                     }
                     Ok(2) => {
-                        (bridge.event)(view, EditorEvent::Discard(ids), window, cx);
-                        (bridge.event)(view, EditorEvent::Continue(then), window, cx);
+                        cx.emit(EditorPanelEvent::BuffersDiscarded { ids: ids.clone() });
+                        cx.emit(EditorPanelEvent::Continue(then));
                     }
                     _ => {
-                        (bridge.event)(view, EditorEvent::Focus, window, cx);
+                        cx.emit(EditorPanelEvent::FocusDocument);
                         cx.notify();
                     }
                 }
@@ -872,11 +827,11 @@ impl EditorPanelState {
         ready.into_iter().map(|waiter| waiter.then).collect()
     }
 
-    pub(super) fn saves_failed(&mut self, id: BufferId) {
+    pub(crate) fn saves_failed(&mut self, id: BufferId) {
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
     }
 
-    pub(super) fn forget_saved_buffer(&mut self, id: BufferId) {
+    pub(crate) fn forget_saved_buffer(&mut self, id: BufferId) {
         self.saves_failed(id);
         if self.bar.as_ref().is_some_and(|bar| match bar.kind {
             BarKind::GoToLine { id: target }
@@ -887,7 +842,7 @@ impl EditorPanelState {
         }
     }
 
-    pub(super) fn render_bar(&self, cx: &gpui_kit::App) -> Option<AnyElement> {
+    pub(crate) fn render_bar(&self, cx: &gpui_kit::App) -> Option<AnyElement> {
         let bar = self.bar.as_ref()?;
         let label = match bar.kind {
             BarKind::GoToLine { .. } => t(L10nKey::EditorGoToLine),

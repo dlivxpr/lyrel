@@ -434,8 +434,8 @@ impl LyrelApp {
         }
     }
 
-    pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
-        self.editor_context_changed();
+    pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &mut Context<Self>) {
+        self.editor_context_changed(cx);
         let next = self.spawn_host(cx);
         self.session.host_changed(previous, next);
     }

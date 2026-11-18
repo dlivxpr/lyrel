@@ -67,7 +67,7 @@ fn drawio_has_unconfirmed_changes(file: &OpenFile, cx: &gpui_kit::App) -> bool {
         .any(|view| view.read(cx).has_unconfirmed_changes())
 }
 
-pub(super) struct EditorBuffers {
+pub(crate) struct EditorBuffers {
     files: Vec<OpenFile>,
     next_untitled: u32,
     open_seq: u64,
@@ -100,6 +100,9 @@ pub(super) struct OpenTarget {
     pub(super) window_host: HostId,
     pub(super) origin: Option<(BufferId, u64)>,
     pub(super) origin_epoch: Option<(HostId, u64)>,
+    /// The editor context epoch at open time: a completion that arrives
+    /// after a context switch is stale and must not land.
+    pub(super) context_epoch: u64,
 }
 
 pub(super) enum OpenResult {
@@ -176,6 +179,10 @@ impl EditorBuffers {
         }
     }
 
+    pub(super) fn context_epoch(&self) -> u64 {
+        self.context_epoch
+    }
+
     pub(super) fn invalidate_context(&mut self) {
         self.context_epoch = self.context_epoch.wrapping_add(1);
         self.pending.clear();
@@ -195,7 +202,7 @@ impl EditorBuffers {
         }
     }
 
-    pub(super) fn take_watch_refresh(&mut self) -> bool {
+    pub(crate) fn take_watch_refresh(&mut self) -> bool {
         std::mem::take(&mut self.watch_refresh)
     }
 
@@ -203,7 +210,7 @@ impl EditorBuffers {
         self.foreground.remove(&tab);
     }
 
-    pub(super) fn get(&self, id: BufferId) -> Option<&OpenFile> {
+    pub(crate) fn get(&self, id: BufferId) -> Option<&OpenFile> {
         self.files.iter().find(|file| file.id() == id)
     }
 
@@ -213,22 +220,22 @@ impl EditorBuffers {
         self.watch.is_some()
     }
 
-    pub(super) fn get_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
+    pub(crate) fn get_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
         self.files.iter_mut().find(|file| file.id() == id)
     }
 
-    pub(super) fn at(&self, host: HostId, path: &Path) -> Option<BufferId> {
+    pub(crate) fn at(&self, host: HostId, path: &Path) -> Option<BufferId> {
         self.files
             .iter()
             .find(|file| file.is_at(host, path))
             .map(OpenFile::id)
     }
 
-    pub(super) fn iter(&self) -> std::slice::Iter<'_, OpenFile> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, OpenFile> {
         self.files.iter()
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
 

@@ -40,6 +40,7 @@ impl LyrelApp {
         let app = cx.entity().downgrade();
         let buffers = if Self::lsp_enabled(cx) {
             self.editor
+                .read(cx)
                 .local_files()
                 .into_iter()
                 .map(|f| LspBuffer {
@@ -74,7 +75,7 @@ impl LyrelApp {
 
     /// A buffer's text changed.
     pub(crate) fn lsp_buffer_edited(&self, id: BufferId, cx: &mut Context<Self>) {
-        if let Some(f) = self.editor.local_file(id) {
+        if let Some(f) = self.editor.read(cx).local_file(id) {
             LspStore::edited(f.id, &f.path, cx);
             self.lsp_signature_help_after_edit(&f, cx);
         }
@@ -82,7 +83,7 @@ impl LyrelApp {
 
     /// A buffer was written to disk.
     pub(crate) fn lsp_buffer_saved(&self, id: BufferId, cx: &mut Context<Self>) {
-        if let Some(f) = self.editor.local_file(id) {
+        if let Some(f) = self.editor.read(cx).local_file(id) {
             LspStore::saved(f.id, &f.path, cx);
         }
     }
@@ -93,7 +94,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(LocalFile, super::DocContext)> {
-        let f = self.editor_active_local_file()?;
+        let f = self.editor_active_local_file(cx)?;
         let text = f.input.read(cx).text().clone();
         let doc = LspStore::context(
             &f.path,
@@ -132,6 +133,7 @@ impl LyrelApp {
         };
         let open_buffer = self
             .editor
+            .read(cx)
             .local_files()
             .into_iter()
             .find(|f| f.path == path.as_path());
@@ -273,7 +275,15 @@ impl LyrelApp {
         if word.trim().is_empty() {
             return;
         }
-        self.editor_open_rename_bar(f.id, offset, word, window, cx);
+        let id = f.id;
+        self.editor.update(cx, |editor, cx| {
+            editor.open_bar(
+                crate::ui::code_editor::BarKind::Rename { id, offset },
+                word,
+                window,
+                cx,
+            )
+        });
     }
 
     /// The rename prompt was answered.
@@ -285,7 +295,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.editor.local_file(id) else {
+        let Some(f) = self.editor.read(cx).local_file(id) else {
             return;
         };
         let text = f.input.read(cx).text().clone();
@@ -335,7 +345,7 @@ impl LyrelApp {
     /// ⌘.: the server's fixes and refactors at the cursor, in the editor's
     /// own code-action menu.
     pub(crate) fn lsp_code_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor_active_local_file().is_none() {
+        if self.editor_active_local_file(cx).is_none() {
             return;
         }
         window.dispatch_action(Box::new(gpui_kit::component::input::ToggleCodeActions), cx);
@@ -353,7 +363,7 @@ impl LyrelApp {
             EditorFindReferences, EditorFormatDocument, EditorGoToDefinition, EditorQuickFix,
             EditorRenameSymbol,
         };
-        let Some(f) = self.editor.local_file(id) else {
+        let Some(f) = self.editor.read(cx).local_file(id) else {
             return menu;
         };
         if !matches!(
@@ -391,7 +401,7 @@ impl LyrelApp {
         if !Self::lsp_enabled(cx) {
             return None;
         }
-        let f = self.editor_active_local_file()?;
+        let f = self.editor_active_local_file(cx)?;
         let status = LspStore::status(&f.path, f.language, cx)?;
         let muted = cx.theme().muted_foreground;
         let element = match status {

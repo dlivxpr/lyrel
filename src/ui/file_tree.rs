@@ -2041,7 +2041,7 @@ impl LyrelApp {
 
         let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
         let tree_host = self.spawn_host(cx);
-        let dirty = self.editor.is_dirty(tree_host, &path);
+        let dirty = self.editor.read(cx).is_dirty(tree_host, &path);
 
         let renaming = matches!(
             &self.file_tree.editing,

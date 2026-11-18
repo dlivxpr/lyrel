@@ -103,6 +103,7 @@ impl LyrelApp {
     /// The open local buffers' texts, for measuring places in them.
     fn lsp_open_texts(&self, cx: &App) -> HashMap<PathBuf, Rope> {
         self.editor
+            .read(cx)
             .local_files()
             .into_iter()
             .map(|f| (f.path, f.input.read(cx).text().clone()))
@@ -154,7 +155,7 @@ impl LyrelApp {
 
     /// ⇧F12: every reference to the symbol under the cursor.
     pub(crate) fn lsp_find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(f) = self.editor_active_local_file() else {
+        let Some(f) = self.editor_active_local_file(cx) else {
             return;
         };
         let (text, offset) = {
@@ -221,7 +222,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<crate::ui::search::LiveQuery> {
-        let f = self.editor_active_local_file()?;
+        let f = self.editor_active_local_file(cx)?;
         let doc = LspStore::context(&f.path, f.id, Freshen::Skip, None, cx)?;
         doc.caps.workspace_symbol_provider.as_ref()?;
         let app = cx.entity().downgrade();
@@ -336,7 +337,7 @@ impl LyrelApp {
     ) {
         let in_front = self
             .editor_preview_buffer()
-            .and_then(|id| self.editor.local_file(id))
+            .and_then(|id| self.editor.read(cx).local_file(id))
             .is_some_and(|f| f.path == path);
         if in_front {
             self.editor_symbol_preview(line, column, cx);

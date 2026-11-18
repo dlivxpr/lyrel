@@ -1071,14 +1071,14 @@ impl LyrelApp {
         // the tree can open, but a buffer read over SFTP carries a path from
         // another machine, and pairing it with this one's host would resolve
         // it against a local repository that merely shares the path.
-        let (host, path) = self.editor_active_location()?;
+        let (host, path) = self.editor_active_location(cx)?;
         let root = cx
             .try_global::<GitStatusCache>()
             .and_then(|cache| cache.repo_root_for(host, path.parent()?))
             // The gutter's own base read finds the repository of a file no
             // terminal has been in, and its markers need this watch to
             // notice a stage or a checkout.
-            .or_else(|| self.editor_gutter_root())?;
+            .or_else(|| self.editor.read(cx).gutter_root(code))?;
         Some((host, root.to_path_buf()))
     }
 

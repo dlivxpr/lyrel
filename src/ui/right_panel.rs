@@ -527,7 +527,7 @@ impl LyrelApp {
     ) {
         if self.tabs.is_empty()
             || self.right_panel_nav_focus.within_focused(window, cx)
-            || self.sidebar_nav_overlay_open(window)
+            || self.sidebar_nav_overlay_open(window, cx)
         {
             return;
         }

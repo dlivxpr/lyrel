@@ -22,13 +22,10 @@
 //! A group whose last file closes goes away, and the split with it.
 
 use gpui_kit::Focusable as _;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
-use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, MouseButton, SharedString, Window, div, px};
+use gpui_kit::{Context, Window};
+use lyrel_core::core::machine::TabId;
 
-use super::{BufferId, TabCode};
-use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
+use super::{BufferId, EditorPanelState, TabCode};
 
 /// Retained identity follows a group through focus swaps and split collapse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,7 +42,7 @@ impl Default for GroupId {
 /// The group without the focus.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OtherGroup {
-    pub(super) id: GroupId,
+    pub(crate) id: GroupId,
     pub(crate) files: Vec<BufferId>,
     pub(crate) active: usize,
     /// Whether the group *with* the focus is the left one.
@@ -134,7 +131,7 @@ impl TabCode {
         self.split.as_ref().is_none_or(|o| o.focus_left)
     }
 
-    pub(super) fn focused_group(&self) -> GroupId {
+    pub(crate) fn focused_group(&self) -> GroupId {
         self.group
     }
 
@@ -167,7 +164,7 @@ impl TabCode {
     }
 
     /// A retired group cannot close a replacement, even on the same side.
-    pub(super) fn close_in_group(&mut self, id: BufferId, group: GroupId) -> bool {
+    pub(crate) fn close_in_group(&mut self, id: BufferId, group: GroupId) -> bool {
         let closed = if self.group == group {
             self.forget(id)
         } else if let Some(other) = self.split.as_mut().filter(|other| other.id == group) {
@@ -293,385 +290,154 @@ impl TabCode {
     }
 }
 
-impl LyrelApp {
-    /// Splits the editor: the file in front opens in a second group to the
-    /// right, which takes the focus. Already split, it opens in the other
-    /// group instead. `false` with no file to split.
-    pub(crate) fn editor_split(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let origin = self.active_editor_input();
-        let Some(code) = self.tab_code_mut() else {
-            return false;
-        };
-        let Some(id) = code.active_id() else {
-            return false;
-        };
-        code.split_with(id);
-        if let (Some(origin), Some(tab), Some(code)) = (
-            origin.as_ref().and_then(|input| input.markdown()),
-            self.tabs.get(self.tabs.active_index()),
-            self.tab_code(),
-        ) {
-            self.editor
-                .buffers
+impl EditorPanelState {
+    /// Opens the second group's default presentation for a file the reader
+    /// just split: Markdown keeps both sides live, SVG/YAML/CSV open their
+    /// other mode by default, an image gets its own framing. The tab's
+    /// `split_with` has already moved the group state: `other_group` names
+    /// the group the file came from (where its live Markdown presentation
+    /// resolves), `group` the new focused group the second view is for.
+    pub(crate) fn open_split_presentations(
+        &mut self,
+        id: BufferId,
+        tab: TabId,
+        other_group: GroupId,
+        group: GroupId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(origin) = self
+            .editor_input_for(id, tab, other_group)
+            .and_then(|input| input.markdown().cloned())
+        {
+            self.buffers
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .markdown_view(origin, tab.id(), code.group, window, cx);
+                .markdown_view(&origin, tab, group, window, cx);
         }
         // An SVG's second group opens the other side by default: source on the
         // left and its synchronized preview on the right, over one Document.
-        if let (Some(primary), Some(tab), Some(code)) = (
-            self.editor
-                .buffers
-                .get(id)
-                .and_then(|file| file.input.svg().cloned()),
-            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
-            self.tab_code(),
-        ) {
-            self.editor
-                .buffers
+        if let Some(primary) = self
+            .buffers
+            .get(id)
+            .and_then(|file| file.input.svg().cloned())
+        {
+            self.buffers
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .svg_view(&primary, tab, code.group, cx);
+                .svg_view(&primary, tab, group, cx);
         }
         // A picture's second group gets its own framing, around the same
         // decoded document.
-        if let (Some(primary), Some(tab), Some(code)) = (
-            self.editor
-                .buffers
-                .get(id)
-                .and_then(|file| file.input.image().cloned()),
-            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
-            self.tab_code(),
-        ) {
-            self.editor
-                .buffers
+        if let Some(primary) = self
+            .buffers
+            .get(id)
+            .and_then(|file| file.input.image().cloned())
+        {
+            self.buffers
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .image_view(&primary, tab, code.group, cx);
+                .image_view(&primary, tab, group, cx);
         }
         // YAML's second group opens the other side by default: tree and source
         // over the same Document and the same parsed projection.
-        if let (Some(primary), Some(tab), Some(code)) = (
-            self.editor
-                .buffers
-                .get(id)
-                .and_then(|file| file.input.yaml().cloned()),
-            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
-            self.tab_code(),
-        ) {
-            self.editor
-                .buffers
+        if let Some(primary) = self
+            .buffers
+            .get(id)
+            .and_then(|file| file.input.yaml().cloned())
+        {
+            self.buffers
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .yaml_view(&primary, tab, code.group, cx);
+                .yaml_view(&primary, tab, group, cx);
         }
         // CSV/TSV's second group opens the other side by default: table and
         // source over the same Document and the same parsed records.
-        if let (Some(primary), Some(tab), Some(code)) = (
-            self.editor
-                .buffers
-                .get(id)
-                .and_then(|file| file.input.csv().cloned()),
-            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
-            self.tab_code(),
-        ) {
-            self.editor
-                .buffers
+        if let Some(primary) = self
+            .buffers
+            .get(id)
+            .and_then(|file| file.input.csv().cloned())
+        {
+            self.buffers
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .csv_view(&primary, tab, code.group, window, cx);
+                .csv_view(&primary, tab, group, window, cx);
         }
-        self.editor.dismiss_bar();
-        self.focus_editor(window, cx);
-        cx.notify();
-        true
     }
 
-    /// Gives the focus to the group on the left (or right). `false` when there
-    /// is no such group to go to — not split, or already there — so the chord
-    /// can carry on to the panes.
-    pub(crate) fn editor_focus_group(
-        &mut self,
-        left: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+    /// Whether the *other* group's surface currently holds the keyboard, so a
+    /// command about to run belongs to that group: the shell swaps the group
+    /// focus when this is true. `active` is the focused group's front buffer,
+    /// `other` the other group's, `other_group` the other's identity.
+    pub(crate) fn split_follow_focus(
+        &self,
+        other: BufferId,
+        active: Option<BufferId>,
+        tab: TabId,
+        other_group: GroupId,
+        window: &Window,
+        cx: &gpui_kit::App,
     ) -> bool {
-        // The strip is shared: a group switch made while its cells hold the
-        // keyboard moves the strip to the other group and keeps the keyboard
-        // there, on that group's own remembered document, instead of
-        // dropping the user into the text they did not ask to edit.
-        let strip_has_keys = self.editor.strip_keyboard.is_focused(window);
-        let Some(code) = self.tab_code_mut() else {
+        let Some(file) = self.buffers.get(other) else {
             return false;
         };
-        if !code.is_split() || code.focus_is_left() == left {
-            return false;
+        if file.input.markdown().is_some() {
+            file.presentations
+                .markdown_existing(tab, other_group)
+                .is_some_and(|view| {
+                    view.read(cx).focus_handle(cx).contains_focused(window, cx)
+                        || file
+                            .presentations
+                            .search(&view)
+                            .is_some_and(|search| search.read(cx).has_focus(window, cx))
+                })
+        } else if file.input.svg().is_some() {
+            file.presentations
+                .svg_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.json().is_some() {
+            file.presentations
+                .json_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.yaml().is_some() {
+            file.presentations
+                .yaml_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.toml().is_some() {
+            file.presentations
+                .toml_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.csv().is_some() {
+            file.presentations
+                .csv_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.xml().is_some() {
+            file.presentations
+                .xml_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if file.input.image().is_some() {
+            file.presentations
+                .image_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
+        } else if file.input.sqlite().is_some() {
+            file.presentations
+                .sqlite_existing(tab, other_group)
+                .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+        } else if active != Some(other) {
+            file.input
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx)
+        } else {
+            false
         }
-        code.swap_focus();
-        self.editor.dismiss_bar();
-        if !strip_has_keys {
-            self.focus_editor(window, cx);
-        }
-        cx.notify();
-        true
-    }
-
-    /// Keeps the focused group the one whose text has the keyboard: a click,
-    /// or anything else that focuses the other group's editor, moves the
-    /// group focus there too. Run on every draw, and before every editor
-    /// command ([`Self::editor_split_command_sync`]): focus moves between
-    /// frames, and F12 or F2 in the first frame after one must act on the
-    /// group the caret is now in.
-    pub(crate) fn editor_split_follow_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(other) = self.tab_code().and_then(TabCode::other_active_id) else {
-            return;
-        };
-        let Some(code) = self.tab_code() else {
-            return;
-        };
-        let tab = self
-            .tabs
-            .get(self.tabs.active_index())
-            .expect("active editor tab")
-            .id();
-        let other_group = code.split.as_ref().expect("other editor group").id;
-        let focused = self.editor.buffers.get(other).is_some_and(|file| {
-            if file.input.markdown().is_some() {
-                file.presentations
-                    .markdown_existing(tab, other_group)
-                    .is_some_and(|view| {
-                        view.read(cx).focus_handle(cx).contains_focused(window, cx)
-                            || file
-                                .presentations
-                                .search(&view)
-                                .is_some_and(|search| search.read(cx).has_focus(window, cx))
-                    })
-            } else if file.input.svg().is_some() {
-                file.presentations
-                    .svg_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.json().is_some() {
-                file.presentations
-                    .json_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.yaml().is_some() {
-                file.presentations
-                    .yaml_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.toml().is_some() {
-                file.presentations
-                    .toml_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.csv().is_some() {
-                file.presentations
-                    .csv_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.xml().is_some() {
-                file.presentations
-                    .xml_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if file.input.image().is_some() {
-                file.presentations
-                    .image_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
-            } else if file.input.sqlite().is_some() {
-                file.presentations
-                    .sqlite_existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
-            } else if code.active_id() != Some(other) {
-                file.input
-                    .read(cx)
-                    .focus_handle(cx)
-                    .contains_focused(window, cx)
-            } else {
-                false
-            }
-        });
-        if focused && let Some(code) = self.tab_code_mut() {
-            code.swap_focus();
-            cx.notify();
-        }
-    }
-
-    /// Settles the group focus before any editor command runs, on the element
-    /// that holds the editor.
-    ///
-    /// gpui draws a window whose focus moved before it dispatches the next
-    /// key, which settles the group on its own; a command from the menu bar
-    /// or a context menu is dispatched without that draw. A capture-phase
-    /// listener runs before the command's own handler wherever that handler
-    /// sits — here, in `app.rs` or in `ui::lsp` — and lets the command carry
-    /// on.
-    pub(crate) fn editor_split_command_sync<E: InteractiveElement>(
-        &self,
-        element: E,
-        cx: &mut Context<Self>,
-    ) -> E {
-        use crate::core::actions::*;
-        macro_rules! before {
-            ($el:expr, $($action:ty),+ $(,)?) => {
-                $el$(.capture_action(cx.listener(|this, _: &$action, window, cx| {
-                    this.editor_split_follow_focus(window, cx);
-                })))+
-            };
-        }
-        before!(
-            element,
-            EditorSave,
-            EditorSaveAs,
-            EditorGoToLine,
-            EditorGoToSymbol,
-            EditorNavigateBack,
-            EditorNavigateForward,
-            EditorSplitRight,
-            EditorGoToDefinition,
-            EditorQuickFix,
-            EditorRenameSymbol,
-            EditorFormatDocument,
-            EditorTransformUppercase,
-            EditorTransformLowercase,
-            EditorTransformTitleCase,
-            EditorTrimTrailingWhitespace,
-            EditorJoinLines,
-            EditorRemoveSurroundingBrackets,
-            EditorFindReferences,
-            EditorNextChange,
-            EditorPrevChange,
-            EditorRevertChange,
-            EditorPeekChange,
-            ToggleDocumentPreview,
-            ToggleDocumentWrap,
-            crate::core::actions::FindInTerminal,
-            crate::core::actions::FindNext,
-            crate::core::actions::FindPrevious,
-            gpui_kit::component::input::Search,
-            gpui_kit::component::input::Replace,
-        )
-    }
-
-    /// The editor's text area: one group, or two side by side.
-    pub(crate) fn render_editor_groups(
-        &mut self,
-        focused_crumbs: Option<AnyElement>,
-        focused_body: AnyElement,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let pane = |crumbs: Option<AnyElement>, body: AnyElement| {
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .h_full()
-                .children(crumbs)
-                .child(div().flex_1().min_h_0().child(body))
-        };
-        let Some(code) = self.tab_code() else {
-            return pane(focused_crumbs, focused_body).into_any_element();
-        };
-        if !code.is_split() {
-            return pane(focused_crumbs, focused_body).into_any_element();
-        }
-        let focus_left = code.focus_is_left();
-        let other = code.other_active_id();
-        let same = other.is_some() && other == code.active_id();
-        let other_slot = usize::from(focus_left);
-        let (other_crumbs, other_body) = match other {
-            Some(id)
-                if same
-                    && self
-                        .editor
-                        .buffers
-                        .get(id)
-                        .is_some_and(|file| file.input.code().is_some()) =>
-            {
-                (None, self.render_editor_same_file(id, focus_left, cx))
-            }
-            Some(id) => (
-                self.render_editor_breadcrumbs_for(id, other_slot, false, window, cx),
-                self.render_editor_body(Some(id), other_slot, window, cx),
-            ),
-            None => (None, self.render_editor_empty(cx).into_any_element()),
-        };
-        let accent = cx.theme().primary;
-        let focused = pane(focused_crumbs, focused_body)
-            // The physical group's path must survive a focus swap between
-            // mouse-down and click, including clicks on toolbar controls.
-            .id(("editor-group", usize::from(!focus_left)))
-            .border_t_2()
-            .border_color(accent)
-            .into_any_element();
-        let unfocused = pane(other_crumbs, other_body)
-            .border_t_2()
-            .border_color(gpui_kit::transparent_black())
-            .id(("editor-group", other_slot))
-            // Before the text sees the click, so what the click does lands in
-            // the group it was made in.
-            .capture_any_mouse_down(cx.listener(move |this, _, window, cx| {
-                this.editor_focus_group(!focus_left, window, cx);
-            }))
-            .into_any_element();
-        let divider = div()
-            .flex_none()
-            .w(px(1.))
-            .h_full()
-            .bg(cx.theme().sidebar_border);
-        let (left, right) = match focus_left {
-            true => (focused, unfocused),
-            false => (unfocused, focused),
-        };
-        h_flex()
-            .items_stretch()
-            .flex_1()
-            .min_h_0()
-            .size_full()
-            .child(left)
-            .child(divider)
-            .child(right)
-            .into_any_element()
-    }
-
-    /// The other group's view of the file the focused group is showing: it is
-    /// drawn once, there, and a click brings it here.
-    fn render_editor_same_file(
-        &self,
-        id: BufferId,
-        focus_left: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let name: SharedString = self
-            .editor
-            .buffers
-            .get(id)
-            .map(|f| f.label())
-            .unwrap_or_default();
-        let theme = cx.theme();
-        v_flex()
-            .id("editor-group-same-file")
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_1()
-            .cursor_pointer()
-            .text_size(gpui_kit::rems(crate::ui::right_panel::TEXT))
-            .text_color(theme.muted_foreground)
-            .child(div().text_color(theme.foreground).child(name))
-            .child(t(L10nKey::EditorSplitSameFile))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.editor_focus_group(!focus_left, window, cx);
-                }),
-            )
-            .into_any_element()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,6 +585,7 @@ mod gpui_tests {
 
     use super::super::nav::gpui_tests::{caret, open_rs, put_caret};
     use super::*;
+    use crate::ui::app::LyrelApp;
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::editor_session::{self, SplitEditor, TabEditor};
 
@@ -912,7 +679,9 @@ mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             app.tabs.select(1);
             // As on a relaunch: nothing has been put back for it yet.
-            app.editor.restored.remove(&tab);
+            app.editor.update(cx, |editor, _| {
+                editor.restored.remove(&tab);
+            });
             app.editor_restore_active(window, cx);
         });
         // The files are read on a real thread; let them land.
@@ -962,7 +731,9 @@ mod gpui_tests {
         let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state.clone()));
         app.update_in(&mut vcx, |app, window, cx| {
-            app.editor.restored.remove(&tab);
+            app.editor.update(cx, |editor, _| {
+                editor.restored.remove(&tab);
+            });
             app.editor_restore_active(window, cx);
         });
         let has_files = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
@@ -1089,7 +860,9 @@ mod gpui_tests {
         let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state));
         app.update_in(&mut vcx, |app, window, cx| {
-            app.editor.restored.remove(&tab);
+            app.editor.update(cx, |editor, _| {
+                editor.restored.remove(&tab);
+            });
             app.editor_restore_active(window, cx);
         });
         // Opened by hand while the three are still being read.

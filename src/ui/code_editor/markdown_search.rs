@@ -341,23 +341,41 @@ impl Render for MarkdownSearch {
     }
 }
 
-impl LyrelApp {
-    pub(crate) fn editor_markdown_find_step(
+impl EditorPanelState {
+    pub(crate) fn markdown_find_has_focus(
+        &self,
+        tab: TabId,
+        code: &TabCode,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        self.active_file(code)
+            .zip(self.active_editor_input(tab, code))
+            .and_then(|(file, input)| file.presentations.search(input.markdown()?))
+            .is_some_and(|search| search.read(cx).has_focus(window, cx))
+    }
+
+    /// Find next/previous in the front Markdown document. `panel_has_focus`
+    /// is the shell's focus answer, passed as a value.
+    pub(crate) fn markdown_find_step(
         &mut self,
         forward: bool,
+        panel_has_focus: bool,
+        tab: TabId,
+        code: &TabCode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_panel_has_focus(window, cx) {
+        if !panel_has_focus {
             return false;
         }
-        let Some(input) = self.active_editor_input() else {
+        let Some(input) = self.active_editor_input(tab, code) else {
             return false;
         };
         let Some(source) = input.markdown() else {
             return false;
         };
-        let Some(file) = self.active_buffer() else {
+        let Some(file) = self.active_file(code) else {
             return false;
         };
         let search = file.presentations.open_search(source, window, cx);
@@ -371,22 +389,28 @@ impl LyrelApp {
         });
         true
     }
-    pub(crate) fn editor_markdown_search(
+
+    /// Opens the front Markdown document's find (or find-and-replace).
+    /// `panel_has_focus` is the shell's focus answer, passed as a value.
+    pub(crate) fn markdown_search(
         &mut self,
         replace: bool,
+        panel_has_focus: bool,
+        tab: TabId,
+        code: &TabCode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_panel_has_focus(window, cx) {
+        if !panel_has_focus {
             return false;
         }
-        let Some(input) = self.active_editor_input() else {
+        let Some(input) = self.active_editor_input(tab, code) else {
             return false;
         };
         let Some(source) = input.markdown() else {
             return false;
         };
-        let Some(file) = self.active_buffer() else {
+        let Some(file) = self.active_file(code) else {
             return false;
         };
         let search = file.presentations.open_search(source, window, cx);

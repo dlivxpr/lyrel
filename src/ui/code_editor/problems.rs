@@ -9,24 +9,12 @@
 //!
 //! Hints are left out, as VS Code leaves them out: servers use them for
 //! inlay-ish suggestions that would bury the real problems.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
-use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, ScrollHandle, Window, div, px};
+use gpui_kit::{Context, ScrollHandle};
 use lsp_types::DiagnosticSeverity;
 
-use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::lsp::LspStore;
-
-/// The pane's height: a handful of rows, leaving the editor the rest.
-const PANE_HEIGHT: f32 = 180.;
-
-/// Past this many rows the list stops drawing and says how many are left.
-const MAX_ROWS: usize = 1000;
+use super::EditorPanelState;
 
 #[derive(Default)]
 pub(crate) struct ProblemsPane {
@@ -97,243 +85,22 @@ pub(crate) fn collect(snapshot: Vec<(PathBuf, Vec<lsp_types::Diagnostic>)>) -> V
 
 /// The first line of a message: the list is one row per problem, and the
 /// rest is a hover away in the editor.
-fn headline(message: &str) -> &str {
+pub(crate) fn headline(message: &str) -> &str {
     message.lines().next().unwrap_or("").trim_end()
 }
 
-impl LyrelApp {
-    pub(crate) fn toggle_editor_problems(&mut self, cx: &mut Context<Self>) {
-        self.editor.problems.open = !self.editor.problems.open;
+impl EditorPanelState {
+    pub(crate) fn toggle_problems(&mut self, cx: &mut Context<Self>) {
+        self.problems.open = !self.problems.open;
         cx.notify();
     }
 
-    /// Where a file's name sits in the list: relative to the project the
-    /// tab shows, when it is inside it.
-    fn problems_label(&self, path: &Path, cx: &App) -> (String, String) {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.display().to_string());
-        let roots = self
-            .tab_code()
-            .map(|code| code.roots.as_slice())
-            .unwrap_or(&[]);
-        let spelled = self
-            .file_tree
-            .project_spelling(self.spawn_host(cx), roots, path);
-        let dir = spelled.parent().map(|parent| {
-            self.tab_code()
-                .and_then(|c| {
-                    c.roots
-                        .iter()
-                        .find_map(|r| parent.strip_prefix(r).ok().map(|p| (r, p)))
-                })
-                .map(|(root, rel)| {
-                    let repo = root
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    match rel.as_os_str().is_empty() {
-                        true => repo,
-                        false => format!("{repo}/{}", rel.display()),
-                    }
-                })
-                .unwrap_or_else(|| parent.display().to_string())
-        });
-        (name, dir.unwrap_or_default())
+    pub(crate) fn problems_open(&self) -> bool {
+        self.problems.open
     }
 
-    pub(crate) fn render_editor_problems(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.editor.problems.open {
-            return None;
-        }
-        let files = collect(LspStore::diagnostics_snapshot(cx));
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let (errors, warnings) =
-            files
-                .iter()
-                .flat_map(|f| &f.problems)
-                .fold((0, 0), |(e, w), p| match p.severity {
-                    Severity::Error => (e + 1, w),
-                    Severity::Warning => (e, w + 1),
-                    Severity::Info => (e, w),
-                });
-        let header = h_flex()
-            .flex_none()
-            .h(px(28.))
-            .px(px(crate::ui::window_chrome::CONTENT_INSET))
-            .gap_2()
-            .items_center()
-            .border_t(crate::ui::theme::hairline(window))
-            .border_color(theme.sidebar_border)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::MEDIUM)
-                    .child(t(L10nKey::EditorProblemsTitle)),
-            )
-            .child(div().text_xs().text_color(muted).child(t_fmt(
-                L10nKey::LspProblemsTooltip,
-                &[
-                    ("errors", &errors.to_string()),
-                    ("warnings", &warnings.to_string()),
-                ],
-            )))
-            .child(div().flex_1())
-            .child(
-                Button::new("editor-problems-close")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Close)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_editor_problems(cx))),
-            );
-
-        let mut rows: Vec<AnyElement> = Vec::new();
-        let mut left = 0usize;
-        for (file_ix, file) in files.iter().enumerate() {
-            if rows.len() >= MAX_ROWS {
-                left += file.problems.len();
-                continue;
-            }
-            let (name, dir) = self.problems_label(&file.path, cx);
-            rows.push(
-                h_flex()
-                    .id(("editor-problems-file", file_ix))
-                    .h(px(24.))
-                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                    .gap_2()
-                    .items_center()
-                    .text_sm()
-                    .child(
-                        div()
-                            .flex_none()
-                            .font_weight(gpui_kit::FontWeight::MEDIUM)
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(dir),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(file.problems.len().to_string()),
-                    )
-                    .into_any_element(),
-            );
-            for (ix, problem) in file.problems.iter().enumerate() {
-                if rows.len() >= MAX_ROWS {
-                    left += file.problems.len() - ix;
-                    break;
-                }
-                let (icon, color) = match problem.severity {
-                    Severity::Error => (IconName::CircleX, theme.danger),
-                    Severity::Warning => (IconName::TriangleAlert, theme.warning),
-                    Severity::Info => (IconName::Info, theme.info),
-                };
-                let at = t_fmt(
-                    L10nKey::EditorLnCol,
-                    &[
-                        ("line", &(problem.line + 1).to_string()),
-                        ("column", &(problem.column + 1).to_string()),
-                    ],
-                );
-                let path = file.path.clone();
-                let (line, column) = (problem.line + 1, problem.column + 1);
-                rows.push(
-                    h_flex()
-                        .id(("editor-problem", rows.len()))
-                        .h(px(22.))
-                        .pl(px(crate::ui::window_chrome::CONTENT_INSET + 12.))
-                        .pr(px(crate::ui::window_chrome::CONTENT_INSET))
-                        .gap_2()
-                        .items_center()
-                        .text_sm()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.list_hover))
-                        .child(Icon::new(icon).xsmall().text_color(color))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(headline(&problem.message).to_string()),
-                        )
-                        .children(problem.source.clone().map(|source| {
-                            div().flex_none().text_xs().text_color(muted).child(source)
-                        }))
-                        .child(div().flex_none().text_xs().text_color(muted).child(at))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_file_in_editor_at(
-                                &path,
-                                Some(line),
-                                Some(column),
-                                window,
-                                cx,
-                            );
-                        }))
-                        .into_any_element(),
-                );
-            }
-        }
-        if left > 0 {
-            rows.push(
-                div()
-                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                    .py_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t_fmt(
-                        L10nKey::EditorProblemsMore,
-                        &[("n", &left.to_string())],
-                    ))
-                    .into_any_element(),
-            );
-        }
-        let body: AnyElement = if files.is_empty() {
-            div()
-                .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                .py_2()
-                .text_sm()
-                .text_color(muted)
-                .child(t(L10nKey::EditorProblemsNone))
-                .into_any_element()
-        } else {
-            let scroll = self.editor.problems.scroll.clone();
-            crate::ui::scrollbar::with_vertical_scrollbar(
-                "editor-problems-scrollbar",
-                v_flex()
-                    .id("editor-problems-list")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .children(rows),
-                &scroll,
-            )
-        };
-        Some(
-            v_flex()
-                .id("editor-problems")
-                .test_support()
-                .flex_none()
-                .h(px(PANE_HEIGHT))
-                .w_full()
-                .child(header)
-                .child(div().flex_1().min_h_0().child(body))
-                .into_any_element(),
-        )
+    pub(crate) fn problems_scroll(&self) -> gpui_kit::ScrollHandle {
+        self.problems.scroll.clone()
     }
 }
 
@@ -416,7 +183,7 @@ mod tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
         app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.editor.problems.open);
+            assert!(app.editor.read(cx).problems_open());
             assert!(app.render_editor_problems(window, cx).is_some());
             app.toggle_editor_problems(cx);
             assert!(app.render_editor_problems(window, cx).is_none());

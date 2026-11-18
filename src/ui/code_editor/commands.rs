@@ -1,8 +1,9 @@
 use std::ops::Range;
 
-use gpui_kit::{Context, Div, InteractiveElement as _, Stateful, Window};
+use gpui_kit::{Context, Window};
+use lyrel_core::core::machine::TabId;
 
-use super::super::app::LyrelApp;
+use super::{EditorPanelState, TabCode};
 
 // Application-owned IDE commands, not aliases for the old component fork.
 gpui_kit::actions!(
@@ -53,62 +54,6 @@ pub(crate) enum Command {
     Trim,
     Join,
     Unwrap,
-}
-
-pub(super) fn install(mut root: Stateful<Div>, cx: &mut Context<LyrelApp>) -> Stateful<Div> {
-    macro_rules! bind {
-        ($($action:ty => $command:ident),* $(,)?) => { $(
-            root = root.on_action(cx.listener(|app, _: &$action, window, cx| {
-                if app.editor_has_focus(window, cx) {
-                    app.editor_apply_command(Command::$command, window, cx);
-                } else { cx.propagate(); }
-            }));
-        )* };
-    }
-    bind!(
-        ToggleLineComment => Comment, ToggleBlockComment => BlockComment,
-        MoveLineUp => MoveUp, MoveLineDown => MoveDown, CopyLineUp => CopyUp,
-        CopyLineDown => CopyDown, DeleteLine => Delete, InsertLineAbove => InsertAbove,
-        InsertLineBelow => InsertBelow, SelectLine => SelectLine, MoveToMatchingBracket => Bracket,
-        SelectNextOccurrence => Next, SelectAllOccurrences => All, SkipOccurrence => Skip,
-        TransformToUppercase => Upper, TransformToLowercase => Lower, TransformToTitleCase => Title,
-        TrimTrailingWhitespace => Trim, JoinLines => Join, RemoveSurroundingBrackets => Unwrap,
-    );
-    root.on_action(
-        cx.listener(|app, _: &gpui_kit::component::input::Search, window, cx| {
-            if !app.editor_markdown_search(false, window, cx) {
-                cx.propagate();
-            }
-        }),
-    )
-    .on_action(
-        cx.listener(|app, _: &gpui_kit::component::input::Replace, window, cx| {
-            if !app.editor_markdown_search(true, window, cx) {
-                cx.propagate();
-            }
-        }),
-    )
-    .on_action(cx.listener(
-        |app, _: &crate::core::actions::FindInTerminal, window, cx| {
-            if !app.editor_markdown_search(false, window, cx) {
-                cx.propagate();
-            }
-        },
-    ))
-    .on_action(
-        cx.listener(|app, _: &crate::core::actions::FindNext, window, cx| {
-            if !app.editor_markdown_find_step(true, window, cx) {
-                cx.propagate();
-            }
-        }),
-    )
-    .on_action(
-        cx.listener(|app, _: &crate::core::actions::FindPrevious, window, cx| {
-            if !app.editor_markdown_find_step(false, window, cx) {
-                cx.propagate();
-            }
-        }),
-    )
 }
 
 struct Edit {
@@ -708,17 +653,22 @@ fn matching_bracket(text: &str, cursor: usize, language: &str) -> Option<usize> 
     Some(if adjacent == Some(close) { open } else { close })
 }
 
-impl LyrelApp {
-    pub(crate) fn editor_apply_command(
+impl EditorPanelState {
+    /// Runs one of the panel's editing commands on the front buffer of `code`,
+    /// as if it had been pressed there. Returns false with no text buffer to
+    /// run it on. `tab` names the active tab the presentation resolves in.
+    pub(crate) fn apply_command(
         &mut self,
         command: Command,
+        tab: TabId,
+        code: &TabCode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(file) = self.active_buffer() else {
+        let Some(file) = self.active_file(code) else {
             return false;
         };
-        let Some(input) = self.active_editor_input() else {
+        let Some(input) = self.active_editor_input(tab, code) else {
             return false;
         };
         // Every line command is about text; a read-only picture has none.

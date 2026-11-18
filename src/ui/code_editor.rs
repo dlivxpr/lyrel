@@ -8,23 +8,20 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Editor, EditorState, Input, InputEvent, InputState, Position, TabSize,
 };
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
+    AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, PromptLevel,
     SharedString, Subscription, Window, div, px, rems,
 };
 use lyrel_core::core::machine::TabId;
 
-use crate::ui::app::LyrelApp;
-use crate::ui::document_column::DocumentChrome;
-use crate::ui::editor_session::{self, TabEditor};
+use crate::ui::editor_session::TabEditor;
 use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use lyrel_document::text::{EditorConfig, Indent, LineEnding, TextFormat};
 
 mod book_document;
@@ -53,15 +50,17 @@ use document_input::{EditorInput, Presentations};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
-mod problems;
+pub(crate) mod problems;
 pub(crate) mod saving;
 mod split;
+pub(crate) use split::GroupId;
 mod sqlite_document;
 mod sqlite_grid;
 mod strip;
 use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
-use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
+pub(crate) use saving::{AfterUnsaved, BarKind};
+use saving::{EditorBar, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 use toml_document::TomlMode;
 use xml_document::XmlMode;
@@ -251,7 +250,7 @@ pub(crate) struct OpenFile {
 }
 
 impl OpenFile {
-    fn id(&self) -> BufferId {
+    pub(crate) fn id(&self) -> BufferId {
         self.id
     }
 
@@ -290,7 +289,7 @@ impl OpenFile {
         }
     }
 
-    fn label(&self) -> SharedString {
+    pub(crate) fn label(&self) -> SharedString {
         if let Some(n) = self.untitled {
             return t_fmt(L10nKey::EditorUntitled, &[("n", &n.to_string())]).into();
         }
@@ -299,6 +298,10 @@ impl OpenFile {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| self.path.display().to_string())
             .into()
+    }
+
+    pub(crate) fn is_untitled(&self) -> bool {
+        self.untitled.is_some()
     }
 
     fn is_at(&self, host: HostId, path: &Path) -> bool {
@@ -341,7 +344,7 @@ impl OpenFile {
         language_for_path(&self.path)
     }
 
-    fn local(&self) -> Option<LocalFile> {
+    pub(crate) fn local(&self) -> Option<LocalFile> {
         if self.untitled.is_some() || !self.host.id().is_local() {
             return None;
         }
@@ -421,6 +424,12 @@ impl TabCode {
         }
     }
 
+    /// The identity of the focused editor group: stable across focus swaps
+    /// and group switches, so presentations and navigation key on it.
+    pub(crate) fn group(&self) -> split::GroupId {
+        self.group
+    }
+
     pub(crate) fn active_id(&self) -> Option<BufferId> {
         self.files.get(self.active).copied()
     }
@@ -428,7 +437,7 @@ impl TabCode {
     /// Adds a buffer just right of the one in front, the way a browser opens
     /// a tab, and brings it forward. One the tab already shows only comes
     /// forward — it keeps its place in the strip.
-    fn show(&mut self, id: BufferId) {
+    pub(crate) fn show(&mut self, id: BufferId) {
         if let Some(pos) = self.files.iter().position(|f| *f == id) {
             self.active = pos;
             return;
@@ -444,7 +453,7 @@ impl TabCode {
 
     /// Lists a buffer at the end of the strip without bringing it forward —
     /// for files arriving in the background: a restore, a merge, a rescue.
-    fn append(&mut self, id: BufferId) {
+    pub(crate) fn append(&mut self, id: BufferId) {
         if !self.files.contains(&id) {
             self.files.push(id);
         }
@@ -471,6 +480,92 @@ impl TabCode {
         true
     }
 }
+
+/// Cross-panel intents the editor panel hands to the workbench shell.
+///
+/// Payloads carry only values — identities, paths, and the captured
+/// `AfterUnsaved` intent — never shell entities or callbacks. `LyrelApp`
+/// subscribes to these at the window root and performs the shell-side
+/// effect (tab placement, terminal focus, LSP and SCM notifications).
+pub(crate) enum EditorPanelEvent {
+    /// The buffer's text changed; the shell runs its LSP edit bookkeeping.
+    BufferEdited { id: BufferId },
+    /// A save finished writing; the shell notifies LSP and SCM.
+    BufferSaved {
+        id: BufferId,
+        host: HostId,
+        directory: Option<PathBuf>,
+    },
+    /// A buffer's identity changed (save-as / rename); the shell re-syncs LSP
+    /// while the watcher rebuild stays inside the editor.
+    IdentityChanged,
+    /// The rename bar was answered; the shell runs the LSP rename.
+    RenameRequested {
+        id: BufferId,
+        offset: usize,
+        name: String,
+    },
+    /// The unsaved-changes prompt was answered; the close continues.
+    Continue(AfterUnsaved),
+    /// These buffers were discarded from the prompt; the shell forgets them
+    /// in every tab and the editor drops them from the registry.
+    BuffersDiscarded { ids: Vec<BufferId> },
+    /// An asynchronous open landed; the shell validates the tab/group and
+    /// places the buffer, or ignores a stale target.
+    OpenCompleted {
+        workspace: lyrel_core::core::session::WorkspaceId,
+        tab: TabId,
+        group: Option<split::GroupId>,
+        id: BufferId,
+        created: bool,
+        front: bool,
+    },
+    /// A tab's recorded files finished restoring; the shell merges them into
+    /// the tab's groups and takes the focus when nothing else did.
+    TabRestored {
+        tab: TabId,
+        open: Vec<(PathBuf, BufferId, bool)>,
+        snapshot: crate::ui::editor_session::TabEditor,
+    },
+    /// Show a path in the file tree (a directory link asked "where is this?").
+    ShowInFileTree { path: PathBuf },
+    /// Reveal a path in the file tree after opening it in the editor.
+    RevealInFileTree { host: HostId, path: PathBuf },
+    /// Type `@path` into the running agent's prompt.
+    AttachToAgent { path: PathBuf, suffix: String },
+    /// Hand a file the editor cannot show to the OS/desktop.
+    OpenExternally { host: HostId, path: PathBuf },
+    /// The panel closed with no file to hold the focus: back to the terminal.
+    FocusTerminal,
+    /// An empty panel handed the keyboard to the file tree.
+    FocusFileTree,
+    /// The document surface took the focus; the status bar notes it.
+    DocumentFocused { tab: TabId },
+    /// The file watcher must be rebuilt against the current window host.
+    RebuildWatcher,
+    /// A cancelled save prompt or an answered bar returns the keyboard to the
+    /// front document.
+    FocusDocument,
+    /// A status control requests a command on the foreground document.
+    StatusCommand(EditorStatusCommand),
+    /// The go-to-line bar was answered; the shell focuses and places the
+    /// cursor, exactly as the old bar handler did.
+    GoToLineRequested {
+        id: BufferId,
+        line: u32,
+        column: u32,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum EditorStatusCommand {
+    TogglePreview,
+    ToggleWrap,
+    ToggleLineEnding,
+    GoToLine,
+}
+
+impl gpui_kit::EventEmitter<EditorPanelEvent> for EditorPanelState {}
 
 pub(crate) struct EditorPanelState {
     buffers: buffers::EditorBuffers,
@@ -504,11 +599,11 @@ pub(crate) struct EditorPanelState {
 }
 
 impl EditorPanelState {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let buffers = buffers::EditorBuffers::new(
             window,
             cx,
-            |app| &mut app.editor.buffers,
+            |editor| &mut editor.buffers,
             Self::buffer_edited,
         );
         Self {
@@ -528,13 +623,66 @@ impl EditorPanelState {
         }
     }
 
-    fn buffer_edited(app: &mut LyrelApp, id: BufferId, cx: &mut Context<LyrelApp>) {
-        app.editor_buffer_changed(id, cx);
+    fn buffer_edited(&mut self, id: BufferId, cx: &mut Context<Self>) {
+        self.buffer_changed(id, cx);
+    }
+
+    /// Re-derives everything an edit of any kind touches inside the panel —
+    /// gutter baseline, navigation history — and tells the shell about the
+    /// edit so its LSP bookkeeping can run.
+    fn buffer_changed(&mut self, id: BufferId, cx: &mut Context<Self>) {
+        self.gutter_note_edit(id, cx);
+        self.nav_note_edit(id, cx);
+        cx.emit(EditorPanelEvent::BufferEdited { id });
+        cx.notify();
     }
 
     /// File-tree dirtiness is Host-aware, like duplicate detection.
     pub(crate) fn is_dirty(&self, host: HostId, path: &Path) -> bool {
         self.buffers.is_dirty(host, path)
+    }
+
+    /// The buffer registry, for the shell's read-side questions (dirty
+    /// scans, labels, gutter roots).
+    pub(crate) fn buffers(&self) -> &buffers::EditorBuffers {
+        &self.buffers
+    }
+
+    pub(crate) fn take_watch_refresh(&mut self) -> bool {
+        self.buffers.take_watch_refresh()
+    }
+
+    pub(crate) fn strip_keyboard_focused(&self, window: &Window) -> bool {
+        self.strip_keyboard.is_focused(window)
+    }
+
+    /// Whether a document-navigation surface (the strip picker or a bar) is
+    /// open above the panel — the shell's overlay question.
+    pub(crate) fn navigation_overlay_open(&self) -> bool {
+        self.strip_picker.is_some() || self.bar.is_some()
+    }
+
+    /// The focus of a panel with no file in it; the shell parks the keyboard
+    /// there when the last file closes.
+    pub(crate) fn empty_focus(&self) -> &gpui_kit::FocusHandle {
+        &self.empty_focus
+    }
+
+    /// The tab whose panel held the focus when it was last drawn, so the
+    /// frame after its last file closes knows whether to take the focus over.
+    pub(crate) fn had_focus(&self) -> Option<TabId> {
+        self.had_focus
+    }
+
+    pub(crate) fn set_had_focus(&mut self, tab: Option<TabId>) {
+        self.had_focus = tab;
+    }
+
+    /// The workspace/host changed: stale pending opens are dropped, every
+    /// buffer's reload generation moves, and open prompts retire.
+    pub(crate) fn invalidate_context(&mut self) {
+        self.buffers.invalidate_context();
+        self.retire_prompts();
     }
 
     /// Only saved, local files are visible to language servers.
@@ -548,7 +696,7 @@ impl EditorPanelState {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum BufferKind {
+pub(crate) enum BufferKind {
     Text,
     Markdown,
 }
@@ -718,7 +866,7 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
 
 /// What the status bar calls a language id from [`language_for_path`].
 /// `None` for plain text, which the bar leaves unsaid.
-fn language_label(id: &str) -> Option<&'static str> {
+pub(crate) fn language_label(id: &str) -> Option<&'static str> {
     Some(match id {
         "rust" => "Rust",
         "go" => "Go",
@@ -773,14 +921,14 @@ fn language_label(id: &str) -> Option<&'static str> {
 /// is the one thing a `:120` link exists to avoid. Three frames is the same
 /// bounded-retry shape `prefill::select_all_when_drawn` uses against the same
 /// class of problem.
-const CURSOR_SCROLL_ATTEMPTS: u8 = 3;
+pub(crate) const CURSOR_SCROLL_ATTEMPTS: u8 = 3;
 
 /// Puts the cursor at `position`, re-trying on later frames until the scroll
 /// that follows it can actually be computed.
 ///
 /// Applied immediately as well as on the retry: the cursor itself lands with
 /// no layout, so the position is right even for a pane that never paints.
-fn place_cursor(
+pub(crate) fn place_cursor(
     input: EditorInput,
     position: Position,
     left: u8,
@@ -899,7 +1047,7 @@ fn tab_size(indent: Indent) -> TabSize {
 /// The execute bit is what `open` reads to decide between displaying a file
 /// and launching it; Windows has no such bit, so there the extension is the
 /// only thing that says so.
-fn is_program(path: &Path) -> bool {
+pub(crate) fn is_program(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -938,7 +1086,7 @@ fn is_program(path: &Path) -> bool {
 /// A file a browser renders rather than showing its source. SVG is not one:
 /// it opens as a source document with its own native preview, so a corrupt or
 /// remote SVG never falls through to the system browser or its network access.
-fn opens_in_browser(path: &Path) -> bool {
+pub(crate) fn opens_in_browser(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
@@ -947,7 +1095,7 @@ fn opens_in_browser(path: &Path) -> bool {
 /// Opens a local file in the default web browser. On macOS that is asked
 /// for by name: what `.html` is associated with is as often an editor. The
 /// other desktops go by the association.
-fn open_in_browser(path: &Path) -> std::io::Result<()> {
+pub(crate) fn open_in_browser(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     if let Some(bundle) = default_browser_bundle_id() {
         std::process::Command::new("open")
@@ -995,93 +1143,82 @@ fn selected_lines(
     Some((start.row + 1, last + 1))
 }
 
-impl LyrelApp {
-    pub(crate) fn tab_code(&self) -> Option<&TabCode> {
-        self.tabs.get(self.tabs.active_index())?.code.as_deref()
+impl EditorPanelState {
+    /// The buffer in front of the given tab's editor.
+    pub(crate) fn active_file(&self, code: &TabCode) -> Option<&OpenFile> {
+        self.buffers.get(code.active_id()?)
     }
 
-    pub(crate) fn tab_code_mut(&mut self) -> Option<&mut TabCode> {
-        self.tabs.active_mut()?.code.as_deref_mut()
-    }
-
-    pub(crate) fn tab_code_mut_or_init(&mut self) -> Option<&mut TabCode> {
-        let tab = self.tabs.active_mut()?;
-        Some(tab.code.get_or_insert_with(|| Box::new(TabCode::new())))
-    }
-
-    pub(crate) fn code_panel_visible(&self) -> bool {
-        self.tab_code().is_some_and(|c| c.visible)
-    }
-
-    /// Temporary document surfaces keep their own keyboard until dismissed.
-    /// The ordinary editor, docked or filled, is content rather than a modal.
-    pub(crate) fn document_navigation_overlay_open(&self) -> bool {
-        self.code_panel_visible() && (self.editor.strip_picker.is_some() || self.editor.has_bar())
-    }
-
-    /// The buffer in front of the active tab's editor.
-    fn active_buffer(&self) -> Option<&OpenFile> {
-        self.editor.buffers.get(self.tab_code()?.active_id()?)
-    }
-
-    pub(crate) fn markdown_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn markdown_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.markdown().is_some())
     }
 
-    pub(crate) fn image_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn image_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.image().is_some())
     }
 
-    pub(crate) fn sqlite_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn sqlite_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.sqlite().is_some())
     }
 
-    pub(crate) fn pdf_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn pdf_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.pdf().is_some())
     }
 
-    pub(crate) fn svg_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn svg_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.svg().is_some())
     }
 
-    pub(crate) fn json_document_active(&self) -> bool {
-        self.active_buffer()
+    pub(crate) fn json_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.json().is_some())
     }
-    pub(crate) fn yaml_document_active(&self) -> bool {
-        self.active_buffer()
+
+    pub(crate) fn yaml_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.yaml().is_some())
     }
-    pub(crate) fn toml_document_active(&self) -> bool {
-        self.active_buffer()
+
+    pub(crate) fn toml_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.toml().is_some())
     }
-    pub(crate) fn csv_document_active(&self) -> bool {
-        self.active_buffer()
+
+    pub(crate) fn csv_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.csv().is_some())
     }
-    pub(crate) fn xml_document_active(&self) -> bool {
-        self.active_buffer()
+
+    pub(crate) fn xml_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.xml().is_some())
     }
-    pub(crate) fn drawio_document_active(&self) -> bool {
-        self.active_buffer()
+
+    pub(crate) fn drawio_active(&self, code: &TabCode) -> bool {
+        self.active_file(code)
             .is_some_and(|file| file.input.drawio().is_some())
     }
 
-    fn active_editor_input(&self) -> Option<EditorInput> {
-        self.editor_input_for(self.tab_code()?.active_id()?)
+    /// The input of the buffer in front of `code`, preferring the
+    /// presentation that already exists for this tab and group.
+    pub(crate) fn active_editor_input(&self, tab: TabId, code: &TabCode) -> Option<EditorInput> {
+        self.editor_input_for(code.active_id()?, tab, code.group)
     }
 
-    fn editor_input_for(&self, id: BufferId) -> Option<EditorInput> {
-        let file = self.editor.buffers.get(id)?;
-        let tab = self.tabs.get(self.tabs.active_index())?.id();
-        let group = self.tab_code()?.group;
+    /// The live input for a buffer in one tab's group: the group's own
+    /// presentation when it exists, the shared input otherwise.
+    pub(crate) fn editor_input_for(
+        &self,
+        id: BufferId,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<EditorInput> {
+        let file = self.buffers.get(id)?;
         Some(
             file.presentations
                 .markdown_existing(tab, group)
@@ -1145,235 +1282,89 @@ impl LyrelApp {
         )
     }
 
-    /// Where the file in front of the active tab's editor lives, if it has
-    /// been saved anywhere yet.
-    pub(crate) fn editor_active_location(&self) -> Option<(HostId, &Path)> {
-        let f = self.active_buffer()?;
-        f.untitled
-            .is_none()
-            .then(|| (f.host.id(), f.path.as_path()))
+    pub(crate) fn active_local_file(&self, code: &TabCode) -> Option<LocalFile> {
+        self.active_file(code).and_then(OpenFile::local)
     }
 
-    fn tab_index_of(&self, tab: TabId) -> Option<usize> {
-        self.tabs.iter().position(|t| t.id() == tab)
+    /// The host/path the front buffer of `code` lives at, for the status bar.
+    pub(crate) fn active_location(&self, code: &TabCode) -> Option<(HostId, &Path)> {
+        let file = self.active_file(code)?;
+        Some((file.host.id(), file.path.as_path()))
     }
 
-    /// How many places show this buffer: every tab showing it, twice for a
-    /// tab whose split shows it in both groups.
-    fn buffer_refs(&self, id: BufferId) -> usize {
-        self.tabs
-            .iter()
-            .filter_map(|t| t.code.as_deref())
-            .map(|c| c.views_of(id))
-            .sum()
-    }
+    // ---- Opening ----
 
-    /// How many tabs show this buffer, in either group.
-    fn buffer_tabs(&self, id: BufferId) -> usize {
-        self.tabs
-            .iter()
-            .filter_map(|t| t.code.as_deref())
-            .filter(|c| c.shows(id))
-            .count()
-    }
-
-    /// Unsaved buffers that only tab `tab_ix` shows — the ones closing it
-    /// would lose. A buffer another tab also shows survives the close.
-    pub(crate) fn editor_unsaved_in_tab(&self, tab_ix: usize) -> Vec<BufferId> {
-        let Some(code) = self.tabs.get(tab_ix).and_then(|t| t.code.as_deref()) else {
-            return Vec::new();
-        };
-        code.all_files()
-            .into_iter()
-            .filter(|id| {
-                self.editor.buffers.get(*id).is_some_and(|b| b.dirty) && self.buffer_tabs(*id) == 1
-            })
-            .collect()
-    }
-
-    /// Every unsaved buffer in the window.
-    pub(crate) fn editor_unsaved(&self) -> Vec<BufferId> {
-        self.editor
-            .buffers
-            .iter()
-            .filter(|b| b.dirty)
-            .map(OpenFile::id)
-            .collect()
-    }
-
-    pub(crate) fn editor_context_changed(&mut self) {
-        self.editor.buffers.invalidate_context();
-        self.editor.retire_prompts();
-    }
-
-    fn editor_rebuild_watcher(&mut self, cx: &mut Context<Self>) {
-        let host = self.active_host(cx);
-        self.editor
-            .buffers
-            .rebuild_watch(host, cx, |app| &mut app.editor.buffers);
-        self.lsp_sync_buffers(cx);
-    }
-
-    /// Shows what a file link in the grid pointed at.
-    ///
-    /// A file opens in the editor, on the line the link named; the tree
-    /// follows along so "what does it say?" and "where does it live?" are
-    /// answered by the same click. A directory has no contents to show, so it
-    /// is only ever the tree.
-    pub(crate) fn open_linked_file(
-        &mut self,
-        path: &Path,
-        line: Option<u32>,
-        column: Option<u32>,
-        is_dir: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if is_dir {
-            self.file_tree_show(path, window, cx);
-            return;
-        }
-        self.open_file_in_editor_at(path, line, column, window, cx);
-        self.file_tree_reveal_path(path, cx);
-    }
-
-    /// [`Self::open_file_in_editor`], landing the cursor on a line the caller
-    /// already knows — what a `src/main.rs:120:3` in the grid was pointing at.
-    pub(crate) fn open_file_in_editor_at(
-        &mut self,
-        path: &Path,
-        line: Option<u32>,
-        column: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        let cursor = line.map(|line| Position {
-            line: line.saturating_sub(1),
-            character: column.unwrap_or(1).saturating_sub(1),
-        });
-        self.editor_open_on_host_at(host, path, cursor, window, cx);
-    }
-
-    pub(crate) fn open_file_in_editor(
-        &mut self,
-        path: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        self.editor_open_on_host(host, path, window, cx);
-    }
-
-    /// [`Self::open_file_in_editor`] against an explicit host — the SFTP
-    /// browser's files live on a host that is never the active one.
-    pub(crate) fn editor_open_on_host(
-        &mut self,
-        host: SharedHost,
-        path: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor_open_on_host_at(host, path, None, window, cx);
-    }
-
-    fn editor_open_on_host_at(
-        &mut self,
-        host: SharedHost,
-        path: &Path,
-        cursor: Option<Position>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor_open_request(host, path, cursor, None, window, cx);
-    }
-
+    /// Starts opening `path` on `host`, returning the id immediately when the
+    /// buffer was already open (the shell shows it); an asynchronous load
+    /// lands through `opened` and the `OpenCompleted` event instead.
+    /// `workspace`/`tab`/`group`/`window_host` are shell-resolved values; the
+    /// editor verifies its own epochs before anything lands.
     #[allow(clippy::too_many_arguments)]
-    fn editor_open_request(
+    pub(crate) fn open_on_host_at(
         &mut self,
         host: SharedHost,
         path: &Path,
         cursor: Option<Position>,
         origin: Option<(BufferId, u64)>,
+        workspace: lyrel_core::core::session::WorkspaceId,
+        tab: TabId,
+        group: Option<split::GroupId>,
+        window_host: HostId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else {
-            return;
-        };
-        self.raise_code_overlay();
-        let Some(group) = self.tab_code_mut_or_init().map(|code| code.group) else {
-            return;
-        };
+    ) -> Option<BufferId> {
         let target = buffers::OpenTarget {
-            workspace: self.workspace,
+            workspace,
             tab,
-            group: Some(group),
-            window_host: self.spawn_host(cx),
+            group,
+            window_host,
             origin,
-            origin_epoch: origin.and_then(|(id, _)| self.editor_resource_epoch(id, cx)),
+            origin_epoch: origin.and_then(|(id, _)| self.resource_epoch(id)),
+            context_epoch: self.buffers.context_epoch(),
         };
-        let reused = self.editor.buffers.open(
+        self.buffers.open(
             host,
             path,
             cursor,
             target,
             window,
             cx,
-            |app| &mut app.editor.buffers,
-            EditorPanelState::buffer_edited,
-            Self::editor_open_target_valid,
-            Self::editor_opened,
-        );
-        if let Some(id) = reused {
-            self.editor_show_in_tab(tab, id, true, window, cx);
-        }
+            |editor| &mut editor.buffers,
+            Self::buffer_edited,
+            Self::open_target_valid,
+            Self::opened,
+        )
     }
 
-    fn editor_resource_epoch(&self, id: BufferId, _: &gpui_kit::App) -> Option<(HostId, u64)> {
-        let file = self.editor.buffers.get(id)?;
+    fn resource_epoch(&self, id: BufferId) -> Option<(HostId, u64)> {
+        let file = self.buffers.get(id)?;
         Some((file.host.id(), file.reload_seq))
     }
 
-    fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
-        self.workspace == target.workspace
-            && self.spawn_host(cx) == target.window_host
-            && self
-                .tabs
-                .iter()
-                .find(|tab| tab.id() == target.tab)
-                .is_some_and(|tab| {
-                    target.group.is_none_or(|group| {
-                        tab.code.as_ref().is_some_and(|code| {
-                            code.group == group
-                                || code.split.as_ref().is_some_and(|other| other.id == group)
-                        })
-                    })
+    /// Whether an asynchronous open may still land. Only editor-verifiable
+    /// predicates live here — the context epoch captured when the open
+    /// started, and the origin document's identity. Whether the tab and group
+    /// still exist is the shell's check, made again in the `OpenCompleted`
+    /// handler; a buffer that lands nowhere is cleaned up by orphan adoption.
+    fn open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
+        if target.context_epoch != self.buffers.context_epoch() {
+            return false;
+        }
+        target.origin.is_none_or(|(id, revision)| {
+            self.buffers
+                .get(id)
+                .and_then(|file| file.input.markdown())
+                .is_some_and(|view| {
+                    let document = view.read(cx).document().read(cx);
+                    document.revision() == revision
+                        && self.resource_epoch(id) == target.origin_epoch
                 })
-            && target.origin.is_none_or(|(id, revision)| {
-                self.editor
-                    .buffers
-                    .get(id)
-                    .and_then(|file| file.input.markdown())
-                    .is_some_and(|view| {
-                        let document = view.read(cx).document().read(cx);
-                        document.revision() == revision
-                            && self.editor_resource_epoch(id, cx) == target.origin_epoch
-                    })
-                    && self
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id() == target.tab)
-                        .and_then(|tab| tab.code.as_ref())
-                        .is_some_and(|code| code.shows(id))
-            })
+        })
     }
 
-    fn editor_opened(
+    /// The completion of an asynchronous open, running on the editor entity.
+    /// Placement into the tab is the shell's answer to `OpenCompleted`.
+    fn opened(
         &mut self,
         target: buffers::OpenTarget,
         result: buffers::OpenResult,
@@ -1383,16 +1374,23 @@ impl LyrelApp {
         match result {
             buffers::OpenResult::Opened { id, created, front } => {
                 if created {
-                    self.editor_buffer_created(id, window, cx);
+                    self.buffer_created(id, window, cx);
                 }
-                self.editor_show_open_target(target, id, front, window, cx);
-                self.editor_rebuild_watcher(cx);
+                cx.emit(EditorPanelEvent::OpenCompleted {
+                    workspace: target.workspace,
+                    tab: target.tab,
+                    group: target.group,
+                    id,
+                    created,
+                    front,
+                });
+                cx.emit(EditorPanelEvent::RebuildWatcher);
             }
             buffers::OpenResult::Failed {
                 host,
                 error: EditorOpenError::NotText(path),
             } => {
-                self.open_outside_the_editor(host, &path, window, cx);
+                cx.emit(EditorPanelEvent::OpenExternally { host, path });
             }
             buffers::OpenResult::Failed {
                 error: EditorOpenError::Message(message),
@@ -1403,155 +1401,53 @@ impl LyrelApp {
         }
     }
 
-    /// What to do with a file the built-in editor cannot show.
-    ///
-    /// A click on a PNG or a `.zip` meant "open this", not "tell me it is not
-    /// text", and on this machine the desktop knows how. A file on another
-    /// machine has nobody here to hand it to, so that one gets the words.
-    ///
-    /// A program does not: `open` on a Mach-O binary runs it, and a build's
-    /// output is full of paths to programs. Clicking a word in a terminal
-    /// must not be a way to execute one, so those keep the words too.
-    fn open_outside_the_editor(
-        &mut self,
-        host_id: HostId,
-        path: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !host_id.is_local() || !self.can_spawn_locally(cx) || is_program(path) {
-            window.notify_app(
-                t_fmt(
-                    L10nKey::EditorBinaryFile,
-                    &[("path", &path.display().to_string())],
-                ),
-                cx,
-            );
-            return;
-        }
-        Self::open_with(path, crate::ui::desktop_file::open_file_path, window, cx);
-    }
-
-    /// Runs one of the desktop openers on a local file, and says so when it
-    /// fails to spawn — as any opener can (#542).
-    fn open_with(
-        path: &Path,
-        opener: fn(&Path) -> std::io::Result<()>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Err(e) = opener(path) {
-            log::warn!("failed to open {}: {e}", path.display());
-            window.notify_app(
-                crate::ui::host_ops::failure(
-                    t_fmt(
-                        L10nKey::LinkFileOpenFailed,
-                        &[
-                            ("path", &path.display().to_string()),
-                            ("error", &e.to_string()),
-                        ],
-                    ),
-                    &e,
-                ),
-                cx,
-            );
-        }
-    }
-
-    /// Puts a buffer in a tab's strip and, when `front`, in front of its
-    /// editor with the panel open and focused.
-    fn editor_show_in_tab(
-        &mut self,
-        tab: TabId,
-        id: BufferId,
-        front: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(tab_ix) = self.tab_index_of(tab) else {
+    /// Registers everything a newly created buffer needs inside the panel:
+    /// navigation history and, for Markdown, its image resources. The shell
+    /// separately watches the document focus for its status line.
+    fn buffer_created(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(file) = self.buffers.get(id) else {
             return;
         };
-        let Some(t) = self.tabs.get_mut(tab_ix) else {
-            return;
-        };
-        let code = t.code.get_or_insert_with(|| Box::new(TabCode::new()));
-        if !front {
-            // Listed, not brought forward: the one in front stays in front.
-            code.append(id);
-            cx.notify();
-            return;
+        let input = file.input.clone();
+        // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
+        if let Some(text) = input.text() {
+            self.nav.track_buffer(id, text.read(cx).text().clone());
         }
-        code.show(id);
-        code.visible = true;
-        if tab_ix == self.tabs.active_index() {
-            self.editor.dismiss_bar();
-            self.focus_editor(window, cx);
+        if let Some(source) = input.markdown() {
+            let owner = cx.entity().downgrade();
+            let resources =
+                cx.new(|cx| markdown::images::ImageHost::new(owner, id, source, window, cx));
+            markdown::images::ImageHost::attach(&resources, source, cx);
+            self.buffers.get_mut(id).unwrap().markdown_resources = Some(resources);
         }
-        cx.notify();
-    }
-
-    fn editor_show_open_target(
-        &mut self,
-        target: buffers::OpenTarget,
-        id: BufferId,
-        front: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(other) = self
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.id() == target.tab)
-            .and_then(|tab| tab.code.as_mut())
-            .and_then(|code| code.split.as_mut())
-            .filter(|other| Some(other.id) == target.group)
-        {
-            let ix = other
-                .files
-                .iter()
-                .position(|entry| *entry == id)
-                .unwrap_or_else(|| {
-                    other.files.push(id);
-                    other.files.len() - 1
-                });
-            if front {
-                other.active = ix;
-            }
-            cx.notify();
-            return;
-        }
-        self.editor_show_in_tab(target.tab, id, front, window, cx);
     }
 
     /// Makes a buffer out of a loaded file, or finds the one already open for
-    /// it, and shows it in `tab`.
-    fn editor_install(
+    /// it. Returns the buffer id and whether it was created; the caller — the
+    /// restore completion, or the shell — decides where it shows.
+    pub(crate) fn install(
         &mut self,
         host: SharedHost,
         loaded: Loaded,
-        tab: TabId,
-        front: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> BufferId {
-        let (id, created) = self.editor.buffers.install(
+    ) -> (BufferId, bool) {
+        let (id, created) = self.buffers.install(
             host,
             loaded,
             window,
             cx,
-            |app| &mut app.editor.buffers,
-            EditorPanelState::buffer_edited,
+            |editor| &mut editor.buffers,
+            Self::buffer_edited,
         );
         if created {
-            self.editor_buffer_created(id, window, cx);
+            self.buffer_created(id, window, cx);
         }
-        self.editor_show_in_tab(tab, id, front, window, cx);
-        self.editor_rebuild_watcher(cx);
-        id
+        (id, created)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn editor_new_buffer(
+    pub(crate) fn new_buffer(
         &mut self,
         host: SharedHost,
         path: PathBuf,
@@ -1565,7 +1461,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> BufferId {
-        let id = self.editor.buffers.create(
+        let id = self.buffers.create(
             host,
             path,
             untitled,
@@ -1577,121 +1473,49 @@ impl LyrelApp {
             mtime,
             window,
             cx,
-            |app| &mut app.editor.buffers,
-            EditorPanelState::buffer_edited,
+            |editor| &mut editor.buffers,
+            Self::buffer_edited,
         );
-        self.editor_buffer_created(id, window, cx);
+        self.buffer_created(id, window, cx);
         id
     }
 
-    fn editor_buffer_created(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(file) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let input = file.input.clone();
-        self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
-        // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
-        if let Some(text) = input.text() {
-            self.editor
-                .nav
-                .track_buffer(id, text.read(cx).text().clone());
-        }
-        if let Some(source) = input.markdown() {
-            let app = cx.entity().downgrade();
-            let resources =
-                cx.new(|cx| markdown::images::ImageHost::new(app, id, source, window, cx));
-            markdown::images::ImageHost::attach(&resources, source, cx);
-            self.editor.buffers.get_mut(id).unwrap().markdown_resources = Some(resources);
-        }
-    }
-
-    /// Re-derives whether a buffer differs from what is on disk, after an
-    /// edit of any kind — typing, undo, a reload, a save rule.
-    fn editor_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        self.editor.buffers.note_edit(id, cx);
-        self.editor_buffer_changed(id, cx);
-    }
-
-    fn editor_buffer_changed(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        self.lsp_buffer_edited(id, cx);
-        self.editor_gutter_note_edit(id, cx);
-        self.editor_nav_note_edit(id, cx);
-        cx.notify();
-    }
-
-    pub(crate) fn editor_active_local_file(&self) -> Option<LocalFile> {
-        self.active_buffer().and_then(OpenFile::local)
-    }
-
-    /// Asks for a new name for the symbol at `offset`, in the bar above the
-    /// text; `ui::lsp` does the renaming once it is answered.
-    pub(crate) fn editor_open_rename_bar(
+    pub(crate) fn new_untitled(
         &mut self,
-        id: BufferId,
-        offset: usize,
-        current: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor_open_bar(BarKind::Rename { id, offset }, current, window, cx);
-    }
-
-    /// A new, empty, never-saved buffer, on the window's own machine.
-    pub(crate) fn editor_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor_new_untitled(BufferKind::Text, window, cx);
-    }
-
-    pub(crate) fn editor_new_markdown_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor_new_untitled(BufferKind::Markdown, window, cx);
-    }
-
-    fn editor_new_untitled(
-        &mut self,
+        host: SharedHost,
         kind: BufferKind,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
-            return;
-        };
-        self.raise_code_overlay();
-        let n = self.editor.buffers.next_untitled();
-        let indent = lyrel_document::text::detect_indent("", "text");
-        let id = self.editor_new_buffer(
+    ) -> BufferId {
+        let number = self.buffers.next_untitled();
+        self.new_buffer(
             host,
             PathBuf::new(),
-            Some(n),
+            Some(number),
             kind,
             String::new(),
             TextFormat::default(),
             EditorConfig::default(),
-            indent,
+            lyrel_document::text::detect_indent("", "text"),
             None,
             window,
             cx,
-        );
-        self.editor_show_in_tab(tab, id, true, window, cx);
+        )
     }
 
     /// A scrollback export is an unsaved document, never a filesystem path on
     /// the pane's host. Saving uses the ordinary Save As and close safeguards.
-    pub(crate) fn editor_open_scrollback(
+    pub(crate) fn open_scrollback(
         &mut self,
         text: String,
+        host: SharedHost,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
-            return;
-        };
-        let host = lyrel_core::host::local::new();
-        let n = self.editor.buffers.next_untitled();
+    ) -> BufferId {
+        let n = self.buffers.next_untitled();
         let indent = lyrel_document::text::detect_indent(&text, "text");
         let dirty = !text.is_empty();
-        let id = self.editor_new_buffer(
+        let id = self.new_buffer(
             host,
             PathBuf::new(),
             Some(n),
@@ -1704,69 +1528,27 @@ impl LyrelApp {
             window,
             cx,
         );
-        if let Some(file) = self.editor.buffers.get_mut(id) {
+        if let Some(file) = self.buffers.get_mut(id) {
             file.saved = Fingerprint::of_str("");
             file.dirty = dirty;
         }
-        self.raise_code_overlay();
-        self.editor_show_in_tab(tab, id, true, window, cx);
+        id
     }
 
-    pub(crate) fn toggle_code_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.active_mut() else {
-            return;
-        };
-        let buried = tab.reveal_code();
-        if buried {
-            self.focus_editor(window, cx);
-            cx.notify();
-            return;
-        }
-        let Some(tab) = self.tabs.active_mut() else {
-            return;
-        };
-        let code = tab.code.get_or_insert_with(|| Box::new(TabCode::new()));
-        if code.visible {
-            code.visible = false;
-            self.editor.had_focus = None;
-            self.editor.dismiss_bar();
-            self.file_tree.cancel_edit();
-            self.focus_active(window, cx);
-            cx.notify();
-            return;
-        }
-        code.visible = true;
-        self.file_tree_refresh_roots(window, cx);
-        if self.active_buffer().is_some() {
-            self.focus_editor(window, cx);
-        } else {
-            // With no file to show, the panel says "Open a file from the file
-            // tree" and hands the tree the focus — but nothing was putting the
-            // tree on screen, so ⌘⇧E on a fresh tab opened an empty editor
-            // pointing at a panel the reader could not see or reach from
-            // there. Reveal it, then focus it.
-            if !self.file_tree_on_screen(cx) {
-                self.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx);
-            }
-            self.file_tree.focus_handle.focus(window, cx);
-        }
-        cx.notify();
-    }
+    // ---- Focus ----
 
-    fn raise_code_overlay(&mut self) {
-        if let Some(tab) = self.tabs.active_mut() {
-            tab.reveal_code();
-        }
-    }
-
-    fn focus_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(file) = self.active_buffer() else {
+    /// Puts the keyboard on the document surface of `code`'s front buffer.
+    pub(crate) fn focus_editor(
+        &mut self,
+        tab: TabId,
+        code: &TabCode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(file) = self.active_file(code) else {
             return;
         };
-        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
-            return;
-        };
-        let group = self.tab_code().expect("active editor group").group;
+        let group = code.group;
         if let Some(input) = file.input.markdown() {
             let view = file
                 .presentations
@@ -1814,94 +1596,72 @@ impl LyrelApp {
         }
     }
 
-    /// Settings borrows focus, not the terminal's place in the workbench.
-    /// Keep explicit terminal commands on `focus_active`; only an overlay's
-    /// return path restores the foreground document or the last docked shell.
-    pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.status_document_context(window, cx) {
-            Some(crate::ui::tab::OverlayTop::Code) => {
-                if self.active_buffer().is_some() {
-                    self.focus_editor(window, cx);
-                } else {
-                    self.editor.empty_focus.focus(window, cx);
-                }
-            }
-            Some(crate::ui::tab::OverlayTop::Diff) => {
-                if let Some(diff) = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .and_then(|tab| tab.diff_overlay.as_ref())
-                {
-                    window.focus(&diff.focus_handle, cx);
-                }
-            }
-            None => self.focus_active(window, cx),
-        }
-    }
-
-    /// Brings the file at `pos` in the active tab's strip to the front.
-    pub(crate) fn editor_activate(
+    /// Brings the file at `pos` in `code`'s strip to the front. The shell has
+    /// already bounds-checked `pos` against `code.files`.
+    pub(crate) fn activate(
         &mut self,
         pos: usize,
+        tab: TabId,
+        code: &mut TabCode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(code) = self.tab_code_mut() else {
-            return;
-        };
         if pos >= code.files.len() {
             return;
         }
         code.active = pos;
-        self.editor.dismiss_bar();
-        self.focus_editor(window, cx);
+        self.dismiss_bar();
+        self.focus_editor(tab, code, window, cx);
         cx.notify();
     }
 
     /// Switch the active native Markdown presentation between live editing and source.
     /// `ToggleDocumentPreview` remains the action ID for existing custom keybindings.
-    pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.code_panel_visible() {
-            return;
-        }
+    pub(crate) fn toggle_document_preview(
+        &mut self,
+        tab: TabId,
+        code: &TabCode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.markdown().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.svg().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.json().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.yaml().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.toml().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.csv().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         } else if let Some(view) = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.xml().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
@@ -1910,39 +1670,34 @@ impl LyrelApp {
     }
 
     /// The status bar's Wrap button, and `ToggleDocumentWrap`. Same reach as
-    /// [`Self::toggle_document_preview`], for any file; the new state becomes
-    /// what the next file opens with.
-    pub(crate) fn toggle_document_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.code_panel_visible() {
-            return;
-        }
-        let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
-            return;
-        };
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
+    /// `toggle_document_preview`, for any file; the new state becomes what the
+    /// next file opens with. The shell writes the returned state to config.
+    pub(crate) fn toggle_document_wrap(
+        &mut self,
+        code: &TabCode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        let id = code.active_id()?;
+        let f = self.buffers.get_mut(id)?;
         // 只读图片没有要折行的文本：命令对它不生效，也不改下一个文本
         // 文件的开箱设置。
-        let Some(text) = f.input.text() else {
-            return;
-        };
+        let text = f.input.text()?;
         f.wrap = !f.wrap;
         let wrap = f.wrap;
         text.set_soft_wrap(wrap, window, cx);
         f.presentations.set_soft_wrap(wrap, &f.input, cx);
-        self.update_config(cx, |cfg| cfg.editor_soft_wrap = wrap);
-        cx.notify();
+        Some(wrap)
     }
 
     /// The status bar's line-ending button: flips the file between LF and
     /// CRLF. The buffer itself always holds `\n`; this only changes what a
     /// save writes, so it marks the file unsaved without touching its text.
-    fn toggle_line_ending(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
+    pub(crate) fn toggle_line_ending(&mut self, code: &TabCode, cx: &mut Context<Self>) {
+        let Some(id) = code.active_id() else {
             return;
         };
-        let Some(f) = self.editor.buffers.get_mut(id) else {
+        let Some(f) = self.buffers.get_mut(id) else {
             return;
         };
         // 只读图片没有保存格式可以改：这个按钮对它不该出现，也不该生效。
@@ -1954,380 +1709,64 @@ impl LyrelApp {
             LineEnding::CrLf => LineEnding::Lf,
         };
         f.set_format(format, cx);
-        self.editor_note_edit(id, cx);
+        self.note_edit(id, cx);
     }
 
-    /// Run one of gpui-component's editing actions on the active buffer, as
-    /// if it had been pressed there. Returns false with no buffer to run it
-    /// on. The palette closes before its row runs, so this focuses the
-    /// buffer first rather than relying on where the focus happens to be.
-    pub(crate) fn editor_dispatch(
-        &mut self,
-        action: &dyn gpui_kit::Action,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.code_panel_visible() {
-            return false;
-        }
-        let Some(input) = self.active_editor_input() else {
-            return false;
-        };
-        let handle = input.read(cx).focus_handle(cx);
-        window.focus(&handle, cx);
-        handle.dispatch_action(action, window, cx);
-        true
+    /// Re-derives whether a buffer differs from what is on disk, after an
+    /// edit of any kind — typing, undo, a reload, a save rule.
+    pub(crate) fn note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
+        self.buffers.note_edit(id, cx);
+        self.buffer_changed(id, cx);
     }
 
-    /// The window's listeners for the editor's text commands, when the user
-    /// has bound one: each runs on the editor only while it has the focus.
-    pub(crate) fn with_editor_text_commands(
-        root: gpui_kit::Stateful<gpui_kit::Div>,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        let root = commands::install(root, cx);
-        use crate::core::actions::{
-            EditorJoinLines, EditorRemoveSurroundingBrackets, EditorTransformLowercase,
-            EditorTransformTitleCase, EditorTransformUppercase, EditorTrimTrailingWhitespace,
-        };
-        root.on_action(
-            cx.listener(|this, _: &EditorTransformUppercase, window, cx| {
-                if !this.editor_has_focus(window, cx) {
-                    cx.propagate();
-                    return;
-                }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToUppercase,
-                    window,
-                    cx,
-                );
-            }),
-        )
-        .on_action(
-            cx.listener(|this, _: &EditorTransformLowercase, window, cx| {
-                if !this.editor_has_focus(window, cx) {
-                    cx.propagate();
-                    return;
-                }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToLowercase,
-                    window,
-                    cx,
-                );
-            }),
-        )
-        .on_action(
-            cx.listener(|this, _: &EditorTransformTitleCase, window, cx| {
-                if !this.editor_has_focus(window, cx) {
-                    cx.propagate();
-                    return;
-                }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToTitleCase,
-                    window,
-                    cx,
-                );
-            }),
-        )
-        .on_action(
-            cx.listener(|this, _: &EditorTrimTrailingWhitespace, window, cx| {
-                if !this.editor_has_focus(window, cx) {
-                    cx.propagate();
-                    return;
-                }
-                // This handler already owns LyrelApp. Redispatching to its own
-                // command listener would try to update the same entity again.
-                this.editor_apply_command(commands::Command::Trim, window, cx);
-            }),
-        )
-        .on_action(cx.listener(|this, _: &EditorJoinLines, window, cx| {
-            if !this.editor_has_focus(window, cx) {
-                cx.propagate();
-                return;
-            }
-            this.editor_dispatch(&crate::ui::code_editor::commands::JoinLines, window, cx);
-        }))
-        .on_action(
-            cx.listener(|this, _: &EditorRemoveSurroundingBrackets, window, cx| {
-                if !this.editor_has_focus(window, cx) {
-                    cx.propagate();
-                    return;
-                }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::RemoveSurroundingBrackets,
-                    window,
-                    cx,
-                );
-            }),
-        )
-    }
-
-    /// Whether an editor exists to run [`Self::editor_dispatch`] on.
-    pub(crate) fn editor_can_dispatch(&self) -> bool {
-        self.code_panel_visible() && self.active_buffer().is_some()
-    }
-
-    pub(crate) fn editor_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
-        self.code_panel_visible()
-            && self
-                .active_editor_input()
-                .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
-    }
-
-    /// Whether anything in the editor panel — the text, its search bar, the
-    /// go-to-line prompt — has the focus. Wider than
-    /// [`Self::editor_has_focus`], for keys that belong to the panel as a
-    /// whole: ⌘S from the find box should still save.
-    pub(crate) fn editor_panel_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
-        self.editor_has_focus(window, cx)
-            // The header strip is part of the panel: with the cells holding
-            // the keyboard, ⌘S and the other document commands still act on
-            // the document in front.
-            || (self.code_panel_visible() && self.editor.strip_keyboard.is_focused(window))
-            || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
-            || self.editor.bar_has_focus(window, cx)
-            || self
-                .active_editor_input()
-                .and_then(|input| {
-                    input
-                        .markdown()
-                        .and_then(|source| self.active_buffer()?.presentations.search(source))
-                })
-                .is_some_and(|search| search.read(cx).has_focus(window, cx))
-    }
-
-    pub(crate) fn editor_save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
-            return;
-        };
-        self.editor_save_file(id, false, window, cx);
-    }
-
-    pub(crate) fn editor_save_as_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
-            return;
-        };
-        self.editor_save_as(id, window, cx);
-    }
-
-    fn editor_bridge() -> EditorBridge<Self> {
-        EditorBridge {
-            access: |app| &mut app.editor,
-            event: Self::editor_event,
-        }
-    }
-
-    fn editor_save_root(&self) -> PathBuf {
-        self.tab_code()
-            .and_then(|code| code.roots.first().cloned())
-            .unwrap_or_default()
-    }
-
-    fn editor_save_file(
+    /// Finishes an IME composition before a close decision: the shared
+    /// document when another tab shows the buffer too, the live input when
+    /// this tab is its only showplace.
+    pub(crate) fn finish_close_composition(
         &mut self,
         id: BufferId,
-        force: bool,
+        shared: bool,
+        tab: TabId,
+        group: split::GroupId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let root = self.editor_save_root();
-        self.editor
-            .save(id, force, &root, window, cx, Self::editor_bridge());
-    }
-
-    fn editor_save_as(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let root = self.editor_save_root();
-        self.editor
-            .save_as(id, &root, window, cx, Self::editor_bridge());
-    }
-
-    fn editor_event(&mut self, event: EditorEvent, window: &mut Window, cx: &mut Context<Self>) {
-        match event {
-            EditorEvent::Saved {
-                id,
-                host,
-                directory,
-            } => {
-                self.editor_buffer_changed(id, cx);
-                self.lsp_buffer_saved(id, cx);
-                self.editor_gutter_refetch(id);
-                if let Some(directory) = directory {
-                    self.scm_invalidate_cwd(host, &directory, cx);
-                }
-            }
-            EditorEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
-            EditorEvent::Continue(intent) => self.editor_continue(intent, window, cx),
-            EditorEvent::Discard(ids) => {
-                for id in ids {
-                    self.editor_drop_buffer(id, cx);
-                }
-            }
-            EditorEvent::Focus => self.focus_editor(window, cx),
-            EditorEvent::GoToLine { id, line, column } => {
-                self.focus_editor(window, cx);
-                if let Some(input) = self.editor_input_for(id).filter(|i| i.is_text()) {
-                    let text = input.text().expect("checked text input");
-                    let lines = text.read(cx).text().lines_len().max(1) as u32;
-                    place_cursor(
-                        input,
-                        Position {
-                            line: line.min(lines) - 1,
-                            character: column - 1,
-                        },
-                        CURSOR_SCROLL_ATTEMPTS,
-                        window,
-                        cx,
-                    );
-                }
-            }
-            EditorEvent::Rename { id, offset, name } => {
-                self.focus_editor(window, cx);
-                self.lsp_rename(id, offset, name, window, cx);
-            }
-        }
-        cx.notify();
-    }
-
-    fn editor_open_bar(
-        &mut self,
-        kind: BarKind,
-        initial: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor
-            .open_bar(kind, initial, window, cx, Self::editor_bridge());
-    }
-
-    pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 行号是文本的位置。图片文档没有行可去，快捷键在这里就是空操作，
-        // 而不是弹出一个永远落不到任何地方的行号框。
-        if !self.code_panel_visible()
-            || !self
-                .active_buffer()
-                .is_some_and(|file| file.input.is_text())
-        {
-            return;
-        }
-        let id = self.tab_code().and_then(TabCode::active_id).unwrap();
-        self.editor_open_bar(BarKind::GoToLine { id }, String::new(), window, cx);
-    }
-
-    fn editor_close_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor.dismiss_bar();
-        self.focus_editor(window, cx);
-        cx.notify();
-    }
-
-    /// Closes the file at `pos` in the active tab's strip. Asks first only
-    /// when this is the last tab showing a buffer with unsaved changes.
-    pub(crate) fn editor_close_file(
-        &mut self,
-        pos: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tab_ix = self.tabs.active_index();
-        let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
+        let Some(file) = self.buffers.get(id) else {
             return;
         };
-        let shared = self.buffer_refs(id) > 1;
-        if let Some(file) = self.editor.buffers.get(id) {
-            if shared {
-                let tab = self.tabs.get(tab_ix).unwrap().id();
-                let group = self.tab_code().unwrap().focused_group();
-                if let Some(view) = file.presentations.markdown_existing(tab, group) {
-                    view.update(cx, |view, cx| view.finish_owned_composition(cx));
-                } else if let Some(view) = file.presentations.svg_existing(tab, group) {
-                    view.update(cx, |view, cx| view.finish_composition(cx));
-                } else if let Some(view) = file.presentations.json_existing(tab, group) {
-                    view.update(cx, |view, cx| view.finish_composition(cx));
-                } else if let Some(view) = file.presentations.csv_existing(tab, group) {
-                    view.update(cx, |view, cx| view.finish_composition(cx));
-                } else if let Some(view) = file.presentations.xml_existing(tab, group) {
-                    view.update(cx, |view, cx| view.finish_composition(cx));
-                }
-            } else {
-                file.input.finish_composition(window, cx);
+        if shared {
+            if let Some(view) = file.presentations.markdown_existing(tab, group) {
+                view.update(cx, |view, cx| view.finish_owned_composition(cx));
+            } else if let Some(view) = file.presentations.svg_existing(tab, group) {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            } else if let Some(view) = file.presentations.json_existing(tab, group) {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            } else if let Some(view) = file.presentations.csv_existing(tab, group) {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            } else if let Some(view) = file.presentations.xml_existing(tab, group) {
+                view.update(cx, |view, cx| view.finish_composition(cx));
             }
-        }
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        if !f.dirty || shared {
-            self.editor_remove_from_tab(tab_ix, id, cx);
-            self.focus_editor(window, cx);
-            return;
-        }
-        let tab = self.tabs.get(tab_ix).unwrap().id();
-        let group = self.tab_code().unwrap().focused_group();
-        self.editor_guard_unsaved(
-            vec![id],
-            AfterUnsaved::CloseFiles {
-                tab,
-                ids: vec![id],
-                group,
-            },
-            window,
-            cx,
-        );
-    }
-
-    /// Closes the file with this buffer in the front tab's strip, wherever
-    /// it has moved to since a menu was built for it.
-    fn editor_close_buffer(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(pos) = self
-            .tab_code()
-            .and_then(|c| c.files.iter().position(|f| *f == id))
-        {
-            self.editor_close_file(pos, window, cx);
-        }
-    }
-
-    /// Closes several files in the front tab's strip, asking once about the
-    /// ones whose edits would be lost with them — not those another tab still
-    /// shows.
-    fn editor_close_buffers(
-        &mut self,
-        ids: Vec<BufferId>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tab_ix = self.tabs.active_index();
-        let Some(tab) = self.tabs.get(tab_ix).map(|t| t.id()) else {
-            return;
-        };
-        let unsaved: Vec<BufferId> = ids
-            .iter()
-            .copied()
-            .filter(|id| {
-                self.editor.buffers.get(*id).is_some_and(|f| f.dirty) && self.buffer_refs(*id) == 1
-            })
-            .collect();
-        if self.editor_guard_unsaved(
-            unsaved,
-            AfterUnsaved::CloseFiles {
-                tab,
-                ids: ids.clone(),
-                group: self.tab_code().unwrap().focused_group(),
-            },
-            window,
-            cx,
-        ) {
-            return;
-        }
-        for id in ids {
-            self.editor_remove_from_tab(tab_ix, id, cx);
+        } else {
+            file.input.finish_composition(window, cx);
         }
     }
 
     /// Types `@path` into the running agent's prompt, with the selected
-    /// lines after it when there are any.
-    fn editor_attach_to_agent(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.editor.buffers.get(id).filter(|f| f.untitled.is_none()) else {
+    /// lines after it when there are any. `tab`/`group` name the editor
+    /// group the request came from.
+    pub(crate) fn attach_to_agent(
+        &mut self,
+        id: BufferId,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(f) = self.buffers.get(id).filter(|f| f.untitled.is_none()) else {
             return;
         };
-        let input = self.editor_input_for(id).expect("retained document");
+        let input = self
+            .editor_input_for(id, tab, group)
+            .expect("retained document");
         let suffix = match input.text() {
             Some(text) => {
                 let state = text.read(cx);
@@ -2342,434 +1781,7 @@ impl LyrelApp {
             None => String::new(),
         };
         let path = f.path.clone();
-        self.attach_path_to_agent(&path, &suffix, cx);
-    }
-
-    /// Right-click in the text. Edits dispatch to the editor itself, so each
-    /// row shows the chord that does the same thing.
-    fn editor_body_menu(
-        menu: PopupMenu,
-        app: &gpui_kit::WeakEntity<Self>,
-        id: BufferId,
-        cx: &mut gpui_kit::App,
-    ) -> PopupMenu {
-        use gpui_kit::component::input as edit;
-        let Some(owner) = app.upgrade() else {
-            return menu;
-        };
-        let this = owner.read(cx);
-        let Some(f) = this.editor.buffers.get(id) else {
-            return menu;
-        };
-        let Some(input) = this.editor_input_for(id) else {
-            return menu;
-        };
-        let state = input.read(cx);
-        let mut menu = menu.min_w(px(220.)).action_context(state.focus_handle(cx));
-        if f.untitled.is_none() {
-            menu = menu
-                .item(
-                    PopupMenuItem::new(t(L10nKey::FileTreeContextAttachAgent)).on_click({
-                        let app = app.clone();
-                        move |_, _window, cx| {
-                            let _ = app.update(cx, |this, cx| this.editor_attach_to_agent(id, cx));
-                        }
-                    }),
-                )
-                .separator();
-        }
-        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景与翻页。给它
-        // 保留这些行，等于向读者承诺文档里有能编辑的文本。
-        if let Some(image) = input.image() {
-            let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
-            return image_document::menu_entries(menu, multipage);
-        }
-        if input.book().is_some() {
-            return menu
-                .separator()
-                .menu(t(L10nKey::EditorBookContents), Box::new(BookToggleContents))
-                .menu(
-                    t(L10nKey::EditorBookBookmarks),
-                    Box::new(BookToggleBookmarks),
-                )
-                .menu(t(L10nKey::EditorBookSearch), Box::new(BookSearch))
-                .separator()
-                .menu(t(L10nKey::EditorBookNextPage), Box::new(BookNextPage))
-                .menu(
-                    t(L10nKey::EditorBookPreviousPage),
-                    Box::new(BookPreviousPage),
-                )
-                .menu(t(L10nKey::EditorBookNextChapter), Box::new(BookNextChapter))
-                .menu(
-                    t(L10nKey::EditorBookPreviousChapter),
-                    Box::new(BookPreviousChapter),
-                )
-                .separator()
-                .menu(t(L10nKey::EditorBookAddBookmark), Box::new(BookAddBookmark));
-        }
-        if let Some(pdf) = input.pdf() {
-            let has_selection = pdf.read(cx).has_selection();
-            return pdf_document::menu_entries(menu, has_selection);
-        }
-        // 数据库没有撤销、查找、剪贴板和行命令可给：它只有刷新与分页。
-        if input.sqlite().is_some() {
-            return sqlite_document::menu_entries(menu);
-        }
-        // The diagram keeps its own undo, clipboard and page commands: every
-        // entry lands on the shared document or the live engine, never on a
-        // text input it does not have.
-        if let Some(drawio) = input.drawio() {
-            let multipage = drawio.read(cx).page_count(cx) > 1;
-            return drawio_document::menu_entries(menu, multipage);
-        }
-        if let Some(csv) = input.csv() {
-            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
-            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        let selected = input
-            .text()
-            .is_some_and(|text| !text.read(cx).selected_range().is_empty());
-        let menu = menu
-            .menu(t(L10nKey::AppMenuUndo), Box::new(edit::Undo))
-            .menu(t(L10nKey::AppMenuRedo), Box::new(edit::Redo))
-            .separator()
-            .menu_with_disabled(t(L10nKey::AppMenuCut), Box::new(edit::Cut), !selected)
-            .menu_with_disabled(t(L10nKey::AppMenuCopy), Box::new(edit::Copy), !selected)
-            .menu_with_disabled(
-                t(L10nKey::AppMenuPaste),
-                Box::new(edit::Paste),
-                cx.read_from_clipboard().is_none(),
-            )
-            .menu(t(L10nKey::AppMenuSelectAll), Box::new(edit::SelectAll));
-        if let Some(markdown) = input.markdown() {
-            let menu = menu
-                .action_context(markdown.read(cx).focus_handle(cx))
-                .menu(
-                    t(L10nKey::EditorGoToLineAction),
-                    Box::new(crate::core::actions::EditorGoToLine),
-                );
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(svg) = input.svg() {
-            let menu = menu.action_context(svg.read(cx).focus_handle(cx)).menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
-            let menu = svg_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(json) = input.json() {
-            let menu = menu.action_context(json.read(cx).focus_handle(cx)).menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
-            let menu = json_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(yaml) = input.yaml() {
-            let menu = menu.action_context(yaml.read(cx).focus_handle(cx)).menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
-            let menu = yaml_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(toml) = input.toml() {
-            let menu = menu.action_context(toml.read(cx).focus_handle(cx)).menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
-            let menu = toml_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        if let Some(xml) = input.xml() {
-            let menu = menu.action_context(xml.read(cx).focus_handle(cx)).menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
-            let menu = xml_document::menu_entries(menu);
-            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
-        }
-        let menu = menu
-            .separator()
-            // The line commands act on every line a cursor or selection
-            // touches. Their chords live on gpui-component's `CodeEditor` key
-            // context and are re-added in `keymap::fixed_bindings`, so they
-            // beat the app's own keys while the editor has focus.
-            .menu(
-                t(L10nKey::EditorToggleComment),
-                Box::new(commands::ToggleLineComment),
-            )
-            .menu(t(L10nKey::EditorMoveLineUp), Box::new(commands::MoveLineUp))
-            .menu(
-                t(L10nKey::EditorMoveLineDown),
-                Box::new(commands::MoveLineDown),
-            )
-            .menu(
-                t(L10nKey::EditorDuplicateLine),
-                Box::new(commands::CopyLineDown),
-            )
-            .menu(t(L10nKey::EditorDeleteLine), Box::new(commands::DeleteLine))
-            .separator()
-            .menu(t(L10nKey::AppMenuFind), Box::new(edit::Search))
-            .menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            )
-            .menu_with_disabled(
-                t(L10nKey::EditorGitRevertChange),
-                Box::new(crate::core::actions::EditorRevertChange),
-                !this.editor_gutter_can_revert(id, cx),
-            )
-            .menu(
-                t(L10nKey::EditorGoToMatchingBracket),
-                Box::new(commands::MoveToMatchingBracket),
-            );
-        let menu = this.lsp_menu_items(menu, id, cx);
-        this.editor_file_menu_items(menu, id, app, cx)
-    }
-
-    /// Right-click on a file in the header's strip.
-    fn editor_tab_menu(
-        menu: PopupMenu,
-        app: &gpui_kit::WeakEntity<Self>,
-        id: BufferId,
-        cx: &gpui_kit::App,
-    ) -> PopupMenu {
-        let Some(this) = app.upgrade() else {
-            return menu;
-        };
-        let this = this.read(cx);
-        let Some(files) = this.tab_code().map(|c| c.files.clone()) else {
-            return menu;
-        };
-        let Some(pos) = files.iter().position(|f| *f == id) else {
-            return menu;
-        };
-        let others: Vec<BufferId> = files.iter().copied().filter(|f| *f != id).collect();
-        let right = files[pos + 1..].to_vec();
-        let close = |label: L10nKey, ids: Vec<BufferId>| {
-            let app = app.clone();
-            PopupMenuItem::new(t(label))
-                .disabled(ids.is_empty())
-                .on_click(move |_, window, cx| {
-                    let ids = ids.clone();
-                    let _ = app.update(cx, |this, cx| this.editor_close_buffers(ids, window, cx));
-                })
-        };
-        let menu = menu
-            .min_w(px(220.))
-            .item(
-                PopupMenuItem::new(t(L10nKey::TabContextCloseTab)).on_click({
-                    let app = app.clone();
-                    move |_, window, cx| {
-                        let _ = app.update(cx, |this, cx| this.editor_close_buffer(id, window, cx));
-                    }
-                }),
-            )
-            .item(close(L10nKey::AppMenuCloseOtherTabs, others))
-            .item(close(L10nKey::AppMenuCloseTabsRight, right));
-        this.editor_file_menu_items(menu, id, app, cx)
-    }
-
-    /// What both menus offer for the file as a whole: open it outside lyrel,
-    /// show it in its folder, copy where it is. Nothing for a file that has
-    /// never been saved, since it is not anywhere yet.
-    fn editor_file_menu_items(
-        &self,
-        menu: PopupMenu,
-        id: BufferId,
-        app: &gpui_kit::WeakEntity<Self>,
-        cx: &gpui_kit::App,
-    ) -> PopupMenu {
-        let Some(f) = self.editor.buffers.get(id).filter(|f| f.untitled.is_none()) else {
-            return menu;
-        };
-        let path = f.path.clone();
-        // Only this machine's desktop can open or show a file, and only a
-        // file that is on this machine — the same rule as the file tree.
-        let local = f.host.id().is_local();
-        let mut menu = menu.separator();
-        if local && self.can_spawn_locally(cx) && !is_program(&path) {
-            let browser = opens_in_browser(&path);
-            let label = match browser {
-                true => t(L10nKey::PanelOpenInBrowser),
-                false => t(L10nKey::AppMenuOpenLinkWithDefaultApp),
-            };
-            let opener: fn(&Path) -> std::io::Result<()> = match browser {
-                true => open_in_browser,
-                false => crate::ui::desktop_file::open_file_path,
-            };
-            menu = menu.item(PopupMenuItem::new(label).on_click({
-                let app = app.clone();
-                let path = path.clone();
-                move |_, window, cx| {
-                    let _ = app.update(cx, |_, cx| Self::open_with(&path, opener, window, cx));
-                }
-            }));
-        }
-        if local {
-            menu = menu.item(
-                PopupMenuItem::new(crate::ui::right_panel::reveal_label()).on_click({
-                    let path = path.clone();
-                    move |_, _window, cx| {
-                        cx.reveal_path(&crate::ui::path_display::native_separators(&path));
-                    }
-                }),
-            );
-        }
-        let copy = |label: L10nKey, text: String| {
-            PopupMenuItem::new(t(label)).on_click(move |_, _window, cx| {
-                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
-            })
-        };
-        // A remote host's paths are already spelled its own way; only one on
-        // this machine is re-spelled with its separators.
-        let full = match local {
-            true => crate::ui::path_display::native_separators(&path)
-                .display()
-                .to_string(),
-            false => path.display().to_string(),
-        };
-        menu = menu.item(copy(L10nKey::FileTreeContextCopyPath, full));
-        if let Some(rel) = self.path_under_tree_root(&path) {
-            let rel = match local {
-                true => crate::ui::path_display::native_separators(&rel)
-                    .display()
-                    .to_string(),
-                false => rel.display().to_string(),
-            };
-            menu = menu.item(copy(L10nKey::EditorCopyRelativePath, rel));
-        }
-        menu
-    }
-
-    pub(crate) fn editor_close_active_if_focused(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let empty = self
-            .tab_code()
-            .is_some_and(|c| c.visible && c.files.is_empty());
-        // ⌘⇧E on an empty panel hands the focus to the file tree, so from
-        // there ⌘W is the empty panel's too.
-        let tree = empty && self.file_tree.focus_handle.contains_focused(window, cx);
-        if !(tree || self.editor_panel_has_focus(window, cx)) {
-            return false;
-        }
-        let Some(code) = self.tab_code_mut() else {
-            return false;
-        };
-        if code.files.is_empty() {
-            code.visible = false;
-            self.editor.had_focus = None;
-            self.editor.dismiss_bar();
-            self.file_tree.cancel_edit();
-            self.focus_active(window, cx);
-            cx.notify();
-            return true;
-        }
-        let active = code.active;
-        self.editor_close_file(active, window, cx);
-        true
-    }
-
-    /// Takes a buffer out of one tab's strip, and drops it once no tab shows
-    /// it any more.
-    fn editor_remove_from_tab(&mut self, tab_ix: usize, id: BufferId, cx: &mut Context<Self>) {
-        if let Some(code) = self
-            .tabs
-            .get_mut(tab_ix)
-            .and_then(|t| t.code.as_deref_mut())
-        {
-            code.close_in_focused(id);
-        }
-        if self.buffer_refs(id) == 0 {
-            self.editor_drop_buffer(id, cx);
-        }
-        cx.notify();
-    }
-
-    /// Forgets a buffer everywhere, edits and all.
-    fn editor_drop_buffer(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        self.editor.forget_saved_buffer(id);
-        for code in self.tabs.iter_mut().filter_map(|t| t.code.as_deref_mut()) {
-            code.forget_everywhere(id);
-        }
-        self.editor.buffers.remove(id);
-        self.editor.nav.forget_buffer(id);
-        self.editor_rebuild_watcher(cx);
-        cx.notify();
-    }
-
-    // ---- Unsaved changes standing in the way of a close ----
-
-    /// Asks about unsaved buffers before `then` goes ahead. Returns `true`
-    /// when there was something to ask about: the caller stops there, and the
-    /// answer carries the close on — after saving, after discarding, or not
-    /// at all.
-    pub(crate) fn editor_guard_unsaved(
-        &mut self,
-        ids: Vec<BufferId>,
-        then: AfterUnsaved,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if ids.is_empty() {
-            return false;
-        }
-        // Showing it is part of the question: the file being asked about may
-        // be behind the terminal, in a tab that is not the one in front.
-        if let Some(tab_ix) = ids.first().and_then(|id| {
-            self.tabs
-                .iter()
-                .position(|t| t.code.as_deref().is_some_and(|c| c.shows(*id)))
-        }) && tab_ix == self.tabs.active_index()
-            && let Some(code) = self.tab_code_mut()
-            && let Some(pos) = {
-                if !code.files.contains(&ids[0]) {
-                    code.swap_focus();
-                }
-                code.files.iter().position(|f| *f == ids[0])
-            }
-        {
-            code.active = pos;
-            code.visible = true;
-        }
-        let root = self.editor_save_root();
-        self.editor
-            .guard_unsaved(ids, then, root, window, cx, Self::editor_bridge())
-    }
-
-    fn editor_continue(&mut self, then: AfterUnsaved, window: &mut Window, cx: &mut Context<Self>) {
-        match then {
-            AfterUnsaved::CloseTab(tab) => {
-                if let Some(ix) = self.tab_index_of(tab) {
-                    self.close_tab(ix, window, cx);
-                }
-            }
-            AfterUnsaved::CloseFiles { tab, ids, group } => {
-                if let Some(ix) = self.tab_index_of(tab) {
-                    for id in ids {
-                        if let Some(code) = self
-                            .tabs
-                            .get_mut(ix)
-                            .and_then(|tab| tab.code.as_deref_mut())
-                        {
-                            code.close_in_group(id, group);
-                        }
-                        if self.buffer_refs(id) == 0 {
-                            self.editor_drop_buffer(id, cx);
-                        }
-                    }
-                }
-            }
-            AfterUnsaved::ClosePane(pane) => self.close_pane_after_unsaved(pane, window, cx),
-            AfterUnsaved::CloseWindow => self.close_window_after_unsaved(window, cx),
-            AfterUnsaved::Quit => self.quit_after_unsaved(window, cx),
-        }
+        cx.emit(EditorPanelEvent::AttachToAgent { path, suffix });
     }
 
     // ---- The file tree moving files out from under their buffers ----
@@ -2777,72 +1789,88 @@ impl LyrelApp {
     /// A file or folder was renamed through lyrel: buffers at or under the old
     /// path follow it. Without this the buffer kept the old name, and the next
     /// save wrote a second copy there.
-    pub(crate) fn editor_path_moved(
+    pub(crate) fn path_moved(
         &mut self,
         host: HostId,
         from: &Path,
         to: &Path,
         cx: &mut Context<Self>,
     ) {
-        let moved = self.editor.buffers.path_moved(host, from, to, cx);
+        let moved = self.buffers.path_moved(host, from, to, cx);
         if moved {
-            self.editor_rebuild_watcher(cx);
+            cx.emit(EditorPanelEvent::RebuildWatcher);
             cx.notify();
         }
     }
 
     /// A file or folder was deleted through lyrel: its buffers say so rather
     /// than waiting for the watcher, which a remote host may not have.
-    pub(crate) fn editor_path_removed(
-        &mut self,
-        host: HostId,
-        path: &Path,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor.buffers.path_removed(host, path);
+    pub(crate) fn path_removed(&mut self, host: HostId, path: &Path, cx: &mut Context<Self>) {
+        self.buffers.path_removed(host, path);
         cx.notify();
     }
 
     // ---- Changes made by something else ----
 
-    pub(crate) fn editor_reload_from_disk(
+    pub(crate) fn reload_from_disk(
         &mut self,
         id: BufferId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor.buffers.reload(
+        self.buffers.reload(
             id,
             window,
             cx,
-            |app| &mut app.editor.buffers,
-            EditorPanelState::buffer_edited,
+            |editor| &mut editor.buffers,
+            Self::buffer_edited,
         );
     }
 
-    // ---- Keeping the registry, the tabs and the session store in step ----
+    // ---- Buffer lifetime ----
 
-    /// Once per frame: buffers no tab shows any more are dropped — or, if
-    /// they hold unsaved work, handed to the tab in front rather than lost —
-    /// the active tab gets back the files it had open last time, and any
-    /// tab whose files changed is recorded for next time.
-    ///
-    /// Done here rather than at each place a tab can go — a close, a shell
-    /// that exits, a tab dragged into another, a workspace switch, a server
-    /// restart — because this sees all of them, including ones added later.
-    pub(crate) fn editor_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor.buffers.take_watch_refresh() {
-            self.editor_rebuild_watcher(cx);
-        }
+    /// Drops the buffer from the panel: the saved-buffer registry, the
+    /// navigation history, and the buffer itself. The shell has already
+    /// removed it from every tab that showed it.
+    pub(crate) fn drop_buffer(&mut self, id: BufferId, cx: &mut Context<Self>) {
+        self.forget_saved_buffer(id);
+        self.buffers.remove(id);
+        self.nav.forget_buffer(id);
+        cx.emit(EditorPanelEvent::RebuildWatcher);
+        cx.notify();
+    }
+
+    /// The tab's restore has started: what was recorded is what is being put
+    /// back, and recording it again before the files load would write down an
+    /// empty tab.
+    pub(crate) fn note_restoring(
+        &mut self,
+        tab: TabId,
+        snapshot: &crate::ui::editor_session::TabEditor,
+    ) {
+        self.recorded.insert(tab, snapshot.clone());
+    }
+
+    // ---- Once-per-frame bookkeeping ----
+
+    /// Editor-side half of the frame sync: restore-set pruning against the
+    /// live tab ids the shell passes in, and deferred diagram-save
+    /// resolutions. `root` is the shell-resolved save root. Presentation
+    /// retention and session recording need the tab set and stay with the
+    /// shell.
+    pub(crate) fn sync(
+        &mut self,
+        live: &std::collections::HashSet<TabId>,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // A tab that left and came back under the same id — a server restart
         // rebuilds every tab that way — gets its files back like a relaunch.
-        if self.editor.restored.len() > self.tabs.len() {
-            let live: HashSet<TabId> = self.tabs.iter().map(|t| t.id()).collect();
-            self.editor.restored.retain(|id| live.contains(id));
+        if self.restored.len() > live.len() {
+            self.restored.retain(|id| live.contains(id));
         }
-        self.editor_adopt_orphans(window, cx);
-        self.editor_restore_active(window, cx);
-        for (id, readiness) in self.editor.buffers.take_drawio_flush_resolutions(cx) {
+        for (id, readiness) in self.buffers.take_drawio_flush_resolutions(cx) {
             match readiness {
                 crate::ui::code_editor::buffers::DrawioFlushReadiness::Confirmed {
                     force,
@@ -2851,16 +1879,7 @@ impl LyrelApp {
                     // A confirmed flush takes the same Host write path as a
                     // synchronous save: conflicts, prompts and identity
                     // checks still apply to the bytes that are current now.
-                    let root = self.editor_save_root();
-                    self.editor.save_at(
-                        id,
-                        force,
-                        target,
-                        &root,
-                        window,
-                        cx,
-                        Self::editor_bridge(),
-                    );
+                    self.save_at(id, force, target, root, window, cx);
                 }
                 crate::ui::code_editor::buffers::DrawioFlushReadiness::Rejected { reason } => {
                     // A page or HTTP refusal is request-scoped: the canvas
@@ -2877,37 +1896,6 @@ impl LyrelApp {
                 }
             }
         }
-        for (id, views) in self.editor.buffers.drawio_pending(cx) {
-            for view in views {
-                let requested = view.update(cx, |view, _| view.take_save_request());
-                if requested {
-                    // The engine's own Ctrl+S rides the same Host save path
-                    // as the toolbar action: conflicts, prompts and write
-                    // identity stay exactly one authority.
-                    self.editor_save_file(id, false, window, cx);
-                }
-            }
-        }
-        for file in self.editor.buffers.iter() {
-            let id = file.id();
-            file.presentations.retain(
-                |tab, group| {
-                    self.tabs
-                        .iter()
-                        .find(|entry| entry.id() == tab)
-                        .and_then(|entry| entry.code.as_deref())
-                        .is_some_and(|code| {
-                            (code.group == group && code.files.contains(&id))
-                                || code.split.as_ref().is_some_and(|other| {
-                                    other.id == group && other.files.contains(&id)
-                                })
-                        })
-                },
-                window,
-                cx,
-            );
-        }
-        self.editor_record_sessions(cx);
     }
 
     /// A deferred diagram save whose engine refused or never confirmed its
@@ -2922,12 +1910,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(label) = self
-            .editor
-            .buffers
-            .get(id)
-            .map(|file| file.label().to_string())
-        else {
+        let Some(label) = self.buffers.get(id).map(|file| file.label().to_string()) else {
             return;
         };
         let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &label)]);
@@ -2944,73 +1927,102 @@ impl LyrelApp {
             &context,
             &std::io::Error::new(kind, message),
         );
-        self.editor.saves_failed(id);
+        self.saves_failed(id);
         cx.notify();
     }
 
-    fn editor_adopt_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // No tabs at all is the gap in the middle of a server restart or a
-        // workspace switch, not a verdict on the buffers: wait for the tabs.
-        if self.editor.buffers.is_empty() || self.tabs.is_empty() {
-            return;
-        }
-        let shown: HashSet<BufferId> = self
-            .tabs
-            .iter()
-            .filter_map(|t| t.code.as_deref())
-            .flat_map(TabCode::all_files)
-            .collect();
-        let orphans: Vec<(BufferId, bool)> = self
-            .editor
-            .buffers
-            .iter()
-            .filter(|b| !shown.contains(&b.id()))
-            .map(|b| (b.id(), b.dirty))
-            .collect();
-        if orphans.is_empty() {
-            return;
-        }
-        let mut changed = false;
-        for (id, dirty) in orphans {
-            if !dirty {
-                self.editor.buffers.remove(id);
-                self.editor.nav.forget_buffer(id);
-                changed = true;
-                continue;
+    /// The draw.io engine's own save requests, picked up once per frame; the
+    /// shell feeds each back through the ordinary Host save path with the
+    /// shell-resolved save root.
+    pub(crate) fn take_drawio_save_requests(&mut self, cx: &mut Context<Self>) -> Vec<BufferId> {
+        let mut requested = Vec::new();
+        for (id, views) in self.buffers.drawio_pending(cx) {
+            for view in views {
+                let view_requested = view.update(cx, |view, _| view.take_save_request());
+                if view_requested {
+                    requested.push(id);
+                }
             }
-            // Nowhere to put it (every tab gone mid-restart): keep it, and it
-            // is adopted on a later frame.
-            let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
-                continue;
-            };
-            let name = self
-                .editor
-                .buffers
-                .get(id)
-                .map(OpenFile::label)
-                .unwrap_or_default();
-            self.editor_show_in_tab(tab, id, false, window, cx);
-            window.notify_app(t_fmt(L10nKey::EditorOrphanAdopted, &[("name", &name)]), cx);
-            changed = true;
         }
-        if changed {
-            self.editor_rebuild_watcher(cx);
-            cx.notify();
+        requested
+    }
+
+    /// Drops presentations whose tab or group no longer shows the buffer.
+    /// `shown` is the shell's membership predicate, supplied per frame.
+    pub(crate) fn retain_presentations(
+        &mut self,
+        shown: &impl Fn(BufferId, TabId, split::GroupId) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for file in self.buffers.iter() {
+            let id = file.id();
+            file.presentations
+                .retain(|tab, group| shown(id, tab, group), window, cx);
         }
     }
 
-    fn editor_restore_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
-            return;
-        };
-        let tab_id = tab.id();
-        if !self.editor.restored.insert(tab_id) {
+    /// Rebuilds the file watcher against the shell-resolved window host.
+    pub(crate) fn rebuild_watch(&mut self, host: Option<SharedHost>, cx: &mut Context<Self>) {
+        self.buffers
+            .rebuild_watch(host, cx, |editor| &mut editor.buffers);
+    }
+
+    /// Whether this tab has not had its recorded files restored yet. A pure
+    /// query: `restore_tab` performs the marking insert.
+    pub(crate) fn needs_restore(&self, tab: TabId) -> bool {
+        !self.restored.contains(&tab)
+    }
+
+    pub(crate) fn is_restored(&self, tab: &TabId) -> bool {
+        self.restored.contains(tab)
+    }
+
+    pub(crate) fn is_recorded(
+        &self,
+        tab: TabId,
+        state: &crate::ui::editor_session::TabEditor,
+    ) -> bool {
+        self.recorded.get(&tab) == Some(state)
+    }
+
+    pub(crate) fn record_session(
+        &mut self,
+        tab: TabId,
+        state: crate::ui::editor_session::TabEditor,
+    ) {
+        self.recorded.insert(tab, state);
+    }
+
+    /// A tab was closed for good: forget what it had open.
+    pub(crate) fn forget_tab(&mut self, tab: TabId) {
+        self.recorded.remove(&tab);
+        self.buffers.forget_tab(tab);
+        self.nav.forget_tab(tab);
+    }
+
+    /// Restores the tab's recorded files when the shell asks. `host`,
+    /// `workspace` and `window_host` are shell-resolved values; the shell has
+    /// also verified the tab exists. The completion emits `TabRestored` for
+    /// the shell to merge and focus.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_tab(
+        &mut self,
+        host: SharedHost,
+        tab: TabId,
+        has_files: bool,
+        workspace: lyrel_core::core::session::WorkspaceId,
+        window_host: HostId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.restored.insert(tab) {
             return;
         }
-        if tab.code.as_deref().is_some_and(|c| !c.files.is_empty()) {
+        if has_files {
             return;
         }
-        let Some(state) = editor_session::get(cx, tab_id) else {
+        let Some(state) = crate::ui::editor_session::get(cx, tab) else {
             return;
         };
         // The left group can be empty while the right is not: it held only
@@ -3018,12 +2030,7 @@ impl LyrelApp {
         if state.files.is_empty() && state.split.as_ref().is_none_or(|s| s.files.is_empty()) {
             return;
         }
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        // What was recorded is what is being put back; recording it again
-        // before the files have loaded would write down an empty tab.
-        self.editor.recorded.insert(tab_id, state.clone());
+        self.note_restoring(tab, &state);
         // Both groups' files in one trip, the left group's first.
         let files: Vec<PathBuf> = state
             .files
@@ -3033,344 +2040,64 @@ impl LyrelApp {
             .collect();
         let requested = files.clone();
         let target = buffers::OpenTarget {
-            workspace: self.workspace,
-            tab: tab_id,
+            workspace,
+            tab,
             group: None,
-            window_host: self.spawn_host(cx),
+            window_host,
             origin: None,
             origin_epoch: None,
+            context_epoch: self.buffers.context_epoch(),
         };
-        self.editor.buffers.restore(
-            host.clone(),
+        let install_host = host.clone();
+        self.buffers.restore(
+            host,
             files,
             target,
             window,
             cx,
-            |app| &mut app.editor.buffers,
-            Self::editor_open_target_valid,
-            move |app, loaded: Vec<Option<Loaded>>, window, cx| {
-                let mut opened: Vec<(PathBuf, BufferId)> = Vec::new();
+            |editor| &mut editor.buffers,
+            Self::open_target_valid,
+            move |editor, loaded: Vec<Option<Loaded>>, window, cx| {
+                let mut opened: Vec<(PathBuf, BufferId, bool)> = Vec::new();
                 for (path, l) in requested.into_iter().zip(loaded) {
                     if let Some(l) = l {
-                        let id = app.editor_install(host.clone(), l, tab_id, false, window, cx);
-                        opened.push((path, id));
+                        let (id, created) = editor.install(install_host.clone(), l, window, cx);
+                        opened.push((path, id, created));
                     }
                 }
-                let group = |paths: &[PathBuf], active: usize| -> (Vec<BufferId>, usize) {
-                    let front = paths.get(active);
-                    let mut ids: Vec<BufferId> = Vec::new();
-                    let mut at = 0;
-                    for path in paths {
-                        let Some(&(_, id)) = opened.iter().find(|(p, _)| p == path) else {
-                            continue;
-                        };
-                        if ids.contains(&id) {
-                            continue;
-                        }
-                        if Some(path) == front {
-                            at = ids.len();
-                        }
-                        ids.push(id);
-                    }
-                    (ids, at)
-                };
-                let (left, left_active) = group(&state.files, state.active);
-                let right = state
-                    .split
-                    .as_ref()
-                    .map(|s| (group(&s.files, s.active), s.focused));
-                let Some(tab_ix) = app.tab_index_of(tab_id) else {
-                    return;
-                };
-                let Some(code) = app.tabs[tab_ix].code.as_deref_mut() else {
-                    return;
-                };
-                let restored: Vec<BufferId> = opened.iter().map(|(_, id)| *id).collect();
-                // Merged into what the tab has now, not written over it: a
-                // file opened, or a split made, while these were loading stays.
-                let untouched = code.restore_groups(
-                    &restored,
-                    (left, left_active),
-                    right.map(|((files, active), focused)| (files, active, focused)),
-                );
-                let visible = state.visible && !code.files.is_empty();
-                code.visible |= visible;
-                // Only a restore nobody has touched takes the keyboard; one the
-                // reader has moved on from leaves it where they put it.
-                if untouched && tab_ix == app.tabs.active_index() && visible {
-                    app.focus_editor(window, cx);
-                }
-                cx.notify();
+                cx.emit(EditorPanelEvent::TabRestored {
+                    tab,
+                    open: opened,
+                    snapshot: state.clone(),
+                });
+                cx.emit(EditorPanelEvent::RebuildWatcher);
             },
         );
     }
-
-    fn editor_record_sessions(&mut self, cx: &mut Context<Self>) {
-        let spawn_host = self.spawn_host(cx);
-        let mut changed: Vec<(TabId, TabEditor)> = Vec::new();
-        for tab in &self.tabs {
-            let Some(code) = tab.code.as_deref() else {
-                continue;
-            };
-            let tab_id = tab.id();
-            // A tab still waiting for its files to come back has nothing to
-            // say about them yet.
-            if !self.editor.restored.contains(&tab_id) {
-                continue;
-            }
-            // Only files on the window's own machine: an SFTP buffer's host
-            // is a connection that will not exist next launch.
-            let group = |ids: &[BufferId], front: usize| -> (Vec<PathBuf>, usize) {
-                let mut files = Vec::new();
-                let mut active = 0;
-                for (pos, id) in ids.iter().enumerate() {
-                    let Some(f) = self.editor.buffers.get(*id) else {
-                        continue;
-                    };
-                    if f.untitled.is_some() || f.host.id() != spawn_host {
-                        continue;
-                    }
-                    if pos == front {
-                        active = files.len();
-                    }
-                    files.push(f.path.clone());
-                }
-                (files, active)
-            };
-            let sides = code.sides();
-            let (files, active) = group(&sides[0].files, sides[0].active);
-            let split = sides.get(1).and_then(|right| {
-                let (files, active) = group(&right.files, right.active);
-                (!files.is_empty()).then_some(editor_session::SplitEditor {
-                    files,
-                    active,
-                    focused: right.focused,
-                })
-            });
-            let state = TabEditor {
-                files,
-                active,
-                visible: code.visible,
-                split,
-            };
-            if self.editor.recorded.get(&tab_id) != Some(&state) {
-                changed.push((tab_id, state));
-            }
-        }
-        for (tab_id, state) in changed {
-            self.editor.recorded.insert(tab_id, state.clone());
-            editor_session::put(cx, tab_id, state);
-        }
-    }
-
-    /// A tab is being closed: the files only it showed go with it. Unsaved
-    /// ones were asked about before the close got here — except when a shell
-    /// exiting took the tab, which cannot ask; those stay, and are handed to
-    /// the tab in front.
-    pub(crate) fn editor_close_tab_files(&mut self, tab_ix: usize, cx: &mut Context<Self>) {
-        let Some(ids) = self
-            .tabs
-            .get(tab_ix)
-            .and_then(|t| t.code.as_deref())
-            .map(TabCode::all_files)
-        else {
-            return;
-        };
-        for id in ids {
-            if self.buffer_tabs(id) == 1 && self.editor.buffers.get(id).is_some_and(|b| !b.dirty) {
-                self.editor_drop_buffer(id, cx);
-            }
-        }
-    }
-
-    /// A tab was closed for good: forget what it had open.
-    pub(crate) fn editor_forget_tab(&mut self, tab: TabId, cx: &mut Context<Self>) {
-        self.editor.recorded.remove(&tab);
-        self.editor.buffers.forget_tab(tab);
-        self.editor.nav.forget_tab(tab);
-        editor_session::remove(cx, tab);
-    }
 }
 
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-impl LyrelApp {
-    pub(crate) fn render_code_overlay(
+impl EditorPanelState {
+    /// One group's text: the file `id`, rendered or as source, or a blank
+    /// pane. `slot` tells the two groups' elements apart. `tab` and `code`
+    /// are the shell-resolved active tab and its editor state. The shell
+    /// attaches the source documents' context menus to the returned element.
+    pub(crate) fn render_body(
         &mut self,
-        chrome: DocumentChrome,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.code_panel_visible() {
-            return None;
-        }
-        // The last file closed with the focus in it: keep the focus in the
-        // panel, or gpui reports it lost and it falls back to the terminal.
-        let tab = self.tabs.get(self.tabs.active_index()).map(|t| t.id());
-        if tab.is_some() && self.editor.had_focus == tab && self.active_buffer().is_none() {
-            self.editor.empty_focus.focus(window, cx);
-        }
-        self.editor.had_focus = tab.filter(|_| self.editor_panel_has_focus(window, cx));
-        self.editor_split_follow_focus(window, cx);
-        self.editor_gutter_sync(cx);
-        self.editor_nav_tick(cx);
-        if let Some(code) = self.tab_code_mut() {
-            code.note_front();
-        }
-        let breadcrumbs = self.render_editor_breadcrumbs(window, cx);
-        let body = self.render_editor_body(
-            self.tab_code().and_then(TabCode::active_id),
-            self.tab_code().map_or(0, TabCode::focused_slot),
-            window,
-            cx,
-        );
-        let conflict_banner = self
-            .active_buffer()
-            .and_then(|f| f.conflict.map(|c| (f.id(), c, f.input.is_savable())))
-            .map(|(id, c, text)| self.render_editor_conflict_banner(id, c, text, cx));
-        let bar = self.render_editor_bar(cx);
-
-        let header = self.render_editor_header(chrome, window, cx);
-        // Every open document owns a status line at the bottom of its panel;
-        // the window's global bar stays below it. Markdown used to be the only
-        // editor with one, which left code files reading their cursor state
-        // from the far-away global bar.
-        let document_status = self.active_buffer().is_some().then(|| {
-            h_flex()
-                .id(if self.markdown_document_active() {
-                    "markdown-status-bar"
-                } else if self.svg_document_active() {
-                    "svg-status-bar"
-                } else if self.json_document_active() {
-                    "json-status-bar"
-                } else if self.yaml_document_active() {
-                    "yaml-status-bar"
-                } else if self.toml_document_active() {
-                    "toml-status-bar"
-                } else if self.csv_document_active() {
-                    "csv-status-bar"
-                } else if self.xml_document_active() {
-                    "xml-status-bar"
-                } else if self.image_document_active() {
-                    "image-status-bar"
-                } else if self.sqlite_document_active() {
-                    "sqlite-status-bar"
-                } else if self.pdf_document_active() {
-                    "pdf-status-bar"
-                } else if self.drawio_document_active() {
-                    "drawio-status-bar"
-                } else {
-                    "code-status-bar"
-                })
-                .test_support()
-                .flex_none()
-                .w_full()
-                .h(rems(1.625))
-                .px_1()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(self.render_document_status(cx))
-        });
-        let editor_col = v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .child(header)
-            .when_some(conflict_banner, |this, b| this.child(b))
-            .children(bar)
-            .child(self.render_editor_groups(breadcrumbs, body, window, cx))
-            .children(self.render_editor_problems(window, cx))
-            .when_some(document_status, |column, status| column.child(status));
-
-        // The panel's own paint is the same either way; only the box is not.
-        // Filling the workspace means stopping the window's translucency and
-        // repainting the theme image the root's copy now sits under; docking
-        // means sitting in the same plane as the right panel, which the column
-        // wrapper has already painted.
-        let shell = v_flex().id("code-panel");
-        let shell = match chrome {
-            DocumentChrome::Fill => shell
-                .absolute()
-                .inset_0()
-                .occlude()
-                // Opaque on purpose: this overlay covers the whole workspace
-                // (everything but the detail panel) and an open file must never
-                // let the window translucency / backdrop material show through
-                // it. The preset's gradient fill is preserved, just with
-                // alpha 1 — the same paint the settings overlay uses. The
-                // theme background image is repainted on top of it, since the
-                // root's copy now sits below this fill.
-                .bg(crate::ui::theme::overlay_background(cx))
-                .children(crate::ui::app::overlay_surface_layers(cx)),
-            DocumentChrome::Dock => shell.size_full().min_w_0(),
-        };
-        let shell = self.editor_nav_actions(shell, cx);
-        let shell = self.editor_split_command_sync(shell, cx);
-        Some(
-            shell
-                .track_focus(&self.editor.empty_focus)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if !this.editor_panel_has_focus(window, cx) {
-                            this.editor.empty_focus.focus(window, cx);
-                        }
-                        if let Some(tab) = this.tabs.get(this.tabs.active_index()) {
-                            this.status_document_focus = Some((tab.id(), true));
-                        }
-                        cx.notify();
-                    }),
-                )
-                .on_key_down(
-                    cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                        if ev.keystroke.key != "escape" {
-                            return;
-                        }
-                        if this.editor_gutter_close_peek(cx) {
-                            cx.stop_propagation();
-                            return;
-                        }
-                        // Escape in the go-to-line or Save As box dismisses the
-                        // box, not the whole editor.
-                        if this.editor.has_bar() {
-                            this.editor_close_bar(window, cx);
-                            cx.stop_propagation();
-                            return;
-                        }
-                        this.toggle_code_panel(window, cx);
-                    }),
-                )
-                .child(h_flex().flex_1().min_h_0().w_full().child(editor_col))
-                .into_any_element(),
-        )
-    }
-
-    /// One group's text: the file `id`, rendered or as source, or the empty
-    /// panel. `slot` tells the two groups' elements apart.
-    pub(crate) fn render_editor_body(
-        &self,
-        id: Option<BufferId>,
+        id: BufferId,
         slot: usize,
+        tab: TabId,
+        code: &TabCode,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        match id.and_then(|id| self.editor.buffers.get(id)) {
-            None => self.render_editor_empty(cx).into_any_element(),
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        match self.buffers.get(id) {
+            None => v_flex()
+                .id(("editor-body", slot))
+                .min_w_0()
+                .min_h_0()
+                .size_full(),
             Some(f) if f.input.book().is_some() => {
                 let primary = f.input.book().expect("book document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3383,16 +2110,9 @@ impl LyrelApp {
                     .min_h_0()
                     .size_full()
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.image().is_some() => {
                 let primary = f.input.image().expect("image document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3405,16 +2125,9 @@ impl LyrelApp {
                     .min_h_0()
                     .size_full()
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.drawio().is_some() => {
                 let primary = f.input.drawio().expect("draw.io document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3427,16 +2140,9 @@ impl LyrelApp {
                     .min_h_0()
                     .size_full()
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.svg().is_some() => {
                 let primary = f.input.svg().expect("SVG document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3452,16 +2158,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.json().is_some() => {
                 let primary = f.input.json().expect("JSON document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3477,16 +2176,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.yaml().is_some() => {
                 let primary = f.input.yaml().expect("YAML document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3502,16 +2194,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.toml().is_some() => {
                 let primary = f.input.toml().expect("TOML document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3527,24 +2212,15 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.xml().is_some() => {
                 let primary = f.input.xml().expect("XML document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.xml_view(primary, tab, group, cx);
-                let id = f.id();
-                let app = cx.entity().downgrade();
                 v_flex()
                     .id(("xml-presentation", view.entity_id()))
                     .min_w_0()
@@ -3554,27 +2230,15 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .context_menu(move |menu, _window, cx| {
-                        Self::editor_body_menu(menu, &app, id, cx)
-                    })
-                    .into_any_element()
             }
             Some(f) if f.input.csv().is_some() => {
                 let primary = f.input.csv().expect("CSV document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.csv_view(primary, tab, group, window, cx);
-                let id = f.id();
-                let app = cx.entity().downgrade();
                 v_flex()
                     .id(("csv-presentation", view.entity_id()))
                     .min_w_0()
@@ -3584,19 +2248,9 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .child(view)
-                    .context_menu(move |menu, _window, cx| {
-                        Self::editor_body_menu(menu, &app, id, cx)
-                    })
-                    .into_any_element()
             }
             Some(f) if f.input.pdf().is_some() => {
                 let primary = f.input.pdf().expect("pdf document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3609,16 +2263,9 @@ impl LyrelApp {
                     .min_h_0()
                     .size_full()
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.sqlite().is_some() => {
                 let primary = f.input.sqlite().expect("sqlite document presentation");
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3631,16 +2278,9 @@ impl LyrelApp {
                     .min_h_0()
                     .size_full()
                     .child(view)
-                    .into_any_element()
             }
             Some(f) if f.input.markdown().is_some() => {
                 let input = f.input.markdown().unwrap();
-                let tab = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .expect("visible editor tab")
-                    .id();
-                let code = self.tab_code().expect("visible editor group");
                 let group = if code.focused_slot() == slot {
                     code.group
                 } else {
@@ -3696,12 +2336,10 @@ impl LyrelApp {
                             // Keep it inside the scroll owner rather than adding shell padding.
                             .child(v_flex().size_full().min_h_0().child(view)),
                     )
-                    .into_any_element()
             }
             Some(f) => {
                 let input = f.input.code().expect("ordinary editor variant").clone();
                 let id = f.id();
-                let app = cx.entity().downgrade();
                 div()
                     .id(("editor-body", slot))
                     .size_full()
@@ -3718,327 +2356,38 @@ impl LyrelApp {
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),
                     )
-                    .children(self.render_editor_gutter(id, cx))
-                    .children(self.render_editor_gutter_peek(id, cx))
+                    .children(self.render_gutter(id, window, cx))
+                    .children(self.render_gutter_peek(id, tab, code, cx))
                     .children(f.popups.clone())
-                    .context_menu(move |menu, _window, cx| {
-                        Self::editor_body_menu(menu, &app, id, cx)
-                    })
-                    .into_any_element()
             }
         }
     }
 
-    fn render_editor_header(
+    /// The document status line: cursor, language, encoding, wrap, the LSP
+    /// state and the document-specific controls. `lsp` is the shell-rendered
+    /// LSP status element, passed in as a value.
+    pub(crate) fn render_status(
         &self,
-        chrome: DocumentChrome,
-        window: &mut Window,
+        tab: TabId,
+        code: &TabCode,
+        lsp: Option<AnyElement>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let row = h_flex().id("editor-header");
-        // v6 chrome: no rule under the bar — the header, the breadcrumbs and
-        // the text are one plane — and only as many file cells as the column
-        // has room for, the rest behind a `+N` list (see `strip`).
-        let (tile, glyph) = (
-            crate::ui::tab_strip::RAIL_TILE,
-            crate::ui::tab_strip::RAIL_TILE_GLYPH,
-        );
-        let cap = self.editor_strip_cap(chrome, cx);
-        let (shown, hidden) = self
-            .tab_code()
-            .map(|c| c.strip_split(cap))
-            .unwrap_or_default();
-        let active_id = self.tab_code().and_then(TabCode::active_id);
-        // The cells the strip actually draws, in strip order — the group's
-        // remembered focus target is clamped to these, so closing a document
-        // or a group switch never leaves the keyboard on a cell that is gone.
-        let mut nav_ids: Vec<BufferId> = Vec::with_capacity(shown.len());
-        let cells: Vec<(usize, BufferId, SharedString, String, bool, bool)> = shown
-            .into_iter()
-            .filter_map(|(pos, id)| {
-                let f = self.editor.buffers.get(id)?;
-                nav_ids.push(id);
-                let tip = if f.untitled.is_some() {
-                    f.label().to_string()
-                } else {
-                    f.path.display().to_string()
-                };
-                Some((pos, id, f.label(), tip, Some(id) == active_id, f.dirty))
-            })
-            .collect();
-        let strip_focused = self.editor.strip_keyboard.is_focused(window);
-        let nav_focus = self.editor_strip_target(&nav_ids);
-        let strip = if cells.is_empty() {
-            div()
-                .min_w_0()
-                .px(px(8.))
-                .text_ellipsis()
-                .text_size(gpui_kit::rems(strip::CELL_TEXT))
-                .text_color(cx.theme().muted_foreground)
-                .child(SharedString::from(t(L10nKey::EditorNoFileOpen)))
-                .into_any_element()
-        } else {
-            let count = cells.len();
-            let keys = nav_ids.clone();
-            h_flex()
-                .id("editor-file-tabs")
-                // One Tab stop for the group, and the keyboard contract of a
-                // tab list: Left/Right and Home/End move the focused cell
-                // without activating it, Enter/Space activate, Escape hands
-                // the keyboard back to the text. The focused cell is the
-                // group's own remembered document (see `strip`).
-                .key_context(strip::KEY_CONTEXT)
-                .role(gpui_kit::Role::TabList)
-                .aria_label(t(L10nKey::EditorDocumentTabs))
-                .aria_orientation(gpui_kit::accesskit::Orientation::Horizontal)
-                .track_focus(&self.editor.strip_keyboard)
-                .on_key_down(
-                    cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                        this.editor_strip_key(&keys, ev, window, cx);
-                    }),
-                )
-                .min_w_0()
-                .gap(px(2.))
-                .overflow_hidden()
-                .children(cells.into_iter().enumerate().map(
-                    |(index, (_, id, name, tip, active, dirty))| {
-                        self.render_file_tab(
-                            strip::StripCell {
-                                id,
-                                name,
-                                tip,
-                                active,
-                                dirty,
-                                nav_focused: Some(id) == nav_focus,
-                                strip_focused,
-                                position: index + 1,
-                                count,
-                            },
-                            cx,
-                        )
-                    },
-                ))
-                .into_any_element()
-        };
-        let back = self.render_document_terminal_button(chrome, window, cx);
-        row.flex_none()
-            // The border is spent on the box, not on the paint: this header
-            // shows no rule, but its tiles sit in the band the traffic lights
-            // hang over and have to keep the title bar's line.
-            .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent)
-            .gap(px(2.))
-            // The whole reserve, not the reserve less the first control's own
-            // inset. The filled editor leads with the back pill, whose 8pt of
-            // inner padding is *inside* its hover box — carving it out of here
-            // starts that box 8pt early and consumes part of the gap reserved
-            // after the traffic lights, even when the lead follows their inset.
-            // Docked, the row leads with the file tabs instead, and the same
-            // subtraction put their first
-            // glyph at 4pt rather than the `CONTENT_INSET` this bar is built on.
-            .pl(px(crate::ui::window_chrome::CONTENT_INSET))
-            // The glyph, not the tile, lands on `CONTENT_INSET`, the column
-            // the file name starts on at the other end of the bar.
-            .pr(px(
-                crate::ui::window_chrome::CONTENT_INSET - (tile - glyph) / 2.
-            ))
-            .children(back)
-            .child(strip)
-            .children(self.render_strip_overflow(&hidden, cap, cx))
-            .child(
-                div().occlude().flex_none().child(
-                    crate::ui::window_chrome::chrome_tile_sized(
-                        Button::new("editor-new-file").icon(Icon::new(IconName::Plus)),
-                        tile,
-                        glyph,
-                        false,
-                        cx,
-                    )
-                    .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
-                    .tooltip(t(L10nKey::EditorNewFile))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.editor_new_file(window, cx);
-                    })),
-                ),
-            )
-            // Whatever is left of the bar stays a place to drag the window by.
-            .child(div().flex_1().h_full())
-            .child(self.document_layout_switch(chrome, cx))
-            .child(
-                div().occlude().flex_none().ml(px(4.)).child(
-                    crate::ui::window_chrome::chrome_tile_sized(
-                        Button::new("editor-panel-close").icon(Icon::new(IconName::Close)),
-                        tile,
-                        glyph,
-                        false,
-                        cx,
-                    )
-                    .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
-                    .tooltip(t(L10nKey::EditorBackToTerminal))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_code_panel(window, cx);
-                    })),
-                ),
-            )
-    }
-
-    /// One file in the header's strip: its name, and a slot that shows the
-    /// unsaved dot at rest and the close button under the pointer — the dot
-    /// says there is something to lose before the × offers to lose it.
-    fn render_file_tab(&self, cell: strip::StripCell, cx: &mut Context<Self>) -> AnyElement {
-        let strip::StripCell {
-            id,
-            name,
-            tip,
-            active,
-            dirty,
-            nav_focused,
-            strip_focused,
-            position,
-            count,
-        } = cell;
-        let group: SharedString = format!("editor-file-tab-{}", id.0).into();
-        let slot = 16.;
-        let muted = cx.theme().muted_foreground;
-        let close = div()
-            .id(("editor-file-tab-close", id.0))
-            .role(gpui_kit::Role::Button)
-            .aria_label(format!("{} {name}", t(L10nKey::Close)))
-            .flex_none()
-            .size(px(slot))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
-            .hover(|s| s.bg(cx.theme().muted))
-            .child(Icon::new(IconName::Close).xsmall().text_color(muted))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                this.editor_close_buffer(id, window, cx);
-            }));
-        // Unsaved is a state, not an alarm: the dot is in caption ink, the
-        // same as the `+N` button's, not the warning hue.
-        let slot_el = div()
-            .flex_none()
-            .size(px(slot))
-            .flex()
-            .items_center()
-            .justify_center()
-            .when(dirty, |d| {
-                d.child(
-                    div()
-                        .group_hover(group.clone(), |s| s.invisible())
-                        .size(px(6.))
-                        .rounded_full()
-                        .bg(muted),
-                )
-            });
-        div()
-            .id(("editor-file-tab", id.0))
-            .role(gpui_kit::Role::Tab)
-            .aria_label(match dirty {
-                true => format!("{name}, {}", t(L10nKey::SettingsUnsaved)),
-                false => name.to_string(),
-            })
-            .aria_selected(active)
-            .aria_position_in_set(position)
-            .aria_size_of_set(count)
-            .group(group.clone())
-            .occlude()
-            .flex_none()
-            .min_w_0()
-            .max_w(px(strip::CELL_MAX_W))
-            .h(px(strip::CELL_H))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .pl(px(10.))
-            .pr(px(6.))
-            .rounded(px(strip::CELL_RADIUS))
-            .text_size(gpui_kit::rems(strip::CELL_TEXT))
-            // The strip's keyboard focus, drawn inside the cell and distinct
-            // from the selected treatment: the selected document is where
-            // the text is, the focused cell is what Enter or Space will show.
-            // The transparent border keeps the label from shifting when it
-            // lights up.
-            .border_1()
-            .border_color(match nav_focused && strip_focused {
-                true => cx.theme().primary,
-                false => gpui_kit::transparent_black(),
-            })
-            .map(|d| match active {
-                true => d
-                    .font_weight(gpui_kit::FontWeight::MEDIUM)
-                    .text_color(cx.theme().foreground)
-                    .bg(cx.theme().sidebar_accent),
-                false => d.text_color(muted).hover(|s| {
-                    s.bg(gpui_kit::rgb(
-                        cx.global::<crate::ui::presets::Surfaces>().sidebar.hover,
-                    ))
-                }),
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(name),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .size(px(slot))
-                    .child(div().absolute().inset_0().child(slot_el))
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .when(!active, |d| d.invisible())
-                            .when(dirty, |d| d.invisible())
-                            .group_hover(group, |s| s.visible())
-                            .child(close),
-                    ),
-            )
-            .tooltip(move |window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.editor_strip_activate(id, window, cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Middle,
-                cx.listener(move |this, _, window, cx| {
-                    this.editor_close_buffer(id, window, cx);
-                }),
-            )
-            .context_menu({
-                let app = cx.entity().downgrade();
-                move |menu, _window, cx| Self::editor_tab_menu(menu, &app, id, cx)
-            })
-            .into_any_element()
-    }
-
-    fn render_editor_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.editor.render_bar(cx)
-    }
-
-    pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.active_buffer();
+    ) -> AnyElement {
+        let active = self.active_file(code);
         let text = active.is_some_and(|file| file.input.is_text());
         let image = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.image().cloned());
         let image_status: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
         let sqlite_status: Option<SharedString> = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.sqlite().cloned())
             .map(|view| view.read(cx).status_text());
         let pdf = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.pdf().cloned());
         let pdf_status: Option<SharedString> =
             pdf.as_ref().map(|view| view.read(cx).status_text(cx));
@@ -4049,7 +2398,7 @@ impl LyrelApp {
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
         let drawio = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.drawio().cloned());
         let drawio_status: Option<SharedString> =
             drawio.as_ref().map(|view| view.read(cx).status_text(cx));
@@ -4059,26 +2408,26 @@ impl LyrelApp {
         let drawio_zoom: Option<SharedString> =
             drawio.as_ref().map(|view| view.read(cx).zoom_label());
         let book_status: Option<SharedString> = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.book().cloned())
             .map(|view| view.read(cx).status_text(cx));
         let book_chapter: Option<SharedString> = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.book().cloned())
             .map(|view| view.read(cx).chapter_label(cx));
         let book_progress: Option<SharedString> = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.book().cloned())
             .map(|view| view.read(cx).progress_label(cx));
         let csv_view = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.csv().cloned());
         let csv_table_mode = csv_view
             .as_ref()
             .is_some_and(|view| view.read(cx).mode() == CsvMode::Table);
         let cursor: Option<SharedString> = (!csv_table_mode)
             .then(|| {
-                self.active_editor_input()
+                self.active_editor_input(tab, code)
                     .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
             })
             .flatten()
@@ -4093,13 +2442,13 @@ impl LyrelApp {
                 .into()
             });
         let wrap: Option<bool> = active.filter(|_| text).map(|f| f.wrap);
-        let native_live = self.active_editor_input().and_then(|input| {
+        let native_live = self.active_editor_input(tab, code).and_then(|input| {
             input
                 .markdown()
                 .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
         });
         let svg_state = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.svg().cloned())
             .map(|view| {
                 let view = view.read(cx);
@@ -4112,7 +2461,7 @@ impl LyrelApp {
                 )
             });
         let json_state = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.json().cloned())
             .map(|view| {
                 let view = view.read(cx);
@@ -4127,7 +2476,7 @@ impl LyrelApp {
                 )
             });
         let xml_state = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.xml().cloned())
             .map(|view| {
                 let view = view.read(cx);
@@ -4141,7 +2490,7 @@ impl LyrelApp {
                 )
             });
         let yaml_state = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.yaml().cloned())
             .map(|view| {
                 let view = view.read(cx);
@@ -4155,7 +2504,7 @@ impl LyrelApp {
                 )
             });
         let toml_state = self
-            .active_editor_input()
+            .active_editor_input(tab, code)
             .and_then(|input| input.toml().cloned())
             .map(|view| {
                 let view = view.read(cx);
@@ -4197,7 +2546,7 @@ impl LyrelApp {
             .and_then(|f| f.format(cx))
             .map(|format| format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
-        let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
+        let lsp = lsp;
 
         let item = |id: &'static str, label: SharedString| {
             Button::new(id).ghost().xsmall().flex_none().label(label)
@@ -4222,9 +2571,9 @@ impl LyrelApp {
                             .child(t(L10nKey::EditorProblemsTitle))
                             .into_any_element()
                     }))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_editor_problems(cx);
-                        this.focus_editor(window, cx);
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_problems(cx);
+                        cx.emit(EditorPanelEvent::FocusDocument);
                     })),
             )
             .when_some(native_live, |this, (live, source_only)| {
@@ -4236,10 +2585,7 @@ impl LyrelApp {
                 this.child(
                     item("status-md-preview", label.into())
                         .disabled(source_only)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_document_preview(window, cx);
-                            this.focus_editor(window, cx);
-                        })),
+                        .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
                 )
             })
             .when_some(
@@ -4254,13 +2600,11 @@ impl LyrelApp {
                             t(L10nKey::EditorCsvShowTable),
                         ),
                     };
-                    let mut this =
-                        this.child(item("status-csv-mode", label.into()).tooltip(tip).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.toggle_document_preview(window, cx);
-                                this.focus_editor(window, cx);
-                            }),
-                        ));
+                    let mut this = this.child(
+                        item("status-csv-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
+                    );
                     if mode == CsvMode::Table {
                         if let Some((records, columns)) = facts {
                             this = this.child(
@@ -4354,12 +2698,11 @@ impl LyrelApp {
                         t(L10nKey::EditorSvgShowSource),
                     ),
                 };
-                this.child(item("status-svg-mode", label.into()).tooltip(tip).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.toggle_document_preview(window, cx);
-                        this.focus_editor(window, cx);
-                    }),
-                ))
+                this.child(
+                    item("status-svg-mode", label.into())
+                        .tooltip(tip)
+                        .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
+                )
                 .when_some(size, |this, (width, height)| {
                     this.child(
                         div()
@@ -4417,13 +2760,11 @@ impl LyrelApp {
                             t(L10nKey::EditorXmlShowSource),
                         ),
                     };
-                    let mut this =
-                        this.child(item("status-xml-mode", label.into()).tooltip(tip).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.toggle_document_preview(window, cx);
-                                this.focus_editor(window, cx);
-                            }),
-                        ));
+                    let mut this = this.child(
+                        item("status-xml-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
+                    );
                     if let (Some(elements), Some(attributes)) = (elements, attributes) {
                         this = this.child(
                             div()
@@ -4492,10 +2833,7 @@ impl LyrelApp {
                     let mut this = this.child(
                         item("status-json-mode", label.into())
                             .tooltip(tip)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_document_preview(window, cx);
-                                this.focus_editor(window, cx);
-                            })),
+                            .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
                     );
                     if let Some(count) = records {
                         this = this.child(
@@ -4585,10 +2923,7 @@ impl LyrelApp {
                     let mut this = this.child(
                         item("status-toml-mode", label.into())
                             .tooltip(tip)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_document_preview(window, cx);
-                                this.focus_editor(window, cx);
-                            })),
+                            .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
                     );
                     if let Some(count) = nodes {
                         this = this.child(
@@ -4655,10 +2990,7 @@ impl LyrelApp {
                     let mut this = this.child(
                         item("status-yaml-mode", label.into())
                             .tooltip(tip)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_document_preview(window, cx);
-                                this.focus_editor(window, cx);
-                            })),
+                            .on_click(status_command(EditorStatusCommand::TogglePreview, cx)),
                     );
                     if let Some(count) = documents {
                         this = this.child(
@@ -4727,12 +3059,10 @@ impl LyrelApp {
                 } else {
                     t(L10nKey::EditorWrapOff)
                 };
-                this.child(item("status-wrap", label.into()).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        this.toggle_document_wrap(window, cx);
-                        this.focus_editor(window, cx);
-                    },
-                )))
+                this.child(
+                    item("status-wrap", label.into())
+                        .on_click(status_command(EditorStatusCommand::ToggleWrap, cx)),
+                )
             })
             // Tabular figures, so the position does not jitter sideways as
             // the caret walks from line 9 to line 10. A click asks for a line
@@ -4741,9 +3071,7 @@ impl LyrelApp {
                 this.child(
                     item("status-cursor", t)
                         .font_features(crate::ui::theme::tabular_figures())
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.editor_go_to_line(window, cx)),
-                        ),
+                        .on_click(status_command(EditorStatusCommand::GoToLine, cx)),
                 )
             })
             .when_some(indent, |this, t| this.child(div().flex_none().child(t)))
@@ -4752,10 +3080,7 @@ impl LyrelApp {
                 this.child(
                     item("status-eol", eol.into())
                         .tooltip(t(L10nKey::EditorToggleLineEnding))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_line_ending(cx);
-                            this.focus_editor(window, cx);
-                        })),
+                        .on_click(status_command(EditorStatusCommand::ToggleLineEnding, cx)),
                 )
             })
             // A picture states what it is and what it cannot be: no caret,
@@ -4909,138 +3234,26 @@ impl LyrelApp {
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))
             .into_any_element()
     }
+}
 
-    fn render_editor_empty(&self, cx: &Context<Self>) -> gpui_kit::Div {
-        v_flex()
-            .on_mouse_down(
-                gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, window, cx| this.editor.empty_focus.focus(window, cx)),
-            )
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                Icon::new(IconName::File)
-                    .large()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(crate::ui::i18n::t(
-                        crate::ui::i18n::L10nKey::OpenFileFromTree,
-                    )),
-            )
-    }
-
-    /// `text` is the document's save capability: a read-only picture can be
-    /// reloaded or closed, but offering "Save" or "Keep mine" would promise a
-    /// write that has no bytes to write. A diagram does have them.
-    fn render_editor_conflict_banner(
-        &self,
-        id: BufferId,
-        conflict: DiskConflict,
-        text: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use crate::ui::dialog::{self, Tone};
-        let theme = cx.theme();
-        let rungs = cx.global::<crate::ui::presets::Surfaces>().window;
-        // The floating notices' grammar, laid flat: a neutral strip over a
-        // hairline, and the state carried by one amber dot. A strip tinted
-        // amber end to end, with a white outlined button from the component
-        // library beside a bare-text one, was three visual languages in one
-        // 32px row.
-        //
-        // The filled answer is always the safe one: Keep mine / Save hold on
-        // to the unsaved edits, Reload / Close throw them away, so those are
-        // offered, not pressed on the reader.
-        let row = h_flex()
-            .flex_none()
-            .w_full()
-            .items_center()
-            .gap(px(8.))
-            .pl(px(dialog::INSET))
-            .pr(px(6.))
-            .h(px(dialog::FOOTER_H))
-            .border_b_1()
-            .border_color(theme.border)
-            .text_size(rems(crate::ui::right_panel::TAB_TEXT))
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(6.))
-                    .rounded_full()
-                    .bg(theme.warning),
-            );
-        let message = |key| div().flex_1().min_w_0().truncate().child(t(key));
-        match conflict {
-            DiskConflict::Changed(observed) => row
-                .child(message(L10nKey::FileChangedOnDisk))
-                .child(dialog::button(
-                    "editor-conflict-reload",
-                    t(L10nKey::Reload),
-                    Tone::Secondary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, window, cx| {
-                        this.editor_reload_from_disk(id, window, cx);
-                    }),
-                ))
-                .when(text, |row| {
-                    row.child(dialog::button(
-                        "editor-conflict-keep",
-                        t(L10nKey::KeepMine),
-                        Tone::Primary,
-                        true,
-                        rungs,
-                        cx,
-                        cx.listener(move |this, _, _w, cx| {
-                            if let Some(f) = this.editor.buffers.get_mut(id) {
-                                // The version seen on disk is now the one a
-                                // save is allowed to replace.
-                                f.disk_mtime = observed;
-                                f.conflict = None;
-                                cx.notify();
-                            }
-                        }),
-                    ))
-                })
-                .into_any_element(),
-            DiskConflict::Deleted => row
-                .child(message(L10nKey::EditorFileDeletedOnDisk))
-                .child(dialog::button(
-                    "editor-deleted-close",
-                    t(L10nKey::Close),
-                    Tone::Secondary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, _w, cx| {
-                        this.editor_drop_buffer(id, cx);
-                    }),
-                ))
-                .when(text, |row| {
-                    row.child(dialog::button(
-                        "editor-deleted-save",
-                        t(L10nKey::Save),
-                        Tone::Primary,
-                        true,
-                        rungs,
-                        cx,
-                        cx.listener(move |this, _, window, cx| {
-                            this.editor_save_file(id, true, window, cx);
-                        }),
-                    ))
-                })
-                .into_any_element(),
-        }
+fn status_command(
+    command: EditorStatusCommand,
+    cx: &Context<EditorPanelState>,
+) -> impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + use<> {
+    let editor = cx.entity().downgrade();
+    move |_, _, cx| {
+        let _ = editor.update(cx, |_, cx| {
+            cx.emit(EditorPanelEvent::StatusCommand(command))
+        });
     }
 }
 
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

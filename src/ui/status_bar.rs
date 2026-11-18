@@ -112,7 +112,7 @@ impl LyrelApp {
         let document_context = self.status_document_context(window, cx);
         let document = document_context.is_some();
         let location = match document_context {
-            Some(crate::ui::tab::OverlayTop::Code) => self.editor_active_location(),
+            Some(crate::ui::tab::OverlayTop::Code) => self.editor_active_location(cx),
             Some(crate::ui::tab::OverlayTop::Diff) => self
                 .tabs
                 .get(self.tabs.active_index())

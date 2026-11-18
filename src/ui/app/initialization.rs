@@ -181,7 +181,9 @@ impl LyrelApp {
         };
         let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
-        let editor = crate::ui::code_editor::EditorPanelState::new(window, cx);
+        let editor = cx.new(|cx| crate::ui::code_editor::EditorPanelState::new(window, cx));
+        let editor_events = Self::watch_editor_panel(&editor, window, cx);
+        let editor_observer = cx.observe(&editor, |_, _, cx| cx.notify());
         let loopback_panel = Forwarding::new(window, cx);
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
@@ -374,6 +376,8 @@ impl LyrelApp {
             file_tree,
             panel_search,
             editor,
+            _editor_events: editor_events,
+            _editor_observer: editor_observer,
             sidebar_width: Rc::new(Cell::new(sidebar_width)),
             sidebar_dragging: Rc::new(Cell::new(false)),
             last_settings_location: (SettingsSection::General, gpui_kit::point(px(0.), px(0.))),
@@ -503,7 +507,7 @@ impl LyrelApp {
             // Unsaved editor buffers hold the window open until the question
             // about them is answered; the answer closes it.
             let asked = app.update(cx, |app, cx| {
-                let unsaved = app.editor_unsaved();
+                let unsaved = app.editor_unsaved(cx);
                 app.editor_guard_unsaved(
                     unsaved,
                     crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
