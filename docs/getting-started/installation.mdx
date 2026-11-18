@@ -146,6 +146,8 @@ GUI 统一通过正式 `gpui-kit =0.10.0` 的官方 `gpui-fast` feature 选择 G
 
 单独验证轻量文本 codec 用 `cargo test --locked -p lyrel-document --no-default-features`；验证完整无 GUI 的格式引擎用 `cargo test --locked -p lyrel-document --all-features`。Markdown editor 单包构建不启用 `formats`。
 
+仅构建 CLI 用 `cargo build --locked -p lyrel-cli`（Windows 用同一 wrapper）。该构建经 `lyrel-protocol` 使用同步 IPC 和本机 Host，不链接 daemon 的 SSH、Tokio、SQLite 或 PTY 引擎；`cli_e2e` 才通过 dev-dependency 启动真实 daemon。
+
 真实 native 字形消费者显式启用 `native-markdown-tests` / `gpui-kit/test-support`，入口 `tests/native_markdown.rs` 为 `harness = false`，在 OS 主线程创建并持有 `current_platform(false)`。每个消费者使用独立 `TestAppContext` 和真实工作台 lifecycle。当前完整 case 以无筛选 `--list` 为准；原 14 项的逐项迁移与明确退役交互见 `HOST_CAPABILITIES.md`，不能按数量推定覆盖等价。Windows `current_platform(true)` 为 Noop 字体，不替代 DirectWrite；macOS AppKit 也不能在 libtest worker 初始化。字体前提保持 fail-closed；这些消费者不替代 GPU 实窗、系统 IME 或真实 SSH。
 
 在满足上述桌面构建前提的终端中，分别编译、执行全部原生用例，再按需列出 selector：
@@ -203,7 +205,7 @@ Windows 的真实 ConPTY 键盘回归需要 Git Bash；安装不在产品检测�
 
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
-GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.32`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.32`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。除下方明确的源码导入例外外，第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.32 -i rio-graphics@0.5.32 -i rio-unicode@0.5.32 -i rio-grapheme-width@0.5.32` 核对共同类型身份和 feature 边界。
+GUI 终端镜像、CLI 文本捕获和 daemon 图片状态统一使用正式 `rio-vt =0.5.32`（`default-features = false`）。`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.32`，传递测宽依赖为同版 `rio-grapheme-width`。输入栏／CLI 的 `terminal_width` 由 `lyrel-protocol` 始终导出；不需要 Cargo feature。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。除下方明确的源码导入例外外，第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.32 -i rio-graphics@0.5.32 -i rio-unicode@0.5.32 -i rio-grapheme-width@0.5.32` 核对共同类型身份和 feature 边界。
 
 #236／#241 的受限源码导入已经接入：`lyrel-markdown-editor` 独立维护固定 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT `zorite-editor 0.11.3`、`gpui-bidi 0.1.1`、`ratex-gpui 0.4.1` 共 16 个源文件；不复制 GPL 应用编排，不修改 Cargo 下载缓存或引入第二个 GUI engine。`zorite-markdown =0.10.1` 为关闭默认 view feature 的正式语法依赖。原始 Git blob 的 SHA-256、来源与本地适配见 crate 的 `UPSTREAM.toml`；完整 MIT 与独立字体 notices 见 `licenses/` 与根 `LICENSE`，Host 能力和最终验收边界见 `HOST_CAPABILITIES.md`。
 
@@ -498,7 +500,7 @@ gh workflow run release.yml --repo dlivxpr/lyrel --ref main \
 
 ### 品牌切换后的维护与验收
 
-修改安装或更新链路时，同步核对生产者与消费者：桌面包中的 GUI／CLI／updater、随包 server、安装标记、平台身份及 checksum 裸文件名必须一致。应用版本与 IPC 协议分别演进；control／pane 的当前编号以 `crates/lyrel-core/src/daemon/control.rs` 与 `protocol.rs` 为准，不能为了应用版本重新编号。
+修改安装或更新链路时，同步核对生产者与消费者：桌面包中的 GUI／CLI／updater、随包 server、安装标记、平台身份及 checksum 裸文件名必须一致。应用版本与 IPC 协议分别演进；control／pane 的当前编号以 `crates/lyrel-protocol/src/daemon/control.rs` 与 `protocol.rs` 为准，不能为了应用版本重新编号。
 
 本地冒烟使用 Cargo build tree、显式临时 `LYREL_CONFIG_DIR` 与隔离的用户目录；不要启动真实安装器、改默认终端关联、刷新外部 agent 配置，或把其他产品的进程当作清理目标。关闭 GUI 后验证会话仍可由 CLI 访问，清理只针对本次创建的进程与临时目录。
 

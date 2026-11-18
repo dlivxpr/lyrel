@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use lyrel_core::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
+use lyrel_protocol::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
 use serde_json::{Value, json};
 
 use super::{Outcome, report};

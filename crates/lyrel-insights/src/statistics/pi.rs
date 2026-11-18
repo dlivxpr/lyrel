@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::core::agent_hooks::{HookAgent, HookTarget};
-use lyrel_core::core::path_spelling::spelling_on;
+use lyrel_protocol::core::agent_hooks::{HookAgent, HookTarget};
+use lyrel_protocol::core::path_spelling::spelling_on;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -49,7 +49,7 @@ pub fn discover_pi(host: &dyn Host, launch: &HashMap<String, String>) -> io::Res
         sources.push(limited);
     }
     for session in sessions {
-        if session.agent != lyrel_core::core::cli_agent::CLIAgent::Pi {
+        if session.agent != lyrel_protocol::core::cli_agent::CLIAgent::Pi {
             continue;
         }
         let Some(scope) = session.scope else {
@@ -355,7 +355,7 @@ fn fingerprint(payload: &Value, timestamp: &Value, kind: &str) -> io::Result<Str
 /// 仅重写同作用域、已由 Host 解析的来源根；不对历史中的父路径执行 I/O。
 pub(super) fn resolve_inheritance(
     snapshot: &mut Snapshot,
-    host: &dyn lyrel_core::host::Host,
+    host: &dyn lyrel_protocol::host::Host,
     original_sources: &[Source],
 ) {
     let mut removals: HashMap<usize, HashSet<String>> = HashMap::new();
@@ -390,7 +390,7 @@ pub(super) fn resolve_inheritance(
         let mut problem = None;
         while let Some(path) = parent {
             let parent_path = spelling_on(
-                lyrel_core::host::HostId(snapshot.host),
+                lyrel_protocol::host::HostId(snapshot.host),
                 std::path::Path::new(path),
             );
             let parent_text = parent_path.to_string_lossy();

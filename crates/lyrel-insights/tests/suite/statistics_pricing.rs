@@ -1,6 +1,6 @@
-use lyrel_core::host::local::LocalHost;
 use lyrel_insights::statistics::pricing::{Pricing, UnitPrice};
 use lyrel_insights::statistics::{DateWindow, Snapshot, Source, StatisticsCache, scan};
+use lyrel_protocol::host::local::LocalHost;
 use serde_json::json;
 
 fn price(currency: &str, input: Option<f64>, output: Option<f64>) -> UnitPrice {

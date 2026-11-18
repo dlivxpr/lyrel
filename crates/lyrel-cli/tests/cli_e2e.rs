@@ -6,9 +6,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use lyrel_core::client::{ControlClient, PaneClient};
-use lyrel_core::daemon::control::ControlHello;
-use lyrel_core::daemon::protocol::{DaemonMsg, PROTOCOL_VERSION, ShellSpec, WinSize};
+use lyrel_protocol::client::{ControlClient, PaneClient};
+use lyrel_protocol::daemon::control::ControlHello;
+use lyrel_protocol::daemon::protocol::{DaemonMsg, PROTOCOL_VERSION, ShellSpec, WinSize};
 
 #[path = "cli_e2e/agents.rs"]
 mod agents;
@@ -576,7 +576,7 @@ fn one_shot(command: &str) -> Vec<String> {
     }
 }
 
-fn collect_pane_output_until(session: &mut lyrel_core::client::PaneSession, marker: &[u8]) {
+fn collect_pane_output_until(session: &mut lyrel_protocol::client::PaneSession, marker: &[u8]) {
     let mut seen = Vec::new();
     loop {
         match session.recv() {

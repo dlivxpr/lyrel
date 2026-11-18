@@ -7,12 +7,12 @@ use crate::commands::test_support::cli;
 use crate::commands::test_support::json_of;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
 
 /// A pane sitting at its prompt: the shell, and nothing in front of it.
-fn idle_procs() -> lyrel_core::daemon::protocol::PaneProcs {
-    lyrel_core::daemon::protocol::PaneProcs {
+fn idle_procs() -> lyrel_protocol::daemon::protocol::PaneProcs {
+    lyrel_protocol::daemon::protocol::PaneProcs {
         procs: vec![proc_entry(100, "zsh", 0, true)],
         ports: Vec::new(),
         probe: Default::default(),
@@ -21,8 +21,8 @@ fn idle_procs() -> lyrel_core::daemon::protocol::PaneProcs {
 }
 
 /// The same pane with a command running in it.
-fn busy_procs() -> lyrel_core::daemon::protocol::PaneProcs {
-    lyrel_core::daemon::protocol::PaneProcs {
+fn busy_procs() -> lyrel_protocol::daemon::protocol::PaneProcs {
+    lyrel_protocol::daemon::protocol::PaneProcs {
         procs: vec![
             proc_entry(100, "zsh", 0, false),
             proc_entry(101, "cargo", 1, true),
@@ -35,8 +35,8 @@ fn busy_procs() -> lyrel_core::daemon::protocol::PaneProcs {
 
 /// A pane whose pty is on this machine, optionally with a shell that is
 /// reporting prompt marks.
-fn local_context(at_prompt: Option<bool>) -> lyrel_core::daemon::protocol::PaneContext {
-    lyrel_core::daemon::protocol::PaneContext {
+fn local_context(at_prompt: Option<bool>) -> lyrel_protocol::daemon::protocol::PaneContext {
+    lyrel_protocol::daemon::protocol::PaneContext {
         remote: None,
         local_pty: true,
         at_prompt,
@@ -50,16 +50,16 @@ fn local_context(at_prompt: Option<bool>) -> lyrel_core::daemon::protocol::PaneC
 fn ssh_procs(
     at_prompt: Option<bool>,
     remote_prompt_seen: bool,
-) -> lyrel_core::daemon::protocol::PaneProcs {
-    use lyrel_core::daemon::protocol::{RemoteContext, RemoteKind};
-    lyrel_core::daemon::protocol::PaneProcs {
+) -> lyrel_protocol::daemon::protocol::PaneProcs {
+    use lyrel_protocol::daemon::protocol::{RemoteContext, RemoteKind};
+    lyrel_protocol::daemon::protocol::PaneProcs {
         procs: vec![
             proc_entry(100, "zsh", 0, false),
             proc_entry(101, "ssh", 1, true),
         ],
         ports: Vec::new(),
         probe: Default::default(),
-        context: Some(lyrel_core::daemon::protocol::PaneContext {
+        context: Some(lyrel_protocol::daemon::protocol::PaneContext {
             remote: Some(RemoteContext {
                 kind: RemoteKind::Ssh,
                 argv: vec!["ssh".into(), "build-box".into()],
@@ -75,13 +75,13 @@ fn ssh_procs(
 
 /// A pane routed to a remote lyrel daemon: no pty on this machine at all,
 /// so the process list is empty by construction rather than by failure.
-fn routed_procs(at_prompt: Option<bool>) -> lyrel_core::daemon::protocol::PaneProcs {
-    use lyrel_core::daemon::protocol::{RemoteContext, RemoteKind};
-    lyrel_core::daemon::protocol::PaneProcs {
+fn routed_procs(at_prompt: Option<bool>) -> lyrel_protocol::daemon::protocol::PaneProcs {
+    use lyrel_protocol::daemon::protocol::{RemoteContext, RemoteKind};
+    lyrel_protocol::daemon::protocol::PaneProcs {
         procs: Vec::new(),
         ports: Vec::new(),
         probe: Default::default(),
-        context: Some(lyrel_core::daemon::protocol::PaneContext {
+        context: Some(lyrel_protocol::daemon::protocol::PaneContext {
             remote: Some(RemoteContext {
                 kind: RemoteKind::NativeSsh,
                 argv: Vec::new(),
@@ -100,8 +100,8 @@ fn proc_entry(
     name: &str,
     depth: u8,
     foreground: bool,
-) -> lyrel_core::daemon::protocol::ProcEntry {
-    lyrel_core::daemon::protocol::ProcEntry {
+) -> lyrel_protocol::daemon::protocol::ProcEntry {
+    lyrel_protocol::daemon::protocol::ProcEntry {
         pid,
         name: name.into(),
         depth,
@@ -115,7 +115,7 @@ fn proc_entry(
 /// two things an orchestrator needs to act on the wake-up.
 #[test]
 fn wait_returns_the_moment_the_state_matches() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     backend
         .replies
@@ -141,7 +141,7 @@ fn wait_returns_the_moment_the_state_matches() {
 /// position the wait arrived at and wakes only once the pane moves.
 #[test]
 fn wait_changed_refuses_the_state_it_arrived_in() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
 
     // Already `waiting` when the wait began, and it never moves: timeout,
     // not a bogus wake-up carrying the previous turn's message.
@@ -214,7 +214,7 @@ fn wait_changed_refuses_the_state_it_arrived_in() {
 /// worker would report `working` right up to the timeout.
 #[test]
 fn wait_ends_when_a_reporting_agents_pane_dies() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     for p in &mut backend.machine.panes {
         if p.id == 3 {
@@ -448,7 +448,7 @@ fn wait_changed_free_says_why_it_saw_nothing_run() {
 /// for would strand exactly the delegation loop the verb exists for.
 #[test]
 fn wait_free_does_not_overrule_a_state_the_caller_asked_for() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     backend
         .replies
@@ -483,7 +483,7 @@ fn wait_free_does_not_overrule_a_state_the_caller_asked_for() {
 fn wait_free_does_not_read_an_empty_process_tree_as_finished() {
     let mut backend = mock();
     backend.replies.push_back(ReplyOk::AgentStates(Vec::new()));
-    backend.procs_reply = lyrel_core::daemon::protocol::PaneProcs::default();
+    backend.procs_reply = lyrel_protocol::daemon::protocol::PaneProcs::default();
 
     let out = execute(
         cli(&["lyrel", "wait", "%3", "--until", "free", "--timeout", "0"]),
@@ -501,7 +501,7 @@ fn wait_free_does_not_read_an_empty_process_tree_as_finished() {
     for _ in 0..4 {
         backend.replies.push_back(ReplyOk::AgentStates(Vec::new()));
     }
-    backend.procs_reply = lyrel_core::daemon::protocol::PaneProcs::default();
+    backend.procs_reply = lyrel_protocol::daemon::protocol::PaneProcs::default();
     let out = execute(
         cli(&["lyrel", "wait", "%3", "--until", "free", "--interval", "50"]),
         &Context::default(),
@@ -612,7 +612,7 @@ fn wait_free_refuses_to_guess_on_a_remote_pane_with_no_integration() {
 /// different source and knows nothing about the far shell.
 #[test]
 fn wait_unknown_free_does_not_cancel_a_wait_on_an_agent_state() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     for _ in 0..3 {
         backend.replies.push_back(ReplyOk::AgentStates(Vec::new()));
@@ -726,7 +726,7 @@ fn wait_free_lets_a_prompt_mark_outrank_a_deeper_process() {
 /// snapshot, and the default wait is for agents.
 #[test]
 fn wait_only_reads_the_process_tree_when_free_is_asked_for() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     backend
         .replies
@@ -745,7 +745,7 @@ fn wait_only_reads_the_process_tree_when_free_is_asked_for() {
 /// so scripts can branch on "not yet" separately from "broken".
 #[test]
 fn wait_timeout_exits_124() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     let mut backend = mock();
     backend
         .replies

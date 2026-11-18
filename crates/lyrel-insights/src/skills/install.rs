@@ -4,7 +4,7 @@ use super::{
     catalog::{GitHubSource, PreparedSkill},
     provenance::sanitize_name,
 };
-use lyrel_core::host::{Host, HostId, Meta};
+use lyrel_protocol::host::{Host, HostId, Meta};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -182,7 +182,7 @@ pub fn preview_install(
     target: InstallTarget,
     skills: Vec<PreparedSkill>,
 ) -> io::Result<InstallPreview> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     check_host(host)?;
     if host.id() != target.host {
         return Err(invalid("installation target belongs to another Host"));
@@ -277,7 +277,7 @@ pub fn apply_install(
     decisions: &[InstallDecision],
     installed_at: &str,
 ) -> InstallReport {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     let mut report = InstallReport::default();
     let active = preview
         .items

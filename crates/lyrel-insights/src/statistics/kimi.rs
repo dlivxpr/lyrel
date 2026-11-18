@@ -1,7 +1,7 @@
 //! Kimi Code 2.2.0 / protocol 1.5 durable usage. `usageScope` labels the
 //! request source, not accumulation: UsageAgentModel.record folds both scopes.
 use super::*;
-use lyrel_core::core::agent_hooks::{HookAgent, HookTarget};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HookTarget};
 use serde_json::Value;
 use std::hash::{Hash, Hasher};
 

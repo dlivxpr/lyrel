@@ -2,7 +2,7 @@
 name = "lyrel-core"
 version.workspace = true
 edition.workspace = true
-description = "lyrel's framework-free core: wire protocol, session daemon, PTY, SSH engine, and the domain model both the GUI and the headless server build on"
+description = "lyrel's framework-free Session Daemon, persistent state, PTY, SSH, and full Host adapters"
 repository = "https://github.com/dlivxpr/lyrel"
 license = "Apache-2.0"
 publish = false
@@ -12,6 +12,7 @@ publish = false
 # `lyrel-server` is), so nothing windowing-, rendering- or GUI-shaped belongs in
 # these dependencies.
 [dependencies]
+lyrel-protocol = { path = "../lyrel-protocol" }
 anyhow.workspace = true
 log.workspace = true
 serde = { workspace = true }
@@ -274,8 +275,7 @@ lyrel-test-support = { path = "../lyrel-test-support" }
 # vanish the way a `#[cfg(feature = …)]`-gated test would (workspace builds
 # unify the feature on from the GUI package anyway). The AGENTS.md warning
 # about feature-gated tests is exactly what this avoids.
-# terminal-width 同理：窄化到 core 的测试也必须覆盖真实 Rio 格宽对照。
-lyrel-core = { path = ".", features = ["remote-install", "terminal-width", "test-support"] }
+lyrel-core = { path = ".", features = ["remote-install", "test-support"] }
 
 
 # `gssapi` — GSSAPI/Kerberos `gssapi-with-mic` SSH auth (`daemon::ssh::auth`).
@@ -300,8 +300,6 @@ default = []
 # Paused clocks belong to test graphs, never the default server/GUI graph.
 test-support = ["tokio/test-util"]
 gssapi = ["dep:libgssapi"]
-# 只控制 GUI 输入栏与 CLI 表格的测宽 API；VT 网格本身也是 daemon 的必需依赖。
-terminal-width = []
 # Lets this build download a `lyrel-server` release asset over HTTPS and push it
 # onto a remote machine. Off by default so `lyrel-server` — which is
 # the thing being downloaded, and never the thing doing the downloading — links

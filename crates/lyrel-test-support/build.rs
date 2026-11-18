@@ -21,7 +21,9 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=../lyrel-core");
+    for relative in identity::FIXTURE_IDENTITY_CRATES {
+        println!("cargo:rerun-if-changed=../../{relative}");
+    }
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     println!("cargo:rerun-if-changed=../../assets/windows/conpty/manifest.json");
 }

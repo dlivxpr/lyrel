@@ -2,7 +2,7 @@
 //! 来源故障的路径归属使用所选 Host 的路径拼写，避免 Windows 扩展路径前缀污染筛选口径。
 use super::*;
 use chrono::{DateTime, Days, NaiveDate, TimeZone};
-use lyrel_core::core::path_spelling::spelling_on;
+use lyrel_protocol::core::path_spelling::spelling_on;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -359,9 +359,9 @@ impl Snapshot {
             let mut unrelated = false;
             // Scope matching uses the scanned Host's spelling, including native
             // Windows roots supplied with an extended-length prefix.
-            let path = spelling_on(lyrel_core::host::HostId(self.host), &issue.path);
+            let path = spelling_on(lyrel_protocol::host::HostId(self.host), &issue.path);
             for source in &self.sources {
-                let root = spelling_on(lyrel_core::host::HostId(self.host), &source.root);
+                let root = spelling_on(lyrel_protocol::host::HostId(self.host), &source.root);
                 if path.starts_with(&root) || root.starts_with(&path) {
                     if source.agent == selected {
                         return false;

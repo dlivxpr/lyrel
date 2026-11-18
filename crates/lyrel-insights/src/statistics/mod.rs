@@ -15,7 +15,7 @@ mod progress;
 pub mod sources;
 pub use progress::scan_with_progress;
 mod time_range;
-use lyrel_core::host::{Host, Meta};
+use lyrel_protocol::host::{Host, Meta};
 pub use omp::discover_omp;
 pub use pi::discover_pi;
 use serde::{Deserialize, Serialize};
@@ -35,9 +35,10 @@ pub struct Source {
     scope: String,
     agent: String,
     #[serde(skip)]
-    opencode_request: Option<Box<lyrel_core::host::session_operations::SessionOperation>>,
+    opencode_request: Option<Box<lyrel_protocol::host::session_operations::SessionOperation>>,
     #[serde(skip)]
-    hermes_request: Option<std::sync::Arc<lyrel_core::host::session_operations::SessionOperation>>,
+    hermes_request:
+        Option<std::sync::Arc<lyrel_protocol::host::session_operations::SessionOperation>>,
     #[serde(default)]
     max_depth: Option<u8>,
     #[serde(default)]
@@ -652,7 +653,7 @@ pub fn scan(
     sources: &[Source],
     cache: &mut StatisticsCache,
 ) -> io::Result<Snapshot> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     if !host.is_connected() {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,

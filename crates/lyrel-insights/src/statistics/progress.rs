@@ -9,7 +9,7 @@ pub fn scan_with_progress(
     cache: &mut StatisticsCache,
     mut progress: impl FnMut(&Snapshot),
 ) -> io::Result<Snapshot> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     if !host.is_connected() {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,
@@ -149,9 +149,9 @@ fn update_observed(snapshot: &mut Snapshot, observed: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyrel_core::core::cli_agent::CLIAgent;
-    use lyrel_core::host::local::LocalHost;
-    use lyrel_core::host::session_operations::{
+    use lyrel_protocol::core::cli_agent::CLIAgent;
+    use lyrel_protocol::host::local::LocalHost;
+    use lyrel_protocol::host::session_operations::{
         SessionOperation, SessionOperationKind, SessionScope,
     };
 

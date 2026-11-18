@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 . (Join-Path $PSScriptRoot 'conpty-staging.ps1')
 $Command = $args[0]
-$TestCommands = @('test', 't-core', 't-lib', 't-editor', 't-cli', 't-native-md', 't-native-term')
+$TestCommands = @('test', 't-protocol', 't-core', 't-lib', 't-editor', 't-cli', 't-native-md', 't-native-term')
 if ($Command -notin ($TestCommands + @('build', 't-check', 'nextest'))) {
     throw 'expected build, test, a standard t-* alias, or nextest run'
 }

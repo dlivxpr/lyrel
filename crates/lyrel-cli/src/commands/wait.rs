@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 use serde_json::json;
 
 use super::target::fetch_machine;
@@ -27,7 +27,7 @@ use crate::cli::{WaitArgs, WaitState};
 /// management. At the default 500ms interval an agent wait costs one aggregate
 /// control request per tick — the same request `lyrel agents` makes once.
 pub(super) fn wait(args: WaitArgs, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
     use std::time::{Duration, Instant};
 
     /// How many polls may pass before liveness is re-checked. The agent

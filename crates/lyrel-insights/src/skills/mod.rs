@@ -8,7 +8,7 @@ pub mod maintenance;
 mod packages;
 mod provenance;
 use discovery::agent_roots;
-use lyrel_core::{
+use lyrel_protocol::{
     core::agent_hooks::{HookAgent, HookTarget},
     host::{Host, HostId, MTime},
 };
@@ -257,7 +257,7 @@ struct Root {
 /// Blocking; callers dispatch through HostOps. An unsupported old peer fails
 /// explicitly before scanning; a failed source remains a visible partial result.
 pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     if !host.is_connected() {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,

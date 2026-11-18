@@ -1,10 +1,10 @@
-use lyrel_core::terminal_width::width;
+use lyrel_protocol::terminal_width::width;
 
-use lyrel_core::core::machine::{Machine, PaneNode, Workspace};
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::core::tab_view::{TabLabel, TabView, strip_host_prefix, tab_views_of};
-use lyrel_core::daemon::control::{PaneAgentState, RouteInfo, ServerStatus};
-use lyrel_core::daemon::protocol::{PaneInfo, PaneProcs, PortProbe};
+use lyrel_protocol::core::machine::{Machine, PaneNode, Workspace};
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::core::tab_view::{TabLabel, TabView, strip_host_prefix, tab_views_of};
+use lyrel_protocol::daemon::control::{PaneAgentState, RouteInfo, ServerStatus};
+use lyrel_protocol::daemon::protocol::{PaneInfo, PaneProcs, PortProbe};
 
 use crate::resolve;
 
@@ -47,7 +47,7 @@ fn clamp(s: &str, max: usize) -> String {
 /// What the sidebar's header for a pinned group reads: the name the user gave
 /// it, or the last segment of its folder — the full path would be the widest
 /// column in the table for no gain.
-pub fn pinned_group_label(group: &lyrel_core::core::group_key::PinnedGroup) -> String {
+pub fn pinned_group_label(group: &lyrel_protocol::core::group_key::PinnedGroup) -> String {
     group
         .given_name()
         .map(str::to_string)
@@ -237,8 +237,8 @@ fn render_node(out: &mut String, node: &PaneNode, machine: &Machine, depth: usiz
         }
         PaneNode::Split { axis, ratio, a, b } => {
             let axis = match axis {
-                lyrel_core::core::machine::Axis::Horizontal => "h",
-                lyrel_core::core::machine::Axis::Vertical => "v",
+                lyrel_protocol::core::machine::Axis::Horizontal => "h",
+                lyrel_protocol::core::machine::Axis::Vertical => "v",
             };
             out.push_str(&format!("{indent}{axis} {:.0}%\n", ratio * 100.0));
             render_node(out, a, machine, depth + 1);
@@ -286,7 +286,7 @@ pub fn procs_tables(procs: &PaneProcs) -> String {
                 if p.foreground { "*" } else { "" }.to_string(),
                 p.rss.map_or_else(
                     || "-".to_string(),
-                    lyrel_core::daemon::procstat::compact_bytes,
+                    lyrel_protocol::daemon::procstat::compact_bytes,
                 ),
             ]
         })
@@ -382,7 +382,7 @@ pub fn routes_table(routes: &[RouteInfo]) -> String {
 mod tests {
     use super::*;
     use crate::testbed::two_workspace_machine;
-    use lyrel_core::daemon::protocol::{PortEntry, ProcEntry};
+    use lyrel_protocol::daemon::protocol::{PortEntry, ProcEntry};
 
     #[test]
     fn columns_line_up_and_lines_carry_no_trailing_spaces() {
@@ -566,7 +566,7 @@ mod tests {
     fn an_unnamed_tab_borrows_its_title_then_an_agent_then_a_place_then_its_process() {
         let view = |f: &dyn Fn(&mut TabView)| {
             let mut v = TabView {
-                id: lyrel_core::core::machine::TabId::new(),
+                id: lyrel_protocol::core::machine::TabId::new(),
                 name: None,
                 title: String::new(),
                 osc_title: None,
@@ -585,7 +585,7 @@ mod tests {
         );
         assert_eq!(
             tab_label(&view(
-                &|v| v.agent = Some(lyrel_core::core::cli_agent::CLIAgent::OhMyPi)
+                &|v| v.agent = Some(lyrel_protocol::core::cli_agent::CLIAgent::OhMyPi)
             )),
             "Oh My Pi"
         );
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(
             tab_label(&view(&|v| {
                 v.osc_title = Some("✳ fixing the switcher".into());
-                v.agent = Some(lyrel_core::core::cli_agent::CLIAgent::OhMyPi);
+                v.agent = Some(lyrel_protocol::core::cli_agent::CLIAgent::OhMyPi);
             })),
             "fixing the switcher"
         );

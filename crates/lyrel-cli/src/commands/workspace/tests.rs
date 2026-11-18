@@ -8,12 +8,12 @@ use crate::commands::test_support::pane_info;
 use crate::commands::test_support::run_cli;
 use crate::commands::test_support::segment;
 use crate::resolve;
-use lyrel_core::core::machine::Machine;
-use lyrel_core::core::machine::PaneSeed;
-use lyrel_core::core::machine::Tab;
-use lyrel_core::core::machine::Workspace;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
+use lyrel_protocol::core::machine::Machine;
+use lyrel_protocol::core::machine::PaneSeed;
+use lyrel_protocol::core::machine::Tab;
+use lyrel_protocol::core::machine::Workspace;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
 use serde_json::json;
 
 #[test]

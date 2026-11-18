@@ -1,6 +1,6 @@
 use super::*;
 use crate::statistics::{DateWindow, StatisticsCache, scan};
-use lyrel_core::host::local::LocalHost;
+use lyrel_protocol::host::local::LocalHost;
 
 fn isolated_launch(root: &Path) -> HashMap<String, String> {
     let omp = root.join("native-omp");
@@ -542,8 +542,8 @@ fn statistics_failed_native_rebinding_keeps_original_scope_as_incomplete_not_def
 
 #[test]
 fn statistics_sources_reject_alias_of_a_bound_native_service_even_when_discovered_as_configured() {
-    use lyrel_core::core::cli_agent::CLIAgent;
-    use lyrel_core::host::session_operations::{
+    use lyrel_protocol::core::cli_agent::CLIAgent;
+    use lyrel_protocol::host::session_operations::{
         SessionOperationKind,
         opencode::{OpenCodeScope, OpenCodeServer},
     };

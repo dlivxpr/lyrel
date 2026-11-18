@@ -15,7 +15,7 @@ pub(super) fn agent_roots(
     let argv = request
         .launch_commands
         .get(agent.slug())
-        .map(|v| lyrel_core::core::cli_agent::parse_command_argv(v))
+        .map(|v| lyrel_protocol::core::cli_agent::parse_command_argv(v))
         .transpose()
         .map_err(io::Error::other)?
         .unwrap_or_default();

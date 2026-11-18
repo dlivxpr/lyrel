@@ -7,7 +7,7 @@
 //! provider scrapers and browser cookie/session readers (`usage`).
 //!
 //! Everything here drives real `LocalHost`/`RemoteHost` work through
-//! `&dyn lyrel_core::host::Host`; nothing touches PTY, SSH setup, or GPUI.
+//! `&dyn lyrel_protocol::host::Host`; nothing touches PTY, SSH setup, or GPUI.
 //! #326 later cuts the lower dependency from `lyrel-core` to
 //! `lyrel-protocol`.
 

@@ -310,7 +310,7 @@ impl Accounts {
     }
     fn persist(&self, stored: &StoredAccounts) -> Result<(), UsageError> {
         let bytes = serde_json::to_vec_pretty(stored).map_err(|_| UsageError::Persistence)?;
-        lyrel_core::core::config::write_atomic_private(&self.path, &bytes)
+        lyrel_protocol::core::config::write_atomic_private(&self.path, &bytes)
             .map_err(|_| UsageError::Persistence)
     }
     pub fn secret(&self, id: Uuid) -> Result<String, UsageError> {

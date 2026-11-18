@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow, bail};
-use lyrel_core::core::session::WorkspaceId;
+use lyrel_protocol::core::session::WorkspaceId;
 
 pub const ENV_PANE: &str = "LYREL_PANE";
 pub const ENV_WS: &str = "LYREL_WS";
 /// The server's config dir, not a socket path — the server publishes the
-/// directory so both endpoints resolve through lyrel_core's own derivation
+/// directory so both endpoints resolve through lyrel_protocol's own derivation
 /// rather than a second one here. Inherited by this process, so
 /// `ControlClient::connect` / `PaneClient::local` already land on the right
 /// server without the CLI touching a path at all.

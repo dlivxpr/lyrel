@@ -407,7 +407,7 @@ pub fn pull_for_branch(
 pub(crate) mod tests {
     use super::*;
     use crate::github::model::{CheckState, ItemState, MergeState, ReviewState};
-    use lyrel_core::core::git::diff::FileStatus;
+    use lyrel_protocol::core::git::diff::FileStatus;
     use std::collections::HashMap;
     use std::sync::Mutex;
 

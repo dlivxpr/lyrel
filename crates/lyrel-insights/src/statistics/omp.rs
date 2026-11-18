@@ -1,5 +1,5 @@
 use super::*;
-use lyrel_core::core::agent_hooks::{HookAgent, HookTarget};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HookTarget};
 use serde_json::Value;
 
 /// OMP 18.12.1 effective scope, resolved only through the selected Host.
@@ -28,7 +28,7 @@ pub fn discover_omp(host: &dyn Host, launch: &HashMap<String, String>) -> io::Re
     let target = HookTarget::remote(host, home.into()).with_launch_commands(launch);
     let environment = target.agent_environment(HookAgent::OhMyPi)?;
     let home = target.agent_home(&environment)?;
-    let profile = lyrel_core::core::agent_history::omp_profile(&environment)?;
+    let profile = lyrel_protocol::core::agent_history::omp_profile(&environment)?;
     let config = environment
         .get("PI_CONFIG_DIR")
         .filter(|v| !v.is_empty())

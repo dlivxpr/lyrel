@@ -1,5 +1,4 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use lyrel_core::host::{self, Host, SharedHost, local::LocalHost};
 use lyrel_insights::github::{ApiError, Reply, Transport};
 use lyrel_insights::skills::{
     ScanRequest, SkillInstallation,
@@ -10,6 +9,7 @@ use lyrel_insights::skills::{
     },
     scan,
 };
+use lyrel_protocol::host::{self, Host, SharedHost, local::LocalHost};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -243,7 +243,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        let root = lyrel_protocol::core::path_spelling::local_spelling_buf(
             fs::canonicalize(std::env::temp_dir()).unwrap(),
         );
         let temp = tempfile::tempdir_in(root).unwrap();
@@ -560,7 +560,7 @@ fn link(target: &Path, path: &Path) {
         .args(["/D", "/C", "mklink", "/J"])
         .arg(path.to_string_lossy().replace('/', "\\"))
         .arg(target.to_string_lossy().replace('/', "\\"));
-    lyrel_core::core::proc::hide_console(&mut command);
+    lyrel_protocol::core::proc::hide_console(&mut command);
     let result = command.output().unwrap();
     assert!(
         result.status.success(),

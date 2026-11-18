@@ -36,6 +36,7 @@ description: >-
 | CLI 用法 | `cargo run --locked -p lyrel-cli -- --help` |
 | 隔离 headless daemon | `cargo run --locked -p lyrel-server -- --daemon --config-dir .lyrel-dev` |
 | 默认成员 / 全成员测试 | `cargo test --locked` / `cargo test --workspace --locked` |
+| 同步 wire／Host 协议 | `cargo t-protocol`（Windows：`pwsh scripts/cargo-windows.ps1 t-protocol`） |
 | core / CLI E2E | `cargo test --locked -p lyrel-core` / `cargo test --locked -p lyrel-cli --test cli_e2e` |
 | 文本 codec / 文档格式引擎 | `cargo test --locked -p lyrel-document --no-default-features` / `cargo test --locked -p lyrel-document --all-features` |
 | 桌面 library 测试 | `cargo test --locked -p lyrel --lib` |
@@ -45,7 +46,7 @@ description: >-
 | Host 边界 | `bash .github/scripts/check-host-boundary.sh` |
 | 补充 lint | `cargo clippy --workspace --all-targets --locked` |
 
-Windows/macOS 默认成员包含桌面、独立 updater、Markdown editor、无 GUI 的 `lyrel-document`／`lyrel-insights` 与 core/server/CLI；两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
+Windows/macOS 默认成员包含桌面、独立 updater、Markdown editor、无 GUI 的文档、insights、protocol、core、server 和 CLI；两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
 
 Host 边界脚本要求 LF；遇到 `$'\r': command not found` 或 `invalid option name` 时先核对行尾，不能扩大 allowlist 掩盖。补全生成读 `scripts/fig-convert/README.md`；性能验证读 `scripts/bench/README.md`，后者依赖 macOS/zsh。
 

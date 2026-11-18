@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 
-use lyrel_core::core::git::diff::{DiffBudget, DiffParser, FileDiff, FileStatus};
+use lyrel_protocol::core::git::diff::{DiffBudget, DiffParser, FileDiff, FileStatus};
 
 /// Issues or pull requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -576,7 +576,7 @@ fn labels(raw: Vec<RawLabel>) -> Vec<Label> {
 
 /// GitHub's `2024-05-01T12:34:56Z`, as unix seconds (zero if unparseable).
 pub fn timestamp(text: &str) -> i64 {
-    lyrel_core::core::git::log::parse_iso8601(text).map_or(0, |ts| ts.unix)
+    lyrel_protocol::core::git::log::parse_iso8601(text).map_or(0, |ts| ts.unix)
 }
 
 impl RawIssue {

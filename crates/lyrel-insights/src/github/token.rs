@@ -216,7 +216,7 @@ pub fn other_gh_accounts_from_system() -> Vec<(String, Token)> {
 }
 
 fn run_gh(gh: &Path, args: &[&str]) -> Option<String> {
-    use lyrel_core::core::proc::{hide_console, output_within};
+    use lyrel_protocol::core::proc::{hide_console, output_within};
     let mut cmd = std::process::Command::new(gh);
     cmd.args(args)
         .env("GH_PROMPT_DISABLED", "1")

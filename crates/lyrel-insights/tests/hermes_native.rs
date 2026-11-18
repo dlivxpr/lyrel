@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use lyrel_core::core::cli_agent::CLIAgent;
-use lyrel_core::daemon::control::{ControlHello, LinkShutdown, feature};
-use lyrel_core::host::local::LocalHost;
 use lyrel_core::host::remote::RemoteHost;
-use lyrel_core::host::session_operations::{
+use lyrel_insights::statistics::{self, DateWindow, Source, StatisticsCache};
+use lyrel_protocol::core::cli_agent::CLIAgent;
+use lyrel_protocol::daemon::control::{ControlHello, LinkShutdown, feature};
+use lyrel_protocol::host::local::LocalHost;
+use lyrel_protocol::host::session_operations::{
     SessionErrorKind, SessionOperation, SessionOperationKind, SessionScope,
 };
-use lyrel_insights::statistics::{self, DateWindow, Source, StatisticsCache};
 
 #[test]
 #[ignore = "requires isolated LYREL_TEST_HERMES and LYREL_TEST_HERMES_HOME"]

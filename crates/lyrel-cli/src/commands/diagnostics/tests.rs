@@ -4,13 +4,13 @@ use crate::commands::Outcome;
 use crate::commands::test_support::human;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
-use lyrel_core::core::agent_hooks::HooksState;
-use lyrel_core::daemon::control::CONTROL_VERSION;
-use lyrel_core::daemon::control::ReplyOk;
-use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
+use lyrel_protocol::core::agent_hooks::HooksState;
+use lyrel_protocol::daemon::control::CONTROL_VERSION;
+use lyrel_protocol::daemon::control::ReplyOk;
+use lyrel_protocol::daemon::protocol::PROTOCOL_VERSION;
 
 fn doctor_backend() -> MockBackend {
-    use lyrel_core::daemon::control::ServerStatus;
+    use lyrel_protocol::daemon::control::ServerStatus;
 
     let mut backend = mock();
     backend.replies.push_back(ReplyOk::Status(ServerStatus {
@@ -58,7 +58,7 @@ fn doctor_reports_the_injected_context_and_the_server_half() {
 /// to be visible — and it long claimed to check hooks without doing so.
 #[test]
 fn doctor_reports_where_the_agent_status_hooks_stand() {
-    use lyrel_core::core::agent_hooks::HookAgent;
+    use lyrel_protocol::core::agent_hooks::HookAgent;
 
     let mut backend = doctor_backend();
     // The real backend answers for every agent it knows how to install

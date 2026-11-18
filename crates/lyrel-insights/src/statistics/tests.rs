@@ -1,5 +1,5 @@
 use super::*;
-use lyrel_core::host::local::LocalHost;
+use lyrel_protocol::host::local::LocalHost;
 use serde_json::json;
 
 fn header(id: &str, parent: Option<&str>) -> String {
@@ -876,7 +876,7 @@ fn statistics_source_aliases_preserve_forks_agent_days_and_missing_source_cache(
             .args(["/D", "/C", "mklink", "/J"])
             .arg(&alias)
             .arg(&physical);
-        lyrel_core::core::proc::hide_console(&mut command);
+        lyrel_protocol::core::proc::hide_console(&mut command);
         let output = command.output().unwrap();
         assert!(
             output.status.success(),
@@ -1104,8 +1104,8 @@ console.log(JSON.stringify({tokens:baseline.tokens+forkAfter.tokens-forkBefore.t
 #[test]
 #[ignore = "requires isolated SSH server argv, native pi store and oracle in LYREL_PI_SSH_* (no production home)"]
 fn statistics_pi_real_ssh_host_reads_official_persisted_history() {
-    use lyrel_core::daemon::control::{ControlHello, LinkShutdown};
     use lyrel_core::host::remote::RemoteHost;
+    use lyrel_protocol::daemon::control::{ControlHello, LinkShutdown};
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
     struct Process(Mutex<Option<std::process::Child>>);

@@ -1,8 +1,8 @@
 use anyhow::Result;
-use lyrel_core::core::agent_hooks::{HookAgent, HooksState};
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::daemon::control::{ControlEvent, ControlHelloOk, ControlRequest, ReplyOk};
-use lyrel_core::daemon::protocol::{PaneInfo, PaneProcs, WinSize};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HooksState};
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::daemon::control::{ControlEvent, ControlHelloOk, ControlRequest, ReplyOk};
+use lyrel_protocol::daemon::protocol::{PaneInfo, PaneProcs, WinSize};
 
 mod real;
 
@@ -80,13 +80,13 @@ pub mod mock {
     use std::collections::VecDeque;
 
     use anyhow::Result;
-    use lyrel_core::core::agent_hooks::{HookAgent, HooksState};
-    use lyrel_core::core::machine::Machine;
-    use lyrel_core::core::session::WorkspaceId;
-    use lyrel_core::daemon::control::{
+    use lyrel_protocol::core::agent_hooks::{HookAgent, HooksState};
+    use lyrel_protocol::core::machine::Machine;
+    use lyrel_protocol::core::session::WorkspaceId;
+    use lyrel_protocol::daemon::control::{
         CONTROL_VERSION, ControlEvent, ControlHelloOk, ControlRequest, ReplyOk, feature,
     };
-    use lyrel_core::daemon::protocol::{PROTOCOL_VERSION, PaneInfo, PaneProcs};
+    use lyrel_protocol::daemon::protocol::{PROTOCOL_VERSION, PaneInfo, PaneProcs};
 
     use super::{Backend, CaptureSegment, RunSpec};
     use crate::exec::{ExecEnd, ExecRun};
@@ -149,7 +149,7 @@ pub mod mock {
                     },
                     output: Vec::new(),
                     dropped: 0,
-                    size: lyrel_core::daemon::protocol::WinSize {
+                    size: lyrel_protocol::daemon::protocol::WinSize {
                         cols: 80,
                         rows: 24,
                         cell_w: 8,

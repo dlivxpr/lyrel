@@ -24,8 +24,8 @@
 //! latest received state, which can lead a GUI frame held by synchronized output;
 //! once the update settles, equivalent content ranges agree.
 
-use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
-use lyrel_core::daemon::protocol::WinSize;
+use lyrel_protocol::core::xtgettcap::MirrorProcessor as Processor;
+use lyrel_protocol::daemon::protocol::WinSize;
 use rio_vt::ansi::CursorShape;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::Dimensions as _;

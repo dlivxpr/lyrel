@@ -7,10 +7,8 @@ repository = "https://github.com/dlivxpr/lyrel"
 license = "Apache-2.0"
 publish = false
 
-# Everything here sits *above* the `lyrel-core` Host seam: it drives real
-# LocalHost/RemoteHost work through `&dyn Host` but never touches PTY, SSH or
-# GUI code, so both the desktop GUI and headless Linux CI build it. (#326
-# later cuts the lower dependency from lyrel-core to lyrel-protocol.)
+# All Host work runs through the `lyrel-protocol` seam. The production
+# package does not link the Session Daemon, PTY, SSH, or GPUI.
 #
 # The crate is a production dependency of the root `lyrel` GUI package only;
 # `lyrel-server`, `lyrel-cli` and the static musl server never depend on it.
@@ -23,9 +21,7 @@ publish = false
 test-support = []
 
 [dependencies]
-# The Host seam: `&dyn Host` file/session/statistics operations plus the
-# CLI-agent and git helpers these modules already shared through core.
-lyrel-core = { path = "../lyrel-core" }
+lyrel-protocol = { path = "../lyrel-protocol" }
 serde = { workspace = true }
 serde_json.workspace = true
 # SKILL.md frontmatter and hook metadata parsing.
@@ -86,6 +82,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# RemoteHost consumers exercise the real core adapter only in tests.
+lyrel-core = { path = "../lyrel-core" }
 tempfile = "3"
 # Timezone-window cases in the statistics suite (same line as lyrel-core's).
 chrono-tz = "0.10"

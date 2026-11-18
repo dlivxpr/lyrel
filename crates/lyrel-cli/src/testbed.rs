@@ -1,5 +1,5 @@
-use lyrel_core::core::machine::{Axis, Machine, PaneNode, PaneRecord, Tab, TabId, Workspace};
-use lyrel_core::core::session::WorkspaceId;
+use lyrel_protocol::core::machine::{Axis, Machine, PaneNode, PaneRecord, Tab, TabId, Workspace};
+use lyrel_protocol::core::session::WorkspaceId;
 
 pub fn two_workspace_machine() -> Machine {
     let api = Workspace {
@@ -79,8 +79,8 @@ pub fn two_workspace_machine() -> Machine {
 
 /// The owning daemon keeps only the local native SSH leaf in its ordinary tree.
 pub fn mixed_sidecar_projection() -> (Workspace, PaneRecord) {
-    use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
-    use lyrel_core::core::session::{RemoteRef, RemoteTarget};
+    use lyrel_protocol::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
+    use lyrel_protocol::core::session::{RemoteRef, RemoteTarget};
 
     let remote = RemoteRef::new(
         RemoteTarget::Alias {

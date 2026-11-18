@@ -2,14 +2,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use lyrel_core::client::{ControlClient, PaneClient, PaneSession};
-use lyrel_core::core::agent_hooks::{HookAgent, HookTarget, HooksState, hooks_state};
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::daemon::control::{
+use lyrel_protocol::client::{ControlClient, PaneClient, PaneSession};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HookTarget, HooksState, hooks_state};
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::daemon::control::{
     ControlEvent, ControlHello, ControlHelloOk, ControlRequest, ReplyOk, RouteInfo,
 };
-use lyrel_core::daemon::protocol::{DaemonMsg, PaneInfo, PaneProcs, ShellSpec, WinSize};
-use lyrel_core::daemon::router::RouteTarget;
+use lyrel_protocol::daemon::protocol::{DaemonMsg, PaneInfo, PaneProcs, ShellSpec, WinSize};
+use lyrel_protocol::daemon::router::RouteTarget;
 
 use super::{Backend, CaptureSegment, RunSpec};
 use crate::exec::{ExecEnd, ExecRun, Transcript};
@@ -52,7 +52,7 @@ struct RunningCommand {
 
 impl RealBackend {
     /// The server's config dir arrives in this process's environment as
-    /// `LYREL_CONFIG_DIR`, which is what `lyrel_core`'s own endpoint derivation
+    /// `LYREL_CONFIG_DIR`, which is what `lyrel_protocol`'s own endpoint derivation
     /// reads. So there is nothing to plumb: `ControlClient::connect` and
     /// `PaneClient::local` resolve the same two sockets the server opened.
     pub fn new(machine: Option<String>) -> RealBackend {
@@ -210,9 +210,9 @@ impl Backend for RealBackend {
         let executable = crate::gui::find_executable().ok()?;
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let executable = crate::server::server_exe().ok()?;
-        let host = lyrel_core::host::local::LocalHost::new();
+        let host = lyrel_protocol::host::local::LocalHost::new();
         let target = HookTarget::local_for_exe(&*host, executable)?
-            .with_launch_commands(&lyrel_core::core::config::Config::load().agent_launch);
+            .with_launch_commands(&lyrel_protocol::core::config::Config::load().agent_launch);
         Some(hooks_state(&target, agent))
     }
 
@@ -475,7 +475,7 @@ fn what_was_asked_for(segments: Vec<CaptureSegment>, scrollback: bool) -> Vec<Ca
         // screen, so `vim`'s `~` column still read as the pane's text after it
         // had exited.
         let dropped = segments.len().saturating_sub(1);
-        let mut modes = lyrel_core::core::term_modes::TerminalModes::new();
+        let mut modes = lyrel_protocol::core::term_modes::TerminalModes::new();
         for segment in segments.drain(..dropped) {
             modes.feed(&segment.bytes);
         }

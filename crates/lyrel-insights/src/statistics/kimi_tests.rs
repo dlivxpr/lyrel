@@ -1,5 +1,5 @@
 use super::*;
-use lyrel_core::host::local::LocalHost;
+use lyrel_protocol::host::local::LocalHost;
 use serde_json::json;
 
 fn session(root: &std::path::Path, id: &str, parent: Option<&str>, child: bool) -> PathBuf {

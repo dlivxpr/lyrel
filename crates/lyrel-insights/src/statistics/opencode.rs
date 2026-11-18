@@ -1,6 +1,8 @@
 use super::*;
-use lyrel_core::core::cli_agent::{CLIAgent, parse_command_argv};
-use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, SessionScope};
+use lyrel_protocol::core::cli_agent::{CLIAgent, parse_command_argv};
+use lyrel_protocol::host::session_operations::{
+    SessionOperation, SessionOperationKind, SessionScope,
+};
 
 impl Source {
     /// A live selector is used only for the next Host query, never serialized.
@@ -120,7 +122,7 @@ pub(super) fn scan_source(
 
 pub(super) fn parse(
     source: &Source,
-    payload: lyrel_core::host::session_operations::opencode::OpenCodeStatistics,
+    payload: lyrel_protocol::host::session_operations::opencode::OpenCodeStatistics,
     observed: i64,
 ) -> io::Result<(Source, Vec<FileFacts>, Vec<ScanIssue>)> {
     let mut source = source.clone();
@@ -261,7 +263,7 @@ pub(super) fn parse(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use lyrel_core::host::local::LocalHost;
+    use lyrel_protocol::host::local::LocalHost;
     use serde_json::{Value, json};
     use std::os::unix::fs::PermissionsExt;
 
@@ -394,9 +396,9 @@ mod tests {
 
         let mut mismatched = request.clone();
         mismatched.scope.opencode = Some(
-            lyrel_core::host::session_operations::opencode::OpenCodeScope {
+            lyrel_protocol::host::session_operations::opencode::OpenCodeScope {
                 server: Some(
-                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                    lyrel_protocol::host::session_operations::opencode::OpenCodeServer {
                         pid: 999,
                         urls: vec!["http://127.0.0.1:12345/".into()],
                     },
@@ -406,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             host.opencode_statistics(&mismatched).unwrap_err().kind,
-            lyrel_core::host::session_operations::SessionErrorKind::Identity
+            lyrel_protocol::host::session_operations::SessionErrorKind::Identity
         );
         write_json("root-next.json", json!({"data":[],"cursor":{}}));
         write_json(
@@ -456,9 +458,9 @@ mod tests {
 
         let mut wrong = request;
         wrong.scope.opencode = Some(
-            lyrel_core::host::session_operations::opencode::OpenCodeScope {
+            lyrel_protocol::host::session_operations::opencode::OpenCodeScope {
                 server: Some(
-                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                    lyrel_protocol::host::session_operations::opencode::OpenCodeServer {
                         pid: 999,
                         urls: vec!["http://127.0.0.1:12345/".into()],
                     },
@@ -474,7 +476,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             wrong_host.kind,
-            lyrel_core::host::session_operations::SessionErrorKind::WrongHost
+            lyrel_protocol::host::session_operations::SessionErrorKind::WrongHost
         );
     }
 }

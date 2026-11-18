@@ -32,7 +32,6 @@ test = false
 lyrel-core = { path = "../lyrel-core", features = [
     "gssapi",
     "remote-install",
-    "terminal-width",
     "test-support",
 ] }
 

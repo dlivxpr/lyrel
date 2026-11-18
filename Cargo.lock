@@ -6380,6 +6380,7 @@ dependencies = [
  "clap",
  "libc",
  "lyrel-core",
+ "lyrel-protocol",
  "lyrel-test-support",
  "rio-vt",
  "serde_json",
@@ -6407,6 +6408,7 @@ dependencies = [
  "libgssapi",
  "log",
  "lyrel-core",
+ "lyrel-protocol",
  "lyrel-test-support",
  "md5",
  "memchr",
@@ -6478,6 +6480,7 @@ dependencies = [
  "icu_collator",
  "log",
  "lyrel-core",
+ "lyrel-protocol",
  "percent-encoding",
  "regex",
  "rusqlite",
@@ -6513,6 +6516,36 @@ dependencies = [
  "unicode-bidi",
  "unicode-segmentation",
  "zorite-markdown",
+]
+
+[[package]]
+name = "lyrel-protocol"
+version = "0.3.5"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "chrono",
+ "getrandom 0.4.3",
+ "gix-discover",
+ "hmac 0.13.0",
+ "http",
+ "ignore",
+ "libc",
+ "log",
+ "memchr",
+ "notify",
+ "regex",
+ "rio-unicode",
+ "rio-vt",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "smol",
+ "tempfile",
+ "toml_edit 0.25.19+spec-1.1.0",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

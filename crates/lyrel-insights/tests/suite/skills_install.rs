@@ -1,4 +1,3 @@
-use lyrel_core::host::{Host, local::LocalHost};
 use lyrel_insights::skills::{
     catalog::{GitHubSource, PreparedSkill, SkillCandidate, SkillFile},
     install::{
@@ -6,11 +5,12 @@ use lyrel_insights::skills::{
         preview_install,
     },
 };
+use lyrel_protocol::host::{Host, local::LocalHost};
 use std::{fs, path::Path};
 
 const NOW: &str = "2026-10-19T08:00:00.000Z";
 fn tempdir() -> tempfile::TempDir {
-    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+    let root = lyrel_protocol::core::path_spelling::local_spelling_buf(
         fs::canonicalize(std::env::temp_dir()).unwrap(),
     );
     tempfile::tempdir_in(root).unwrap()
@@ -394,14 +394,14 @@ fn dangling_lock_and_destination_links_are_not_mistaken_for_missing_paths() {
 // A real filesystem Host with only the external write operation faulted. Reads,
 // directory identity, staging and rollback all exercise LocalHost in a sandbox.
 struct WriteFailure {
-    inner: lyrel_core::host::SharedHost,
+    inner: lyrel_protocol::host::SharedHost,
     fail_lock_commit: bool,
     fail_name: Option<String>,
     change_target_after_stage: Option<std::path::PathBuf>,
     fail_restore_lock: bool,
 }
 impl Host for WriteFailure {
-    fn id(&self) -> lyrel_core::host::HostId {
+    fn id(&self) -> lyrel_protocol::host::HostId {
         self.inner.id()
     }
     fn separator(&self) -> char {
@@ -414,10 +414,10 @@ impl Host for WriteFailure {
         &self,
         p: &Path,
         root: Option<&Path>,
-    ) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
+    ) -> std::io::Result<Vec<lyrel_protocol::host::Entry>> {
         self.inner.read_dir(p, root)
     }
-    fn stat(&self, p: &Path) -> std::io::Result<lyrel_core::host::Meta> {
+    fn stat(&self, p: &Path) -> std::io::Result<lyrel_protocol::host::Meta> {
         self.inner.stat(p)
     }
     fn read_file(&self, p: &Path, max: u64) -> std::io::Result<Vec<u8>> {
@@ -433,18 +433,18 @@ impl Host for WriteFailure {
         limit: usize,
         max_dirs: usize,
         hidden: bool,
-    ) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> {
+    ) -> std::io::Result<Vec<lyrel_protocol::host::SearchHit>> {
         self.inner.search(roots, query, limit, max_dirs, hidden)
     }
     fn search_content(
         &self,
         roots: &[std::path::PathBuf],
-        query: &lyrel_core::host::ContentQuery,
-        limits: &lyrel_core::host::ContentLimits,
-    ) -> std::io::Result<lyrel_core::host::ContentResults> {
+        query: &lyrel_protocol::host::ContentQuery,
+        limits: &lyrel_protocol::host::ContentLimits,
+    ) -> std::io::Result<lyrel_protocol::host::ContentResults> {
         self.inner.search_content(roots, query, limits)
     }
-    fn write_file(&self, p: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> {
+    fn write_file(&self, p: &Path, bytes: &[u8]) -> std::io::Result<lyrel_protocol::host::Meta> {
         if self
             .fail_name
             .as_ref()
@@ -498,13 +498,13 @@ impl Host for WriteFailure {
     fn repo_root(&self, p: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
         self.inner.repo_root(p)
     }
-    fn git(&self, p: &Path, args: &[&str]) -> std::io::Result<lyrel_core::host::Output> {
+    fn git(&self, p: &Path, args: &[&str]) -> std::io::Result<lyrel_protocol::host::Output> {
         self.inner.git(p, args)
     }
-    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> {
+    fn shells(&self) -> std::io::Result<lyrel_protocol::core::shells::ShellInventory> {
         self.inner.shells()
     }
-    fn watch(&self, p: &[std::path::PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
+    fn watch(&self, p: &[std::path::PathBuf]) -> std::io::Result<lyrel_protocol::host::WatchSub> {
         self.inner.watch(p)
     }
 }
@@ -892,9 +892,9 @@ fn kernel_permission_denial_never_reports_installation_or_writes_a_lock() {
 // Host paths are deliberately foreign to the test process; only the adapter
 // translates them into a real isolated filesystem.
 struct PathHost {
-    inner: lyrel_core::host::SharedHost,
+    inner: lyrel_protocol::host::SharedHost,
     sandbox: tempfile::TempDir,
-    id: lyrel_core::host::HostId,
+    id: lyrel_protocol::host::HostId,
     separator: char,
     disconnected: std::sync::atomic::AtomicBool,
     disconnect_after_publish: bool,
@@ -908,7 +908,7 @@ impl PathHost {
         Self {
             inner: LocalHost::new(),
             sandbox: tempdir(),
-            id: lyrel_core::host::HostId(id),
+            id: lyrel_protocol::host::HostId(id),
             separator,
             disconnected: false.into(),
             disconnect_after_publish: false,
@@ -958,7 +958,7 @@ impl PathHost {
     }
 }
 impl Host for PathHost {
-    fn id(&self) -> lyrel_core::host::HostId {
+    fn id(&self) -> lyrel_protocol::host::HostId {
         self.id
     }
     fn separator(&self) -> char {
@@ -981,11 +981,11 @@ impl Host for PathHost {
         &self,
         path: &Path,
         _: Option<&Path>,
-    ) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
+    ) -> std::io::Result<Vec<lyrel_protocol::host::Entry>> {
         self.connected()?;
         self.inner.read_dir(&self.local(path), None)
     }
-    fn stat(&self, path: &Path) -> std::io::Result<lyrel_core::host::Meta> {
+    fn stat(&self, path: &Path) -> std::io::Result<lyrel_protocol::host::Meta> {
         self.connected()?;
         self.inner.stat(&self.local(path))
     }
@@ -1004,18 +1004,18 @@ impl Host for PathHost {
         _: usize,
         _: usize,
         _: bool,
-    ) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> {
+    ) -> std::io::Result<Vec<lyrel_protocol::host::SearchHit>> {
         unreachable!()
     }
     fn search_content(
         &self,
         _: &[std::path::PathBuf],
-        _: &lyrel_core::host::ContentQuery,
-        _: &lyrel_core::host::ContentLimits,
-    ) -> std::io::Result<lyrel_core::host::ContentResults> {
+        _: &lyrel_protocol::host::ContentQuery,
+        _: &lyrel_protocol::host::ContentLimits,
+    ) -> std::io::Result<lyrel_protocol::host::ContentResults> {
         unreachable!()
     }
-    fn write_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> {
+    fn write_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<lyrel_protocol::host::Meta> {
         self.connected()?;
         self.inner.write_file(&self.local(path), bytes)
     }
@@ -1069,13 +1069,13 @@ impl Host for PathHost {
     fn repo_root(&self, _: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
         unreachable!()
     }
-    fn git(&self, _: &Path, _: &[&str]) -> std::io::Result<lyrel_core::host::Output> {
+    fn git(&self, _: &Path, _: &[&str]) -> std::io::Result<lyrel_protocol::host::Output> {
         unreachable!()
     }
-    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> {
+    fn shells(&self) -> std::io::Result<lyrel_protocol::core::shells::ShellInventory> {
         unreachable!()
     }
-    fn watch(&self, _: &[std::path::PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
+    fn watch(&self, _: &[std::path::PathBuf]) -> std::io::Result<lyrel_protocol::host::WatchSub> {
         unreachable!()
     }
 }

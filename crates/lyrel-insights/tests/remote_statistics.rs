@@ -3,7 +3,7 @@
 //! `lyrel-core`'s `host::remote` tests with their owner: they consume
 //! `lyrel_insights::statistics`/`skills` types across the wire, so they live
 //! where those types live. The fake peer speaks the public control protocol
-//! (`lyrel_core::daemon::control`) over a real socket — the same mechanism
+//! (`lyrel_protocol::daemon::control`) over a real socket — the same mechanism
 //! core's remote tests use.
 
 use std::io::Write as _;
@@ -11,16 +11,18 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use lyrel_core::core::cli_agent::CLIAgent;
-use lyrel_core::daemon::control::{
+use lyrel_core::host::remote::RemoteHost;
+use lyrel_insights::statistics::{self, DateWindow, Source, StatisticsCache};
+use lyrel_protocol::core::cli_agent::CLIAgent;
+use lyrel_protocol::daemon::control::{
     CONTROL_VERSION, ControlClientMsg, ControlHello, ControlHelloOk, ControlReply, ControlRequest,
     ControlServerMsg, ReplyOk, feature,
 };
-use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
-use lyrel_core::host::Host as _;
-use lyrel_core::host::remote::RemoteHost;
-use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, SessionScope};
-use lyrel_insights::statistics::{self, DateWindow, Source, StatisticsCache};
+use lyrel_protocol::daemon::protocol::PROTOCOL_VERSION;
+use lyrel_protocol::host::Host as _;
+use lyrel_protocol::host::session_operations::{
+    SessionOperation, SessionOperationKind, SessionScope,
+};
 
 fn hello_ok(separator: char) -> ControlHelloOk {
     ControlHelloOk {
@@ -98,7 +100,7 @@ where
     (host, seen_rx)
 }
 
-fn session_request(host: lyrel_core::host::HostId) -> SessionOperation {
+fn session_request(host: lyrel_protocol::host::HostId) -> SessionOperation {
     SessionOperation {
         expected_host: host.0,
         agent: CLIAgent::OhMyPi,
@@ -232,8 +234,8 @@ fn hermes_statistics_keeps_known_undated_fields_and_cached_values_on_failure() {
             )
         } else if attempt == 1 {
             Err(
-                lyrel_core::host::session_operations::SessionOperationError {
-                    kind: lyrel_core::host::session_operations::SessionErrorKind::Command,
+                lyrel_protocol::host::session_operations::SessionOperationError {
+                    kind: lyrel_protocol::host::session_operations::SessionErrorKind::Command,
                     message: "runtime failed".into(),
                     retained: None,
                 },

@@ -284,9 +284,9 @@ fn send_outside_a_shell_without_an_address_names_the_fix() {
     );
 }
 
-fn procs_with_paste_mode(mode: Option<bool>) -> lyrel_core::daemon::protocol::PaneProcs {
-    lyrel_core::daemon::protocol::PaneProcs {
-        context: Some(lyrel_core::daemon::protocol::PaneContext {
+fn procs_with_paste_mode(mode: Option<bool>) -> lyrel_protocol::daemon::protocol::PaneProcs {
+    lyrel_protocol::daemon::protocol::PaneProcs {
+        context: Some(lyrel_protocol::daemon::protocol::PaneContext {
             local_pty: true,
             bracketed_paste: mode,
             ..Default::default()

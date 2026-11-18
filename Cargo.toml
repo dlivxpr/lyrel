@@ -33,9 +33,7 @@ required-features = ["native-markdown-tests"]
 # `lyrel-updater` executable, which lives in `crates/lyrel-updater`. GPUI-free,
 # like everything else at this seam.
 lyrel-updater = { path = "crates/lyrel-updater" }
-# The framework-free half of lyrel: wire protocol, session daemon, PTY, the
-# native SSH engine, and the domain model the headless `lyrel-server` shares with
-# this GUI. Everything that does *not* need gpui lives there.
+# The framework-free daemon and Host execution behind the protocol facade.
 # `gssapi` is off in lyrel-core's defaults (a static musl `lyrel-server` cannot
 # link the system krb5 it binds); the GUI, which builds against a real desktop
 # toolchain, turns it on so managed SSH connections keep offering
@@ -45,9 +43,9 @@ lyrel-updater = { path = "crates/lyrel-updater" }
 # client used only to *download* a `lyrel-server` onto a remote machine
 # (decision D5). The server binary is the thing being downloaded, so it can
 # never take that path; the GUI, which is the client that pushes it, can.
-lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "terminal-width"] }
+lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install"] }
 
-# GUI-free insights above the `lyrel-core` Host seam: the right panel's GitHub
+# GUI-free insights above the `lyrel-protocol` Host seam: the right panel's GitHub
 # tab, Settings' skills/statistics/usage backends and their browser session
 # readers. The GUI is this crate's only production consumer — the headless
 # server and CLI never link it — so it stays a desktop-only dependency, while
@@ -89,7 +87,7 @@ memchr = "2"
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
 # Scalar widths remain needed by preedit ink detection and copy unwrapping.
-# Input-bar cluster widths instead use lyrel-core's optional terminal-width.
+# Input-bar cluster widths use lyrel-protocol's terminal_width helper.
 rio-unicode.workspace = true
 # Fair reader/painter locking without maintaining an emulator-specific lock.
 parking_lot = "0.13"
@@ -325,7 +323,7 @@ native-markdown-tests = ["test-support"]
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor 与 updater helper；Linux 排除桌面包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
+default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"
@@ -344,8 +342,7 @@ gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 #
 # Only the parser/grid library is taken: Rio's own PTY, windowing and
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
-# mode stacks the daemon folds for replay stay in `lyrel-core`'s own
-# `term_modes`.
+# mode stacks the daemon folds for replay stay in `lyrel-protocol`'s `term_modes`.
 rio-vt = { version = "=0.5.32", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
 rio-unicode = "=0.5.32"

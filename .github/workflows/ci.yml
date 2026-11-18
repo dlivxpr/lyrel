@@ -1,7 +1,7 @@
 name: CI
 
-# Windows/macOS 验证桌面与 headless；Linux 只验证 core/server/CLI，
-# 包含 /proc、PTY、SSH/SFTP/GSSAPI，不构建 GUI 或桌面 updater。
+# Windows/macOS 验证桌面与 headless；Linux 验证无 GUI 的协议、daemon、CLI、
+# 文档、insights 与共享夹具，包含 /proc、PTY、SSH/SFTP/GSSAPI。
 on:
   push:
     branches: [main]
@@ -276,7 +276,7 @@ jobs:
       # 测试图统一 native-markdown-tests,test-support，并且所有编译/执行
       # 步骤共用同一 --workspace 选择：windows-sys 与 tokio 的 dev-dependency
       # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
-      # （含 GUI-free 的 lyrel-document 与桌面 lyrel-updater），新增成员自动进入门禁。
+      # （含 lyrel-protocol、lyrel-document 与桌面 lyrel-updater）。
       #
       # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
       # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；

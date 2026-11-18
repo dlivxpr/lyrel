@@ -1,7 +1,7 @@
 //! 五种原生统计来源的非秘密关联；请求只在所选 Host 上按当前 launcher 重建。
 use super::{Source, discover_hermes, discover_kimi, discover_omp, discover_opencode, discover_pi};
-use lyrel_core::host::Host;
-use lyrel_core::host::session_operations::{SessionOperation, SessionScope, durable_scope};
+use lyrel_protocol::host::Host;
+use lyrel_protocol::host::session_operations::{SessionOperation, SessionScope, durable_scope};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -166,7 +166,7 @@ impl SourceBindings {
             }
             let identity: serde_json::Value = serde_json::from_str(&payload.identity)
                 .map_err(|_| invalid("OpenCode returned no durable service identity"))?;
-            let server: lyrel_core::host::session_operations::opencode::OpenCodeServer =
+            let server: lyrel_protocol::host::session_operations::opencode::OpenCodeServer =
                 serde_json::from_value(identity["server"].clone())
                     .map_err(|_| invalid("OpenCode returned no durable service identity"))?;
             if server.urls.is_empty() {

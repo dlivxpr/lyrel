@@ -1,4 +1,4 @@
-pub mod client;
+pub use lyrel_protocol::{self, client, terminal_width};
 pub mod core;
 pub mod daemon;
 pub mod host;
@@ -10,5 +10,3 @@ pub mod host;
 /// through an older helper. Windows-only like the pinned package itself.
 #[cfg(windows)]
 pub mod conpty_files;
-#[cfg(feature = "terminal-width")]
-pub mod terminal_width;

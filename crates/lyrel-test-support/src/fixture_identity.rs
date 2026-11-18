@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
-/// Files outside `crates/lyrel-core` that define the fixture's observable
-/// protocol. Core sources are hashed recursively by
-/// [`fixture_source_identity`], because the daemon the fixture hosts is core.
+/// Daemon and protocol packages whose complete sources shape the fixture.
+pub const FIXTURE_IDENTITY_CRATES: &[&str] = &["crates/lyrel-core", "crates/lyrel-protocol"];
+
+/// Additional files that define the fixture's observable behavior or build.
+/// The daemon and protocol packages are hashed recursively.
 pub const FIXTURE_IDENTITY_FILES: &[&str] = &[
     "crates/lyrel-test-support/src/fixture_identity.rs",
     "crates/lyrel-test-support/src/hex.rs",
@@ -30,8 +32,8 @@ pub const FIXTURE_IDENTITY_FILES: &[&str] = &[
     "assets/windows/conpty/manifest.json",
 ];
 
-/// Hex SHA-256 over the fixed support files plus every file under
-/// `crates/lyrel-core`, framed with its workspace-relative path.
+/// Hex SHA-256 of the fixture and its source packages, framed with
+/// workspace-relative paths.
 pub fn fixture_source_identity(root: &Path) -> io::Result<String> {
     use std::fmt::Write as _;
 
@@ -47,14 +49,12 @@ pub fn fixture_source_identity(root: &Path) -> io::Result<String> {
         hash_bytes(&mut hasher, Path::new(relative), &bytes);
     }
 
-    let mut core_files = Vec::new();
-    collect_files(
-        &root.join("crates/lyrel-core"),
-        Path::new("crates/lyrel-core"),
-        &mut core_files,
-    )?;
-    core_files.sort();
-    for (relative, path) in core_files {
+    let mut source_files = Vec::new();
+    for relative in FIXTURE_IDENTITY_CRATES {
+        collect_files(&root.join(relative), Path::new(relative), &mut source_files)?;
+    }
+    source_files.sort();
+    for (relative, path) in source_files {
         let bytes = std::fs::read(&path).map_err(|error| {
             io::Error::new(
                 error.kind(),
@@ -110,4 +110,28 @@ fn collect_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_source_changes_invalidate_a_prebuilt_fixture() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path();
+        for relative in FIXTURE_IDENTITY_FILES {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture input").unwrap();
+        }
+        std::fs::create_dir_all(root.join("crates/lyrel-core")).unwrap();
+        let protocol = root.join("crates/lyrel-protocol/src/daemon/protocol.rs");
+        std::fs::create_dir_all(protocol.parent().unwrap()).unwrap();
+        std::fs::write(&protocol, b"original wire implementation").unwrap();
+        let built = fixture_source_identity(root).unwrap();
+
+        std::fs::write(&protocol, b"updated wire implementation").unwrap();
+        assert_ne!(built, fixture_source_identity(root).unwrap());
+    }
 }

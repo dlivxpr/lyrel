@@ -73,7 +73,7 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     collect_pane_output_until(&mut pane, b"KITTY_READY");
     let address = format!("%{}", pane.pane_id());
     let mut serial = 0;
-    let mut send = |pane: &mut lyrel_core::client::PaneSession, bytes: &[u8]| {
+    let mut send = |pane: &mut lyrel_protocol::client::PaneSession, bytes: &[u8]| {
         serial += 1;
         pane.input(format!("SEND {serial} 0 {} 1\n", hex(bytes)).as_bytes())
             .unwrap();

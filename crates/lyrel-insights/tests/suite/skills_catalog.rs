@@ -499,7 +499,6 @@ fn yaml_frontmatter_is_really_parsed_and_skill_search_filters_the_same_catalog()
 #[test]
 #[ignore = "真实公开匿名 GitHub HTTP；仅在明确联网验收时执行，安装范围始终为 TempDir"]
 fn public_github_install_is_immediately_browsable_with_cli_compatible_project_provenance() {
-    use lyrel_core::host::local::LocalHost;
     use lyrel_insights::{
         github::http::HttpTransport,
         skills::{
@@ -510,6 +509,7 @@ fn public_github_install_is_immediately_browsable_with_cli_compatible_project_pr
             scan,
         },
     };
+    use lyrel_protocol::host::local::LocalHost;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");

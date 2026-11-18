@@ -13,7 +13,7 @@ use install::{
     changed, check_ancestors, check_host, cleanup, inspect_directory, invalid, normalize_selector,
     parent_and_name, read_lock, rename_live, safe_meta, validate_relative,
 };
-use lyrel_core::{
+use lyrel_protocol::{
     core::agent_hooks::{HookAgent, HookTarget},
     host::{Host, HostId, Meta},
 };
@@ -52,7 +52,7 @@ pub struct UpdateCheck {
 /// Reuses the exact effective native profile discovery used for browsing. A
 /// failed profile/configuration lookup is not silently replaced by GUI defaults.
 pub fn private_roots(host: &dyn Host, request: &ScanRequest) -> io::Result<Vec<PathBuf>> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     check_host(host)?;
     if !host.is_absolute(&request.home)
         || request
@@ -267,7 +267,7 @@ pub fn check_update(
     skill: &SkillInstallation,
     http: &dyn Transport,
 ) -> UpdateCheck {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     let mut result = UpdateCheck {
         status: UpdateStatus::Available,
         local_changes: LocalChanges::UnknownBaseline,
@@ -590,7 +590,7 @@ pub fn preview_remove(
     skill: &SkillInstallation,
     agent_roots: &[PathBuf],
 ) -> io::Result<RemovePreview> {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     let identity = identity(host, &target, skill)?;
     let mut warnings = Vec::new();
     let links = collect_links(host, agent_roots, &identity.destination, &mut warnings);
@@ -707,7 +707,7 @@ fn uncertain(error: &io::Error, host: &dyn Host) -> bool {
 /// Consumes the exact confirmation. Partial/unknown results include recovery
 /// paths and must be reviewed, not fed blindly into another destructive retry.
 pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
-    lyrel_core::host::guard_off_ui();
+    lyrel_protocol::host::guard_off_ui();
     let mut report = RemoveReport {
         content: RemovalStatus::Retained("Not removed".into()),
         source_record: RemovalStatus::Retained(

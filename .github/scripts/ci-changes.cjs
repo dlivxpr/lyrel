@@ -105,7 +105,8 @@ function isDesktopOnly(file) {
 
 // GUI-free 也进 Linux headless 图的成员：CLI、lyrel-document 的全部文档引擎、
 // lyrel-insights 的 skills/statistics/github/usage 模型（浏览器读取器仍只进
-// 桌面目标）、共享测试夹具以及它们的集成测试。lyrel-core 源码仍按保守分支计入 server。
+// 桌面目标）、共享测试夹具以及集成测试。lyrel-core 与 lyrel-protocol 同是
+// server 生产依赖，源码不在此列：保守分支同时触发 server。
 function isDesktopAndLinuxOnly(file) {
   return (
     file.startsWith('crates/lyrel-cli/') ||

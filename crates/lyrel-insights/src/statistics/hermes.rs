@@ -1,8 +1,10 @@
 //! Hermes 0.22.2 public launcher/gateway adapter. No database or Python guessing.
 use super::*;
-use lyrel_core::core::agent_hooks::{HookAgent, HookTarget};
-use lyrel_core::core::cli_agent::{CLIAgent, parse_command_argv};
-use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, SessionScope};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HookTarget};
+use lyrel_protocol::core::cli_agent::{CLIAgent, parse_command_argv};
+use lyrel_protocol::host::session_operations::{
+    SessionOperation, SessionOperationKind, SessionScope,
+};
 use serde_json::Value;
 
 impl Source {
