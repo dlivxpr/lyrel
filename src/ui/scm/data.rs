@@ -715,11 +715,6 @@ pub(crate) fn status_of(
     cx.try_global::<ScmData>()?.status_for(host, root)
 }
 
-/// The per-path decoration index the file tree looks up during `render`.
-pub(crate) fn index_of(cx: &gpui_kit::App, host: HostId, root: &Path) -> Option<Arc<StatusIndex>> {
-    cx.try_global::<ScmData>()?.index_for(host, root)
-}
-
 impl LyrelApp {
     /// Read a repository's status, unless a read is already running or what we
     /// hold is current. Safe to call from `render`.

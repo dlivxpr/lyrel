@@ -3326,7 +3326,7 @@ mod render_idle_gpui_tests {
         vcx.update(|_, cx| {
             let status = status_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(status.total_entries, 2);
-            let index = crate::ui::scm::data::index_of(cx, repo.host, &repo.root).unwrap();
+            let index = crate::ui::scm_snapshot::index_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(index.file("after.txt"), Some(DecoStatus::Untracked));
         });
     }

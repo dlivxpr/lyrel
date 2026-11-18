@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::scm_snapshot::index_of;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_core::host::{
     ContentLimits, ContentQuery, ContentResults, Entry, Meta, Output, SearchHit,
