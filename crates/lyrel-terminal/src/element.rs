@@ -59,7 +59,6 @@ pub struct RenderCell {
     bold: bool,
     italic: bool,
     strikeout: bool,
-    #[cfg(any(test, feature = "test-support"))]
     pub underline: UnderlineKind,
     underline_color: Option<Hsla>,
     pub spacer: bool,
@@ -73,11 +72,8 @@ pub struct RenderCell {
     /// resolve it while a snapshot is acquired; a held frame and a reading row
     /// keep the captured version until their buffer retires.
     pub glyph: Option<std::sync::Arc<crate::glyph::GlyphView>>,
-    #[cfg(any(test, feature = "test-support"))]
     pub match_hit: bool,
-    #[cfg(any(test, feature = "test-support"))]
     pub match_current: bool,
-    #[cfg(any(test, feature = "test-support"))]
     pub link_hover: bool,
     osc8_dots: bool,
 }
@@ -220,7 +216,6 @@ pub enum SnapshotUnavailable {
 
 #[derive(Default)]
 pub struct GridSnapshot {
-    #[cfg(any(test, feature = "test-support"))]
     pub cursor: Option<GridCursor>,
     // None preserves the window material; an OSC 11 override belongs to the
     // committed picture, so synchronized/contended repaints cannot leak it.

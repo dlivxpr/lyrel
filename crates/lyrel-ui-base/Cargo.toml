@@ -13,7 +13,7 @@ publish = false
 # dependency of the root package's test builds (the root crate enables this
 # feature from its desktop dev-dependencies). Production builds never enable
 # it, keeping the guards out of released code.
-test-guards = ["dep:tempfile"]
+test-guards = ["dep:parking_lot", "dep:tempfile"]
 
 # Desktop-only foundation, mirroring the root package: everything below the
 # line compiles only on Windows/macOS. On Linux this crate is an empty rlib so
@@ -30,7 +30,7 @@ smol.workspace = true
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 yaml_serde.workspace = true
 plist = "1"
-parking_lot = "0.13"
+parking_lot = { version = "0.13", optional = true }
 tempfile = { version = "3", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -48,6 +48,7 @@ objc2-foundation = { version = "0.3", features = ["NSLocale"] }
 # optional production dependency above only exists for the `test-guards`
 # feature, so the dev-dependency carries the plain `cargo test` build.
 tempfile = "3"
+parking_lot = "0.13"
 # GPUI test harness for the store/off-thread unit tests.
 gpui-kit = { workspace = true, features = ["test-support"] }
 

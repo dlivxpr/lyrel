@@ -24,7 +24,7 @@ pub fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<Ent
     let summary = sanitize_notification_text(title.unwrap_or("lyrel"), NOTIFY_TITLE_MAX);
     let body = sanitize_notification_text(body, NOTIFY_BODY_MAX);
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if TEST_NOTIFICATIONS.with(|slot| slot.borrow().is_some()) {
         TEST_NOTIFICATIONS.with(|slot| {
             slot.borrow_mut()

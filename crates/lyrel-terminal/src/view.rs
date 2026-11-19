@@ -253,8 +253,7 @@ pub struct TerminalView {
     host_id: lyrel_ui_base::host_ops::HostId,
     workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
     pub pane_id: u64,
-    #[cfg(any(test, feature = "test-support"))]
-    pub shell_spec: Option<ShellSpec>,
+    shell_spec: Option<ShellSpec>,
     owner_workspace: Option<lyrel_ui_base::session::WorkspaceId>,
     ssh_spec: Option<Box<lyrel_core::daemon::protocol::NativeSshSpec>>,
     remote_paste: super::paste::RemotePaste,
@@ -360,17 +359,13 @@ pub struct TerminalView {
     /// Command completion can fall entirely between foreground polls.
     git_prompt_cycle: u64,
     pub input: super::prompt_input::PromptInput,
-    #[cfg(any(test, feature = "test-support"))]
     pub history: TerminalHistory,
     /// Native shell-channel history waits for this pane's SSH connection.
     native_history_seed_pending: bool,
     pane_history_seed: Option<(lyrel_ui_base::host_ops::HostId, u64)>,
-    #[cfg(any(test, feature = "test-support"))]
     pub completion: TerminalCompletion,
-    #[cfg(any(test, feature = "test-support"))]
     pub integration_notice: Option<String>,
     integration_notice_shown: bool,
-    #[cfg(any(test, feature = "test-support"))]
     pub created_at: std::time::Instant,
     /// How opaque the pane wants this terminal painted this frame: 1.0 at
     /// rest, [`lyrel_ui_base::pane_dim::INACTIVE_DIM`] for an unfocused pane in a

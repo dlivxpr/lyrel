@@ -541,7 +541,7 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
     view.update(cx, |view, cx| {
         view.pane_id = pane;
         // No pane override: the existing local default resolver knows zsh.
-        view.shell_spec = None;
+        assert!(view.shell_spec().is_none());
         view.follow_history_scope(cx);
     });
     cx.run_until_parked();
