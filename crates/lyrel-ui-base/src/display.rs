@@ -39,10 +39,8 @@ mod tests {
 
     #[test]
     fn reads_in_binary_units() {
-        assert_eq!(
-            human_bytes(512),
-            format!("512 {}", t(L10nKey::RemoteInstallBytes))
-        );
+        crate::i18n::set_locale("en");
+        assert_eq!(human_bytes(512), "512 bytes");
         assert_eq!(human_bytes(2048), "2.0 KiB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MiB");
     }
