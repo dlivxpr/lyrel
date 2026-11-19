@@ -666,8 +666,16 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
     });
     settle(&mut cx);
     confirm_pending_sync(&app, &mut cx);
-    until(&mut cx, |_cx| {
+    // The Host write and its UI acknowledgement complete on different executors.
+    until(&mut cx, |cx| {
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
+            && app.read_with(cx, |app, cx| {
+                app.editor
+                    .read(cx)
+                    .buffers
+                    .get(id)
+                    .is_some_and(|file| !file.dirty)
+            })
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
@@ -882,13 +890,20 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
         view.on_surface_event(SurfaceEvent::Save, cx);
     });
     settle(&mut cx);
-    // The frame sweep owns the request: run it explicitly, then wait for the
-    // Host write itself rather than for a dirty bit that may already be gone.
+    // The frame sweep owns the request. Wait for both the Host write and
+    // its asynchronous acknowledgement in the editor.
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     settle(&mut cx);
     confirm_pending_sync(&app, &mut cx);
-    until(&mut cx, |_cx| {
+    until(&mut cx, |cx| {
         std::fs::read(&path).unwrap().as_slice() == committed.as_ref()
+            && app.read_with(cx, |app, cx| {
+                app.editor
+                    .read(cx)
+                    .buffers
+                    .get(id)
+                    .is_some_and(|file| !file.dirty)
+            })
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
     app.read_with(&cx, |app, cx| {
