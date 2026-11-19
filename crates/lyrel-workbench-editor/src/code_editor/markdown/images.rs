@@ -662,7 +662,7 @@ impl ImageHost {
         });
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn is_loaded(&self, source: &str) -> bool {
         matches!(self.states.get(source), Some(State::Ready))
     }

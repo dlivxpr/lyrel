@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) use lyrel_workbench_editor::code_editor::test_host;
 
-#[cfg(any(test, feature = "native-markdown-tests"))]
+#[cfg(feature = "native-markdown-tests")]
 use gpui_kit::MouseButton;
 
 #[cfg(test)]

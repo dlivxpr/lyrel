@@ -14,7 +14,7 @@
 - 文档工作台由桌面注入 Markdown 图片代理，不再启用 `lyrel-core/remote-install`；JSON／JSONL、TOML、YAML、XML 共用结构视图的解析与交互流程，各格式保留独立的保真投影和局部编辑。
 - 文件树改为独立 GPUI Entity，diff 探测独立跟踪同源请求与重连；Markdown 拆分呈现状态和绘制阶段，终端搜索自行管理防抖代次。设置通过明确事件与凭据适配器接线，验证后保留在根包。Linux 生产依赖图门禁同时检查被排除的桌面包不会经传递依赖重新进入。
 - Unix 语言服务器查找继续跳过没有执行权限的文件；文件树重命名和删除回归等待 GPUI 完成事件后再核对磁盘结果，避免把磁盘先变化误判为事件丢失。
-- 终端共享测试夹具在只启用 `test-support` 时也提供配对连接和测试 pane 构造器，并保持临时配置隔离；普通桌面测试不再依赖原生 Markdown 测试 feature。
+- 终端和文档工作台的共享夹具在只启用 `test-support` 时提供普通桌面测试所需的 pane、文件 Host 和图片状态，不再依赖原生 Markdown 测试 feature。
 - core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
 - 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
 - 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。

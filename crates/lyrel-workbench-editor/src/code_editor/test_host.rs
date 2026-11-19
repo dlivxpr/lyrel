@@ -80,7 +80,7 @@ impl FileHost {
         })
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn mapped(id: HostId, root: &Path) -> Arc<Self> {
         let mut host = Self::new(id);
         Arc::get_mut(&mut host).unwrap().root = Some(root.to_path_buf());
@@ -92,7 +92,7 @@ impl FileHost {
             |root| root.join(path.to_string_lossy().trim_start_matches('/')),
         )
     }
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn fail_next_write(&self) {
         self.fail_write.store(true, Ordering::SeqCst);
     }
@@ -105,7 +105,7 @@ impl FileHost {
         tx
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn pause_next_write(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
