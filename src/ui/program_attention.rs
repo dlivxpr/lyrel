@@ -406,8 +406,16 @@ impl crate::ui::app::LyrelApp {
     }
 }
 
-impl crate::terminal::view::TerminalView {
-    pub(crate) fn program_source(&self) -> ProgramSource {
+/// The program-record identity a pane reports under, read off its
+/// `TerminalView`. A trait rather than an inherent method because the view
+/// now lives in `lyrel-terminal`; implemented here, where `ProgramSource`
+/// itself lives.
+pub(crate) trait TerminalViewProgramSource {
+    fn program_source(&self) -> ProgramSource;
+}
+
+impl TerminalViewProgramSource for lyrel_terminal::view::TerminalView {
+    fn program_source(&self) -> ProgramSource {
         ProgramSource {
             host: self.host_id(),
             pane: self.pane_id,

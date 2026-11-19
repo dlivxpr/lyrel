@@ -37,6 +37,7 @@ pub mod notification_bridge;
 pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;
+pub(crate) mod pane_liveness;
 pub mod pane_dim;
 pub mod pane_drag;
 pub(crate) mod pane_sidecar;
@@ -49,7 +50,6 @@ pub mod perf;
 pub(crate) mod pip_geometry;
 #[cfg(target_os = "macos")]
 pub mod platform;
-pub mod prefill;
 pub mod presets;
 pub mod proc_usage;
 pub(crate) mod program_attention;

@@ -14,18 +14,23 @@
 
 pub mod actions;
 pub mod config;
+pub mod desktop_file;
 pub mod desktop_lookups;
 pub mod file_drag;
+pub mod file_search;
 pub mod fuzzy;
 pub mod host_ops;
 pub mod host_registry;
 pub mod i18n;
+pub mod notification_bridge;
 pub mod notification_history;
 pub mod palette;
 pub mod pane_dim;
 pub mod path_display;
 pub mod presets;
+pub mod presentation;
 pub mod route;
+pub mod rounding;
 pub mod scm_snapshot;
 pub mod session;
 pub mod ssh_config;

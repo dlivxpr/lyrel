@@ -672,10 +672,10 @@ fn stop_workspace_keeping(cx: &mut App, workspace: WorkspaceId, ids: Vec<u64>) {
             .detach();
     }
     if cx
-        .try_global::<crate::terminal::pane_liveness::PaneLivenessCache>()
+        .try_global::<crate::ui::pane_liveness::PaneLivenessCache>()
         .is_some()
     {
-        cx.update_global::<crate::terminal::pane_liveness::PaneLivenessCache, _>(|cache, _| {
+        cx.update_global::<crate::ui::pane_liveness::PaneLivenessCache, _>(|cache, _| {
             cache.invalidate(host)
         });
     }

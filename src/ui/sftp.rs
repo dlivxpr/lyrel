@@ -569,7 +569,7 @@ impl LyrelApp {
             return;
         }
         let cwd = self.sftp_panel.cwd.clone();
-        let input = crate::ui::prefill::filled_box(cwd, window, cx);
+        let input = lyrel_terminal::prefill::filled_box(cwd, window, cx);
         input.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(
             &input,
@@ -851,7 +851,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = crate::ui::prefill::filled_box(remote_basename(&name), window, cx);
+        let input = lyrel_terminal::prefill::filled_box(remote_basename(&name), window, cx);
         let edit = SftpEdit::Rename {
             original: name,
             input: input.clone(),
@@ -868,7 +868,7 @@ impl LyrelApp {
         let octal = format!("{:o}", entry.permissions & 0o777);
         let readable = mode_string(entry.permissions);
         let path = entry.path.clone();
-        let input = crate::ui::prefill::filled_box(octal, window, cx);
+        let input = lyrel_terminal::prefill::filled_box(octal, window, cx);
         let edit = SftpEdit::Chmod {
             path,
             readable,

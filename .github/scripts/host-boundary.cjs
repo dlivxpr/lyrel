@@ -6,9 +6,9 @@ const path = require('node:path').posix;
 // extraction has landed, and skipped loudly (never fatal) while it has not.
 const SCAN_ROOTS = [
     {root: 'src/ui', required: true},
-    {root: 'src/terminal', required: true},
+    {root: 'src/terminal', required: false},
     {root: 'crates/lyrel-ui-base/src', required: false},
-    {root: 'crates/lyrel-terminal/src', required: false},
+    {root: 'crates/lyrel-terminal/src', required: true},
     {root: 'crates/lyrel-workbench-editor/src', required: false},
 ];
 const files = new Set();

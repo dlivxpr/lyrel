@@ -34,6 +34,9 @@ lyrel-core = { path = "../lyrel-core", features = [
     "remote-install",
     "test-support",
 ] }
+# Cross-process locking for the on-demand graphics-fixture build and its
+# ConPTY staging (the consumer tests may all race the first build).
+fs2 = "0.4"
 
 # The library is consumed by headless Linux test runs too (CI builds every
 # member): keep a headless Linux build possible without enabling the

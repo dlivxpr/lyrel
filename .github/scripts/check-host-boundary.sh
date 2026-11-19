@@ -99,33 +99,44 @@ src/ui/settings/usage/browser/chromium.rs|use std::fs::{self, File}
 # Shell history lives in the local user's home (`~/.zsh_history` &co.) and backs
 # this app's own history search. A remote pane's history is the remote shell's
 # business, read over the wire, not through here.
-src/terminal/history.rs|std::fs::
+crates/lyrel-terminal/src/history.rs|std::fs::
 
 # Completion is already remote-aware: a remote pane is signalled by `cwd: None`,
 # which disables exactly these local-filesystem candidate sources in favour of
 # `remote_path_request` / `remote_path_candidates`. The `$PATH` scan is likewise
 # this machine's `$PATH`, deliberately withheld from remote panes.
-src/terminal/completion.rs|std::fs::read_dir
-src/terminal/completion.rs|.is_absolute()
+crates/lyrel-terminal/src/completion.rs|std::fs::read_dir
+crates/lyrel-terminal/src/completion.rs|.is_absolute()
 
 # Bundled completion specs shipped in `assets/completions`, resolved from the
 # app bundle / dev manifest dir. Program data, not user or workspace data.
-src/terminal/signature.rs|std::fs::read_to_string
+crates/lyrel-terminal/src/signature.rs|std::fs::read_to_string
 
 # Opening a path scraped out of terminal output resolves it against the local
 # cwd — a local-pane affordance; `resolve_existing_path` declines when there is
 # no local cwd.
-src/terminal/search.rs|.is_absolute()
+crates/lyrel-terminal/src/search.rs|.is_absolute()
 
 # Clipboard-image paste stages the bytes into the OS temp dir so an agent TUI
 # can be handed a path. Always `std::env::temp_dir()` on this machine.
-src/terminal/paste.rs|std::fs::create_dir_all
-src/terminal/paste.rs|std::fs::write
+crates/lyrel-terminal/src/paste.rs|std::fs::create_dir_all
+crates/lyrel-terminal/src/paste.rs|std::fs::write
 # The source side of a paste/drop upload into a remote pane: the paths the
 # clipboard or desktop hands over are on this machine by construction, so
 # asking whether one is a directory is a local read. The remote side of the
 # copy goes over SFTP.
-src/terminal/paste.rs|std::fs::metadata
+crates/lyrel-terminal/src/paste.rs|std::fs::metadata
+
+# Toast branding (Windows-only `aumid`): compares and creates paths under the
+# per-user Start Menu / the current executable's directory on this machine —
+# never a workspace or remote path.
+crates/lyrel-terminal/src/aumid.rs|.canonicalize()
+crates/lyrel-terminal/src/aumid.rs|std::fs::create_dir_all
+
+# The glyph-protocol test helper reads the reply file the local fixture
+# process was just asked to write, under the test's own temp dir. Test-support
+# surface only (`test-support` feature / cfg(test)).
+crates/lyrel-terminal/src/test_support.rs|std::fs::read_to_string
 
 # Asking whether a file would be *launched* rather than shown before handing it
 # to the desktop opener. Only reachable behind `host_id.is_local()` — a path on

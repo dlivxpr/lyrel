@@ -1,7 +1,11 @@
 mod core;
 mod daemon;
-mod terminal;
 mod ui;
+
+// The desktop terminal client crate. Re-exported under its old in-crate name
+// so workbench modules keep their `crate::terminal::` paths while the crate
+// boundary settles; new code imports `lyrel_terminal` directly.
+pub use lyrel_terminal as terminal;
 
 #[cfg(test)]
 pub use lyrel_test_support::native_ssh as native_ssh_graphics_fixture;
@@ -48,13 +52,16 @@ impl NativeTerminalFixtureSupport {
 /// Run the native-font terminal consumer on the process main thread.
 #[cfg(feature = "native-markdown-tests")]
 pub fn run_native_terminal_tests(fixture: NativeTerminalFixtureSupport) -> std::process::ExitCode {
-    use terminal::view::native_terminal_tests as suite;
+    use crate::terminal_tests::native_terminal_tests as suite;
     if let Some(result) = suite::run_fixture(fixture.pty_sender) {
         return result;
     }
     suite::set_fixture_support(fixture);
     native_markdown::main(suite::native_cases().collect(), "native_terminal")
 }
+
+#[cfg(any(test, feature = "native-markdown-tests"))]
+pub(crate) mod terminal_tests;
 
 use crate::core::config::Config;
 use crate::ui::assets::Assets;
@@ -643,7 +650,7 @@ pub fn run() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     #[cfg(target_os = "windows")]
     if args.as_slice() == [std::ffi::OsStr::new("-Embedding")] {
-        crate::terminal::desktop_notification::windows_toast::run_embedding();
+        lyrel_terminal::desktop_notification::windows_toast::run_embedding();
         return;
     }
     {
@@ -770,7 +777,7 @@ pub fn run() {
     // Give desktop toasts the lyrel icon and name instead of notify-rust's
     // PowerShell fallback. Best-effort; no-op off Windows.
     #[cfg(target_os = "windows")]
-    crate::core::aumid::init();
+    lyrel_terminal::aumid::init();
 
     let restore_session = config.restore_session;
     let daemon_result = if restore_session {

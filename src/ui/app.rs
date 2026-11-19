@@ -1,4 +1,5 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
+use crate::ui::program_attention::TerminalViewProgramSource as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
@@ -4049,7 +4050,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        let input = crate::ui::prefill::filled_box(current, window, cx);
+        let input = lyrel_terminal::prefill::filled_box(current, window, cx);
         input.update(cx, |state, cx| state.focus(window, cx));
         input
     }

@@ -15,7 +15,7 @@ use lyrel_core::core::session::{RemoteTarget, RouteSnapshot, WorkspaceId};
 use crate::core::actions::{SwitcherAcross, SwitcherAcrossBack};
 use crate::core::session::WorkspaceStore;
 use crate::daemon::install::InstallPhase;
-use crate::terminal::pane_liveness::Liveness;
+use crate::ui::pane_liveness::Liveness;
 use crate::ui::app::LyrelApp;
 use crate::ui::desktop_lookups::{HostChoice, HostLinks, home_for_host, local_home};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -706,7 +706,7 @@ impl LyrelApp {
     fn switcher_groups(&self, cx: &mut Context<Self>) -> Vec<Group> {
         let now = crate::ui::home::now_secs();
         let current = self.workspace;
-        crate::terminal::pane_liveness::sweep(cx);
+        crate::ui::pane_liveness::sweep(cx);
 
         let mut groups: Vec<Group> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -769,7 +769,7 @@ impl LyrelApp {
                         .unwrap_or_default(),
                     when: crate::ui::home::relative_time(now, w.last_active),
                     last_active: w.last_active,
-                    live: crate::terminal::pane_liveness::liveness_of(app, w),
+                    live: crate::ui::pane_liveness::liveness_of(app, w),
                     open: w.open,
                     current: w.id == current,
                     preempted: false,

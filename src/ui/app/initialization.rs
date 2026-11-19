@@ -204,9 +204,9 @@ impl LyrelApp {
                 this.right_panel_refresh_changes(cx);
                 cx.notify();
             });
-        cx.default_global::<crate::terminal::pane_liveness::PaneLivenessCache>();
+        cx.default_global::<crate::ui::pane_liveness::PaneLivenessCache>();
         let pane_liveness_watch = cx
-            .observe_global::<crate::terminal::pane_liveness::PaneLivenessCache>(|_this, cx| {
+            .observe_global::<crate::ui::pane_liveness::PaneLivenessCache>(|_this, cx| {
                 cx.notify();
             });
         // The rules the terminal asks below the workbench through: what a

@@ -58,7 +58,7 @@ impl LyrelApp {
         // over — not a prefix. `default_value` parked the caret in front of it,
         // so naming a worktree "login" over the suggested "feature" produced
         // "loginfeature".
-        let prefill = crate::ui::prefill::filled_box;
+        let prefill = lyrel_terminal::prefill::filled_box;
         let name = prefill(defaults.name.clone(), window, cx);
         let branch = prefill(defaults.name, window, cx);
         let base = prefill(defaults.base, window, cx);

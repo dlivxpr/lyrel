@@ -1122,7 +1122,7 @@ impl LyrelApp {
                 .into_any_element();
         }
 
-        crate::terminal::pane_liveness::sweep(cx);
+        crate::ui::pane_liveness::sweep(cx);
         let current = crate::ui::machine_mirror::display_name_for(cx, self.workspace)
             .unwrap_or_else(|| "lyrel".to_string());
         let monogram: String = current
