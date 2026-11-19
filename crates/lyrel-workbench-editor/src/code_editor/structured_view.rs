@@ -1,12 +1,9 @@
 //! 共享结构化树视图：源码/结构模式、展开、键盘导航、滚动同步、源码定位、
 //! 完整值面板与结构编辑会话。
 //!
-//! JSON／JSONC／JSONL 与 TOML 的 presentation 侧只有格式壳
-//! （[`StructuredViewFormat`]）不同：行配色与徽标、编辑命令集、mutation 规划、
-//! 标签与元素 id 前缀。共享代码持有 Document 订阅、源码 presentation、选择/
-//! 展开/滚动状态与 [`StructureEditPanel`] 会话；格式壳不复制这些。后续的
-//! YAML／XML 迁移（#340）只需实现同一格式壳：徽标、面板提示、多行值、
-//! focus_edit_value、自定义计数与自动展开策略都有对应 seam。
+//! JSON／JSONC／JSONL、TOML、YAML 和 XML 通过 [`StructuredViewFormat`] 提供
+//! 格式专属行、编辑命令、局部修改规划、文案和展开策略。共享视图持有源码呈现、
+//! 选择、展开、滚动与 [`StructureEditPanel`] 会话；共享文档管理解析投影的生命周期。
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -62,6 +59,7 @@ impl StructuredMode {
 /// 记录取整行；TOML 直接用投影的 `detail`。`has_detail` 为假时详情不可用
 /// （如 JSONL 的 Records 容器），不允许源码定位与完整值。路径借用投影，
 /// revision 刷新时的选中匹配与完整值保留因此不分配字符串。
+#[non_exhaustive]
 pub struct NodeIdentity<'a> {
     pub path: &'a str,
     pub range: Range<usize>,
@@ -72,6 +70,7 @@ pub struct NodeIdentity<'a> {
 }
 
 /// 一行可见结构节点的格式特定呈现数据。
+#[non_exhaustive]
 pub struct NodeRow {
     pub key: SharedString,
     pub value: SharedString,
@@ -85,6 +84,7 @@ pub struct NodeRow {
 }
 
 /// 工具栏一次树编辑命令的启用状态与触发方式。
+#[non_exhaustive]
 pub struct EditButton<R> {
     /// 元素 id 后缀；共享代码加上 `"{前缀}-"` 作用域。
     pub id: &'static str,
@@ -124,6 +124,7 @@ pub enum EditPlan<T> {
 }
 
 /// 打开编辑面板所需的一切：标题、字段、提示、多行值与固定目标。
+#[non_exhaustive]
 pub struct EditPanelDesc<T> {
     pub title: SharedString,
     pub key: Option<EditField>,
