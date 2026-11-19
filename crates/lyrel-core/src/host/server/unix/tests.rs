@@ -3,6 +3,7 @@ use crate::daemon::control::ControlHello;
 use crate::host::Host;
 use crate::host::local::LocalHost;
 use crate::host::remote::RemoteHost;
+use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 #[test]

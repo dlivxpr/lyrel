@@ -11,6 +11,7 @@ use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, size};
+use lyrel_markdown_editor::Document;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -57,8 +58,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn svg_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<SvgView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .svg()
             .expect("an SVG document")
@@ -98,8 +99,8 @@ fn open(
         app.editor_open_on_host(host, &at, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.svg().is_some())
         })
     });
@@ -133,7 +134,7 @@ fn replace_source(
     let replacement = replacement.to_owned();
     app.update_in(cx, |app, window, cx| {
         app.focus_editor(window, cx);
-        let input = app.active_editor_input().expect("SVG document");
+        let input = app.active_editor_input(cx).expect("SVG document");
         input
             .text()
             .unwrap()
@@ -151,7 +152,7 @@ fn type_source(
     app.update_in(cx, |app, window, cx| {
         app.focus_editor(window, cx);
         let view = app
-            .active_editor_input()
+            .active_editor_input(cx)
             .expect("SVG document")
             .svg()
             .expect("SVG presentation")
@@ -166,10 +167,10 @@ fn type_source(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -204,7 +205,7 @@ fn replace_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 #[gpui_kit::test]
 fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     // The mapped Host's file and a same-named local decoy: only the owning
@@ -222,17 +223,22 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
 
     let id = open_with_preview(&app, &mut cx, host.clone(), &path, (40., 30.));
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert_eq!(file.language(), "svg");
         assert!(!file.dirty, "an untouched SVG opens clean");
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "no code language service"
         );
-        assert!(app.svg_document_active());
+        assert!(app.svg_document_active(cx));
     });
     assert_eq!(
         rendered_revision(&app, &cx),
@@ -303,8 +309,8 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"64\"");
     let edited = replace_bytes(ORIGINAL, b"width=\"40\"", b"width=\"64\"");
-    app.read_with(&cx, |app, _| {
-        assert!(app.active_buffer().is_some_and(|file| file.dirty));
+    app.read_with(&cx, |app, cx| {
+        assert!(app.active_buffer(cx).is_some_and(|file| file.dirty));
     });
     wait_preview(&app, &mut cx, (64., 30.));
     assert_eq!(
@@ -347,9 +353,9 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     until(&mut cx, |cx| cx.has_pending_prompt());
     cx.simulate_prompt_answer(t(L10nKey::EditorDiscard));
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
-            app.editor.buffers.get(id).is_none(),
+            app.editor.read(cx).buffers.get(id).is_none(),
             "discarded close released it"
         );
     });
@@ -374,7 +380,7 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
 
 #[gpui_kit::test]
 fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "split.svg", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(284));
@@ -396,8 +402,8 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("SVG buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("SVG buffer");
         (
             file.presentations
                 .svg_existing(tab, right)
@@ -409,7 +415,7 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
     });
     assert_ne!(front, other, "each group draws its own presentation");
     app.read_with(&cx, |app, cx| {
-        let _ = app.active_buffer().expect("SVG buffer");
+        let _ = app.active_buffer(cx).expect("SVG buffer");
         assert_eq!(
             front.read(cx).document().entity_id(),
             other.read(cx).document().entity_id(),
@@ -464,7 +470,7 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(285));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -548,8 +554,11 @@ fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
     );
 
     // The last failed document still has editable source and a title/state.
-    app.read_with(&cx, |app, _| {
-        assert!(app.active_buffer().is_some_and(|file| file.input.is_text()));
+    app.read_with(&cx, |app, cx| {
+        assert!(
+            app.active_buffer(cx)
+                .is_some_and(|file| file.input.is_text())
+        );
     });
     let failed_id = svg_view(&app, &cx).entity_id();
     cx.update(|window, _| {
@@ -560,7 +569,7 @@ fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(286));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -576,8 +585,8 @@ fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppConte
         preview_failure(&app, cx)
             .is_some_and(|message| message.contains(t(L10nKey::EditorSvgInvalid)))
     });
-    app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("still open");
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("still open");
         assert!(file.input.text().is_some(), "source stays editable");
         assert!(!file.dirty, "an invalid file is not an edit");
     });
@@ -636,7 +645,7 @@ fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let remote_file = fixture(dir.path(), "original.svg", ORIGINAL);
     let host = FileHost::new(HostId(287));
@@ -648,7 +657,7 @@ fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
     let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"64\"");
     wait_preview(&app, &mut cx, (64., 30.));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     let target = dir.path().join("renamed.svg");
     cx.update(|window, cx| {
@@ -657,8 +666,8 @@ fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
         window.press("enter", cx);
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -675,21 +684,21 @@ fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     open_with_preview(&app, &mut cx, host, &target, (64., 30.));
 }
 
 #[gpui_kit::test]
 fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "watched.svg", ORIGINAL);
     let host: SharedHost = lyrel_core::host::local::LocalHost::new();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open_with_preview(&app, &mut cx, host, &path, (40., 30.));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     // A clean external rewrite is reloaded through the source codec and
@@ -697,9 +706,9 @@ fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppCon
     let rewritten = b"\xef\xbb\xbf<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"20\">\r\n<rect width=\"50\" height=\"20\"/>\n</svg>\n";
     std::fs::write(&path, rewritten).unwrap();
     until(&mut cx, |cx| preview_size(&app, cx) == Some((50., 20.)));
-    app.read_with(&cx, |app, _| {
-        assert!(!app.active_buffer().unwrap().dirty);
-        assert!(app.active_buffer().unwrap().conflict.is_none());
+    app.read_with(&cx, |app, cx| {
+        assert!(!app.active_buffer(cx).unwrap().dirty);
+        assert!(app.active_buffer(cx).unwrap().conflict.is_none());
     });
     assert_eq!(
         source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
@@ -715,8 +724,8 @@ fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppCon
         b"\xef\xbb\xbf<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>\n";
     std::fs::write(&path, conflicting).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -732,7 +741,7 @@ fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn a_late_preview_never_overwrites_a_newer_revision(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "late.svg", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(288));

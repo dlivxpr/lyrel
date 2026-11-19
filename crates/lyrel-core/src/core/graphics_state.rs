@@ -348,9 +348,7 @@ mod playback_tests;
 mod placeholder;
 pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
-/// Encoded source and RGBA-equivalent bounds; these are independent scopes.
-pub const MAX_PANE_ENCODED_BYTES: usize = 512 << 20;
-pub const MAX_PANE_DECODED_BYTES: usize = 512 << 20;
+pub use lyrel_protocol::daemon::protocol::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
 /// Admits a 3840 × 2160 RGBA screenshot (33,177,600 bytes).
 pub const MAX_IMAGE_DECODED_BYTES: usize = 32 << 20;
 #[path = "graphics_retention.rs"]

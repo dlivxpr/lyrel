@@ -16,11 +16,11 @@ use std::collections::HashMap;
 
 use gpui_kit::SharedString;
 
-use crate::core::config::DiffViewMode;
-use crate::terminal::git_diff::{
+use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
+use crate::ui::scm::diff::{
     AUTO_COLLAPSE_LINES, DiffSnapshot, FileDiff, FileStatus, MAX_RENDERED_FILES, Truncation,
 };
-use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
+use lyrel_core::core::config::DiffViewMode;
 
 /// Everything the file header row draws, lifted out of its [`FileDiff`].
 ///
@@ -251,7 +251,7 @@ pub(crate) fn file_expanded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::git_diff::{DiffLine, Hunk, LineKind};
+    use crate::ui::scm::diff::{DiffLine, Hunk, LineKind};
 
     fn line(kind: LineKind, old: Option<u32>, new: Option<u32>) -> DiffLine {
         DiffLine {

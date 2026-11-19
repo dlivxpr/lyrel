@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::machine::Machine;
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::core::machine::Machine;
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 
 use crate::address::{self, Context};
 use crate::backend::Backend;

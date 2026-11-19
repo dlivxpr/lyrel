@@ -19,9 +19,9 @@ use gpui_kit::{App, AppContext as _, Entity, Window};
 use lyrel_core::core::git::log::{Commit, CommitFile, CommitPage, GraphScope};
 use lyrel_core::core::git::status::{HeadState, WorkingTreeStatus};
 
-use crate::ui::host_ops::{HostId, SharedHost};
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 mod branches;
 mod history;
@@ -53,7 +53,7 @@ impl RepoKey {
     /// Inspect refresh identity without cloning a root or Host on a render
     /// that already has a fresh branch/graph result.
     pub(crate) fn refresh_epoch(&self, cx: &App) -> u64 {
-        cx.try_global::<crate::terminal::git_data::ScmData>()
+        cx.try_global::<crate::ui::scm::data::ScmData>()
             .map_or(0, |data| data.epoch(self.host, &self.root))
     }
 }
@@ -162,7 +162,7 @@ pub(crate) struct ScmPanelState {
     /// The cheap per-tab git status the panel last reacted to. A change in it
     /// means a command touched the repository and the expensive status is due
     /// another look.
-    pub(crate) last_tab_status: Option<crate::terminal::git_status::GitStatus>,
+    pub(crate) last_tab_status: Option<crate::ui::scm::status_cache::GitStatus>,
     graph: GraphState,
     /// When set, the panel body is replaced by a single commit's detail view
     /// instead of the working tree.

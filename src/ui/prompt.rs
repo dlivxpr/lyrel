@@ -286,7 +286,7 @@ impl Render for TextPrompt {
             // occluded — the dimmed window would still take it.
             .occlude()
             .cursor_default()
-            .bg(crate::ui::presets::scrim_fill(cx))
+            .bg(lyrel_ui_base::presets::scrim_fill(cx))
             .on_key_down(cx.listener(|this, ev: &gpui_kit::KeyDownEvent, _, cx| {
                 if let Some(ix) = this.answer_for_key(&ev.keystroke.key) {
                     cx.emit(PromptResponse(ix));
@@ -391,7 +391,7 @@ mod tests {
     /// line and ignored the theme. Return still answers it.
     #[gpui_kit::test]
     fn the_quit_prompt_is_drawn_by_the_app_not_the_platform(cx: &mut TestAppContext) {
-        use crate::ui::i18n::{L10nKey, t};
+        use lyrel_ui_base::i18n::{L10nKey, t};
 
         let (_app, mut vcx) = crate::ui::app::test_window::harness(cx);
         let mut answer = vcx.update(|window, cx| {

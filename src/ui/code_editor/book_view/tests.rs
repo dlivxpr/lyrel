@@ -7,6 +7,8 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
+use lyrel_document::epub::ReaderTheme;
+use lyrel_workbench_editor::code_editor::book_document::BookState;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -35,8 +37,8 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
 }
 
 fn active(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<BookView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("document")
             .book()
             .expect("EPUB reader")
@@ -55,7 +57,7 @@ fn open(
     });
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer().is_some_and(|file| {
+            app.active_buffer(cx).is_some_and(|file| {
                 file.path == path
                     && file
                         .input
@@ -64,7 +66,7 @@ fn open(
             })
         })
     });
-    app.read_with(cx, |app, _| app.active_buffer().unwrap().id())
+    app.read_with(cx, |app, cx| app.active_buffer(cx).unwrap().id())
 }
 
 fn side_item_id(
@@ -145,7 +147,7 @@ fn fixture(dir: &Path, name: &str, fixed: bool) -> PathBuf {
 
 #[gpui_kit::test]
 fn spine_navigation_and_full_book_search_reach_the_last_chapter(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "reference.epub", false);
     let original = std::fs::read(&path).unwrap();
@@ -200,7 +202,7 @@ fn spine_navigation_and_full_book_search_reach_the_last_chapter(tcx: &mut TestAp
 fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "persistent.epub", false);
     let original = std::fs::read(&path).unwrap();
@@ -220,7 +222,7 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     assert!(chosen.font_scale > before.font_scale);
     assert_ne!(chosen.line_height, before.line_height);
     assert_ne!(chosen.page_width_rem, before.page_width_rem);
-    assert_eq!(chosen.theme, lyrel_epub::ReaderTheme::Dark);
+    assert_eq!(chosen.theme, lyrel_document::epub::ReaderTheme::Dark);
     click_side_item(&app, &mut cx, "Final chapter");
     until(&mut cx, |cx| {
         active(&app, cx).read_with(cx, |view, _| {
@@ -233,11 +235,13 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok()
+            })
             .is_some_and(|record| {
                 record.reading.chapter == 1
                     && record.bookmarks.len() == 1
-                    && record.prefs.theme == lyrel_epub::ReaderTheme::Dark
+                    && record.prefs.theme == lyrel_document::epub::ReaderTheme::Dark
             })
     });
     app.update_in(&mut cx, |app, window, cx| {
@@ -262,7 +266,7 @@ fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     // consumer under test.
     app.update_in(&mut cx, |app, _, cx| {
         let view = app
-            .active_editor_input()
+            .active_editor_input(cx)
             .and_then(|input| input.book().cloned())
             .expect("EPUB reader");
         view.update(cx, |view, cx| {
@@ -326,8 +330,8 @@ fn unsupported_and_corrupt_books_stay_visible_read_only_documents(tcx: &mut Test
             app.editor_open_on_host(host.clone(), path, window, cx)
         });
         until(&mut cx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer()
+            app.read_with(cx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| file.path == *path && file.input.book().is_some())
             })
         });
@@ -346,7 +350,7 @@ fn unsupported_and_corrupt_books_stay_visible_read_only_documents(tcx: &mut Test
 
 #[gpui_kit::test]
 fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "search-position.epub", false);
     let original = std::fs::read(&path).unwrap();
@@ -391,7 +395,9 @@ fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut T
     until(&mut cx, |_| {
         std::fs::read(&record_path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<lyrel_epub::ReaderRecord>(&bytes).ok())
+            .and_then(|bytes| {
+                serde_json::from_slice::<lyrel_document::epub::ReaderRecord>(&bytes).ok()
+            })
             .is_some_and(|record| {
                 record.reading.chapter == 0
                     && record.reading.fraction > 0.99

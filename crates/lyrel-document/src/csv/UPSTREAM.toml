@@ -1,0 +1,63 @@
+# 记录导入前核对的原始源码摘要；本地适配后的文件不应与上游相等。
+#
+# #288 局部 mutation 层（`edit.rs`）是 Lyrel 补缺，不是上游源码：Glim 的 CSV
+# reader 只有只读表格，没有保真写回。它按本清单记录的记录／字段源区间计算
+# 单元格、表格粘贴与行列增删的局部替换，交给共享 Document 作为一次 history
+# 记录；不序列化整表、不使用排序／筛选后的显示位置、不改动未触及字段的
+# 拼写／引号／分隔符／BOM／编码／逐行行尾。字节级回归见
+# `crates/lyrel-document/src/csv/edit_tests.rs`，
+# 生产工作台消费者见 `tests.rs`。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+ticket = "#287"
+maintainer = "Lyrel"
+
+[[source]]
+upstream = "crates/glim-services/src/csv.rs"
+local = "crates/lyrel-document/src/csv/table.rs"
+sha256 = "8bff2521ce94c3becfc55a02267b71d7a7fb3165a03b33e61858f602bef97b9b"
+scope = "csv::ReaderBuilder has_headers(false)/flexible(true) 的逻辑记录读取、quoted delimiter 与 multiline 语义、完整列集合、解析取消"
+adaptation = "输入改为共享 Document snapshot 的同一 Arc<String>；预算改为具名 CsvLimits 并拒绝而非返回局部页；用 csv::ByteRecord::position 与 reader position 补记录区间、用字段边界扫描器补原始字段区间，并逐字段与 csv 解码值核对；不再为页面持有 decoder 的 ResourcePool；字段值不常驻，显示/排序/筛选/复制按区间从源文解码"
+rejected = "Glim ResourcePool/WorkingReservation、IO_BUFFER_BYTES 与 TextRowsBuilder 容器、GeoJSON/GPX/KML 分支、任意 anyhow 错误透传均未导入"
+
+[[source]]
+upstream = "crates/glim-core/src/table.rs"
+local = "crates/lyrel-document/src/csv/table.rs"
+sha256 = "d3e940b951efa519370c1b6d79ba02bbe81981746a4b53ef31b80b05cc656151"
+scope = "只读表页的 rows/columns/more 数据形状与“列数按完整逻辑记录取最大值”的契约"
+adaptation = "TablePage 形状并入 CsvTable 的完整记录集合；没有分页表也就不需要 more/TextRows；SQLite 页类型保持未导入"
+rejected = "整个 Glim resources/TextRows 子系统与 SqlitePage 未导入"
+
+[[source]]
+upstream = "crates/glim-app/src/views/reader/csv.rs"
+local = "crates/lyrel-workbench-editor/src/code_editor/csv_document.rs"
+sha256 = "a0b2e3a09d04fa19eb067f6bc76b6c5b94adbb7d1563cf82fd03bfd62af2c31b"
+scope = "行列页位置、busy/suspend 时拒绝新页请求、后台任务取消后才发布、精确逻辑记录而不是物理行的换页"
+adaptation = "由 CsvDocument 统一做一套解析与取消；列窗口分页保留（显示预算），记录集合不再分页而由完整逻辑表 + uniform_list 虚拟化承载；每个 CsvView 保存自己的选择/列窗口/筛选/排序/滚动；late parse/query 以 Document 身份、revision、generation 三重校验后才安装"
+rejected = "Glim reader_jobs/telemetry、ReaderHost 与服务表注册、Source::File 的本地 std::fs 读取（Lyrel 内容始终来自 owning Host 打开后的共享 Document）、Geo 分支不导入"
+
+[[source]]
+upstream = "crates/glim-app/src/views/reader/csv/view.rs"
+local = "crates/lyrel-workbench-editor/src/code_editor/csv_document.rs"
+sha256 = "6dc5ab5368ac4cd376e9a52fc792c7910e45c1879c582590a1a794a040183fd1"
+scope = "虚拟化行、独立纵横滚动、显示摘录压平硬换行、完整值详情与复制交互、列窗口边界、空记录页"
+adaptation = "uniform_list、Kit Button/Input/Spinner/Scrollbar 适配到当前主题与本地化；单元格 ElementId 换成 view+逻辑记录+逻辑列+角色的稳定标识；完整值改为固定详情面板与剪贴板，不复制上游 host 回调；增加键盘单元格导航、视图筛选/排序和源码区间定位；列窗口保留，显示摘录仍只压平显示文本、完整值另取"
+rejected = "ReaderHost translate/action 回调、Glim controls/loading 壳、按显示行号生成的 ElementId、对话框 host 与浮层骨架未导入"
+
+[[source]]
+upstream = "assets/reader-contracts/table.csv"
+local = "src/ui/code_editor/csv_document/fixtures/table.csv"
+sha256 = "e5baec556148dc0660e7f98df9510325097266c631ccd7a1435fd0bf2571707e"
+bytes = 73
+scope = "上游 UTF-8 BOM、中文、quoted comma、多行双引号、不等长记录与真实空字段原始夹具"
+adaptation = "原字节导入；经正常工作台打开、完整字段复制与未编辑保存消费，不以物理行替代逻辑记录"
+
+[[source]]
+upstream = "assets/reader-contracts/table.json"
+local = "src/ui/code_editor/csv_document/fixtures/table.json"
+sha256 = "4c659b4aad534158475d399284d890935a09dd69e05973301d0637e91fa8716e"
+bytes = 257
+scope = "上游独立期望：完整3列、4条逻辑记录、quoted multiline、缺失字段与空字段"
+adaptation = "原字节导入；生产工作台消费者断言读取与复制结果、原 CSV 字节保存不变，不将期望 JSON 作为文档模型"

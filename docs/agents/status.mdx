@@ -239,9 +239,9 @@ read mark：切换工作区或重建视图不等于读过结果，断线期间�
 是否读到新结果取决于窗口中的实际焦点，而不是视图缓存的聚焦标志。
 
 完成通知保持既有的 1.5 秒稳定等待；智能体在此期间恢复工作时取消该通知，等待输入
-通知仍立即发送，不增加新的通知策略。实现由 `src/terminal/agent_activity.rs` 的
+通知仍立即发送，不增加新的通知策略。实现由 `crates/lyrel-terminal/src/agent_activity.rs` 的
 `AgentActivity` 持有检测、会话转换、read mark、未读及取消状态；`TerminalView`
-只适配 GPUI 事件、计时任务和保留的实体身份。`src/terminal/desktop_notification.rs`
+只适配 GPUI 事件、计时任务和保留的实体身份。`crates/lyrel-terminal/src/desktop_notification.rs`
 独立负责平台投递、文本清理、通知标识和点击路由，不依赖终端连接或 reader。
 点击路由使用 GPUI entity 身份而非 daemon pane 编号；旧通知不会跳到新进程复用的同编号窗格。
 Windows 安装包注册通知中心的点击处理器。即使 Windows 将点击交给另一个进程，也只会将其转发给发出通知且仍运行的实例；原窗格已关闭时不会切换焦点。

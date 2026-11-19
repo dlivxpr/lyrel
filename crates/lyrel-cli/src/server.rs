@@ -3,10 +3,10 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
-use lyrel_core::client::PaneClient;
-use lyrel_core::core::config;
-use lyrel_core::daemon::protocol::FEATURE_HANDOFF;
-use lyrel_core::daemon::spawn;
+use lyrel_protocol::client::PaneClient;
+use lyrel_protocol::core::config;
+use lyrel_protocol::daemon::protocol::FEATURE_HANDOFF;
+use lyrel_protocol::daemon::spawn;
 use serde_json::json;
 
 use crate::commands::{Outcome, Report};
@@ -99,7 +99,7 @@ pub fn stop() -> Result<Outcome> {
         // Answering nothing is not the same as being gone: a stranded server
         // (#667) still holds the seat, and stop is the verb people reach for
         // to clear it. Only a free seat means there is truly nothing to stop.
-        let Some(stranded) = lyrel_core::daemon::singleton::holder_pid() else {
+        let Some(stranded) = lyrel_protocol::daemon::singleton::holder_pid() else {
             return report(
                 "the server is not running",
                 json!({ "stopped": false, "running": false }),
@@ -109,7 +109,7 @@ pub fn stop() -> Result<Outcome> {
         // Compared against the pid, not mere occupancy: a fresh daemon may
         // legitimately claim the freed seat in this very window, and it is
         // not the thing this command failed to stop.
-        if lyrel_core::daemon::singleton::holder_pid() == Some(stranded) {
+        if lyrel_protocol::daemon::singleton::holder_pid() == Some(stranded) {
             bail!(
                 "the stranded server could not be reaped{}",
                 spawn::seat_holder_note()
@@ -168,7 +168,7 @@ pub fn restart(hard: bool) -> Result<Outcome> {
 /// `instance`, because that value is minted once per process image.
 fn restart_in_place(
     client: &PaneClient,
-    old: &lyrel_core::daemon::protocol::DaemonVersion,
+    old: &lyrel_protocol::daemon::protocol::DaemonVersion,
 ) -> Result<Outcome> {
     let exe = server_exe()?;
     client.hand_off(&exe).map_err(|e| {
@@ -221,7 +221,7 @@ fn restart_in_place(
     // held seat is the handed-off daemon still coming up, carrying every
     // session. `start` would grant it one second of grace and then reap it —
     // ending exactly the sessions this command promised to keep.
-    if lyrel_core::daemon::singleton::holder_pid().is_some() {
+    if lyrel_protocol::daemon::singleton::holder_pid().is_some() {
         bail!(
             "the server took the handoff but has not started answering within \
              {START_TIMEOUT:?} — it still holds the server seat, so its sessions may yet \

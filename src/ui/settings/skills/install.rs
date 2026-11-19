@@ -5,13 +5,11 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     select::{Select, SelectEvent, SelectItem, SelectState},
 };
-use lyrel_core::{
-    core::github::{ApiError, Transport},
-    skills::{
-        catalog::{self, GitHubSource, SkillCatalog, SkillSearchResult},
-        install::{
-            self, ExistingContent, InstallDecision, InstallPreview, InstallStatus, InstallTarget,
-        },
+use lyrel_insights::github::{ApiError, Transport};
+use lyrel_insights::skills::{
+    catalog::{self, GitHubSource, SkillCatalog, SkillSearchResult},
+    install::{
+        self, ExistingContent, InstallDecision, InstallPreview, InstallStatus, InstallTarget,
     },
 };
 use std::collections::BTreeSet;
@@ -184,6 +182,7 @@ fn github_transport(
     if let Some(transport) = injected {
         return Ok(transport);
     }
+    let proxy = lyrel_core::daemon::install::proxy::resolve("https://api.github.com", proxy);
     Ok(catalog::desktop_github_transport(proxy))
 }
 fn catalog_error(error: catalog::CatalogError) -> String {
@@ -336,7 +335,12 @@ impl SettingsWindow {
             move |_| {
                 let transport: Arc<dyn Transport> = match injected {
                     Some(t) => t,
-                    None => Arc::new(catalog::SkillsSearchHttp::new(proxy.as_deref())),
+                    None => Arc::new(catalog::SkillsSearchHttp::new(
+                        lyrel_core::daemon::install::proxy::resolve(
+                            "https://skills.sh",
+                            proxy.as_deref(),
+                        ),
+                    )),
                 };
                 catalog::search(transport.as_ref(), &query).map_err(|error| error.to_string())
             },

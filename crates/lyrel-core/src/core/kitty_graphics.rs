@@ -43,8 +43,6 @@ pub use super::graphics_state::{
 /// this to admit a one-shot frame that still fits [`MAX_TRANSMISSION_BASE64`];
 /// [`ApcTokenizer::push_graphics`] logs whatever it has to drop.
 const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
-const MAX_DISCOVERY_PAYLOAD: usize = 8192;
-const MAX_DCS_HEADER: usize = 128;
 /// Fixed OSC identifier for iTerm2 proprietary commands.
 const ITERM2_OSC_ID: &[u8] = b"1337;";
 /// Bound on a command identifier before its `=` (`MultipartFile` is the longest
@@ -84,13 +82,9 @@ pub struct ApcTokenizer {
     /// Decoded iTerm2 PNG bytes queued for the pane, still charged to this
     /// tokenizer until the daemon moves the lease into image preparation.
     osc_completed: usize,
-    /// Discovery reuses this bounded framing, not a second VT grammar.
-    dcs: bool,
-    /// Only the graphics splitter owns OSC 1337; the Glyph and XTGETTCAP
-    /// sniffers must forward that control string intact for the graphics
-    /// sniffer behind them.
+    /// Only the graphics splitter owns OSC 1337; the Glyph sniffer must
+    /// forward that control string intact for the graphics sniffer behind it.
     iterm2: bool,
-    header: Option<Box<rio_vt::performer::parser::Parser>>,
     /// Which APC body this instance lifts: kitty `G` or Glyph Protocol `25a1`.
     lift: ApcLift,
     /// Bytes of `lift.prefix()` matched so far in [`State::ApcStart`].
@@ -123,7 +117,7 @@ enum State {
     Esc,
     /// Held `ESC _`; the next byte decides graphics (`G`) vs. passthrough APC.
     ApcStart,
-    /// Rio classifies discovery; graphics mode admits numeric static Sixel.
+    /// Held `ESC P`; graphics mode admits a numeric static Sixel header.
     DcsStart,
     /// Buffering a `_G` graphics command (stripped from passthrough).
     ApcGraphics,
@@ -171,16 +165,14 @@ impl ApcTokenizer {
                 retention.work(retention.owner())
             },
             osc_completed: 0,
-            dcs: false,
             iterm2: true,
-            header: None,
             lift: ApcLift::KittyGraphics,
             matched: 0,
         }
     }
 
     /// A tokenizer that lifts Glyph Protocol bodies (`25a1`) with the same
-    /// framing. It has no DCS discovery; every other control string passes
+    /// framing. It has no Sixel admission; every other control string passes
     /// through verbatim.
     pub(crate) fn glyph() -> Self {
         let mut tokenizer = Self::new();
@@ -191,13 +183,6 @@ impl ApcTokenizer {
 
     pub(crate) fn ground(&self) -> bool {
         self.at_boundary()
-    }
-
-    pub(crate) fn xtgettcap() -> Self {
-        let mut tokenizer = Self::new();
-        tokenizer.dcs = true;
-        tokenizer.iterm2 = false;
-        tokenizer
     }
 
     pub(crate) fn at_boundary(&self) -> bool {
@@ -273,32 +258,10 @@ impl ApcTokenizer {
         self.state = State::Ground;
     }
 
-    fn opener(&self) -> &'static [u8] {
-        if self.dcs { b"\x1bP" } else { b"\x1b_" }
-    }
-
-    fn boundary(&self, bytes: &[u8]) -> Option<usize> {
-        let control = memchr::memchr3(0x1b, 0x18, 0x1a, bytes);
-        if !self.dcs {
-            return control;
-        }
-        match (control, memchr::memchr(0x9c, bytes)) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
-    }
-
     fn start_command(&mut self) {
         self.clear_buffer();
         self.matched = 0;
-        self.state = if self.dcs {
-            let parser = self.header.get_or_insert_with(Default::default);
-            **parser = rio_vt::performer::parser::Parser::default();
-            parser.advance(&mut DcsHeader::default(), b"\x1bP");
-            State::DcsStart
-        } else {
-            State::ApcStart
-        };
+        self.state = State::ApcStart;
     }
 
     /// Feed one chunk of output. `on_passthrough` receives runs of non-graphics
@@ -370,21 +333,12 @@ impl ApcTokenizer {
                         return;
                     }
                 },
-                State::PassApc => match if self.dcs {
-                    self.boundary(&bytes[i..])
-                } else {
-                    memchr::memchr(0x1b, &bytes[i..])
-                } {
+                State::PassApc => match memchr::memchr(0x1b, &bytes[i..]) {
                     Some(off) => {
                         if off > 0 {
                             on_passthrough(&bytes[i..i + off]);
                         }
-                        if self.dcs && bytes[i + off] != 0x1b {
-                            on_passthrough(&bytes[i + off..i + off + 1]);
-                            self.state = State::Ground;
-                        } else {
-                            self.state = State::PassApcEsc;
-                        }
+                        self.state = State::PassApcEsc;
                         i += off + 1;
                     }
                     None => {
@@ -392,7 +346,7 @@ impl ApcTokenizer {
                         return;
                     }
                 },
-                State::ApcDrop => match self.boundary(&bytes[i..]) {
+                State::ApcDrop => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
                         self.state = if bytes[i + off] == 0x1b {
                             State::ApcDropEsc
@@ -403,15 +357,11 @@ impl ApcTokenizer {
                     }
                     None => return,
                 },
-                State::ApcGraphics => match self.boundary(&bytes[i..]) {
+                State::ApcGraphics => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
                         if self.push_graphics(&bytes[i..i + off]) {
                             if bytes[i + off] == 0x1b {
                                 self.state = State::ApcGraphicsEsc;
-                            } else if self.dcs && bytes[i + off] == 0x9c {
-                                on_command(&self.buf, false, false);
-                                self.clear_buffer();
-                                self.state = State::Ground;
                             } else {
                                 on_command(&self.buf, true, false);
                                 self.clear_buffer();
@@ -437,7 +387,7 @@ impl ApcTokenizer {
                     }
                 },
                 State::Esc => match bytes[i] {
-                    byte if byte == self.opener()[1] => {
+                    b'_' => {
                         self.start_command();
                         i += 1;
                     }
@@ -466,7 +416,7 @@ impl ApcTokenizer {
                     // OSC is the third bounded control string this splitter
                     // knows: only the fixed iTerm2 `1337;` prefix is inspected,
                     // and every other OSC stays byte-for-byte passthrough.
-                    b']' if self.iterm2 && !self.dcs => {
+                    b']' if self.iterm2 => {
                         self.clear_buffer();
                         self.state = State::OscPrefix;
                         i += 1;
@@ -479,70 +429,27 @@ impl ApcTokenizer {
                     }
                 },
                 State::DcsStart => {
+                    // Graphics mode admits numeric static Sixel.
                     let byte = bytes[i];
-                    if !self.dcs {
-                        if byte == b'q' {
-                            if self.push_graphics(&[byte]) {
-                                self.state = State::ApcGraphics;
-                            } else {
-                                self.clear_buffer();
-                                self.state = State::ApcDrop;
-                            }
-                            i += 1;
-                        } else if byte.is_ascii_digit() || byte == b';' {
-                            if self.buf.len() >= 64 || !self.push_graphics(&[byte]) {
-                                self.clear_buffer();
-                                self.state = State::ApcDrop;
-                            }
-                            i += 1;
-                        } else {
-                            on_passthrough(b"\x1b");
-                            on_passthrough(&self.buf);
-                            self.clear_buffer();
-                            self.state = State::PassApc;
-                        }
-                        continue;
-                    }
-                    if matches!(byte, 0x18 | 0x1a | 0x9c) {
-                        self.clear_buffer();
-                        on_passthrough(b"\x18");
-                        self.state = State::Ground;
-                        i += 1;
-                        continue;
-                    }
-                    if byte == 0x1b {
-                        self.clear_buffer();
-                        on_passthrough(b"\x18");
-                        self.state = State::Esc;
-                        i += 1;
-                        continue;
-                    }
-                    let mut classification = DcsHeader::default();
-                    self.header
-                        .as_mut()
-                        .expect("DCS header parser")
-                        .advance(&mut classification, &bytes[i..i + 1]);
-                    if byte < 0x20 || byte == 0x7f {
-                        // Forward executed C0 once, not again in the owner's query Processor.
-                        on_passthrough(&bytes[i..i + 1]);
-                        i += 1;
-                        continue;
-                    }
-                    self.buf.push(byte);
-                    i += 1;
-                    if let Some(query) = classification.query {
-                        if query {
+                    if byte == b'q' {
+                        if self.push_graphics(&[byte]) {
                             self.state = State::ApcGraphics;
                         } else {
-                            on_passthrough(self.opener());
-                            on_passthrough(&self.buf);
                             self.clear_buffer();
-                            self.state = State::PassApc;
+                            self.state = State::ApcDrop;
                         }
-                    } else if self.buf.len() >= MAX_DCS_HEADER {
-                        on_passthrough(b"\x18");
+                        i += 1;
+                    } else if byte.is_ascii_digit() || byte == b';' {
+                        if self.buf.len() >= 64 || !self.push_graphics(&[byte]) {
+                            self.clear_buffer();
+                            self.state = State::ApcDrop;
+                        }
+                        i += 1;
+                    } else {
+                        on_passthrough(b"\x1b");
+                        on_passthrough(&self.buf);
                         self.clear_buffer();
-                        self.state = State::ApcDrop;
+                        self.state = State::PassApc;
                     }
                 }
                 State::ApcStart => {
@@ -575,15 +482,9 @@ impl ApcTokenizer {
                         self.state = State::Ground;
                         i += 1;
                     }
-                    0x1b if self.dcs => {
-                        on_command(&self.buf, true, false);
-                        self.clear_buffer();
-                        self.state = State::Esc;
-                        i += 1;
-                    }
                     0x1b => i += 1, // existing Kitty APC handling
                     // A bare `ESC _` re-opens: the next byte decides graphics again.
-                    byte if byte == self.opener()[1] => {
+                    b'_' => {
                         on_command(&self.buf, true, false);
                         self.start_command();
                         i += 1;
@@ -626,10 +527,7 @@ impl ApcTokenizer {
                     // swallows every `ESC _G …` after it — the graphics get
                     // forwarded as APC text that the client's vte then discards,
                     // so the image is simply lost.
-                    byte if byte == self.opener()[1] => {
-                        if self.dcs {
-                            on_passthrough(b"\x18");
-                        }
+                    b'_' => {
                         self.start_command();
                         i += 1;
                     }
@@ -644,11 +542,7 @@ impl ApcTokenizer {
                     }
                     _ => {
                         on_passthrough(b"\x1b");
-                        self.state = if self.dcs {
-                            State::Ground
-                        } else {
-                            State::PassApc
-                        };
+                        self.state = State::PassApc;
                     }
                 },
                 State::ApcDropEsc => match bytes[i] {
@@ -657,7 +551,7 @@ impl ApcTokenizer {
                         i += 1;
                     }
                     0x1b => i += 1,
-                    byte if byte == self.opener()[1] => {
+                    b'_' => {
                         self.start_command();
                         i += 1;
                     }
@@ -871,8 +765,6 @@ impl ApcTokenizer {
     fn push_graphics(&mut self, run: &[u8]) -> bool {
         let limit = if self.lift == ApcLift::GlyphProtocol {
             super::glyph_protocol::MAX_APC_BODY
-        } else if self.dcs {
-            MAX_DISCOVERY_PAYLOAD
         } else if self.buf.first() == Some(&b'P') {
             8 << 20
         } else {
@@ -911,24 +803,6 @@ impl ApcTokenizer {
         }
         self.buf.extend_from_slice(run);
         true
-    }
-}
-
-#[derive(Default)]
-struct DcsHeader {
-    query: Option<bool>,
-}
-
-impl rio_vt::performer::parser::Perform for DcsHeader {
-    fn hook(
-        &mut self,
-        _: &rio_vt::performer::parser::Params,
-        intermediates: &[u8],
-        _: bool,
-        action: char,
-    ) {
-        // Processor's hook matches this pair even when its ignore flag is set.
-        self.query = Some(intermediates == b"+" && action == 'q');
     }
 }
 

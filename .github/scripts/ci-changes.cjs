@@ -89,12 +89,17 @@ function isPreflightOnly(file) {
   );
 }
 
-// 只在桌面（GUI/updater/native harness）与 Apple/Windows 目标上编译的输入。
+// 只在桌面（GUI/updater/native harness）与 Apple/Windows 目标上编译的输入；
+// Linux headless 显式排除桌面包；manifest 变化仍按共享解析输入处理。
 function isDesktopOnly(file) {
   return (
     file.startsWith('src/') ||
     file === 'build.rs' ||
     file.startsWith('crates/lyrel-markdown-editor/') ||
+    file.startsWith('crates/lyrel-updater/') ||
+    file.startsWith('crates/lyrel-ui-base/') ||
+    file.startsWith('crates/lyrel-terminal/') ||
+    file.startsWith('crates/lyrel-workbench-editor/') ||
     file.startsWith('tests/') ||
     file.startsWith('assets/icons/') ||
     file.startsWith('assets/drawio/') ||
@@ -102,15 +107,16 @@ function isDesktopOnly(file) {
   );
 }
 
-// GUI-free 也进 Linux headless 图的成员：CLI、文本/PDF/EPUB 后端、纯模型 crate
-// 以及它们的集成测试。lyrel-core 源码仍按保守分支计入 server。
+// GUI-free 也进 Linux headless 图的成员：CLI、lyrel-document 的全部文档引擎、
+// lyrel-insights 的 skills/statistics/github/usage 模型（浏览器读取器仍只进
+// 桌面目标）、共享测试夹具以及集成测试。lyrel-core 与 lyrel-protocol 同是
+// server 生产依赖，源码不在此列：保守分支同时触发 server。
 function isDesktopAndLinuxOnly(file) {
   return (
     file.startsWith('crates/lyrel-cli/') ||
-    file.startsWith('crates/lyrel-code-editor/') ||
-    file.startsWith('crates/lyrel-text/') ||
-    file.startsWith('crates/lyrel-epub/') ||
-    file.startsWith('crates/lyrel-pdf/') ||
+    file.startsWith('crates/lyrel-document/') ||
+    file.startsWith('crates/lyrel-insights/') ||
+    file.startsWith('crates/lyrel-test-support/') ||
     /^crates\/lyrel-(core|server)\/tests\//.test(file)
   );
 }

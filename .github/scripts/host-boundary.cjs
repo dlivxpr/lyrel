@@ -1,6 +1,13 @@
 // Host boundary module traversal. Invoked by check-host-boundary.sh, not a test harness.
 const fs = require('node:fs');
 const path = require('node:path').posix;
+// The shell and each desktop capability crate are required scan roots.
+const SCAN_ROOTS = [
+    'src/ui',
+    'crates/lyrel-ui-base/src',
+    'crates/lyrel-terminal/src',
+    'crates/lyrel-workbench-editor/src',
+];
 const files = new Set();
 function collect(root) {
     for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
@@ -9,7 +16,15 @@ function collect(root) {
         else if (file.endsWith('.rs')) files.add(file);
     }
 }
-['src/ui', 'src/terminal'].forEach(collect);
+for (const root of SCAN_ROOTS) {
+    if (!fs.existsSync(root)) {
+        console.error(`check-host-boundary: scan root '${root}' does not exist (moved? renamed?)`);
+        process.exit(2);
+    }
+    collect(root);
+}
+// Retained whole-window terminal consumers live in the shell's test module.
+if (fs.existsSync('src/terminal_tests')) collect('src/terminal_tests');
 if (files.size < 10) throw Error('check-host-boundary: fewer than 10 files; scan roots look wrong');
 
 // Strings/comments are units: fixture braces cannot manufacture Rust modules.
@@ -125,7 +140,15 @@ function parse(file) {
             ix = last+1;
         }
     }
-    const directory = path.basename(file) === 'mod.rs' ? path.dirname(file) : path.join(path.dirname(file), path.basename(file, '.rs'));
+    // `mod.rs` and crate roots (`lib.rs`/`main.rs`) resolve child modules in the
+    // file's own directory; any other module's children live in the matching
+    // module directory. Without the crate-root case, `src/lib.rs`'s
+    // `#[cfg(test)] mod fixture;` would never resolve and the fixture would be
+    // scanned as production.
+    const base = path.basename(file);
+    const directory = base === 'mod.rs' || base === 'lib.rs' || base === 'main.rs'
+        ? path.dirname(file)
+        : path.join(path.dirname(file), path.basename(file, '.rs'));
     walk(0, tokens.length, directory, path.dirname(file));
 }
 for (const file of files) parse(file);

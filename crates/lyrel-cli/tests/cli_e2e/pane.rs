@@ -3,8 +3,8 @@ use super::*;
 pub(super) fn repeated_pane_pressure_preserves_detached_history_and_closes_only_owned_panes(
     daemon: &Daemon,
 ) {
-    use lyrel_core::core::machine::PaneSeed;
-    use lyrel_core::daemon::control::ControlRequest;
+    use lyrel_protocol::core::machine::PaneSeed;
+    use lyrel_protocol::daemon::control::ControlRequest;
 
     let workspace = daemon.run_json(&["ws", "new", "lifecycle-retention"]);
     let workspace = workspace["id"].as_str().unwrap();
@@ -159,8 +159,8 @@ pub(super) fn retired_executable_names_still_run_as_ordinary_pty_commands(daemon
 }
 
 pub(super) fn parked_shells_keep_cli_identity_input_capture_and_close_scope(daemon: &Daemon) {
-    use lyrel_core::core::machine::{Axis, PaneSeed};
-    use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+    use lyrel_protocol::core::machine::{Axis, PaneSeed};
+    use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 
     let client = ControlClient::connect_at(
         &daemon.control_endpoint(),

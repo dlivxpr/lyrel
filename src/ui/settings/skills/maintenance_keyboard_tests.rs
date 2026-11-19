@@ -55,7 +55,7 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         ("en", 1100., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 680., gpui_kit::component::ThemeMode::Dark),
     ] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         vcx.simulate_resize(gpui_kit::size(px(width), px(720.)));
         app.update_in(&mut vcx, |app, window, cx| {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
@@ -133,7 +133,7 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         );
         assert!(!project.join("skills-lock.json").exists());
     }
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }
 
 #[gpui_kit::test]

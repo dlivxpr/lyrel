@@ -19,7 +19,7 @@ pub(super) fn mock() -> MockBackend {
 /// wrapping tests can wrap without pages of fixture.
 pub(super) fn segment(bytes: &[u8]) -> crate::backend::CaptureSegment {
     crate::backend::CaptureSegment {
-        size: lyrel_core::daemon::protocol::WinSize {
+        size: lyrel_protocol::daemon::protocol::WinSize {
             cols: 20,
             rows: 10,
             cell_w: 8,
@@ -50,8 +50,8 @@ pub(super) fn json_of(outcome: Outcome) -> Value {
 pub(super) fn pane_info(
     pane_id: u64,
     owner: Option<&str>,
-) -> lyrel_core::daemon::protocol::PaneInfo {
-    lyrel_core::daemon::protocol::PaneInfo {
+) -> lyrel_protocol::daemon::protocol::PaneInfo {
+    lyrel_protocol::daemon::protocol::PaneInfo {
         pane_id,
         cwd: None,
         title: "sh".into(),
@@ -63,20 +63,20 @@ pub(super) fn pane_info(
 
 pub(super) fn agent_state(
     pane_id: u64,
-    status: lyrel_core::core::cli_agent::AgentStatus,
-) -> lyrel_core::daemon::control::PaneAgentState {
+    status: lyrel_protocol::core::cli_agent::AgentStatus,
+) -> lyrel_protocol::daemon::control::PaneAgentState {
     agent_state_at(pane_id, status, 0)
 }
 
 pub(super) fn agent_state_at(
     pane_id: u64,
-    status: lyrel_core::core::cli_agent::AgentStatus,
+    status: lyrel_protocol::core::cli_agent::AgentStatus,
     activity: u64,
-) -> lyrel_core::daemon::control::PaneAgentState {
-    lyrel_core::daemon::control::PaneAgentState {
+) -> lyrel_protocol::daemon::control::PaneAgentState {
+    lyrel_protocol::daemon::control::PaneAgentState {
         pane_id,
         agent: None,
-        state: lyrel_core::core::cli_agent::AgentSessionState {
+        state: lyrel_protocol::core::cli_agent::AgentSessionState {
             status,
             message: Some("needs permission".into()),
             session_id: Some("sess-9".into()),

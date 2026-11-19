@@ -1,11 +1,10 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, HashSet};
 
-use crate::core::ssh_config;
 use gpui_kit::{Context, Window};
+use lyrel_ui_base::ssh_config;
 use uuid::Uuid;
 
-use crate::core::config::Config;
 use crate::core::keychain::{CredentialStore, OsCredentialStore, key_account_from_contents};
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile,
@@ -13,6 +12,7 @@ use crate::core::ssh_profile::{
 use crate::daemon::protocol::{
     NativeSshSpec, SshAlgorithms, SshAuthMode, SshForwardKind, SshForwardRule, SshProxy,
 };
+use lyrel_ui_base::config::Config;
 
 use super::app::{LyrelApp, SpawnWhere};
 use super::tab::presentation::SpawnAs;
@@ -120,7 +120,7 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) {
-        if let Some(resolved) = crate::core::ssh_config::resolve_alias_to_profile(&qc.host) {
+        if let Some(resolved) = ssh_config::resolve_alias_to_profile(&qc.host) {
             let mut profile = resolved.profile;
             if let Some(user) = qc.user {
                 profile.user = user;
@@ -183,7 +183,7 @@ impl LyrelApp {
         &self,
         window: &gpui_kit::Window,
         cx: &gpui_kit::App,
-    ) -> Option<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
+    ) -> Option<gpui_kit::Entity<lyrel_terminal::view::TerminalView>> {
         self.tabs
             .get(self.tabs.active_index())?
             .pane
@@ -254,7 +254,9 @@ impl LyrelApp {
                     // Silently dropping the hop would leave a host that saves fine and
                     // then cannot be reached.
                     window.notify_app(
-                        crate::ui::i18n::t(crate::ui::i18n::L10nKey::SshSaveDroppedJumpHost),
+                        lyrel_ui_base::i18n::t(
+                            lyrel_ui_base::i18n::L10nKey::SshSaveDroppedJumpHost,
+                        ),
                         cx,
                     );
                 }
@@ -268,11 +270,11 @@ impl LyrelApp {
     /// be fixable only by finding the same host again in Settings (#438).
     pub(crate) fn edit_ssh_host_of_target(
         &mut self,
-        target: &crate::core::session::RemoteTarget,
+        target: &lyrel_ui_base::session::RemoteTarget,
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) {
-        use crate::core::session::RemoteTarget;
+        use lyrel_ui_base::session::RemoteTarget;
         match target {
             RemoteTarget::Profile { id } => self.open_ssh_profile_in_settings(*id, window, cx),
             // An alias is read out of `~/.ssh/config`, which this form does not
@@ -323,7 +325,7 @@ impl LyrelApp {
         let target = ssh_host_target_of_spec(&spec, &cx.global::<Config>().ssh_profiles);
         let label = crate::ui::switcher::host_form_label(&target)?;
         let form = match target {
-            crate::core::session::RemoteTarget::Profile { .. } => TabHostForm::Saved(target),
+            lyrel_ui_base::session::RemoteTarget::Profile { .. } => TabHostForm::Saved(target),
             _ => TabHostForm::Unsaved(spec),
         };
         Some((form, label))
@@ -350,7 +352,7 @@ impl LyrelApp {
         self.update_config(cx, |cfg| {
             let entry = cfg.ssh_profile_frecency.entry(profile_id).or_default();
             entry.count = entry.count.saturating_add(1);
-            entry.last_used = crate::core::config::unix_now();
+            entry.last_used = lyrel_core::core::config::unix_now();
         });
     }
 }
@@ -360,7 +362,7 @@ impl LyrelApp {
 /// the palette and the new-tab menu so the same host leads both lists.
 pub(crate) fn ssh_profiles_by_frecency(cx: &gpui_kit::App) -> Vec<SshProfile> {
     let cfg = cx.global::<Config>();
-    let now = crate::core::config::unix_now();
+    let now = lyrel_core::core::config::unix_now();
     let mut profiles = cfg.ssh_profiles.clone();
     profiles.sort_by(|a, b| {
         let score = |p: &SshProfile| {
@@ -521,7 +523,7 @@ fn build_spec_inner(
 /// would save fine and then not connect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TabHostForm {
-    Saved(crate::core::session::RemoteTarget),
+    Saved(lyrel_ui_base::session::RemoteTarget),
     Unsaved(Box<NativeSshSpec>),
 }
 
@@ -541,8 +543,8 @@ pub(crate) enum TabHostForm {
 pub(crate) fn ssh_host_target_of_spec(
     spec: &NativeSshSpec,
     profiles: &[SshProfile],
-) -> crate::core::session::RemoteTarget {
-    use crate::core::session::RemoteTarget;
+) -> lyrel_ui_base::session::RemoteTarget {
+    use lyrel_ui_base::session::RemoteTarget;
     let saved = spec
         .profile_id
         .as_deref()
@@ -697,7 +699,7 @@ fn map_algorithms(a: &Algorithms) -> SshAlgorithms {
 pub(crate) type AliasResolver<'a> = dyn Fn(&str) -> Option<(SshProfile, Option<String>)> + 'a;
 
 pub(crate) fn config_alias_resolver(alias: &str) -> Option<(SshProfile, Option<String>)> {
-    crate::core::ssh_config::resolve_alias_to_profile(alias).map(|r| (r.profile, r.proxy_jump))
+    ssh_config::resolve_alias_to_profile(alias).map(|r| (r.profile, r.proxy_jump))
 }
 
 pub(crate) fn native_spec_from_transient_profile(

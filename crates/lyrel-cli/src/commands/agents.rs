@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::agent_hooks::{HookAgent, HooksState};
-use lyrel_core::core::machine::Machine;
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::core::agent_hooks::{HookAgent, HooksState};
+use lyrel_protocol::core::machine::Machine;
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 use serde_json::{Value, json};
 
 use super::target::fetch_machine;
@@ -89,7 +89,7 @@ impl AgentHookDiagnostic {
 }
 
 fn agent_hook_diagnostics(
-    states: &[lyrel_core::daemon::control::PaneAgentState],
+    states: &[lyrel_protocol::daemon::control::PaneAgentState],
     machine: &Machine,
     backend: &mut dyn Backend,
 ) -> Vec<AgentHookDiagnostic> {
@@ -112,7 +112,7 @@ fn agent_hook_diagnostics(
 }
 
 fn agents_human(
-    states: &[lyrel_core::daemon::control::PaneAgentState],
+    states: &[lyrel_protocol::daemon::control::PaneAgentState],
     diagnostics: &[AgentHookDiagnostic],
 ) -> String {
     if diagnostics.is_empty() {

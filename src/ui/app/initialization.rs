@@ -52,7 +52,7 @@ impl LyrelApp {
         }
         Self::prompt_daemon_version_mismatch(window, cx);
         crate::ui::remote_connect::register(cx);
-        crate::ui::remote_connect::sweep_wsl(cx);
+        crate::ui::desktop_lookups::sweep_wsl(cx);
         Self::prompt_remote_daemon_mismatch(window, cx);
         app.reopen_remote_at_startup(cx);
         app
@@ -174,14 +174,17 @@ impl LyrelApp {
                 cfg.font_fallbacks.clone(),
                 cfg.font_features
                     .as_ref()
-                    .map(crate::core::config::gpui_font_features),
+                    .map(lyrel_ui_base::config::gpui_font_features),
                 cfg.cursor_style,
                 cfg.scrollback_limit,
             )
         };
         let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
-        let editor = crate::ui::code_editor::EditorPanelState::new(window, cx);
+        let editor =
+            cx.new(|cx| lyrel_workbench_editor::code_editor::EditorPanelState::new(window, cx));
+        let editor_events = Self::watch_editor_panel(&editor, window, cx);
+        let editor_observer = cx.observe(&editor, |_, _, cx| cx.notify());
         let loopback_panel = Forwarding::new(window, cx);
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
@@ -194,18 +197,29 @@ impl LyrelApp {
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {
             this.reload_from_config(window, cx)
         });
-        cx.default_global::<crate::terminal::git_status::GitStatusCache>();
+        cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
+        crate::ui::scm_snapshot::install_scm_snapshot_source(cx);
         let git_status_watch =
-            cx.observe_global::<crate::terminal::git_status::GitStatusCache>(|this, cx| {
+            cx.observe_global::<crate::ui::scm::status_cache::GitStatusCache>(|this, cx| {
                 this.maybe_refresh_diff_overlay(cx);
                 this.right_panel_refresh_changes(cx);
                 cx.notify();
             });
-        cx.default_global::<crate::terminal::pane_liveness::PaneLivenessCache>();
-        let pane_liveness_watch = cx
-            .observe_global::<crate::terminal::pane_liveness::PaneLivenessCache>(|_this, cx| {
+        cx.default_global::<crate::ui::pane_liveness::PaneLivenessCache>();
+        let pane_liveness_watch =
+            cx.observe_global::<crate::ui::pane_liveness::PaneLivenessCache>(|_this, cx| {
                 cx.notify();
             });
+        // The rules the terminal asks below the workbench through: what a
+        // workspace's panes attach over, and whether another client is
+        // driving it. Installed once per process; the terminal side only ever
+        // forwards the call, so it never imports the supervisors themselves.
+        crate::ui::desktop_lookups::install_pane_route_for(
+            crate::ui::remote_workspace::pane_route_for,
+        );
+        crate::ui::desktop_lookups::install_accepts_input(
+            crate::ui::remote_workspace::workspace_accepts_input,
+        );
         let this = cx.weak_entity();
         let keystroke_watch = cx.intercept_keystrokes(move |_ev, _window, cx| {
             let _ = this.update(cx, |this, cx| this.dismiss_mod_hint(cx));
@@ -233,6 +247,9 @@ impl LyrelApp {
             if window.is_window_active() {
                 crate::ui::motion::refresh_system(cx);
                 WorkspaceStore::focus(cx, this.workspace);
+                crate::ui::tree_sync::fire_workspace_op(cx, this.workspace, |ws| {
+                    lyrel_core::daemon::control::ControlRequest::WorkspaceTouch { workspace: ws }
+                });
                 this.refresh_git_status_all(cx);
             }
         });
@@ -311,7 +328,7 @@ impl LyrelApp {
             },
         );
         let file_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchFiles))
+            InputState::new(window, cx).placeholder(t(lyrel_ui_base::i18n::L10nKey::SearchFiles))
         });
         let file_search_sub = cx.subscribe_in(&file_search, window, |_this, _i, ev, _w, cx| {
             if matches!(ev, InputEvent::Change) {
@@ -364,6 +381,8 @@ impl LyrelApp {
             file_tree,
             panel_search,
             editor,
+            _editor_events: editor_events,
+            _editor_observer: editor_observer,
             sidebar_width: Rc::new(Cell::new(sidebar_width)),
             sidebar_dragging: Rc::new(Cell::new(false)),
             last_settings_location: (SettingsSection::General, gpui_kit::point(px(0.), px(0.))),
@@ -423,11 +442,13 @@ impl LyrelApp {
         // Backstop for every other way a window goes away (a workspace
         // closed from elsewhere): its language-server documents go with it.
         let app_id = cx.entity_id();
-        cx.on_release(move |_, cx| crate::ui::lsp::LspStore::sync_window(app_id, Vec::new(), cx))
-            .detach();
         cx.on_release(move |_, cx| {
-            if cx.has_global::<crate::terminal::git_data::ScmData>() {
-                cx.global_mut::<crate::terminal::git_data::ScmData>()
+            lyrel_workbench_editor::lsp::LspStore::sync_window(app_id, Vec::new(), cx)
+        })
+        .detach();
+        cx.on_release(move |_, cx| {
+            if cx.has_global::<crate::ui::scm::data::ScmData>() {
+                cx.global_mut::<crate::ui::scm::data::ScmData>()
                     .release_window(app_id.as_u64());
             }
         })
@@ -493,10 +514,10 @@ impl LyrelApp {
             // Unsaved editor buffers hold the window open until the question
             // about them is answered; the answer closes it.
             let asked = app.update(cx, |app, cx| {
-                let unsaved = app.editor_unsaved();
+                let unsaved = app.editor_unsaved(cx);
                 app.editor_guard_unsaved(
                     unsaved,
-                    crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
+                    lyrel_workbench_editor::code_editor::saving::AfterUnsaved::CloseWindow,
                     window,
                     cx,
                 )
@@ -506,7 +527,8 @@ impl LyrelApp {
             }
             app.update(cx, |app, cx| {
                 app.prepare_window_close(cx);
-                app.lsp_window_closed(cx);
+                app.editor
+                    .update(cx, |editor, cx| editor.lsp_window_closed(cx));
             });
             true
         });

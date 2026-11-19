@@ -8,13 +8,13 @@
 use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
-// The decoders live in `lyrel-code-editor`; these explicit imports keep the
+// The decoders live in `lyrel-document`; these explicit imports keep the
 // fixture encoders pointing at the registry crates.
 use crate::ui::app::test_window::harness_with_tabs;
 #[rustfmt::skip]
 use ::gif;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{Point, TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 #[rustfmt::skip]
@@ -74,8 +74,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path)
         })
     });
@@ -91,8 +91,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn image_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<ImageView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .image()
             .expect("an image document")
@@ -145,7 +145,7 @@ fn secondary(chord: &str) -> String {
 
 #[gpui_kit::test]
 fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -155,19 +155,24 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
 
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.image().is_some(), "an image document");
         assert!(!file.dirty, "a picture is never unsaved");
         assert_eq!(file.path, path);
-        assert!(app.image_document_active());
+        assert!(app.image_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, path.clone()))
         );
         // 只读文档不是语言服务器能看的文本文件。
-        assert!(app.editor.local_file(id).is_none());
+        assert!(app.editor.read(cx).local_file(id).is_none());
     });
     assert_eq!(ready_size(&app, &cx), (64, 40));
 
@@ -215,8 +220,11 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
         app.editor_close_file(0, window, cx)
     });
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
-        assert!(app.editor.buffers.get(id).is_none(), "buffer released");
+    app.read_with(&cx, |app, cx| {
+        assert!(
+            app.editor.read(cx).buffers.get(id).is_none(),
+            "buffer released"
+        );
         assert!(
             app.tab_code().is_some_and(|code| code.files.is_empty()),
             "tab strip emptied"
@@ -226,7 +234,7 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn all_five_static_formats_decode_as_themselves(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let cases: [(&str, Vec<u8>, ImageFormat); 5] = [
         (
@@ -280,7 +288,7 @@ fn all_five_static_formats_decode_as_themselves(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -324,16 +332,16 @@ fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
     // 4. 普通文本文件仍然是文本，不被探针抢走。
     let plain = fixture(dir.path(), "notes.txt", b"just text\n");
     open(&app, &mut cx, &plain);
-    app.read_with(&cx, |app, _| {
-        let front = app.active_buffer().expect("text document");
+    app.read_with(&cx, |app, cx| {
+        let front = app.active_buffer(cx).expect("text document");
         assert!(front.input.code().is_some(), "still the text editor");
-        assert!(!app.image_document_active());
+        assert!(!app.image_document_active(cx));
     });
 }
 
 #[gpui_kit::test]
 fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -351,9 +359,9 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
         ImageContent::Ready(_) => panic!("a file over the image budget decoded"),
         ImageContent::Loading => panic!("a file over the image budget is loading"),
     }
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .is_some_and(|file| file.input.image().is_some())
         )
     });
@@ -376,7 +384,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn keyboard_and_controls_frame_the_picture_and_pan_it(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -463,7 +471,7 @@ fn keyboard_and_controls_frame_the_picture_and_pan_it(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = solid(image::ImageFormat::Png, 40, 30);
     let path = fixture(dir.path(), "read-only.png", &before);
@@ -477,20 +485,31 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        let wrap_before = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let wrap_before = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .editor_soft_wrap;
         app.toggle_document_wrap(window, cx);
         assert_eq!(
-            cx.global::<crate::core::config::Config>().editor_soft_wrap,
+            cx.global::<lyrel_ui_base::config::Config>()
+                .editor_soft_wrap,
             wrap_before,
             "wrap stays a text preference"
         );
-        assert!(!app.editor.has_bar(), "no prompt opened over a picture");
+        assert!(
+            !app.editor.read(cx).has_bar(),
+            "no prompt opened over a picture"
+        );
         assert_eq!(
-            app.editor_search_tabs().len(),
+            app.editor_search_tabs(cx).len(),
             1,
             "no symbol picker over a picture"
         );
-        let file = app.editor.buffers.get(id).expect("still installed");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty);
         assert_eq!(file.format(cx), None, "a picture has no text format");
     });
@@ -507,14 +526,14 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
     });
     settle(&mut cx);
     assert_eq!(ready_size(&app, &cx), (40, 30));
-    app.read_with(&cx, |app, _| {
-        assert!(!app.active_buffer().expect("still open").dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(!app.active_buffer(cx).expect("still open").dirty);
     });
 }
 
 #[gpui_kit::test]
 fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -526,12 +545,12 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
     assert_eq!(ready_size(&app, &cx), (20, 20));
     // 等监视真的装上再写,不然外部变化没有观察者。
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::write(&path, solid(image::ImageFormat::Png, 90, 70)).unwrap();
     until(&mut cx, |cx| decoded_size(&app, cx) == Some((90, 70)));
-    app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("still open");
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("still open");
         assert!(file.conflict.is_none(), "a clean picture reloads itself");
         assert!(!file.dirty);
     });
@@ -539,7 +558,7 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -551,12 +570,12 @@ fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
     assert_eq!(ready_size(&app, &cx), (20, 20));
 
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::remove_file(&path).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -569,8 +588,8 @@ fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
     // Close 是真实动作,不是摆设。
     cx.update(|window, cx| window.click("editor-deleted-close", cx));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_none_or(|file| file.conflict.is_none())
         })
     });
@@ -578,7 +597,7 @@ fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_bytes = solid(image::ImageFormat::Png, 10, 10);
     let path = fixture(dir.path(), "pic.png", &local_bytes);
@@ -597,8 +616,8 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
                 .is_some_and(|id| id != local)
         })
     });
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(69));
     });
     assert_eq!(ready_size(&app, &cx), (10, 10), "the plain host's own copy");
 
@@ -614,13 +633,13 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
         app.editor_open_on_host(mapped, Path::new("/pic.png"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.tab_code()
                 .and_then(TabCode::active_id)
                 .is_some_and(|id| {
                     id != local
                         && app
-                            .editor_active_location()
+                            .editor_active_location(cx)
                             .is_some_and(|(host, _)| host == HostId(70))
                 })
         })
@@ -659,7 +678,7 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -683,8 +702,8 @@ fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContex
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("picture");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("picture");
         (
             file.presentations
                 .image_existing(tab, right)
@@ -696,7 +715,7 @@ fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContex
     });
     assert_ne!(front, other, "each group draws its own view");
     app.read_with(&cx, |app, cx| {
-        assert!(app.active_buffer().is_some());
+        assert!(app.active_buffer(cx).is_some());
         assert_eq!(
             front.read(cx).document().entity_id(),
             other.read(cx).document().entity_id(),
@@ -708,7 +727,7 @@ fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContex
     let before = other.read_with(&cx, |view, _| view.scale());
     dispatch(&app, &mut cx, ImageZoomIn);
     app.read_with(&cx, |app, cx| {
-        let file = app.active_buffer().expect("picture");
+        let file = app.active_buffer(cx).expect("picture");
         let (front, other) = (
             file.presentations.image_existing(tab, right).unwrap(),
             file.presentations.image_existing(tab, left).unwrap(),
@@ -726,7 +745,7 @@ fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContex
 fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -741,8 +760,12 @@ fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
         app.editor_open_on_host(shared, &path, window, cx)
     });
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor.buffers.iter().count(), 0, "still reading");
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(
+            app.editor.read(cx).buffers.iter().count(),
+            0,
+            "still reading"
+        );
     });
     // 读取还没回来，标签页先关掉。
     app.update_in(&mut cx, |app, window, cx| app.close_tab(0, window, cx));
@@ -750,9 +773,9 @@ fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
     let _ = gate.send(());
     settle(&mut cx);
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert_eq!(
-            app.editor.buffers.iter().count(),
+            app.editor.read(cx).buffers.iter().count(),
             0,
             "a late read installs no document into a closed tab"
         );
@@ -760,9 +783,10 @@ fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
 
     // 同一个窗口里再打开一次仍然成功：没有卡住的 pending 状态。
     let id = open(&app, &mut cx, &path);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.input.image().is_some())
@@ -862,7 +886,7 @@ fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
 #[gpui_kit::test]
 fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppContext) {
     use self::gif::DisposalMethod::{Background, Keep, Previous};
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = gif_fixture(
         &[
@@ -946,7 +970,7 @@ fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = gif_fixture(
         &[
@@ -994,14 +1018,14 @@ fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut Tes
         "closing the last presentation releases the document and its frame task"
     );
     advance(&mut cx, 500);
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor.buffers.iter().count(), 0);
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(app.editor.read(cx).buffers.iter().count(), 0);
     });
 }
 
 #[gpui_kit::test]
 fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (900, 600, [200, 10, 10]),
@@ -1096,7 +1120,7 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
 
 #[gpui_kit::test]
 fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (40, 20, [200, 10, 10]),
@@ -1135,7 +1159,7 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (40, 20, [200, 10, 10]),
@@ -1161,7 +1185,7 @@ fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppCont
         (tab, left, right)
     });
     let (front, other) = app.read_with(&cx, |app, _cx| {
-        let file = app.active_buffer().expect("TIFF");
+        let file = app.active_buffer(_cx).expect("TIFF");
         (
             file.presentations
                 .image_existing(tab, right)
@@ -1192,7 +1216,7 @@ fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppCont
     ));
     dispatch(&app, &mut cx, ImageZoomIn);
     app.read_with(&cx, |app, cx| {
-        let file = app.active_buffer().expect("TIFF");
+        let file = app.active_buffer(cx).expect("TIFF");
         let front = file.presentations.image_existing(tab, right).unwrap();
         assert!(front.read(cx).scale() > 1., "the focused page zoomed");
     });
@@ -1209,7 +1233,7 @@ fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -1296,7 +1320,7 @@ fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let local = super::super::test_host::canonical_tempdir();
     let decoy = super::super::test_host::canonical_tempdir();
     let local_gif = gif_fixture(
@@ -1335,8 +1359,8 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
         app.editor_open_on_host(shared.clone(), Path::new("/anim.gif"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.editor_active_location()
+        app.read_with(cx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, _)| host == HostId(72))
         })
     });
@@ -1346,8 +1370,8 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
         app.editor_open_on_host(shared, Path::new("/pages.tiff"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.editor_active_location()
+        app.read_with(cx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, path)| host == HostId(72) && path.ends_with("pages.tiff"))
         })
     });
@@ -1370,7 +1394,7 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
 /// owning Host's versioned segments, not a raised whole-file limit.
 #[gpui_kit::test]
 fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = super::super::test_host::noise_png(1400, 1000);
     assert!(
@@ -1386,7 +1410,7 @@ fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppConte
         app.editor_open_on_host(shared, &path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     assert_eq!(ready_size(&app, &cx), (1400, 1000));
     assert_eq!(
@@ -1411,7 +1435,7 @@ fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
     use lyrel_core::host::server::{Services, serve_with};
     use std::net::{TcpListener, TcpStream};
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = super::super::test_host::noise_png(1400, 1000);
     assert!(bytes.len() > 4 * 1024 * 1024);
@@ -1439,7 +1463,7 @@ fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
         app.editor_open_on_host(shared, &path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
     });
     assert_eq!(ready_size(&app, &cx), (1400, 1000));
 }

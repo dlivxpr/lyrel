@@ -1,9 +1,17 @@
 use super::super::test_host::{FileHost, canonical_tempdir};
-use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
+use gpui_kit::component::input::Position;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
+use lyrel_ui_base::host_ops::{HostId, MTime, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_workbench_editor::code_editor::{BufferId, DiskConflict, TabCode};
+use lyrel_workbench_editor::editor_session;
+use lyrel_workbench_editor::editor_session::TabEditor;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -28,7 +36,7 @@ fn active_id(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Option<BufferId
 fn start_active_markdown_in_source(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
     app.update_in(vcx, |app, _window, cx| {
         let view = app
-            .active_editor_input()
+            .active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -82,11 +90,11 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
     let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
     let pane = app.read_with(&vcx, |app, _| app.tabs[0].pane.terminals()[0].clone());
     let (cwd, expected_path, expected_host) = if remote {
-        use crate::core::session::{
+        use lyrel_ui_base::host_registry::HostRegistry;
+        use lyrel_ui_base::route::PaneWorkspace;
+        use lyrel_ui_base::session::{
             RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore,
         };
-        use crate::terminal::PaneWorkspace;
-        use crate::ui::host_registry::HostRegistry;
 
         let target = RemoteTarget::Alias {
             alias: "range-citation-fixture".into(),
@@ -150,7 +158,7 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     app.read_with(&vcx, |app, cx| {
         let file = app
-            .active_buffer()
+            .active_buffer(cx)
             .expect("citation opens the production editor");
         assert_eq!(file.path, expected_path);
         assert_eq!(file.host.id(), expected_host);
@@ -167,7 +175,7 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
 
 #[gpui_kit::test]
 fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &mut TestAppContext) {
-    use crate::core::actions::{EditorNewFile, EditorNewMarkdownFile};
+    use lyrel_ui_base::actions::{EditorNewFile, EditorNewMarkdownFile};
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     for extension in ["md", "MARKDOWN", "MDX"] {
@@ -177,13 +185,13 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
             app.open_file_in_editor(&path, window, cx)
         });
         wait_until(&mut vcx, |vcx| {
-            app.read_with(vcx, |app, _| {
-                app.active_buffer()
+            app.read_with(vcx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| file.path.file_name() == path.file_name())
             })
         });
         app.read_with(&vcx, |app, cx| {
-            let file = app.active_buffer().unwrap();
+            let file = app.active_buffer(cx).unwrap();
             assert_eq!(file.language(), "markdown");
             assert_eq!(
                 file.input.markdown().unwrap().read(cx).is_live(),
@@ -202,8 +210,8 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         app.open_file_in_editor(&code, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.input.code().is_some())
         })
     });
@@ -211,7 +219,7 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         app.toggle_document_preview(window, cx)
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.language(), "rust");
         assert!(file.input.code().is_some());
         assert_eq!(
@@ -221,8 +229,8 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
     });
     vcx.dispatch_action(EditorNewFile);
     vcx.run_until_parked();
-    app.read_with(&vcx, |app, _| {
-        let file = app.active_buffer().unwrap();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.untitled.is_some());
         assert!(file.path.as_os_str().is_empty());
         assert!(file.input.code().is_some());
@@ -231,7 +239,7 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         app.editor_open_scrollback("# terminal output".into(), window, cx)
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.input.code().is_some());
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
@@ -241,7 +249,7 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
     vcx.dispatch_action(EditorNewMarkdownFile);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.untitled.is_some());
         assert!(file.path.as_os_str().is_empty());
         let view = file.input.markdown().unwrap().read(cx);
@@ -266,7 +274,7 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     let first = active_id(&app, &vcx).unwrap();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -282,7 +290,7 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     });
     vcx.run_until_parked();
     let edited = app.read_with(&vcx, |app, cx| {
-        app.active_buffer()
+        app.active_buffer(cx)
             .unwrap()
             .input
             .text()
@@ -305,7 +313,7 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tab_code().unwrap().active_id(), Some(first));
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -315,14 +323,14 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
                 .to_string(),
             edited
         );
-        assert_eq!(app.editor_unsaved(), vec![first]);
+        assert_eq!(app.editor_unsaved(cx), vec![first]);
     });
     app.update_in(&mut vcx, |app, window, cx| app.focus_editor(window, cx));
     vcx.update(|window, cx| window.render_frame(cx));
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -333,21 +341,21 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_ne!(file.id(), first);
         assert_eq!(file.host.id(), HostId::LOCAL);
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
             edited
         );
-        assert!(app.editor_unsaved().is_empty());
+        assert!(app.editor_unsaved(cx).is_empty());
     });
 }
 
 #[gpui_kit::test]
 fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut TestAppContext) {
-    use crate::core::actions::EditorSave;
     use gpui_kit::component::input::{MoveToStart, Redo, Undo};
+    use lyrel_ui_base::actions::EditorSave;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fidelity.mdx");
     // The first three terminators reproduce the observed majority-CRLF bug.
@@ -364,8 +372,8 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
     let save = |vcx: &mut VisualTestContext| {
         vcx.dispatch_action(EditorSave);
         wait_until(vcx, |vcx| {
-            app.read_with(vcx, |app, _| {
-                app.active_buffer()
+            app.read_with(vcx, |app, cx| {
+                app.active_buffer(cx)
                     .is_some_and(|file| !file.saving && !file.dirty)
             })
         });
@@ -395,9 +403,9 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
     save(&mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), edited);
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(app.active_buffer().unwrap().host.id(), HostId(705));
+        assert_eq!(app.active_buffer(cx).unwrap().host.id(), HostId(705));
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -437,10 +445,10 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
         start_active_markdown_in_source(&app, &mut vcx);
         let save = |vcx: &mut VisualTestContext| {
-            vcx.dispatch_action(crate::core::actions::EditorSave);
+            vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
             wait_until(vcx, |vcx| {
-                app.read_with(vcx, |app, _| {
-                    app.active_buffer()
+                app.read_with(vcx, |app, cx| {
+                    app.active_buffer(cx)
                         .is_some_and(|file| !file.dirty && !file.saving)
                 })
             });
@@ -504,13 +512,13 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
         window.render_frame(cx);
         window.input("🎉", cx);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     vcx.run_until_parked();
     assert_eq!(std::fs::read(&path).unwrap(), original);
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.dirty);
         assert_eq!(file.format(cx).unwrap().encoding_label(), "Windows-1252");
         assert_eq!(
@@ -519,10 +527,10 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
         );
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -575,21 +583,23 @@ fn markdown_change_commands_target_focused_split_presentation(cx: &mut TestAppCo
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
-    let first = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap());
+    let first = app.read_with(&vcx, |app, cx| app.active_editor_input(cx).unwrap());
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
     start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.render_frame(cx));
-    let second = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap());
+    let second = app.read_with(&vcx, |app, cx| app.active_editor_input(cx).unwrap());
     app.update_in(&mut vcx, |app, window, cx| {
-        let id = app.active_buffer().unwrap().id();
-        app.editor
-            .buffers
-            .get_mut(id)
-            .unwrap()
-            .gutter
-            .set_base_for_test("one\ntwo\nthree\nfour\n");
+        let id = app.active_buffer(cx).unwrap().id();
+        app.editor.update(cx, |editor, _| {
+            editor
+                .buffers
+                .get_mut(id)
+                .unwrap()
+                .gutter
+                .set_base_for_test("one\ntwo\nthree\nfour\n");
+        });
         first
             .text()
             .unwrap()
@@ -632,8 +642,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
     let id = active_id(&app, &vcx).unwrap();
-    let first = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&vcx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -649,8 +659,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     });
     start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.render_frame(cx));
-    let second = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&vcx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -690,7 +700,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -708,7 +718,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -723,7 +733,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -740,7 +750,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -759,10 +769,10 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         app.focus_editor(window, cx);
     });
     vcx.update(|window, cx| window.render_frame(cx));
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -777,14 +787,14 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_ne!(file.id(), id);
         assert!(file.input.code().is_none());
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
             "中🎉alpha\nbeta\n"
         );
-        assert!(app.editor_unsaved().is_empty());
+        assert!(app.editor_unsaved(cx).is_empty());
     });
 }
 
@@ -800,8 +810,8 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
-    let view = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&vcx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -847,7 +857,7 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -880,18 +890,22 @@ fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(
     wait_until(&mut vcx, |vcx| {
         active_id(&app, vcx).is_some_and(|id| id != local)
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.editor
+                .read(cx)
                 .local_files()
                 .iter()
-                .map(|file| file.id)
+                .map(|file| file.id())
                 .collect::<Vec<_>>(),
             vec![local]
         );
-        let remote = app.active_buffer().unwrap();
-        assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
-        assert_eq!(remote.path, app.editor.local_file(local).unwrap().path);
+        let remote = app.active_buffer(cx).unwrap();
+        assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(69));
+        assert_eq!(
+            remote.path,
+            app.editor.read(cx).local_file(local).unwrap().path()
+        );
     });
 }
 
@@ -918,12 +932,12 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor.buffers.watch.is_some())
+        app.read_with(vcx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::write(&path, "external version\n").unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer().is_some_and(|file| {
+            app.active_buffer(cx).is_some_and(|file| {
                 file.input.text().unwrap().read(cx).text().to_string() == "external version\n"
             })
         })
@@ -934,7 +948,7 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     });
     vcx.run_until_parked();
     let text = app.read_with(&vcx, |app, cx| {
-        app.active_buffer()
+        app.active_buffer(cx)
             .unwrap()
             .input
             .text()
@@ -946,15 +960,15 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     assert!(text.contains("unsaved"));
     std::fs::write(&path, "another external version\n").unwrap();
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().unwrap().conflict.is_some()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).unwrap().conflict.is_some()
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(matches!(file.conflict, Some(DiskConflict::Changed(_))));
         assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), text);
-        assert!(app.editor.is_dirty(HostId::LOCAL, &file.path));
+        assert!(app.editor.read(cx).is_dirty(HostId::LOCAL, &file.path));
     });
 }
 
@@ -973,8 +987,8 @@ fn markdown_reload_started_before_composition_reports_conflict_without_losing_in
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut context, |context| active_id(&app, context).is_some());
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -987,7 +1001,7 @@ fn markdown_reload_started_before_composition_reports_conflict_without_losing_in
     std::fs::write(&path, format!("{original}external\n")).unwrap();
     let release = host.pause_next_read();
     app.update_in(&mut context, |app, window, cx| {
-        app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx)
+        app.editor_reload_from_disk(app.active_buffer(cx).unwrap().id(), window, cx)
     });
     wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
     view.update_in(&mut context, |view, window, cx| {
@@ -995,8 +1009,8 @@ fn markdown_reload_started_before_composition_reports_conflict_without_losing_in
     });
     release.send(()).unwrap();
     wait_until(&mut context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer().unwrap().conflict.is_some()
+        app.read_with(context, |app, cx| {
+            app.active_buffer(cx).unwrap().conflict.is_some()
         })
     });
     view.read_with(&context, |view, cx| {
@@ -1034,8 +1048,8 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut context, |context| active_id(&app, context).is_some());
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -1047,16 +1061,10 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
     let release = host.pause_next_read();
     std::fs::write(&path, loaded).unwrap();
     app.update_in(&mut context, |app, window, cx| {
-        app.editor
-            .buffers
-            .rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
-        app.editor.buffers.external_change(
-            &path,
-            window,
-            cx,
-            |app| &mut app.editor.buffers,
-            crate::ui::code_editor::EditorPanelState::buffer_edited,
-        );
+        app.editor.update(cx, |editor, cx| {
+            editor.buffers.rebuild_watch(Some(host.clone()), cx);
+            editor.buffers.external_change(&path, window, cx);
+        });
     });
     wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
     view.update_in(&mut context, |view, _window, cx| {
@@ -1069,8 +1077,8 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
             view.document().read(cx).encode().unwrap() == loaded.as_bytes()
         })
     });
-    app.read_with(&context, |app, _| {
-        let file = app.active_buffer().unwrap();
+    app.read_with(&context, |app, cx| {
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.conflict.is_none());
         assert!(!file.dirty);
     });
@@ -1100,8 +1108,8 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
-    let first = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&vcx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -1111,8 +1119,8 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
         assert!(app.editor_split(window, cx));
     });
     start_active_markdown_in_source(&app, &mut vcx);
-    let second = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&vcx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -1125,7 +1133,7 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
     std::fs::write(&path, external).unwrap();
     let release = host.pause_next_read();
     app.update_in(&mut vcx, |app, window, cx| {
-        app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx);
+        app.editor_reload_from_disk(app.active_buffer(cx).unwrap().id(), window, cx);
     });
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
     app.update_in(&mut vcx, |app, window, cx| {
@@ -1134,13 +1142,13 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
     vcx.dispatch_action(SelectAll);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
-        assert!(!app.active_buffer().unwrap().dirty);
+        assert!(!app.active_buffer(cx).unwrap().dirty);
         assert_eq!(first.read(cx).selected_range(), 0..15);
     });
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -1165,10 +1173,10 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
             external
         );
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -1188,19 +1196,19 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         app.open_file_in_editor_at(&path, Some(1), Some(1), window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == path)
-                && app.editor.buffers.watch.is_some()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.path == path)
+                && app.editor.read(cx).buffers.watching()
         })
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.input("NEW161", cx);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -1212,7 +1220,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         }
     });
     let selection = app.read_with(&vcx, |app, cx| {
-        app.active_buffer()
+        app.active_buffer(cx)
             .unwrap()
             .input
             .text()
@@ -1233,12 +1241,12 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         .unwrap();
     let expected = MTime::from_system_time(std::fs::metadata(&path).unwrap().modified().unwrap());
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().unwrap().disk_mtime == Some(expected)
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).unwrap().disk_mtime == Some(expected)
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
             "NEW161alpha\nbeta\n"
@@ -1253,7 +1261,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     vcx.dispatch_action(Undo);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
             "alpha\nbeta\n"
@@ -1263,7 +1271,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     vcx.dispatch_action(Redo);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
             "NEW161alpha\nbeta\n"
@@ -1287,64 +1295,15 @@ fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut
     app.update_in(&mut vcx, |app, window, cx| app.close_tab(0, window, cx));
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty())
+        app.read_with(vcx, |app, cx| {
+            app.editor.read(cx).buffers.pending_is_empty()
+        })
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tabs.len(), 1);
-        assert!(app.editor_active_location().is_none());
+        assert!(app.editor_active_location(cx).is_none());
         assert!(app.tab_code().is_none_or(|code| code.files.is_empty()));
     });
-}
-
-fn mt(secs: i64, nanos: u32) -> Option<MTime> {
-    Some(MTime { secs, nanos })
-}
-
-#[test]
-fn external_changes_are_told_apart_from_our_own_saves() {
-    let ours = mt(100, 0);
-    let seen = |m| Observed::Present(m);
-    assert_eq!(
-        classify_external_change(false, false, ours, seen(ours)),
-        ExternalChange::Ignore
-    );
-    assert_eq!(
-        classify_external_change(false, false, ours, seen(mt(101, 0))),
-        ExternalChange::Reload
-    );
-    assert_eq!(
-        classify_external_change(false, true, ours, seen(mt(101, 0))),
-        ExternalChange::Conflict
-    );
-    assert_eq!(
-        classify_external_change(false, false, mt(100, 0), seen(mt(100, 1))),
-        ExternalChange::Reload
-    );
-    assert_eq!(
-        classify_external_change(true, false, ours, seen(mt(101, 0))),
-        ExternalChange::Ignore
-    );
-    assert_eq!(
-        classify_external_change(false, false, None, seen(None)),
-        ExternalChange::Reload
-    );
-}
-
-#[test]
-fn a_file_that_vanished_is_reported_deleted_whether_or_not_it_was_edited() {
-    assert_eq!(
-        classify_external_change(false, false, mt(1, 0), Observed::Missing),
-        ExternalChange::Deleted
-    );
-    assert_eq!(
-        classify_external_change(false, true, mt(1, 0), Observed::Missing),
-        ExternalChange::Deleted
-    );
-    // Our save replaces by rename; the watcher can catch the gap between.
-    assert_eq!(
-        classify_external_change(true, false, mt(1, 0), Observed::Missing),
-        ExternalChange::Ignore
-    );
 }
 
 #[gpui_kit::test]
@@ -1364,19 +1323,21 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
         app.editor_open_on_host_at(newer, &path, Some(Position::new(1, 3)), window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.editor_active_location()
+        app.read_with(vcx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, _)| host == HostId(71))
         })
     });
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty())
+        app.read_with(vcx, |app, cx| {
+            app.editor.read(cx).buffers.pending_is_empty()
+        })
     });
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(app.editor_active_location().unwrap().0, HostId(71));
+        assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(71));
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -1397,10 +1358,10 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
 fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
     cx: &mut TestAppContext,
 ) {
-    use crate::core::session::{Session, WorkspaceStore};
-    use crate::terminal::view::quiet_test_pane;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::tab::Tab;
+    use lyrel_terminal::view::quiet_test_pane;
+    use lyrel_ui_base::session::{Session, WorkspaceStore};
 
     let old_root = canonical_tempdir();
     let new_root = canonical_tempdir();
@@ -1426,7 +1387,7 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         window.input("DIRTY161", cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor_unsaved() == vec![dirty])
+        app.read_with(vcx, |app, cx| app.editor_unsaved(cx) == vec![dirty])
     });
     let release = older.pause_next_read();
     app.update_in(&mut vcx, |app, window, cx| {
@@ -1451,22 +1412,22 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
     // finish; an installed stale buffer is also a completed, failing outcome.
     wait_until(&mut vcx, |vcx| {
         Arc::strong_count(&older) == 1
-            || app.read_with(vcx, |app, _| {
-                app.editor.buffers.at(older.id(), path).is_some()
+            || app.read_with(vcx, |app, cx| {
+                app.editor.read(cx).buffers.at(older.id(), path).is_some()
             })
     });
     vcx.update(|window, cx| window.render_frame(cx));
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.workspace, next_workspace);
         assert!(
-            app.editor.buffers.at(older.id(), path).is_none(),
+            app.editor.read(cx).buffers.at(older.id(), path).is_none(),
             "the old navigation must not land"
         );
         assert!(
             app.tab_code().unwrap().files.contains(&dirty),
             "the new quiet tab adopts the dirty orphan"
         );
-        let file = app.editor.buffers.get(dirty).unwrap();
+        let file = app.editor.read(cx).buffers.get(dirty).unwrap();
         assert_eq!(file.path, dirty_path);
         assert!(file.dirty);
         assert_eq!(
@@ -1480,13 +1441,13 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         app.editor_open_on_host_at(newer, path, Some(Position::new(1, 4)), window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.editor_active_location()
+        app.read_with(vcx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, location)| host == HostId(73) && location == path)
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.host.id(), HostId(73));
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
@@ -1499,14 +1460,14 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         let files = &app.tab_code().unwrap().files;
         assert!(files.contains(&dirty));
         assert!(files.contains(&file.id()));
-        assert!(app.editor.buffers.at(older.id(), path).is_none());
-        assert_eq!(app.editor_unsaved(), vec![dirty]);
+        assert!(app.editor.read(cx).buffers.at(older.id(), path).is_none());
+        assert_eq!(app.editor_unsaved(cx), vec![dirty]);
     });
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&dirty_path, window, cx);
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
         assert_eq!(
@@ -1520,7 +1481,7 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
 fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
     cx: &mut TestAppContext,
 ) {
-    use crate::ui::host_registry::HostRegistry;
+    use lyrel_ui_base::host_registry::HostRegistry;
 
     let old_root = canonical_tempdir();
     let new_root = canonical_tempdir();
@@ -1546,7 +1507,7 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
         window.input("DIRTY161", cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor_unsaved() == vec![dirty])
+        app.read_with(vcx, |app, cx| app.editor_unsaved(cx) == vec![dirty])
     });
     let release = older.pause_next_read();
     let context = app.update_in(&mut vcx, |app, window, cx| {
@@ -1566,15 +1527,15 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         Arc::strong_count(&older) == 1
-            || app.read_with(vcx, |app, _| {
-                app.editor.buffers.at(older.id(), path).is_some()
+            || app.read_with(vcx, |app, cx| {
+                app.editor.read(cx).buffers.at(older.id(), path).is_some()
             })
     });
     app.read_with(&vcx, |app, cx| {
         assert_eq!((app.workspace, app.tabs[0].id()), context);
         assert_eq!(app.tab_code().unwrap().files.len(), 1);
-        assert!(app.editor.buffers.at(older.id(), path).is_none());
-        let file = app.active_buffer().unwrap();
+        assert!(app.editor.read(cx).buffers.at(older.id(), path).is_none());
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
         assert_eq!(
@@ -1587,12 +1548,12 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
         app.open_file_in_editor_at(path, Some(2), Some(5), window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.id() != dirty)
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.id() != dirty)
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.host.id(), HostId::LOCAL);
         assert_eq!(file.path, path);
         assert_eq!(
@@ -1604,13 +1565,13 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
             Position::new(1, 4)
         );
         assert_eq!(app.tab_code().unwrap().files.len(), 2);
-        assert_eq!(app.editor_unsaved(), vec![dirty]);
+        assert_eq!(app.editor_unsaved(cx), vec![dirty]);
     });
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&dirty_path, window, cx);
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
         assert_eq!(
@@ -1632,7 +1593,9 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
     app.update_in(&mut vcx, |app, window, cx| {
         let tab = app.tabs[0].id();
         app.tab_code_mut_or_init();
-        app.editor.restored.remove(&tab);
+        app.editor.update(cx, |editor, _| {
+            editor.restored.remove(&tab);
+        });
         editor_session::put(
             cx,
             tab,
@@ -1650,10 +1613,10 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
         app.editor_restore_active(window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.path.file_name(), valid.file_name());
         assert_eq!(
             file.input.text().unwrap().read(cx).text().to_string(),
@@ -1700,7 +1663,7 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -1717,7 +1680,7 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.render_frame(cx));
     app.update_in(&mut vcx, |app, window, cx| {
-        app.active_editor_input()
+        app.active_editor_input(cx)
             .unwrap()
             .text()
             .unwrap()
@@ -1727,7 +1690,7 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -1742,7 +1705,7 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()

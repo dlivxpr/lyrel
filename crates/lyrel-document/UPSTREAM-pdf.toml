@@ -1,0 +1,49 @@
+# 此清单记录原始 MIT 源文件；本地修改后的文件不应与这些上游摘要相等。
+repository = "https://github.com/packetThrower/zorite"
+revision = "9f069c73a56b06efc84fb7abb700beb50083c827"
+license = "MIT"
+copyright = "Copyright (c) 2026 Will Lehnertz"
+ticket = "#284/#285"
+maintainer = "Lyrel"
+backend = "hayro =0.8.0 (registry, Apache-2.0 OR MIT)"
+
+# 本地适配：GUI-free crate，仅保留解析、页尺寸、单页光栅化、页窗口与缩放纯函数、
+# 文本层、outline/link 与只读表单描述；所有 GPUI 视图、chrome、交互与保存写回均不导入。
+# 页渲染输入改为 owning Host 已读取的不可变字节；每位视图自行持有页/缩放/位图窗口。
+# 明确排除上游 set_form_value、normalize_form_appearances、文本/高亮编辑与 GPL 应用代码。
+# 文本层修复：locate 的 UTF-8 字节推进、裁剪栈、单栏阅读顺序、Type3 前进宽度与 CJK 空格；
+# outline 补齐 named destination（Names/Dests 与旧式 Dests）和目的地坐标，旋转页链接按
+# 页面初始变换归一化；无 /AP 表单只输出解密后的字段值与几何，由 Lyrel 叠加只读文本，
+# 不再把 WinAnsi 合成外观写回字节。
+# src/pdf.rs、src/pdf/fixtures.rs 为 Lyrel 原创适配/测试夹具；未修改 hayro 或 Cargo 缓存。
+# #285：上游 GPUI 侧的选择/搜索/大纲交互未导入，Lyrel `PdfView` 以归一化几何重实现；
+# src/pdf/text.rs 的选择矩形/选字/`find_matches`/阅读顺序、`src/pdf/outline.rs` 的大纲/目的地/
+# 链接由本票直接消费；`ligature_text_document` 夹具为 Lyrel 原创（Type3 多码点 glyph）。
+# 原生阅读修复：端点先用与文本重建一致的阅读行分组，再匹配横向最近字形，
+# 避免低于同行其它字形的 descender 抢占行尾后的释放点；旋转坐标只对端点逆变换一次。
+
+[[source]]
+upstream = "crates/gpui-pdf/src/lib.rs"
+local = "src/pdf.rs"
+sha256 = "e0083bbf316502d348b73c406403a0494d1f769147fe03ebfc2c6bcfe7024bf2"
+
+[[source]]
+upstream = "crates/gpui-pdf/src/text.rs"
+local = "src/pdf/text.rs"
+sha256 = "f7f7a5a442be4c1c9c86a2af9c80cd14c893d411f2131618a6784a72ee0ea651"
+
+[[source]]
+upstream = "crates/gpui-pdf/src/outline.rs"
+local = "src/pdf/outline.rs"
+sha256 = "8731ef0de26715be44010b2a3913d8eefdf82dd859acb85d3fcee2bb496b7fcb"
+
+[[source]]
+upstream = "crates/gpui-pdf/src/forms.rs"
+local = "src/pdf/forms.rs"
+sha256 = "d93e84131248cebe2f08b0f3683ce2c1e92190791b88a9e37137833b9ddde5c9"
+scope = "仅只读字段枚举与几何/值/对齐/字体描述；写值与外观合成未导入"
+
+[[source]]
+upstream = "crates/gpui-pdf/LICENSE"
+local = "licenses/zorite-gpui-pdf-MIT.txt"
+sha256 = "106b4e0e16feb98773c7b406d8bb6ae8a59e2baf8b7a21c7286ee36b07132f17"

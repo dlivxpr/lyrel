@@ -78,6 +78,9 @@ test('release build workflow changes select real packaging validation, not unrel
 for (const [name, files, expected] of [
   ['GUI changes keep both desktop platforms', { 'src/ui/app.rs': 'fn ui() {}' }, [true, false, false, false]],
   ['core integration tests still run on all test platforms', { 'crates/lyrel-core/tests/session.rs': 'fn test() {}' }, [true, true, false, false]],
+  ['core daemon changes rebuild the headless deliverable and test consumers', { 'crates/lyrel-core/src/daemon/mod.rs': 'pub struct Daemon;' }, [true, true, true, false]],
+  ['protocol source changes rebuild the standalone server and all test consumers', { 'crates/lyrel-protocol/src/daemon/protocol.rs': 'pub const PROTOCOL_VERSION: u32 = 19;' }, [true, true, true, false]],
+  ['server source changes rebuild the headless deliverable and test consumers', { 'crates/lyrel-server/src/main.rs': 'fn main() {}' }, [true, true, true, false]],
   ['CLI changes do not rebuild the standalone server', { 'crates/lyrel-cli/src/main.rs': 'fn main() {}' }, [true, true, false, false]],
   ['pure documentation pushes retain only preflight', { 'docs/start.mdx': '# Guide', 'CHANGELOG.md': '# Changes' }, [false, false, false, false]],
   ['embedded license changes rebuild every Rust target', { LICENSE: 'license' }, [true, true, true, false]],
@@ -89,7 +92,15 @@ for (const [name, files, expected] of [
   ['agent notes are not build inputs', { '.agent/pr-123.md': '# notes', '.agent/config.json': '{}' }, [false, false, false, false]],
   ['documentation site content is not a build input', { 'docs/docs.json': '{}', 'docs/theme.css': 'body {}' }, [false, false, false, false]],
   ['crate notices are not build inputs', { 'crates/lyrel-core/NOTICE.md': 'notice' }, [false, false, false, false]],
-  ['the GUI-free model crate is validated on Linux too', { 'crates/lyrel-code-editor/src/lib.rs': 'pub fn model() {}' }, [true, true, false, false]],
+  ['the GUI-free document crate is validated on Linux too', { 'crates/lyrel-document/src/lib.rs': 'pub fn model() {}' }, [true, true, false, false]],
+  ['the standalone updater crate stays on the desktop platforms', { 'crates/lyrel-updater/src/windows.rs': 'pub fn run() {}' }, [true, false, false, false]],
+  ['shared desktop foundation source stays on the desktop platforms', { 'crates/lyrel-ui-base/src/host_ops.rs': 'pub fn run() {}' }, [true, false, false, false]],
+  ['future desktop UI sub-crates stay on the desktop platforms', { 'crates/lyrel-terminal/src/lib.rs': 'pub fn model() {}' }, [true, false, false, false]],
+  ['editor workbench source stays on the desktop platforms', { 'crates/lyrel-workbench-editor/src/lib.rs': 'pub fn model() {}' }, [true, false, false, false]],
+  ['native markdown editor source stays on the desktop platforms', { 'crates/lyrel-markdown-editor/src/lib.rs': 'pub fn model() {}' }, [true, false, false, false]],
+  ['desktop foundation manifests can alter workspace resolution and require all Rust targets', { 'crates/lyrel-ui-base/Cargo.toml': '[package]\nname = "lyrel-ui-base"' }, [true, true, true, false]],
+  ['shared test-support fixtures rebuild the headless consumers too', { 'crates/lyrel-test-support/src/pty.rs': 'pub fn pty_sender() {}' }, [true, true, false, false]],
+  ['the GUI-free insights crate is validated on desktop and Linux headless', { 'crates/lyrel-insights/src/statistics/mod.rs': 'pub fn scan() {}' }, [true, true, false, false]],
   ['cargo configuration changes rebuild every Rust target', { '.cargo/config.toml': '[target.x86_64-unknown-linux-gnu]\n' }, [true, true, true, false]],
 ]) {
   test(name, (t) => {

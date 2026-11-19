@@ -3,7 +3,7 @@ use super::*;
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, Selectable as _, button::Button};
 use gpui_kit::{PathBuilder, canvas, point, relative, rems};
-use lyrel_core::statistics::analysis::Metric;
+use lyrel_insights::statistics::analysis::Metric;
 
 pub(super) fn compact(value: Option<u64>) -> String {
     match value {

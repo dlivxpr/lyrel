@@ -13,8 +13,8 @@ use gpui_kit::{
 use lyrel_core::core::machine::{PipGeometry, TabId};
 
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneChrome, PaneSlot};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 /// Only the committed intent belongs to the daemon. Capture, measurements and
 /// in-progress movement stay with this tab's client and never enter a snapshot.

@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::daemon::control::{ControlHello, ControlRequest, ReplyOk};
-use lyrel_core::daemon::protocol::FEATURE_VALIDATED_TITLES;
+use lyrel_protocol::daemon::control::{ControlHello, ControlRequest, ReplyOk};
+use lyrel_protocol::daemon::protocol::FEATURE_VALIDATED_TITLES;
 
 /// What the daemon's authoritative tree says a pane calls itself. This is the
 /// fact the CLI's tree/switcher views and every other control consumer read.
@@ -78,7 +78,7 @@ pub(super) fn validated_titles_reach_daemon_facts_from_a_real_pty(daemon: &Daemo
     let mut serial = 0;
     let mut write_title = |bytes: &[u8]| {
         serial += 1;
-        pane.input(format!("TITLE {serial} 0 {} 0\n", terminal_pty_fixture::hex(bytes)).as_bytes())
+        pane.input(format!("TITLE {serial} 0 {} 0\n", hex(bytes)).as_bytes())
             .expect("write a title through the real PTY");
         collect_pane_output_until(&mut pane, format!("TITLE_DONE_{serial}").as_bytes());
     };

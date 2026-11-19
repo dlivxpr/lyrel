@@ -7,10 +7,10 @@ use crate::commands::test_support::human;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::pane_info;
 use crate::commands::test_support::run_cli;
-use lyrel_core::core::machine::PaneSeed;
-use lyrel_core::core::machine::Tab;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
+use lyrel_protocol::core::machine::PaneSeed;
+use lyrel_protocol::core::machine::Tab;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
 use serde_json::Value;
 use serde_json::json;
 
@@ -63,7 +63,7 @@ fn tab_verbs_resolve_machine_wide_ordinals_to_real_ids() {
 
 /// File tab @2 under a pinned folder group, the way the GUI would.
 fn pin_second_tab(backend: &mut MockBackend, name: Option<&str>) -> String {
-    use lyrel_core::core::group_key::PinnedGroup;
+    use lyrel_protocol::core::group_key::PinnedGroup;
     let mut group = PinnedGroup::folder(std::path::Path::new("C:\\proj\\sub"));
     group.name = name.map(str::to_string);
     let id = group.id;

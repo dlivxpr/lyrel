@@ -14,22 +14,22 @@ use std::rc::Rc;
 
 use std::path::{Path, PathBuf};
 
-use crate::core::config::Config;
 use crate::core::group_key::{
     AutoKey, GroupId, GroupKey, PinnedGroup, WorkspaceGroups, auto_key, auto_names, pinned_names,
     place,
 };
-use crate::terminal::git_status::GitStatusCache;
 use crate::ui::app::LyrelApp;
 use crate::ui::hints::tab_badge_label;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
+use crate::ui::scm::status_cache::GitStatusCache;
 use crate::ui::tab::Tab;
 use crate::ui::tab_strip::{
     DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_end_clusters, elide_label,
     elide_path_keep_tail, measure_text,
 };
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
 
@@ -165,7 +165,7 @@ fn counts_width(
     ts: &gpui_kit::WindowTextSystem,
     font: &gpui_kit::Font,
     size: f32,
-    status: &crate::terminal::git_status::GitStatus,
+    status: &crate::ui::scm::status_cache::GitStatus,
 ) -> f32 {
     let mut w = 0.;
     if status.added > 0 {
@@ -185,10 +185,10 @@ fn counts_width(
 
 /// The branch a whole group shares, lifted off its rows and onto its header.
 struct SharedGit {
-    status: crate::terminal::git_status::GitStatus,
+    status: crate::ui::scm::status_cache::GitStatus,
     /// Where a click on the counts opens the diff overlay, if the setting
     /// allows one.
-    click: Option<(crate::ui::host_ops::HostId, PathBuf)>,
+    click: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)>,
     /// Every row the group counts, drawn or folded away.
     rows: Vec<usize>,
 }
@@ -284,7 +284,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs.is_empty() || self.sidebar_nav_overlay_open(window) {
+        if self.tabs.is_empty() || self.sidebar_nav_overlay_open(window, cx) {
             return;
         }
         let targets = self.sidebar_nav_targets(cx);
@@ -468,7 +468,7 @@ impl LyrelApp {
 
     /// Modal surfaces above workbench navigation. A visible code panel is
     /// ordinary content; a diff, picker, or document prompt is not.
-    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window) -> bool {
+    pub(crate) fn sidebar_nav_overlay_open(&self, window: &Window, cx: &gpui_kit::App) -> bool {
         let settings_here = self.settings.as_ref().is_some_and(|_| {
             self.settings_window
                 .is_none_or(|(settings, _)| settings == window.window_handle())
@@ -478,7 +478,7 @@ impl LyrelApp {
             || self.close_prompt_open
             || self.switcher.is_some()
             || self.worktree_prompt.is_some()
-            || self.document_navigation_overlay_open()
+            || self.document_navigation_overlay_open(cx)
             || self
                 .tabs
                 .get(self.tabs.active_index())
@@ -522,7 +522,7 @@ impl LyrelApp {
                 true
             }
             "escape" => {
-                if self.sidebar_nav_overlay_open(window) {
+                if self.sidebar_nav_overlay_open(window, cx) {
                     false
                 } else {
                     self.sidebar_nav_leave(window, cx);
@@ -571,7 +571,7 @@ impl LyrelApp {
         let active = self.tabs.active_index();
         let nav_focused = self.sidebar_nav_focus.is_focused(window);
         let nav_target = self.sidebar_nav_target.clone();
-        let sf = cx.global::<crate::ui::presets::Surfaces>().rail;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().rail;
         let show_badges = self.mod_hint_badges;
         let width = self.sidebar_px(window, cx);
         *self.sidebar_slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
@@ -678,12 +678,12 @@ impl LyrelApp {
         // someone goes to read them, keeps the resting green and red.
         let rail_fill: gpui_kit::Hsla = gpui_kit::rgb(sf.base).into();
         let count_ink = cx.theme().muted_foreground;
-        let added_ink = crate::ui::presets::resting_ink(
+        let added_ink = lyrel_ui_base::presets::resting_ink(
             cx.theme().success,
             cx.theme().muted_foreground,
             rail_fill,
         );
-        let removed_ink = crate::ui::presets::resting_ink(
+        let removed_ink = lyrel_ui_base::presets::resting_ink(
             cx.theme().danger,
             cx.theme().muted_foreground,
             rail_fill,
@@ -794,7 +794,7 @@ impl LyrelApp {
                 .and_then(|t| t.group.get())
                 .is_some_and(|g| groups.contains(g))
         });
-        let workspace_is_local = !crate::core::session::WorkspaceStore::all(cx)
+        let workspace_is_local = !lyrel_ui_base::session::WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote());
 
@@ -1202,7 +1202,7 @@ impl LyrelApp {
                                 .child(label.clone()),
                         )
                         .when(program_unread != 0, |row| {
-                            let reminder = crate::ui::i18n::t_fmt(
+                            let reminder = lyrel_ui_base::i18n::t_fmt(
                                 L10nKey::ProgramNewResults,
                                 &[("count", &program_unread.to_string())],
                             );
@@ -1395,7 +1395,7 @@ impl LyrelApp {
                                 .id(("sidebar-nav-ring", i))
                                 .absolute()
                                 .inset_0()
-                                .rounded(crate::ui::rounding::ROW_RADIUS)
+                                .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                                 .border_1()
                                 .border_color(cx.theme().primary),
                         )
@@ -1433,7 +1433,7 @@ impl LyrelApp {
                     .justify_between()
                     .gap(px(row_metrics::GAP))
                     .px_2()
-                    .rounded(crate::ui::rounding::ROW_RADIUS)
+                    .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                     .when(is_active, |s| {
                         s.bg(gpui_kit::rgb(sf.selected))
                             .text_color(gpui_kit::rgb(sf.text_selected))
@@ -2076,7 +2076,7 @@ impl LyrelApp {
                         .items_center()
                         .gap_2()
                         .pl_2()
-                        .rounded(crate::ui::rounding::CARD_RADIUS)
+                        .rounded(lyrel_ui_base::rounding::CARD_RADIUS)
                         .cursor_pointer()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
@@ -2320,7 +2320,7 @@ impl LyrelApp {
                     .w(px(width - 1.))
                     .h_full()
                     .child(workspace_head)
-                    .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                    .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                         "tab-sidebar-scrollbar",
                         list,
                         &self.sidebar_scroll,
@@ -2356,7 +2356,7 @@ impl LyrelApp {
                 .w_full()
                 .items_center()
                 .justify_center()
-                .rounded(crate::ui::rounding::CARD_RADIUS)
+                .rounded(lyrel_ui_base::rounding::CARD_RADIUS)
                 .border_1()
                 .border_color(ink)
                 .when(lit, |d| d.bg(cx.theme().drag_border.opacity(0.15)))
@@ -2839,7 +2839,7 @@ impl LyrelApp {
     /// host — on a remote one the same spelling names something else, or
     /// nothing at all.
     pub(crate) fn pin_dropped_folders(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        if crate::core::session::WorkspaceStore::all(cx)
+        if lyrel_ui_base::session::WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote())
         {
@@ -3213,7 +3213,9 @@ impl LyrelApp {
             let host = self
                 .window_workspace(cx)
                 .as_ref()
-                .map_or(crate::ui::host_ops::HostId::LOCAL, |ws| ws.target.host_id());
+                .map_or(lyrel_ui_base::host_ops::HostId::LOCAL, |ws| {
+                    ws.target.host_id()
+                });
             cx.try_global::<GitStatusCache>()?.known_repo_for(host, cwd)
         });
         let entered = cwd.and_then(|cwd| {
@@ -3599,7 +3601,7 @@ fn git_click(
     tab: &Tab,
     window: &Window,
     cx: &gpui_kit::App,
-) -> Option<(crate::ui::host_ops::HostId, PathBuf)> {
+) -> Option<(lyrel_ui_base::host_ops::HostId, PathBuf)> {
     tab.pane.focused_or_first(window, cx).and_then(|leaf| {
         let view = leaf.read(cx);
         let cwd = view.git_status_cwd()?.to_path_buf();
@@ -3627,8 +3629,8 @@ mod fold_tests {
     /// missing makes it return "no decision", which would leave every group
     /// below untouched and every assertion about moving vacuous.
     fn plant(app: &LyrelApp, i: usize, cwd: &str, root: &str, home: &str, cx: &mut gpui_kit::App) {
-        use crate::terminal::git_status::{GitStatusCache, RepoSnapshot};
-        use crate::ui::host_ops::HostId;
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_ui_base::host_ops::HostId;
 
         let cwd = PathBuf::from(cwd);
         let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");
@@ -3657,8 +3659,8 @@ mod fold_tests {
 
     /// Put tab `i` somewhere the cache knows is in no repo at all.
     fn plant_plain(app: &LyrelApp, i: usize, cwd: &str, cx: &mut gpui_kit::App) {
-        use crate::terminal::git_status::GitStatusCache;
-        use crate::ui::host_ops::HostId;
+        use crate::ui::scm::status_cache::GitStatusCache;
+        use lyrel_ui_base::host_ops::HostId;
 
         let cwd = PathBuf::from(cwd);
         let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");

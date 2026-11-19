@@ -7,10 +7,10 @@ use lyrel_core::core::session::WorkspaceId;
 use uuid::Uuid;
 
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
+use lyrel_core::core::config::RightPanelTab;
 #[cfg(test)]
-use crate::core::config::Config;
-use crate::core::config::RightPanelTab;
-use crate::ui::i18n::{L10nKey, alias_translations, t, t_fmt};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, alias_translations, t, t_fmt};
 
 /// Everything a row can do once it is picked. `LyrelApp::run_command` is the
 /// one place these are carried out, whichever tab the row came from.
@@ -171,7 +171,7 @@ pub enum CommandKind {
         agent: CLIAgent,
         session_id: String,
         cwd: Option<std::path::PathBuf>,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         scope: Option<lyrel_core::host::session_operations::SessionScope>,
     },
     /// A past agent session, branched into a new tab where it ran.
@@ -179,7 +179,7 @@ pub enum CommandKind {
         agent: CLIAgent,
         session_id: String,
         cwd: Option<std::path::PathBuf>,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         scope: Option<lyrel_core::host::session_operations::SessionScope>,
     },
     CopySessionId(String),
@@ -907,7 +907,7 @@ impl Item {
     /// The theme picker's rows, the one in use checked.
     pub fn themes(cx: &App) -> Vec<Item> {
         let active = crate::ui::theme::effective_preset_id(cx);
-        crate::ui::presets::all(cx)
+        lyrel_ui_base::presets::all(cx)
             .into_iter()
             .enumerate()
             .map(|(i, p)| {
@@ -977,7 +977,7 @@ impl Item {
     /// instead of previewing something else the moment it is opened.
     pub fn active_theme_index(cx: &App) -> Option<usize> {
         let active = crate::ui::theme::effective_preset_id(cx);
-        crate::ui::presets::all(cx)
+        lyrel_ui_base::presets::all(cx)
             .iter()
             .position(|p| p.id == active)
     }
@@ -1023,9 +1023,9 @@ mod tests {
     #[gpui_kit::test]
     fn the_theme_picker_opens_on_the_theme_in_use(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            let themes = crate::ui::presets::all(cx);
+            let themes = lyrel_ui_base::presets::all(cx);
             let last = themes.last().expect("built-in themes").id.clone();
-            cx.set_global(Config(crate::core::config::CoreConfig {
+            cx.set_global(Config(lyrel_ui_base::config::CoreConfig {
                 theme_follow_system: false,
                 theme_preset: last,
                 ..Default::default()
@@ -1064,10 +1064,10 @@ mod gpui_tests {
 
     #[gpui_kit::test]
     fn every_action_has_a_stable_id(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.update(|cx| {
             cx.set_global(Config::default());
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
             let chrome = ChromeState {
                 rail_collapsed: false,
                 right_panel_visible: false,
@@ -1090,10 +1090,10 @@ mod gpui_tests {
 
     #[gpui_kit::test]
     fn the_git_group_is_its_own_section(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.update(|cx| {
             cx.set_global(Config::default());
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
             let chrome = ChromeState {
                 rail_collapsed: false,
                 right_panel_visible: false,
@@ -1125,10 +1125,10 @@ mod gpui_tests {
     /// one only where the window's workspace has one of ours to update.
     #[gpui_kit::test]
     fn the_remote_update_is_offered_only_with_a_remote_server(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.update(|cx| {
             cx.set_global(Config::default());
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
 
             let local = Item::actions(chrome(None));
             assert!(

@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result, bail};
-use lyrel_core::core::machine::PaneSeed;
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::core::machine::PaneSeed;
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 use serde_json::json;
 
 use super::target::{fetch_machine, resolve_ws};
@@ -78,10 +78,10 @@ fn repo_or_here(repo: Option<std::path::PathBuf>) -> Result<std::path::PathBuf> 
 /// this can already run the script by hand, so the GUI's approval step would
 /// guard nothing here.
 fn worktree_new(args: WorktreeNew, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
-    use lyrel_core::core::cli_agent::CLIAgent;
-    use lyrel_core::core::worktree::{self, WorktreeRequest, setup};
+    use lyrel_protocol::core::cli_agent::CLIAgent;
+    use lyrel_protocol::core::worktree::{self, WorktreeRequest, setup};
 
-    let host = lyrel_core::host::local::LocalHost::new();
+    let host = lyrel_protocol::host::local::LocalHost::new();
     let repo = repo_or_here(args.repo)?;
     let agent = args
         .agent
@@ -91,7 +91,7 @@ fn worktree_new(args: WorktreeNew, ctx: &Context, backend: &mut dyn Backend) -> 
         })
         .transpose()?;
     // Reject an undeliverable task before Git or the daemon can create anything.
-    let overrides = lyrel_core::core::config::Config::load().agent_launch;
+    let overrides = lyrel_protocol::core::config::Config::load().agent_launch;
     let inventory = host.shells()?;
     let shell_program = inventory
         .shells
@@ -195,9 +195,9 @@ fn worktree_new(args: WorktreeNew, ctx: &Context, backend: &mut dyn Backend) -> 
 }
 
 fn worktree_ls(repo: Option<std::path::PathBuf>, backend: &mut dyn Backend) -> Result<Outcome> {
-    let host = lyrel_core::host::local::LocalHost::new();
+    let host = lyrel_protocol::host::local::LocalHost::new();
     let repo = repo_or_here(repo)?;
-    let listed = lyrel_core::core::worktree::list(&*host, &repo).map_err(anyhow::Error::msg)?;
+    let listed = lyrel_protocol::core::worktree::list(&*host, &repo).map_err(anyhow::Error::msg)?;
     // Each live pane belongs to the deepest checkout its cwd is in: the main
     // checkout contains `.lyrel/worktrees/*`, and a pane in one of those is
     // not also working in main.
@@ -253,9 +253,9 @@ fn worktree_rm(
     repo: Option<std::path::PathBuf>,
     backend: &mut dyn Backend,
 ) -> Result<Outcome> {
-    use lyrel_core::core::worktree;
+    use lyrel_protocol::core::worktree;
 
-    let host = lyrel_core::host::local::LocalHost::new();
+    let host = lyrel_protocol::host::local::LocalHost::new();
     let repo = repo_or_here(repo)?;
     let wt = worktree::find(&*host, &repo, target).map_err(anyhow::Error::msg)?;
     let occupying: Vec<u64> = backend

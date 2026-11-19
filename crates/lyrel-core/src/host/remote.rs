@@ -2140,17 +2140,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_require_selected_peer_environment_before_reading_any_files() {
-        let (host, seen) = host_with_peer('/', |_| {
-            panic!("old skill peer must not receive filesystem or command requests")
-        });
-        let error = crate::skills::scan(&*host, &crate::skills::ScanRequest::new("/peer/home"))
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert!(seen.try_recv().is_err());
-    }
-
-    #[test]
     fn agent_environment_uses_the_peer_scope_and_excludes_credentials() {
         let (host, _) = host_with_peer_announcing(
             '/',
@@ -2831,7 +2820,6 @@ mod tests {
 
     #[test]
     fn opencode_statistics_transports_only_the_selected_host_scope() {
-        use crate::host::session_operations::opencode::OpenCodeStatistics;
         let (host, _) = host_with_peer_announcing(
             '/',
             &[crate::daemon::control::feature::OPENCODE_STATISTICS],
@@ -2846,11 +2834,12 @@ mod tests {
                 );
                 Some((
                     ControlReply::Ok(ReplyOk::OpenCodeStatistics(Box::new(Ok(
-                        OpenCodeStatistics {
-                            identity: "remote-service".into(),
-                            sessions: vec![],
-                            issues: vec!["native service offline".into()],
-                        },
+                        serde_json::from_value(serde_json::json!({
+                            "identity": "remote-service",
+                            "sessions": [],
+                            "issues": ["native service offline"],
+                        }))
+                        .unwrap(),
                     )))),
                     vec![],
                 ))
@@ -2982,70 +2971,6 @@ mod tests {
         );
     }
     #[test]
-    fn hermes_statistics_preserves_cost_kinds_and_window_completeness() {
-        use crate::statistics::{self, DateWindow, Source, StatisticsCache};
-        let (host, _) = host_with_peer_announcing(
-            '/',
-            &[crate::daemon::control::feature::HERMES_STATISTICS],
-            |request| {
-                let ControlRequest::HermesStatistics { request } = request else {
-                    panic!("expected scoped statistics")
-                };
-                assert_eq!(request.expected_host, 0);
-                assert_eq!(request.scope.profile.as_deref(), Some("work"));
-                let rows = serde_json::json!({"projects":[{"path":"/work", "sessionCount":3,"sessionIds":["main","branch","continuation"],"previewSessions":[
-                {"id":"main","source":"cli","started_at":100,"last_active":90000,"input_tokens":10,"output_tokens":5,"actual_cost_usd":0,"estimated_cost_usd":0.8,"model":"native"},
-                {"id":"branch","source":"cli","parent_session_id":"main","_lineage_root_id":"main","_lineage_ids":["branch"],"started_at":300,"last_active":400,"input_tokens":7,"output_tokens":3,"estimated_cost_usd":0.2},
-                {"id":"continuation","source":"cli","_lineage_ids":["main","continuation"],"started_at":100,"last_active":90000,"input_tokens":100,"output_tokens":50,"actual_cost_usd":99}
-            ]}],"scoped_session_ids":["main","branch","continuation"]});
-                Some((
-                    ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(rows)))),
-                    vec![],
-                ))
-            },
-        );
-        let mut request = session_request(host.id());
-        request.agent = crate::core::cli_agent::CLIAgent::Hermes;
-        request.scope.profile = Some("work".into());
-        let source = Source::hermes(
-            PathBuf::from("/remote/hermes/profiles/work"),
-            "hermes:work",
-            request,
-        );
-        let snapshot =
-            statistics::scan(&*host, &[source], &mut StatisticsCache::default()).unwrap();
-        let totals = snapshot.aggregate(&DateWindow::all("UTC"));
-        assert_eq!(totals.main_sessions(), 2);
-        assert_eq!(totals.tokens().total(), Some(25));
-        assert_eq!(totals.recorded_usd(), Some(0.0));
-        assert_eq!(totals.estimated_usd(), Some(1.0));
-        assert!(
-            !snapshot.is_complete(),
-            "public gateway cannot include child usage"
-        );
-        assert!(
-            snapshot
-                .issues()
-                .iter()
-                .any(|i| i.reason().contains("children"))
-        );
-        use chrono::TimeZone;
-        let day = DateWindow::calendar(
-            crate::statistics::Period::Today,
-            chrono::Utc.with_ymd_and_hms(1970, 1, 2, 12, 0, 0).unwrap(),
-            None,
-        )
-        .unwrap();
-        let partial = snapshot.aggregate(&day);
-        assert_eq!(
-            partial.tokens().total(),
-            None,
-            "session cumulative totals must not be attributed to its last day"
-        );
-        assert!(!partial.is_complete());
-    }
-
-    #[test]
     fn hermes_statistics_does_not_send_unknown_requests_to_history_only_peer() {
         let (host, _) = host_with_peer_announcing(
             '/',
@@ -3059,125 +2984,5 @@ mod tests {
             crate::host::session_operations::SessionErrorKind::Unsupported
         );
         assert!(host.is_connected());
-    }
-    #[test]
-    fn hermes_statistics_marks_global_preview_and_ambiguous_empty_results() {
-        use crate::statistics::{self, Source, StatisticsCache};
-        for (value, expected) in [
-            (
-                serde_json::json!({"projects":[],"active_id":null,"scoped_session_ids":[]}),
-                "empty response",
-            ),
-            (
-                serde_json::json!({"projects":[{"sessionCount":502,"previewSessions":[],"sessionIds":[]}],"scoped_session_ids":vec!["stored";501]}),
-                "global 501",
-            ),
-            (
-                serde_json::json!({"projects":[{"sessionCount":2,"previewSessions":[],"sessionIds":["a","b"]}],"scoped_session_ids":[]}),
-                "preview window",
-            ),
-        ] {
-            let (host, _) = host_with_peer_announcing(
-                '/',
-                &[crate::daemon::control::feature::HERMES_STATISTICS],
-                move |_| {
-                    Some((
-                        ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(Ok(value.clone())))),
-                        vec![],
-                    ))
-                },
-            );
-            let mut request = session_request(host.id());
-            request.agent = crate::core::cli_agent::CLIAgent::Hermes;
-            let source = Source::hermes("/isolated".into(), "scope", request);
-            let snapshot =
-                statistics::scan(&*host, &[source], &mut StatisticsCache::default()).unwrap();
-            assert!(!snapshot.is_complete());
-            assert!(
-                snapshot
-                    .issues()
-                    .iter()
-                    .any(|i| i.reason().contains(expected)),
-                "{:?}",
-                snapshot.issues()
-            );
-        }
-    }
-    #[test]
-    fn hermes_statistics_keeps_known_undated_fields_and_cached_values_on_failure() {
-        use crate::statistics::{self, DateWindow, Source, StatisticsCache};
-        let calls = std::sync::atomic::AtomicUsize::new(0);
-        let (host, _) = host_with_peer_announcing(
-            '/',
-            &[crate::daemon::control::feature::HERMES_STATISTICS],
-            move |_| {
-                let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let result = if attempt == 0 {
-                    Ok(
-                        serde_json::json!({"projects":[{"previewSessions":[{"id":"known","source":"cli","input_tokens":9,"actual_cost_usd":1.25}]}],"scoped_session_ids":["known"]}),
-                    )
-                } else if attempt == 1 {
-                    Err(crate::host::session_operations::SessionOperationError {
-                        kind: crate::host::session_operations::SessionErrorKind::Command,
-                        message: "runtime failed".into(),
-                        retained: None,
-                    })
-                } else {
-                    Ok(serde_json::json!({"projects":[],"active_id":null,"scoped_session_ids":[]}))
-                };
-                Some((
-                    ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(result))),
-                    vec![],
-                ))
-            },
-        );
-        let mut request = session_request(host.id());
-        request.agent = crate::core::cli_agent::CLIAgent::Hermes;
-        let source = Source::hermes("/isolated".into(), "scope", request);
-        let mut cache = StatisticsCache::default();
-        let first = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
-        let totals = first.aggregate(&DateWindow::all("UTC"));
-        assert_eq!(totals.main_sessions(), 1);
-        assert_eq!(totals.tokens().input(), Some(9));
-        assert_eq!(totals.tokens().output(), None);
-        assert_eq!(totals.recorded_usd(), Some(1.25));
-        use chrono::TimeZone;
-        let window = DateWindow::calendar(
-            crate::statistics::Period::Today,
-            chrono::Utc.with_ymd_and_hms(1970, 1, 1, 12, 0, 0).unwrap(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(first.aggregate(&window).tokens().input(), None);
-        assert_eq!(
-            first.aggregate(&window).main_sessions(),
-            0,
-            "missing timestamps must not fabricate activity on the Unix epoch day"
-        );
-        let failed = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
-        assert_eq!(
-            failed.aggregate(&DateWindow::all("UTC")).recorded_usd(),
-            Some(1.25)
-        );
-        assert_eq!(failed.updated(), first.updated());
-        assert!(
-            failed
-                .issues()
-                .iter()
-                .any(|i| i.reason().contains("runtime failed"))
-        );
-        let empty = statistics::scan(&*host, &[source], &mut cache).unwrap();
-        assert_eq!(
-            empty.aggregate(&DateWindow::all("UTC")).recorded_usd(),
-            Some(1.25),
-            "ambiguous empty responses must retain dated cached usage, not claim a new zero history"
-        );
-        assert_eq!(empty.updated(), first.updated());
-        assert!(
-            empty
-                .issues()
-                .iter()
-                .any(|i| i.reason().contains("empty response"))
-        );
     }
 }

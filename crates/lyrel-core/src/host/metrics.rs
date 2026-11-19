@@ -1,74 +1,21 @@
 //! Whole-host sampling owned by the daemon's native Host, not a terminal/GUI.
 //!
-//! Requests share one sampler per server process. Only the CPU and RAM APIs are
-//! refreshed; process enumeration is never enabled. A request worker performs
-//! the blocking platform work at most once a second, without a sampling thread
+//! The wire values live in `lyrel-protocol`; this crate owns the sampler and
+//! injects it into the full local Host at construction. Requests share one
+//! sampler per server process. Only the CPU and RAM APIs are refreshed;
+//! process enumeration is never enabled. A request worker performs the
+//! blocking platform work at most once a second, without a sampling thread
 //! or polling work when no client wants metrics.
 use std::io;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
 use sysinfo::{MemoryRefreshKind, System};
+
+pub use lyrel_protocol::host::metrics::*;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const IDLE_RESET: Duration = Duration::from_secs(10);
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HostMetrics {
-    hostname: String,
-    instance: String,
-    state: MetricsState,
-}
-
-impl HostMetrics {
-    pub fn hostname(&self) -> &str {
-        &self.hostname
-    }
-    /// Matches the control hello, so a previous daemon's sample cannot be reused.
-    pub fn instance(&self) -> &str {
-        &self.instance
-    }
-    pub fn state(&self) -> &MetricsState {
-        &self.state
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MetricsState {
-    Waiting,
-    Sample(HostSample),
-    Unavailable(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HostSample {
-    cpu_percent: f32,
-    memory_used_bytes: u64,
-    memory_total_bytes: u64,
-    sampled_at_millis: u64,
-}
-
-impl HostSample {
-    /// Whole-machine busy time, normalized to 0–100 across all logical CPUs.
-    pub fn cpu_percent(&self) -> f32 {
-        self.cpu_percent
-    }
-    /// Physical RAM in use according to the host OS; excludes swap.
-    pub fn memory_used_bytes(&self) -> u64 {
-        self.memory_used_bytes
-    }
-    pub fn memory_total_bytes(&self) -> u64 {
-        self.memory_total_bytes
-    }
-    pub fn sampled_at_millis(&self) -> u64 {
-        self.sampled_at_millis
-    }
-    pub fn memory_percent(&self) -> f64 {
-        self.memory_used_bytes as f64 * 100.0 / self.memory_total_bytes as f64
-    }
-}
 
 struct Sampler {
     system: System,
@@ -95,11 +42,11 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         system.refresh_cpu_usage();
         *shared = Some(Sampler {
             system,
-            snapshot: HostMetrics {
+            snapshot: HostMetrics::new(
                 hostname,
-                instance: crate::daemon::control::server_instance().to_owned(),
-                state: MetricsState::Waiting,
-            },
+                lyrel_protocol::daemon::control::server_instance(),
+                MetricsState::Waiting,
+            ),
             refreshed: now,
         });
     }
@@ -116,7 +63,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         let used = sampler.system.used_memory();
         // sysinfo 0.40.1 refresh methods return (), so validate the exposed data.
         // Unsupported platforms already fail System::new() instead of yielding zeros.
-        sampler.snapshot.state = if sampler.system.cpus().is_empty()
+        let state = if sampler.system.cpus().is_empty()
             || total == 0
             || used > total
             || !cpu.is_finite()
@@ -126,17 +73,18 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                 "the host OS did not return valid whole-machine CPU/RAM data".into(),
             )
         } else {
-            MetricsState::Sample(HostSample {
-                cpu_percent: cpu,
-                memory_used_bytes: used,
-                memory_total_bytes: total,
-                sampled_at_millis: SystemTime::now()
+            MetricsState::Sample(HostSample::new(
+                cpu,
+                used,
+                total,
+                SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis()
                     .min(u128::from(u64::MAX)) as u64,
-            })
+            ))
         };
+        sampler.snapshot.set_state(state);
         sampler.refreshed = now;
     }
     Ok(sampler.snapshot.clone())

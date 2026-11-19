@@ -2,8 +2,8 @@
 //! The window only installs GPUI subscriptions and applies accepted configuration edits.
 
 use super::super::*;
-use crate::core::config::KeybindingOverride;
 use crate::ui::keymap::{effective_chords, extra_bindings, same_chord};
+use lyrel_core::core::config::KeybindingOverride;
 
 pub(in crate::ui) struct ShortcutEditor {
     search: Entity<InputState>,

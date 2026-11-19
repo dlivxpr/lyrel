@@ -6,9 +6,9 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems, svg};
 
-use crate::core::actions::{OpenSettings, ShowRightPanelInfo, ToggleSwitcher};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::actions::{OpenSettings, ShowRightPanelInfo, ToggleSwitcher};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 pub(crate) struct Clock {
     text: SharedString,
@@ -112,7 +112,7 @@ impl LyrelApp {
         let document_context = self.status_document_context(window, cx);
         let document = document_context.is_some();
         let location = match document_context {
-            Some(crate::ui::tab::OverlayTop::Code) => self.editor_active_location(),
+            Some(crate::ui::tab::OverlayTop::Code) => self.editor_active_location(cx),
             Some(crate::ui::tab::OverlayTop::Diff) => self
                 .tabs
                 .get(self.tabs.active_index())
@@ -126,19 +126,19 @@ impl LyrelApp {
                 if id.is_local() {
                     return t(L10nKey::RemoteThisComputer).to_string();
                 }
-                crate::core::session::WorkspaceStore::all(cx)
+                lyrel_ui_base::session::WorkspaceStore::all(cx)
                     .views
                     .iter()
                     .filter_map(|workspace| workspace.host.as_ref())
                     .find(|host| host.host_id() == id)
-                    .map(|host| crate::ui::remote_connect::route_label(cx, host))
+                    .map(|host| crate::ui::desktop_lookups::route_label(cx, host))
                     .or_else(|| {
                         self.host_snapshots
                             .get(&id)
                             .map(|snapshot| snapshot.target.to_string())
                     })
                     .unwrap_or_else(|| {
-                        crate::ui::i18n::t_fmt(
+                        lyrel_ui_base::i18n::t_fmt(
                             L10nKey::StatusRemoteHost,
                             &[("id", &format!("{:016x}", id.0))],
                         )
@@ -148,7 +148,7 @@ impl LyrelApp {
         let path = if document {
             location.map(|(host, path)| {
                 if host.is_local() {
-                    crate::ui::path_display::native_separators(path)
+                    lyrel_ui_base::path_display::native_separators(path)
                         .display()
                         .to_string()
                 } else {
@@ -298,11 +298,11 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
-    use crate::core::config::Config;
     use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+    use lyrel_ui_base::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
+    use lyrel_ui_base::config::Config;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -334,7 +334,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn long_host_and_cjk_path_yield_to_global_controls_at_narrow_zoom(cx: &mut TestAppContext) {
-        use crate::core::session::{
+        use lyrel_ui_base::session::{
             RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
         };
         let (app, mut vcx, _stream) = harness_with_pane(cx);
@@ -451,10 +451,11 @@ mod tests {
                             "the terminal must use the content height, not collapse to its intrinsic size");
                     });
                 }
-                vcx.update(|window, cx| {
+                let line_ending = vcx.update(|window, cx| {
                     let status = window.find("workbench-status").bounds();
                     let content = window.find("workbench-content").bounds();
                     assert_global_controls_in_bounds(window);
+                    let mut line_ending = None;
                     if filled && width == 720. {
                         let local = window.find("code-status-bar").bounds();
                         let document = window.find("document-status").bounds();
@@ -480,13 +481,22 @@ mod tests {
                         assert_global_controls_in_bounds(window);
                         let label = eol.label().unwrap().to_owned();
                         window.click("status-eol", cx);
-                        assert_ne!(window.find("status-eol").label(), Some(label.as_str()));
+                        line_ending = Some(label);
                     }
                     assert!(content.bottom() <= status.top());
                     assert!(status.bottom() <= window.viewport_size().height);
                     assert!(window.find("status-settings").visible());
-                    window.click("status-settings", cx);
+                    line_ending
                 });
+                if let Some(label) = line_ending {
+                    // The editor's click notifies the window through a GPUI event
+                    // after the input callback returns.
+                    settle(&mut vcx);
+                    vcx.update(|window, _| {
+                        assert_ne!(window.find("status-eol").label(), Some(label.as_str()));
+                    });
+                }
+                vcx.update(|window, cx| window.click("status-settings", cx));
                 settle(&mut vcx);
                 assert!(app.read_with(&vcx, |app, _| app.settings.is_some()));
                 vcx.simulate_keystrokes("escape");
@@ -510,7 +520,7 @@ mod tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while app.read_with(&vcx, |app, _| !app.markdown_document_active()) {
+        while app.read_with(&vcx, |app, cx| !app.markdown_document_active(cx)) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "Markdown fixture loads"

@@ -4,12 +4,11 @@ use std::time::Duration;
 
 use gpui_kit::TestAppContext;
 
-use super::route::ForwardOwnerKey;
 use crate::daemon::protocol::{
     ClientMsg, DaemonMsg, ForwardStatus, ManagedForward, SshForwardKind, WorkspaceOp,
 };
-use crate::terminal::PaneWorkspace;
 use crate::ui::app::test_window::harness_with_tabs;
+use lyrel_ui_base::route::{ForwardOwnerKey, PaneWorkspace};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mutation {
@@ -216,8 +215,8 @@ fn workspace() -> PaneWorkspace {
     )
     .unwrap();
     PaneWorkspace {
-        workspace: crate::core::session::WorkspaceId::new(),
-        target: crate::core::session::RemoteTarget::direct(&spec.user, &spec.host, spec.port),
+        workspace: lyrel_ui_base::session::WorkspaceId::new(),
+        target: lyrel_ui_base::session::RemoteTarget::direct(&spec.user, &spec.host, spec.port),
         spec: Some(Box::new(spec)),
         label: None,
         resize_echo: false,
@@ -252,7 +251,7 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
         );
         return;
     };
-    crate::core::config::set_config_dir(config.into());
+    lyrel_core::core::config::set_config_dir(config.into());
     let peer = WirePeer::start();
     for use_workspace in [false, true] {
         for (mutation, applied, changed_draft) in [

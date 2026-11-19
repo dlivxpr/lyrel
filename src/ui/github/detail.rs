@@ -1,7 +1,7 @@
 //! One issue or pull request, pushed into the GitHub tab over its list.
 //!
 //! Title, state, author, labels, the body and the conversation as Markdown —
-//! through gpui-component's `TextView`, after `core::github::markdown` has
+//! through gpui-component's `TextView`, after `lyrel_insights::github::markdown` has
 //! turned images into links and disarmed non-web link targets — and, for a
 //! pull request, its branches, where it stands on merging, its checks, its
 //! reviewers and its changed files. A file opens in the diff overlay, the
@@ -15,14 +15,13 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, rems};
 
 use lyrel_core::core::git::diff::{CommitLabel, DiffBudget, DiffSnapshot, DiffSource};
-use lyrel_core::core::github::{
+use lyrel_insights::github::{
     Check, CheckState, Checks, Comment, Detail, PrFile, Readiness, RepoSlug, ReviewState, Reviewer,
     readiness,
 };
 
 use crate::ui::app::LyrelApp;
 use crate::ui::github::{Fold, now_unix};
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::panel_github::{
     check_glyph, check_label, describe_error, github_tile, label_chip, state_glyph, state_label,
 };
@@ -33,6 +32,7 @@ use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::RepoKey;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::CONTENT_INSET;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 
 const ROW_H: f32 = 26.;
 const SECTION_GAP: f32 = 16.;
@@ -75,7 +75,7 @@ impl LyrelApp {
             None => (None, None),
         };
         let is_pr = detail.as_ref().map_or(
-            self.github.kind == lyrel_core::core::github::Kind::Pulls,
+            self.github.kind == lyrel_insights::github::Kind::Pulls,
             |d| d.item.is_pr,
         );
         let url = detail.as_ref().map_or_else(
@@ -172,7 +172,7 @@ impl LyrelApp {
         url: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let muted = cx.theme().muted_foreground;
         h_flex()
             .flex_none()
@@ -569,7 +569,7 @@ impl LyrelApp {
         files: &Arc<Vec<PrFile>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
         let deco = crate::ui::diff_overlay::deco_status(file.status);
         let (name, dir) = split_display_path(&file.path);
@@ -758,7 +758,7 @@ fn checks_section(
     let theme = cx.theme();
     let muted = theme.muted_foreground;
     let mono = theme.mono_font_family.clone();
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let now = now_unix();
     let counted = checks.counted();
     let summary = if counted == 0 {
@@ -884,7 +884,7 @@ fn fold_row(
     unfolded: bool,
     cx: &gpui_kit::App,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let muted = cx.theme().muted_foreground;
     h_flex()
         .id(id)
@@ -926,7 +926,7 @@ fn reviews_section(
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let foldable = reviewers.len() > REVIEWERS_FOLD_AT;
     let shown = if foldable && !unfolded {
         REVIEWERS_FOLD_AT - 1
@@ -1044,7 +1044,7 @@ fn markdown_block(id: String, source: &str, empty: &str, cx: &gpui_kit::App) -> 
             .child(empty.to_string())
             .into_any_element();
     }
-    let safe = lyrel_core::core::github::markdown::sanitize(source, t(L10nKey::GitHubImage));
+    let safe = lyrel_insights::github::markdown::sanitize(source, t(L10nKey::GitHubImage));
     div()
         .px(px(TEXT_INSET))
         .min_w_0()
@@ -1079,12 +1079,12 @@ fn markdown_block(id: String, source: &str, empty: &str, cx: &gpui_kit::App) -> 
 const UNSAFE_BLOCK: &str = "lyrel-github-unsafe-block";
 
 /// Whether `node` and everything under it is what
-/// `core::github::markdown::sanitize` promises: images only from GitHub's own
+/// `lyrel_insights::github::markdown::sanitize` promises: images only from GitHub's own
 /// hosts, links (and link definitions) only to web and mail targets, and raw
 /// HTML with no `<img>` or unsafe `href`/`src`.
 fn renders_safely(node: &gpui_kit::component::text::markdown_ast::Node) -> bool {
     use gpui_kit::component::text::markdown_ast::Node;
-    use lyrel_core::core::github::markdown::{html_is_safe, is_github_hosted, is_safe_target};
+    use lyrel_insights::github::markdown::{html_is_safe, is_github_hosted, is_safe_target};
     let here = match node {
         Node::Image(image) => is_github_hosted(&image.url),
         // Never written by the rewrite (it makes every `![…][…]` a link).

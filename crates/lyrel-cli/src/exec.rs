@@ -14,8 +14,8 @@
 //! foreground (a nested shell, an `ssh`) — a `D` in the bytes is only the end
 //! once the daemon agrees the shell is back at its prompt.
 
-use lyrel_core::core::osc::OscTokenizer;
-use lyrel_core::daemon::protocol::WinSize;
+use lyrel_protocol::core::osc::OscTokenizer;
+use lyrel_protocol::daemon::protocol::WinSize;
 
 /// Output kept past this is dropped from the front: the end of a long build is
 /// the part worth reading, and a command that prints without bound must not

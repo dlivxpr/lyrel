@@ -1,5 +1,6 @@
-use crate::core::session::RemoteTarget;
-use crate::ui::remote_connect::{Connected, HostChoice};
+use crate::ui::desktop_lookups::HostChoice;
+use crate::ui::remote_connect::Connected;
+use lyrel_ui_base::session::RemoteTarget;
 
 /// One window's manual connection and creation flow, not machine authority.
 #[derive(Default)]
@@ -209,10 +210,10 @@ use gpui_kit::{Context, Window};
 use lyrel_core::host::HostId;
 
 use super::{RemoteLinks, pump_auth_sheets};
-use crate::core::config::Config;
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
 use crate::ui::remote_connect;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 
 impl LyrelApp {
     pub(crate) fn connect_to_host(&mut self, choice: HostChoice, cx: &mut Context<Self>) {
@@ -314,7 +315,7 @@ impl LyrelApp {
                         rows: rows.clone(),
                     },
                 );
-                remote_connect::HostLinks::insert(cx, connected.host, home.clone());
+                crate::ui::desktop_lookups::HostLinks::insert(cx, connected.host, home.clone());
                 // The listing outlives the link: mirrored into the store so
                 // the switcher still knows this machine's workspaces after a
                 // restart, without a connection.

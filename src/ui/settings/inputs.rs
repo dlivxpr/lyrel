@@ -1,6 +1,6 @@
 use super::arguments::{join_shell_args, split_shell_args};
 use super::*;
-use crate::core::config::ShellConfig;
+use lyrel_core::core::config::ShellConfig;
 
 /// The one rule the "Start in" custom path lives by (#601): empty means unset
 /// and saves; anything else must name a directory that exists, because the
@@ -237,7 +237,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_working_directory_strategy(
         &mut self,
-        strategy: crate::core::config::WdStrategy,
+        strategy: lyrel_core::core::config::WdStrategy,
         cx: &mut Context<Self>,
     ) {
         let cfg = cx.global_mut::<Config>();
@@ -287,9 +287,10 @@ impl SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::wd_path_saveable;
-    use crate::core::config::{Config, ShellConfig};
     use crate::ui::settings::{SettingsSection, test_window};
     use gpui_kit::{Focusable as _, TestAppContext};
+    use lyrel_core::core::config::ShellConfig;
+    use lyrel_ui_base::config::Config;
 
     #[test]
     fn a_start_in_path_saves_only_when_it_names_a_real_directory() {
@@ -313,7 +314,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn shell_field_enter_preserves_argv_and_invalid_drafts(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
         let args: Vec<String> = [
             "-c",

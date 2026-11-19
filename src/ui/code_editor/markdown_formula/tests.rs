@@ -31,10 +31,10 @@ fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestC
     }
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
-    context.dispatch_action(crate::core::actions::EditorSave);
+    context.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer()
+        app.read_with(context, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -43,8 +43,8 @@ fn active(
     app: &Entity<LyrelApp>,
     context: &VisualTestContext,
 ) -> Entity<lyrel_markdown_editor::EditorState> {
-    app.read_with(context, |app, _| {
-        app.active_editor_input()
+    app.read_with(context, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -84,7 +84,7 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = active(&app, &context);
     save(&app, &mut context);
@@ -123,10 +123,10 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     first.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).encode().unwrap(), expected)
     });
-    app.read_with(&context, |app, _| {
-        assert!(app.active_buffer().unwrap().dirty)
+    app.read_with(&context, |app, cx| {
+        assert!(app.active_buffer(cx).unwrap().dirty)
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     first.read_with(&context, |view, cx| {
@@ -136,7 +136,7 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Redo);
     save(&app, &mut context);
     assert_eq!(std::fs::read(&file).unwrap(), expected);
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     // The second presentation gets its own structural seat, with the same Document/history.
     app.update_in(&mut context, |app, window, cx| {
         assert!(app.editor_split(window, cx))
@@ -207,7 +207,7 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| app.active_buffer(cx).is_some())
     });
     active(&app, &context).read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).encode().unwrap(), display_expected)
@@ -225,7 +225,7 @@ pub(super) fn unsupported_and_unchanged_are_lossless(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| app.active_buffer(cx).is_some())
     });
     let view = active(&app, &context);
     enter(&view, original.find('$').unwrap(), &mut context);
@@ -235,7 +235,7 @@ pub(super) fn unsupported_and_unchanged_are_lossless(cx: &mut TestAppContext) {
             "unsupported parse never steals document focus"
         )
     });
-    assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+    assert!(!app.read_with(&context, |app, cx| app.active_buffer(cx).unwrap().dirty));
     // Supported entry followed by commit without edits retains the exact original spelling.
     enter(&view, original.rfind("$\\frac").unwrap(), &mut context);
     context.update(|window, cx| window.press("enter", cx));
@@ -272,7 +272,7 @@ fn formula_empty_and_indented_fences_preserve_bytes_through_commit_cancel_and_un
             app.open_file_in_editor(&path, window, cx)
         });
         until(&mut context, |cx| {
-            app.read_with(cx, |app, _| app.active_buffer().is_some())
+            app.read_with(cx, |app, cx| app.active_buffer(cx).is_some())
         });
         let view = active(&app, &context);
         let at = view.read_with(&context, |view, _| view.text().find("$$").unwrap());
@@ -349,12 +349,12 @@ pub(super) fn native_full_mixed_tall_formula_pointer_fragments(cx: &mut TestAppC
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| app.active_buffer(cx).is_some())
     });
     let view = active(&app, &context);
     until(&mut context, |context| {
         app.read_with(context, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .markdown_resources
                 .as_ref()
@@ -468,12 +468,12 @@ pub(super) fn native_hard_break_formula_fragments(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| app.active_buffer(cx).is_some())
     });
     let view = active(&app, &context);
     until(&mut context, |context| {
         app.read_with(context, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .markdown_resources
                 .as_ref()

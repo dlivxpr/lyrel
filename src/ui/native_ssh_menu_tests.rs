@@ -1,23 +1,44 @@
 // Production host-menu pointer path, backed by the isolated native SSH Host.
 use super::*;
+use crate::ui::desktop_lookups;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 
 #[gpui_kit::test]
 #[ignore = "requires isolated pinned native SSH/SFTP and same-commit server; run alone"]
 fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::TestAppContext) {
-    let binary = std::path::PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"));
+    let binary = std::path::PathBuf::from(
+        std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
+    );
     let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
-    crate::core::config::set_config_dir(fixture.local_config_dir());
+    lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     let spec = fixture.spec();
     let target = RemoteTarget::direct(&spec.user, &spec.host, spec.port);
-    let host = fixture.connect_control_as(&target.connection_key(), "isolated-menu-client", "isolated-menu-window");
+    let host = fixture.connect_control_as(
+        &target.connection_key(),
+        "isolated-menu-client",
+        "isolated-menu-window",
+    );
     let remote = WorkspaceId::new();
-    assert!(matches!(host.client().call(ControlRequest::WorkspaceCreate { name: Some("isolated menu disconnect".into()), workspace: Some(remote) }).unwrap(), ReplyOk::WorkspaceTree(_)));
-    struct Owned(std::sync::Arc<lyrel_core::host::remote::RemoteHost>, WorkspaceId);
+    assert!(matches!(
+        host.client()
+            .call(ControlRequest::WorkspaceCreate {
+                name: Some("isolated menu disconnect".into()),
+                workspace: Some(remote)
+            })
+            .unwrap(),
+        ReplyOk::WorkspaceTree(_)
+    ));
+    struct Owned(
+        std::sync::Arc<lyrel_core::host::remote::RemoteHost>,
+        WorkspaceId,
+    );
     impl Drop for Owned {
         fn drop(&mut self) {
-            let _ = self.0.client().call(ControlRequest::WorkspaceRemove { workspace: self.1 });
+            let _ = self
+                .0
+                .client()
+                .call(ControlRequest::WorkspaceRemove { workspace: self.1 });
         }
     }
     let _owned = Owned(host.clone(), remote);
@@ -27,18 +48,31 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
     let other_workspace = other.read_with(cx, |app, _| app.workspace);
     let handle = vcx.window_handle();
     cx.update(|cx| {
-        crate::ui::i18n::set_locale("en");
-        let mut remote_view = crate::core::session::WindowView::on_remote(crate::core::session::RemoteRef::new(target.clone(), remote));
+        lyrel_ui_base::i18n::set_locale("en");
+        let mut remote_view = lyrel_ui_base::session::WindowView::on_remote(
+            lyrel_ui_base::session::RemoteRef::new(target.clone(), remote),
+        );
         remote_view.id = workspace;
         remote_view.open = true;
-        let mut local = crate::core::session::WindowView::default();
+        let mut local = lyrel_ui_base::session::WindowView::default();
         local.id = other_workspace;
         local.open = true;
-        WorkspaceStore::install_for_test(cx, crate::core::session::WindowViews { views: vec![remote_view, local], active: Some(workspace) });
+        WorkspaceStore::install_for_test(
+            cx,
+            lyrel_ui_base::session::WindowViews {
+                views: vec![remote_view, local],
+                active: Some(workspace),
+            },
+        );
         crate::ui::windows::WindowRegistry::init(cx);
         crate::ui::windows::WindowRegistry::register(cx, workspace, handle, app.downgrade());
-        crate::ui::windows::WindowRegistry::register(cx, other_workspace, other_vcx.window_handle(), other.downgrade());
-        remote_connect::HostLinks::insert(cx, host.clone(), host.home());
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            other_workspace,
+            other_vcx.window_handle(),
+            other.downgrade(),
+        );
+        desktop_lookups::HostLinks::insert(cx, host.clone(), host.home());
     });
     app.update_in(&mut vcx, |app, window, cx| app.open_switcher(window, cx));
     vcx.run_until_parked();
@@ -53,8 +87,15 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
         window.pointer_up(disconnect, gpui_kit::MouseButton::Left, cx);
     });
     vcx.run_until_parked();
-    assert_eq!(vcx.update(|_, cx| RemoteLinks::status_of(cx, workspace)), Some(crate::ui::remote_workspace::RemoteStatus::Disconnected));
+    assert_eq!(
+        vcx.update(|_, cx| RemoteLinks::status_of(cx, workspace)),
+        Some(crate::ui::remote_workspace::RemoteStatus::Disconnected)
+    );
     assert_eq!(app.read_with(cx, |app, _| app.workspace), workspace);
-    assert_eq!(other.read_with(cx, |app, _| (app.workspace, app.tabs.len())), (other_workspace, 1), "the production menu must not invalidate an unrelated rooted window");
-    assert!(vcx.update(|_, cx| remote_connect::HostLinks::get(cx, target.host_id()).is_none()));
+    assert_eq!(
+        other.read_with(cx, |app, _| (app.workspace, app.tabs.len())),
+        (other_workspace, 1),
+        "the production menu must not invalidate an unrelated rooted window"
+    );
+    assert!(vcx.update(|_, cx| desktop_lookups::HostLinks::get(cx, target.host_id()).is_none()));
 }

@@ -62,9 +62,9 @@ fn move_to_tab_keeps_the_selected_remote_transport_and_the_other_pane(cx: &mut T
         let left = app.tabs[0].pane.first_leaf().unwrap();
         let right = app.tabs.remove(1).pane.first_leaf().unwrap();
         right.terminal().unwrap().update(cx, |view, _| {
-            view.set_workspace(Some(crate::terminal::PaneWorkspace {
+            view.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: WorkspaceId::new(),
-                target: crate::core::session::RemoteTarget::direct("me", "remote-build", 22),
+                target: lyrel_ui_base::session::RemoteTarget::direct("me", "remote-build", 22),
                 spec: None,
                 label: None,
                 resize_echo: false,
@@ -147,9 +147,9 @@ fn restarting_an_unreachable_remote_never_replaces_it_with_a_local_shell(cx: &mu
     let remote = app.update_in(&mut vcx, |app, window, cx| {
         let remote = app.tabs[0].pane.terminals()[0].clone();
         remote.update(cx, |view, _| {
-            view.set_workspace(Some(crate::terminal::PaneWorkspace {
+            view.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: WorkspaceId::new(),
-                target: crate::core::session::RemoteTarget::direct("me", "offline-build", 22),
+                target: lyrel_ui_base::session::RemoteTarget::direct("me", "offline-build", 22),
                 spec: None,
                 label: None,
                 resize_echo: false,

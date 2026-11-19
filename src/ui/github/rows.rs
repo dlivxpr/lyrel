@@ -3,7 +3,7 @@
 
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{AnyElement, Div, Hsla, SharedString, TestSupportExt as _, div, prelude::*, rems};
-use lyrel_core::core::github::stack::Cell;
+use lyrel_insights::github::stack::Cell;
 
 use crate::ui::right_panel::{META, ROW_INSET};
 

@@ -1,0 +1,97 @@
+[package]
+name = "lyrel-insights"
+version.workspace = true
+edition.workspace = true
+description = "GUI-free insights above the lyrel Host seam: skill discovery/catalog/install, coding-agent session telemetry, GitHub read queries, and desktop usage account/browser-session readers"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+# All Host work runs through the `lyrel-protocol` seam. The production
+# package does not link the Session Daemon, PTY, SSH, or GPUI.
+#
+# The crate is a production dependency of the root `lyrel` GUI package only;
+# `lyrel-server`, `lyrel-cli` and the static musl server never depend on it.
+# The usage module (models, provider scrapers and browser session readers)
+# is desktop-only. Linux builds the skills/statistics/github modules.
+
+[features]
+# Let the desktop's workflow tests exercise the real reader with an isolated
+# authorization adapter. Never enabled by a production dependency.
+test-support = []
+
+[dependencies]
+lyrel-protocol = { path = "../lyrel-protocol" }
+serde = { workspace = true }
+serde_json.workspace = true
+# SKILL.md frontmatter and hook metadata parsing.
+yaml_serde.workspace = true
+chrono = { version = "0.4.45", features = ["serde"] }
+# OpenCode service URL validation in statistics source binding (same crate and
+# purpose as lyrel-core's non-optional `http` dependency).
+http = "1.5.0"
+# Skill content hashes (catalog/install), browser-session fingerprints and the
+# usage checksum helpers — the same locked sha2 line core already pins.
+sha2 = "0.11.1"
+base64 = "0.23.1"
+# Persisted usage account ids serialize through serde — the same v4+serde
+# feature line the root manifest already uses.
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+log.workspace = true
+# Skill catalog source decoding (skills.sh URL decoding and locale-aware
+# content collation). These used to be lyrel-core's optional `github`
+# feature; they are unconditional here because the transport above them is
+# this crate's whole reason to exist.
+url = "2"
+percent-encoding = "2"
+icu_collator = "=2.4.0"
+# The GitHub/skills HTTPS transports. rustls-based (no native TLS), the same
+# locked ureq line the desktop already uses. Proxy resolution is *injected*
+# by the desktop composition (`Option<ureq::Proxy>`), never resolved here.
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "win-system-proxy",
+    "socks-proxy",
+] }
+# Version-0 package parsing inside skill discovery.
+regex = "1"
+# Kimi Code hook metadata parsing inside skill discovery — the same crate the
+# agent-hooks editor in lyrel-core already pins.
+toml_edit = "0.25.17"
+# Pricing rows keep the common single-currency shape on the stack — the same
+# workspace smallvec line lyrel-core pins.
+smallvec.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# Desktop browser session/cookie readers. These live here — not in the root
+# GUI package — so headless Linux builds link no SQLite/LevelDB/AES/Snappy
+# for code they cannot reach.
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+rusty-leveldb = "4.0.2"
+snap = "1"
+fs2 = "0.4"
+zeroize = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Chromium uses POSIX record locks in addition to the fs2 file lock.
+libc = "0.2.191"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows Chromium cookie decryption: same-user DPAPI unwrap plus AES-GCM,
+# the exact pinned line the GUI used. Never calls ABE or interactive APIs.
+aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
+# CryptUnprotectData for the same-user DPAPI unwrap above.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+[dev-dependencies]
+# RemoteHost consumers exercise the real core adapter only in tests.
+lyrel-core = { path = "../lyrel-core" }
+tempfile = "3"
+# Timezone-window cases in the statistics suite (same line as lyrel-core's).
+chrono-tz = "0.10"
+
+[lints]
+workspace = true

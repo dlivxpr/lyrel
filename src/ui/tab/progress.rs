@@ -1,7 +1,7 @@
 use super::Tab;
 use crate::daemon::protocol::{PaneProgress, ProgressKind};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use gpui_kit::{App, SharedString};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 impl Tab {
     /// The tab's program-reported progress, summarized from every terminal

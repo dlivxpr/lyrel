@@ -1,1677 +1,22 @@
-//! Getting around the editor: back and forward through where the caret has
-//! been, Go to Symbol, and the breadcrumbs over the text.
-//!
-//! **History.** Every jump — Go to File, Go to Line, Go to Symbol, a file link
-//! clicked in the grid, a definition a language server found, a click far down
-//! the file — is noticed the same way: [`LyrelApp::editor_nav_tick`] samples the
-//! caret each time the editor draws, and a caret that changed file, or moved
-//! [`JUMP_LINES`] or more without the text changing under it, has jumped. The
-//! place it left goes on the back stack. Nothing has to remember to report a
-//! jump, so a new way of jumping cannot forget to.
-//!
-//! One history per tab, like a tab's strip of files: each tab is its own
-//! editor group. A place in a file that has since been closed opens the file
-//! again; one in an untitled buffer that is gone is skipped.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use gpui_kit::component::input::Position;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
-use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, Window, div, px};
-use lyrel_core::core::machine::TabId;
-use smallvec::{SmallVec, smallvec};
-
-use super::outline::{self, Outline, SymbolKind};
-use super::{BufferId, CURSOR_SCROLL_ATTEMPTS, TabCode, place_cursor};
-use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::HostId;
-use crate::ui::i18n::{L10nKey, t};
-use crate::ui::search::{CommandKind, Item, SearchTab};
-
-/// A text replacement's effect on the application's saved navigation lines.
-#[derive(Clone, Copy, Debug)]
-struct NavEdit {
-    start_line: usize,
-    end_line: usize,
-    new_lines: usize,
-    at_line_start: bool,
-}
-
-/// Compare borrowed chunks without decoding every scalar in unchanged text.
-/// The iterators and the slice comparisons run in the same direction; chunk
-/// boundaries may differ after an edit, so consume only the shorter remainder.
-fn matching_chunk_bytes<'a>(
-    mut left: impl Iterator<Item = &'a str>,
-    mut right: impl Iterator<Item = &'a str>,
-    limit: usize,
-    reverse: bool,
-) -> usize {
-    let mut a: &[u8] = &[];
-    let mut b: &[u8] = &[];
-    let mut matched = 0;
-    while matched < limit {
-        while a.is_empty() {
-            let Some(chunk) = left.next() else {
-                return matched;
-            };
-            a = chunk.as_bytes();
-        }
-        while b.is_empty() {
-            let Some(chunk) = right.next() else {
-                return matched;
-            };
-            b = chunk.as_bytes();
-        }
-        let len = a.len().min(b.len()).min(limit - matched);
-        let (a_part, b_part) = if reverse {
-            (&a[a.len() - len..], &b[b.len() - len..])
-        } else {
-            (&a[..len], &b[..len])
-        };
-        if a_part != b_part {
-            return matched
-                + if reverse {
-                    a_part
-                        .iter()
-                        .rev()
-                        .zip(b_part.iter().rev())
-                        .take_while(|(a, b)| a == b)
-                        .count()
-                } else {
-                    a_part
-                        .iter()
-                        .zip(b_part.iter())
-                        .take_while(|(a, b)| a == b)
-                        .count()
-                };
-        }
-        matched += len;
-        if reverse {
-            a = &a[..a.len() - len];
-            b = &b[..b.len() - len];
-        } else {
-            a = &a[len..];
-            b = &b[len..];
-        }
-    }
-    matched
-}
-
-impl NavEdit {
-    /// Edits use the old snapshot's coordinates, last first, so shifting a
-    /// location through them never changes the coordinates of an earlier edit.
-    fn between(
-        old: &(impl Clone + Into<super::text::TextSnapshot>),
-        new: &(impl Clone + Into<super::text::TextSnapshot>),
-    ) -> SmallVec<[Self; 1]> {
-        let old = old.clone().into();
-        let new = new.clone().into();
-        let shared = old.len().min(new.len());
-        let start = old.floor_char_boundary(matching_chunk_bytes(
-            old.chunks(),
-            new.chunks(),
-            shared,
-            false,
-        ));
-        if start == old.len() && start == new.len() {
-            return SmallVec::new();
-        }
-        let suffix = matching_chunk_bytes(
-            old.reverse_chunks(),
-            new.reverse_chunks(),
-            shared - start,
-            true,
-        );
-        // Byte matches may stop inside a shared UTF-8 encoding. Trim to scalar
-        // boundaries before slicing; equal prefix/suffix bytes have the same
-        // boundaries on both sides, even when their chunk layouts differ.
-        let suffix = old.len() - old.ceil_char_boundary(old.len() - suffix);
-        let at = old.offset_to_point(start);
-        let edit = Self {
-            start_line: at.row,
-            end_line: old.offset_to_point(old.len() - suffix).row,
-            new_lines: new
-                .slice(start..new.len() - suffix)
-                .chars()
-                .filter(|&c| c == '\n')
-                .count(),
-            at_line_start: at.column == 0,
-        };
-        // Typing, a paste/deletion and a replacement confined to either side's
-        // single line cannot contain an unchanged line between two edits.
-        if edit.start_line == edit.end_line || edit.new_lines == 0 {
-            return smallvec![edit];
-        }
-
-        // Only a two-sided multiline replacement needs line alignment. The
-        // shared gutter diff sees the already-trimmed region, never the file.
-        let old_region = old.slice(start..old.len() - suffix).to_string();
-        let new_region = new.slice(start..new.len() - suffix).to_string();
-        let offsets = |text: &str| {
-            let mut at = 0;
-            std::iter::once(0)
-                .chain(text.split_inclusive('\n').map(|line| {
-                    at += line.len();
-                    at
-                }))
-                .collect::<Vec<_>>()
-        };
-        let old_offsets = offsets(&old_region);
-        let new_offsets = offsets(&new_region);
-        super::gutter::exact_diff_hunks(&old_region, &new_region)
-            .into_iter()
-            .rev()
-            .map(|hunk| {
-                let old_at = old_offsets[hunk.old.start];
-                let old_text = &old_region[old_at..old_offsets[hunk.old.end]];
-                let new_text = &new_region[new_offsets[hunk.new.start]..new_offsets[hunk.new.end]];
-                // Line alignment can include an unchanged partial boundary
-                // line. Trim it at Unicode scalar boundaries before shifting.
-                let prefix = old_text
-                    .chars()
-                    .zip(new_text.chars())
-                    .take_while(|(a, b)| a == b)
-                    .map(|(ch, _)| ch.len_utf8())
-                    .sum::<usize>();
-                let suffix = old_text[prefix..]
-                    .chars()
-                    .rev()
-                    .zip(new_text[prefix..].chars().rev())
-                    .take_while(|(a, b)| a == b)
-                    .map(|(ch, _)| ch.len_utf8())
-                    .sum::<usize>();
-                let at = old.offset_to_point(start + old_at + prefix);
-                Self {
-                    start_line: at.row,
-                    end_line: old
-                        .offset_to_point(start + old_at + old_text.len() - suffix)
-                        .row,
-                    new_lines: new_text[prefix..new_text.len() - suffix]
-                        .bytes()
-                        .filter(|&ch| ch == b'\n')
-                        .count(),
-                    at_line_start: at.column == 0,
-                }
-            })
-            .collect()
-    }
-
-    fn shift(self, line: usize) -> usize {
-        if line < self.start_line || (line == self.start_line && !self.at_line_start) {
-            line
-        } else if line >= self.end_line {
-            line.saturating_sub(self.end_line - self.start_line)
-                .saturating_add(self.new_lines)
-        } else {
-            self.start_line + (line - self.start_line).min(self.new_lines)
-        }
-    }
-}
-
-/// A caret that moves this many lines or more at once has jumped. Arrowing
-/// and typing never do; a click, a search hit or Page Down do.
-pub(crate) const JUMP_LINES: u32 = 10;
-
-/// How many places the back stack keeps.
-pub(crate) const MAX_HISTORY: usize = 50;
-
-/// How long a Back or Forward waits for the file it asked for to open before
-/// the caret is watched for jumps again.
-const PENDING_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// How often an outline is rebuilt while the text keeps changing. Between
-/// rebuilds the breadcrumbs show the last one, a keystroke or two stale.
-const OUTLINE_THROTTLE: Duration = Duration::from_millis(250);
-
-/// The key context the editor's chords are bound in: the text field's own.
-///
-/// Not a context of the editor panel's: gpui ranks a context-free binding as
-/// deep as whatever has focus, so a panel-level binding would lose ⌘⇧O to the
-/// workspace switcher. At the text field's depth, and listed after the
-/// window's table, it wins. Only the editor panel handles these actions, so in
-/// any other text field — or the terminal — the chord falls through to the
-/// binding next in line.
-pub(crate) const KEY_CONTEXT: &str = "Input";
-
-/// One place the caret has been.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NavLocation {
-    pub host: HostId,
-    /// Empty for an untitled buffer.
-    pub path: PathBuf,
-    /// Set only for an untitled buffer, which has no path to be found by and
-    /// can be returned to only while it is still open.
-    pub buffer: Option<BufferId>,
-    pub pos: Position,
-}
-
-impl NavLocation {
-    fn same_file(&self, other: &NavLocation) -> bool {
-        self.host == other.host && self.path == other.path && self.buffer == other.buffer
-    }
-
-    /// In the same file and within a jump of each other: one place, as far
-    /// as history is concerned.
-    fn near(&self, other: &NavLocation) -> bool {
-        self.same_file(other) && self.pos.line.abs_diff(other.pos.line) < JUMP_LINES
-    }
-}
-
-/// Back and forward stacks, as a browser keeps them.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct NavHistory {
-    back: Vec<NavLocation>,
-    forward: Vec<NavLocation>,
-}
-
-impl NavHistory {
-    /// The caret jumped away from `from`. A new jump forgets the way forward,
-    /// and a place near the last one recorded replaces it rather than
-    /// stacking up beside it.
-    pub(crate) fn push(&mut self, from: NavLocation) {
-        self.forward.clear();
-        match self.back.last_mut() {
-            Some(last) if last.near(&from) => *last = from,
-            _ => self.back.push(from),
-        }
-        if self.back.len() > MAX_HISTORY {
-            self.back.remove(0);
-        }
-    }
-
-    /// Where Back goes from `current`, which becomes the way forward.
-    /// Places near `current` are passed over: going back to where you already
-    /// are would look like the key did nothing.
-    pub(crate) fn go_back(&mut self, current: Option<NavLocation>) -> Option<NavLocation> {
-        let target = pop_past(&mut self.back, current.as_ref())?;
-        if let Some(current) = current {
-            self.forward.push(current);
-        }
-        Some(target)
-    }
-
-    /// Where Forward goes from `current`, which goes back on the back stack.
-    pub(crate) fn go_forward(&mut self, current: Option<NavLocation>) -> Option<NavLocation> {
-        let target = pop_past(&mut self.forward, current.as_ref())?;
-        if let Some(current) = current {
-            match self.back.last_mut() {
-                Some(last) if last.near(&current) => *last = current,
-                _ => self.back.push(current),
-            }
-        }
-        Some(target)
-    }
-
-    /// Moves the places in one file along with edits made to it, so a place
-    /// keeps pointing at the same code after lines above it come and go.
-    fn shift(&mut self, file: &NavLocation, edits: &[NavEdit]) {
-        for loc in self.back.iter_mut().chain(self.forward.iter_mut()) {
-            if loc.same_file(file) {
-                loc.pos.line = shift_line(loc.pos.line, edits);
-            }
-        }
-    }
-
-    /// Drops the places `keep` turns down, from both stacks.
-    pub(crate) fn retain(&mut self, keep: impl Fn(&NavLocation) -> bool) {
-        self.back.retain(&keep);
-        self.forward.retain(&keep);
-    }
-
-    #[cfg(test)]
-    fn lens(&self) -> (usize, usize) {
-        (self.back.len(), self.forward.len())
-    }
-}
-
-fn shift_line(line: u32, edits: &[NavEdit]) -> u32 {
-    edits
-        .iter()
-        .fold(line as usize, |line, edit| edit.shift(line))
-        .min(u32::MAX as usize) as u32
-}
-
-fn pop_past(stack: &mut Vec<NavLocation>, current: Option<&NavLocation>) -> Option<NavLocation> {
-    loop {
-        let top = stack.pop()?;
-        if !current.is_some_and(|c| c.near(&top)) {
-            return Some(top);
-        }
-    }
-}
-
-/// Where the caret is, and how long the text is — a text that changed length
-/// since the last sample was being edited, and an edit is not a jump.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Sample {
-    pub at: NavLocation,
-    pub text_len: usize,
-}
-
-/// One tab's history, and the caret sample the next one is compared against.
-#[derive(Default)]
-pub(crate) struct TabNav {
-    pub(crate) history: NavHistory,
-    last: Option<Sample>,
-    /// A Back or Forward on its way to a file that is still opening. Until it
-    /// lands, the caret that has not got there yet is not a jump.
-    pending: Option<(NavLocation, Instant)>,
-}
-
-impl TabNav {
-    /// Compares a fresh sample against the last one and records a jump.
-    /// `quiet` says the caret was moved by a key that pages or pastes, which
-    /// can go a long way without anyone having jumped anywhere.
-    pub(crate) fn observe(&mut self, now: Option<Sample>, at: Instant, quiet: bool) {
-        if let Some((target, since)) = &self.pending {
-            let arrived = now.as_ref().is_some_and(|s| s.at.same_file(target));
-            if arrived || at.duration_since(*since) > PENDING_TIMEOUT {
-                self.pending = None;
-                if arrived {
-                    self.last = now;
-                    return;
-                }
-            } else {
-                return;
-            }
-        }
-        let Some(now) = now else {
-            // No buffer in front: nothing to compare the next one against but
-            // the last place the caret was, which is kept.
-            return;
-        };
-        if let Some(last) = &self.last {
-            let jumped = !last.at.same_file(&now.at)
-                || (!quiet
-                    && last.text_len == now.text_len
-                    && last.at.pos.line.abs_diff(now.at.pos.line) >= JUMP_LINES);
-            if jumped {
-                self.history.push(last.at.clone());
-            }
-        }
-        self.last = Some(now);
-    }
-
-    /// Moves the history, and the last sample, along with edits to a file.
-    fn shift(&mut self, file: &NavLocation, edits: &[NavEdit]) {
-        self.history.shift(file, edits);
-        if let Some(last) = self.last.as_mut().filter(|l| l.at.same_file(file)) {
-            last.at.pos.line = shift_line(last.at.pos.line, edits);
-        }
-    }
-
-    fn expect(&mut self, target: NavLocation, at: Instant) {
-        self.pending = Some((target, at));
-    }
-}
-
-struct OutlineCache {
-    language: &'static str,
-    parser: Option<outline::OutlineParser>,
-    text: Option<super::text::TextSnapshot>,
-    outline: Arc<Outline>,
-    at: Instant,
-    task: Option<gpui_kit::Task<()>>,
-}
-
-/// Go to Symbol's preview: where the caret was before the picker started
-/// moving it, put back if the picker is dismissed.
-struct SymbolPreview {
-    buffer: BufferId,
-    input: super::document_input::WeakEditorInput,
-    origin: Position,
-    scroll: gpui_kit::Point<gpui_kit::Pixels>,
-}
-
-/// The window's navigation state, held by `EditorPanelState`.
-#[derive(Default)]
-pub(crate) struct EditorNav {
-    tabs: HashMap<TabId, TabNav>,
-    outlines: HashMap<BufferId, OutlineCache>,
-    /// Symbols handed in from elsewhere — a language server's
-    /// `documentSymbol` — which win over the tree's.
-    provided: HashMap<BufferId, Arc<Outline>>,
-    preview: Option<SymbolPreview>,
-    refresh_scheduled: bool,
-    /// Persistent rope snapshots share unchanged text; no whole-buffer copy on typing.
-    text_seen: HashMap<BufferId, super::text::TextSnapshot>,
-    /// A key that pages or pastes was just pressed in the editor: the caret
-    /// move it makes is not a jump.
-    quiet_move: bool,
-    _keystrokes: Option<gpui_kit::Subscription>,
-}
-
-/// Whether an action moves the caret a long way without jumping anywhere:
-/// paging through the file, or pasting, undoing and redoing a large edit.
-fn is_quiet_move(action: &dyn gpui_kit::Action) -> bool {
-    use gpui_kit::component::input::{MovePageDown, MovePageUp, Paste, Redo, Undo};
-    let any = action.as_any();
-    any.is::<MovePageUp>()
-        || any.is::<MovePageDown>()
-        || any.is::<Paste>()
-        || any.is::<Undo>()
-        || any.is::<Redo>()
-}
-
-impl EditorNav {
-    pub(crate) fn new(cx: &mut Context<LyrelApp>) -> Self {
-        let keystrokes = cx.observe_keystrokes(|this, event, window, cx| {
-            if event.action.as_deref().is_some_and(is_quiet_move)
-                && this.editor_panel_has_focus(window, cx)
-            {
-                this.editor.nav.quiet_move = true;
-            }
-        });
-        Self {
-            _keystrokes: Some(keystrokes),
-            ..Self::default()
-        }
-    }
-
-    pub(super) fn track_buffer(&mut self, id: BufferId, text: super::text::TextSnapshot) {
-        self.text_seen.insert(id, text);
-    }
-
-    pub(crate) fn forget_tab(&mut self, tab: TabId) {
-        self.tabs.remove(&tab);
-    }
-
-    pub(crate) fn forget_buffer(&mut self, id: BufferId) {
-        self.outlines.remove(&id);
-        self.text_seen.remove(&id);
-        self.provided.remove(&id);
-        for nav in self.tabs.values_mut() {
-            nav.history.retain(|l| l.buffer != Some(id));
-        }
-    }
-}
-
-impl LyrelApp {
-    fn nav_tab(&self) -> Option<TabId> {
-        self.tabs.get(self.tabs.active_index()).map(|t| t.id())
-    }
-
-    /// Where the caret is in the buffer in front, if there is one.
-    /// A picture shows nothing the caret could be at: it does not enter
-    /// navigation history as a fake line 1.
-    fn nav_here(&self, cx: &gpui_kit::App) -> Option<Sample> {
-        let f = self.active_buffer()?;
-        let input = self.active_editor_input()?;
-        let text = input.text()?;
-        let state = text.read(cx);
-        Some(Sample {
-            at: NavLocation {
-                host: f.host.id(),
-                path: f.path.clone(),
-                buffer: f.untitled.map(|_| f.id()),
-                pos: state.cursor_position(),
-            },
-            text_len: state.text().len(),
-        })
-    }
-
-    /// Samples the caret for jumps. Called whenever the editor draws, which
-    /// every caret move and every edit makes it do.
-    pub(crate) fn editor_nav_tick(&mut self, cx: &mut Context<Self>) {
-        // The picker moving the caret around is looking, not jumping; the
-        // jump it ends in is seen on the first draw after it closes.
-        if self.editor.nav.preview.is_some() {
-            return;
-        }
-        let Some(tab) = self.nav_tab() else { return };
-        let now = self.nav_here(cx);
-        let quiet = std::mem::take(&mut self.editor.nav.quiet_move);
-        self.editor
-            .nav
-            .tabs
-            .entry(tab)
-            .or_default()
-            .observe(now, Instant::now(), quiet);
-    }
-
-    /// A buffer changed: move saved locations by the actual text replacement,
-    /// including undo, reload and LSP edits rather than depending on a widget log.
-    pub(crate) fn editor_nav_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let file = NavLocation {
-            host: f.host.id(),
-            path: f.path.clone(),
-            buffer: f.untitled.map(|_| id),
-            pos: Position::default(),
-        };
-        let Some(current) = f.input.text().map(|text| text.read(cx).text().clone()) else {
-            // No text changed: a reload of a picture is not a text edit.
-            return;
-        };
-        let Some(previous) = self.editor.nav.text_seen.insert(id, current.clone()) else {
-            return;
-        };
-        let referenced = self.editor.nav.tabs.values().any(|nav| {
-            nav.history
-                .back
-                .iter()
-                .chain(nav.history.forward.iter())
-                .any(|at| at.same_file(&file))
-                || nav
-                    .last
-                    .as_ref()
-                    .is_some_and(|sample| sample.at.same_file(&file))
-        });
-        if !referenced {
-            return;
-        }
-        let edits = NavEdit::between(&previous, &current);
-        for nav in self.editor.nav.tabs.values_mut() {
-            nav.shift(&file, &edits);
-        }
-    }
-
-    /// Back (or, with `forward`, Forward) through the active tab's history.
-    pub(crate) fn editor_navigate(
-        &mut self,
-        forward: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(tab) = self.nav_tab() else { return };
-        // Settle the caret's latest move first, or a jump made since the
-        // last draw would be lost.
-        self.editor_nav_tick(cx);
-        loop {
-            let current = self.nav_here(cx).map(|s| s.at);
-            let nav = self.editor.nav.tabs.entry(tab).or_default();
-            let target = match forward {
-                true => nav.history.go_forward(current),
-                false => nav.history.go_back(current),
-            };
-            let Some(target) = target else { return };
-            if self.nav_open(tab, target, window, cx) {
-                return;
-            }
-        }
-    }
-
-    /// Shows `target`. `false` when it is gone for good — an untitled buffer
-    /// that was closed, a machine no longer connected.
-    fn nav_open(
-        &mut self,
-        tab: TabId,
-        target: NavLocation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let at = Instant::now();
-        if let Some(id) = target.buffer {
-            if self.editor.buffers.get(id).is_none() {
-                return false;
-            }
-            self.editor
-                .nav
-                .tabs
-                .entry(tab)
-                .or_default()
-                .expect(target.clone(), at);
-            self.editor_show_in_tab(tab, id, true, window, cx);
-            if let Some(input) = self.editor_input_for(id) {
-                place_cursor(input, target.pos, CURSOR_SCROLL_ATTEMPTS, window, cx);
-            }
-            return true;
-        }
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, target.host) else {
-            return false;
-        };
-        self.editor
-            .nav
-            .tabs
-            .entry(tab)
-            .or_default()
-            .expect(target.clone(), at);
-        // The same road a file link takes, so a file closed since opens again.
-        self.editor_open_on_host_at(host, &target.path, Some(target.pos), window, cx);
-        true
-    }
-
-    // ---- Outline ----
-
-    /// Replaces the tree's symbols for `buffer` with ones found elsewhere — a
-    /// language server's `textDocument/documentSymbol`, flattened with
-    /// [`Outline::from_nodes`]. `None` goes back to the tree's. The caller
-    /// keeps them current: they are shown as given until replaced.
-    pub(crate) fn editor_set_document_symbols(
-        &mut self,
-        buffer: BufferId,
-        symbols: Option<Outline>,
-        cx: &mut Context<Self>,
-    ) {
-        match symbols {
-            Some(outline) => self.editor.nav.provided.insert(buffer, Arc::new(outline)),
-            None => self.editor.nav.provided.remove(&buffer),
-        };
-        cx.notify();
-    }
-
-    /// Breadcrumbs retain the last outline while native Markdown is parsed off
-    /// the UI thread. Explicit symbol navigation still requests current text.
-    fn editor_outline(
-        &mut self,
-        id: BufferId,
-        fresh: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<Arc<Outline>> {
-        if let Some(provided) = self.editor.nav.provided.get(&id) {
-            return Some(provided.clone());
-        }
-        let f = self.editor.buffers.get(id)?;
-        let language = f.language();
-        // Symbols are facts about text: a document without text has no outline.
-        let text = f.input.text()?.read(cx).text().clone();
-        let native_markdown = f.input.markdown().is_some();
-        if !outline::supports(&language) {
-            return None;
-        }
-        if let Some(cache) = self.editor.nav.outlines.get(&id) {
-            let current =
-                cache.language == language && cache.text.as_ref().is_some_and(|old| old == &text);
-            if current {
-                return Some(cache.outline.clone());
-            }
-            if cache.language == language
-                && !fresh
-                && (cache.task.is_some() || cache.at.elapsed() < OUTLINE_THROTTLE)
-            {
-                let stale = cache.outline.clone();
-                if cache.task.is_none() {
-                    self.nav_schedule_refresh(cx);
-                }
-                return Some(stale);
-            }
-        }
-        let mut previous = self
-            .editor
-            .nav
-            .outlines
-            .remove(&id)
-            .filter(|cache| cache.language == language);
-        let mut parser = previous
-            .as_mut()
-            .and_then(|cache| cache.parser.take())
-            .or_else(|| outline::OutlineParser::new(language))?;
-        if native_markdown && !fresh {
-            let (completed, stale) = previous
-                .map(|cache| (cache.text, cache.outline))
-                .unwrap_or_default();
-            let background = cx.background_executor().spawn(async move {
-                let outline = Arc::new(parser.parse(&text));
-                (parser, text, outline)
-            });
-            let task = cx.spawn(async move |app, cx| {
-                let (parser, text, outline) = background.await;
-                let _ = app.update(cx, |app, cx| {
-                    let current = app.editor.buffers.get(id).is_some_and(|file| {
-                        file.language() == language
-                            && file
-                                .input
-                                .text()
-                                .is_some_and(|now| now.read(cx).text() == text)
-                    });
-                    let Some(cache) = app
-                        .editor
-                        .nav
-                        .outlines
-                        .get_mut(&id)
-                        .filter(|cache| cache.language == language)
-                    else {
-                        return;
-                    };
-                    cache.parser = Some(parser);
-                    cache.task = None;
-                    if current {
-                        cache.text = Some(text);
-                        cache.outline = outline;
-                    }
-                    cx.notify();
-                });
-            });
-            self.editor.nav.outlines.insert(
-                id,
-                OutlineCache {
-                    language,
-                    parser: None,
-                    text: completed,
-                    outline: stale.clone(),
-                    at: Instant::now(),
-                    task: Some(task),
-                },
-            );
-            return Some(stale);
-        }
-        // A fresh request cancels the pending breadcrumb owner before replacing it.
-        drop(previous);
-        let outline = Arc::new(parser.parse(&text));
-        self.editor.nav.outlines.insert(
-            id,
-            OutlineCache {
-                language,
-                parser: Some(parser),
-                text: Some(text),
-                outline: outline.clone(),
-                at: Instant::now(),
-                task: None,
-            },
-        );
-        Some(outline)
-    }
-
-    fn nav_schedule_refresh(&mut self, cx: &mut Context<Self>) {
-        if self.editor.nav.refresh_scheduled {
-            return;
-        }
-        self.editor.nav.refresh_scheduled = true;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(OUTLINE_THROTTLE).await;
-            let _ = this.update(cx, |this, cx| {
-                this.editor.nav.refresh_scheduled = false;
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    // ---- Go to Symbol ----
-
-    /// Go to Symbol in the file in front: the search, on its Symbols tab.
-    /// The same chord puts it away again.
-    pub(crate) fn editor_go_to_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.search.view() {
-            if view.read(cx).tab() == SearchTab::Symbols {
-                self.close_search(window, cx);
-                return;
-            }
-            self.close_search(window, cx);
-        }
-        let Some(f) = self.active_buffer() else {
-            return;
-        };
-        // 图片没有符号：打开一个空的符号选择器只会让人以为文件读坏了。
-        if !f.input.is_text() {
-            return;
-        }
-        let id = f.id();
-        let Some(input) = self.active_editor_input() else {
-            return;
-        };
-        let Some(text) = input.text() else {
-            return;
-        };
-        let (origin, scroll) = (
-            text.read(cx).cursor_position(),
-            input.read(cx).scroll_offset(),
-        );
-        let outline = self.editor_outline(id, true, cx).unwrap_or_default();
-        let rows = symbol_rows(&outline);
-        let here = outline
-            .chain_at(origin)
-            .last()
-            .map(|&ix| symbol_command(&outline.symbols[ix]));
-        self.open_search(SearchTab::Symbols, "", window, cx);
-        self.editor.nav.preview = Some(SymbolPreview {
-            buffer: id,
-            input: input.downgrade(),
-            origin,
-            scroll,
-        });
-        let live = self.lsp_project_symbol_query(window, cx);
-        if let Some(view) = self.search.view() {
-            view.update(cx, |view, cx| {
-                view.set_symbols(rows, here, window, cx);
-                if let Some(live) = live {
-                    view.set_live_query(live, window, cx);
-                }
-            });
-        }
-    }
-
-    /// The editor's search row as this window can fill it: Files always,
-    /// Symbols with a text document in front.
-    pub(crate) fn editor_search_tabs(&self) -> Vec<SearchTab> {
-        let mut tabs = vec![SearchTab::Files];
-        if self
-            .active_buffer()
-            .is_some_and(|file| file.input.is_text())
-        {
-            tabs.push(SearchTab::Symbols);
-        }
-        tabs
-    }
-
-    /// Shows a symbol the picker is on, leaving the keyboard in the picker.
-    pub(crate) fn editor_symbol_preview(&mut self, line: u32, column: u32, cx: &mut Context<Self>) {
-        let Some(input) = self
-            .editor
-            .nav
-            .preview
-            .as_ref()
-            .and_then(|preview| preview.input.upgrade())
-        else {
-            return;
-        };
-        let Some(text) = input.text() else {
-            return;
-        };
-        let offset = text
-            .read(cx)
-            .text()
-            .position_to_offset(&Position::new(line, column));
-        text.set_selected_range(offset..offset, cx);
-    }
-
-    /// Begins a preview in the file in front for a picker someone else
-    /// filled — Find References (`ui::lsp`) — so arrowing through it moves
-    /// the caret and closing it puts the caret back, as Go to Symbol does.
-    pub(crate) fn editor_begin_preview(&mut self, cx: &App) {
-        let Some(f) = self.active_buffer() else {
-            return;
-        };
-        let Some(input) = self.active_editor_input() else {
-            return;
-        };
-        // A text-only request: pictures have no caret to restore.
-        let Some(text) = input.text() else {
-            return;
-        };
-        let (origin, scroll) = (
-            text.read(cx).cursor_position(),
-            input.read(cx).scroll_offset(),
-        );
-        self.editor.nav.preview = Some(SymbolPreview {
-            buffer: f.id(),
-            input: input.downgrade(),
-            origin,
-            scroll,
-        });
-    }
-
-    /// The buffer a preview is running in, if one is.
-    pub(crate) fn editor_preview_buffer(&self) -> Option<BufferId> {
-        self.editor.nav.preview.as_ref().map(|p| p.buffer)
-    }
-
-    /// The picker's choice is final: the caret stays where it took it.
-    pub(crate) fn editor_symbol_preview_commit(&mut self) {
-        self.editor.nav.preview = None;
-    }
-
-    /// The picker went away without a choice: the caret and the scroll go
-    /// back to where they were, and so does the keyboard.
-    pub(crate) fn editor_symbol_preview_cancel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(preview) = self.editor.nav.preview.take() else {
-            return;
-        };
-        let Some(input) = preview.input.upgrade() else {
-            return;
-        };
-        let Some(text) = input.text() else {
-            return;
-        };
-        text.set_cursor_position(preview.origin, window, cx);
-        input.set_scroll_offset(preview.scroll, cx);
-    }
-
-    /// Puts the caret on a 0-based position in the buffer in front.
-    pub(crate) fn editor_go_to_position(
-        &mut self,
-        line: u32,
-        column: u32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor.nav.preview = None;
-        let Some(input) = self.active_editor_input() else {
-            return;
-        };
-        place_cursor(
-            input,
-            Position::new(line, column),
-            CURSOR_SCROLL_ATTEMPTS,
-            window,
-            cx,
-        );
-    }
-
-    // ---- Chrome ----
-
-    /// The palette's editor rows, offered while a file is in front of it.
-    pub(crate) fn editor_palette_items(&self) -> Vec<Item> {
-        use crate::ui::search::CommandGroup;
-        if !self.code_panel_visible() || self.active_buffer().is_none() {
-            return Vec::new();
-        }
-        [
-            (L10nKey::CmdEditorGoToSymbol, CommandKind::EditorGoToSymbol),
-            (L10nKey::CmdEditorGoBack, CommandKind::EditorNavigateBack),
-            (
-                L10nKey::CmdEditorGoForward,
-                CommandKind::EditorNavigateForward,
-            ),
-            (L10nKey::CmdEditorSplitRight, CommandKind::EditorSplitRight),
-            (
-                L10nKey::EditorFocusLeftGroup,
-                CommandKind::EditorFocusLeftGroup,
-            ),
-            (
-                L10nKey::EditorFocusRightGroup,
-                CommandKind::EditorFocusRightGroup,
-            ),
-            (
-                L10nKey::FocusDocumentTabNavigation,
-                CommandKind::FocusDocumentTabNavigation,
-            ),
-            (
-                L10nKey::EditorDocumentOverflow,
-                CommandKind::EditorDocumentOverflow,
-            ),
-        ]
-        .into_iter()
-        .map(|(key, kind)| Item::localized(key, kind).in_group(CommandGroup::View))
-        .collect()
-    }
-
-    /// The editor's own chords, handled by the element that holds it.
-    pub(crate) fn editor_nav_actions<E: InteractiveElement>(
-        &self,
-        element: E,
-        cx: &mut Context<Self>,
-    ) -> E {
-        use crate::core::actions::{
-            EditorDocumentOverflow, EditorFocusLeftGroup, EditorFocusRightGroup, EditorGoToSymbol,
-            EditorNavigateBack, EditorNavigateForward, EditorSplitRight,
-            FocusDocumentTabNavigation,
-        };
-        element
-            .on_action(cx.listener(|this, _: &EditorSplitRight, window, cx| {
-                if !this.editor_split(window, cx) {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &EditorFocusLeftGroup, window, cx| {
-                if !this.editor_focus_group(true, window, cx) {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &EditorFocusRightGroup, window, cx| {
-                if !this.editor_focus_group(false, window, cx) {
-                    cx.propagate();
-                }
-            }))
-            .on_action(
-                cx.listener(|this, _: &FocusDocumentTabNavigation, window, cx| {
-                    if !this.focus_document_tab_navigation(window, cx) {
-                        cx.propagate();
-                    }
-                }),
-            )
-            .on_action(cx.listener(|this, _: &EditorDocumentOverflow, window, cx| {
-                if !this.editor_document_overflow(window, cx) {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &EditorGoToSymbol, window, cx| {
-                this.editor_go_to_symbol(window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &EditorNavigateBack, window, cx| {
-                this.editor_navigate(false, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &EditorNavigateForward, window, cx| {
-                this.editor_navigate(true, window, cx)
-            }))
-    }
-
-    /// The row over the text: where the file is, then which symbols the caret
-    /// is inside. The symbols open Go to Symbol.
-    pub(crate) fn render_editor_breadcrumbs(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let id = self.tab_code().and_then(TabCode::active_id)?;
-        let slot = self.tab_code().map_or(0, TabCode::focused_slot);
-        self.render_editor_breadcrumbs_for(id, slot, true, window, cx)
-    }
-
-    /// The breadcrumbs of one group's file. `focused` is whether that group
-    /// has the focus; the other group's symbols first bring the focus over.
-    pub(crate) fn render_editor_breadcrumbs_for(
-        &mut self,
-        id: BufferId,
-        slot: usize,
-        focused: bool,
-        _window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let f = self.editor.buffers.get(id)?;
-        let code = self.tab_code()?;
-        let group = if code.focused_slot() == slot {
-            code.group
-        } else {
-            code.split.as_ref()?.id
-        };
-        let tab = self.tabs.get(self.tabs.active_index())?.id();
-        let input = f
-            .presentations
-            .markdown_existing(tab, group)
-            .map(super::EditorInput::Markdown)
-            .or_else(|| {
-                f.presentations
-                    .svg_existing(tab, group)
-                    .map(super::EditorInput::Svg)
-            })
-            .or_else(|| {
-                f.presentations
-                    .json_existing(tab, group)
-                    .map(super::EditorInput::Json)
-            })
-            .or_else(|| {
-                f.presentations
-                    .yaml_existing(tab, group)
-                    .map(super::EditorInput::Yaml)
-            })
-            .or_else(|| {
-                f.presentations
-                    .toml_existing(tab, group)
-                    .map(super::EditorInput::Toml)
-            })
-            .or_else(|| {
-                f.presentations
-                    .csv_existing(tab, group)
-                    .map(super::EditorInput::Csv)
-            })
-            .or_else(|| {
-                f.presentations
-                    .xml_existing(tab, group)
-                    .map(super::EditorInput::Xml)
-            })
-            .or_else(|| {
-                f.presentations
-                    .drawio_existing(tab, group)
-                    .map(super::EditorInput::Drawio)
-            })
-            .unwrap_or_else(|| f.input.clone());
-        // A picture has no caret to chain symbols from.
-        let caret = input.text()?.read(cx).cursor_position();
-        let segments: Vec<String> = if f.untitled.is_some() {
-            vec![f.label().to_string()]
-        } else {
-            let roots = self.tab_code().map(|c| c.roots.as_slice()).unwrap_or(&[]);
-            let local = f.host.id() == self.spawn_host(cx);
-            match local {
-                true => path_segments(
-                    &self.file_tree.project_spelling(f.host.id(), roots, &f.path),
-                    roots,
-                ),
-                false => path_segments(&f.path, &[]),
-            }
-        };
-        let file = (f.untitled.is_none()).then(|| f.path.clone());
-        let supported = f.untitled.is_none() && outline::supports(f.language());
-        let chain: Vec<(SymbolKind, String)> = match supported {
-            true => self
-                .editor_outline(id, false, cx)
-                .map(|o| {
-                    o.chain_at(caret)
-                        .into_iter()
-                        .map(|ix| (o.symbols[ix].kind, o.symbols[ix].name.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            false => Vec::new(),
-        };
-
-        let theme = cx.theme();
-        let (fg, muted) = (theme.foreground, theme.muted_foreground);
-        // A chevron a rung fainter than the names, so the path reads as its
-        // names and the separators recede.
-        let sep = || {
-            div().flex_none().px(px(4.)).child(
-                Icon::new(IconName::ChevronRight)
-                    .size(px(9.))
-                    .text_color(muted.opacity(0.6)),
-            )
-        };
-        let last = segments.len().saturating_sub(1);
-        let mut path = h_flex()
-            .flex_shrink(1.)
-            .min_w_0()
-            .overflow_hidden()
-            .items_center();
-        for (i, seg) in segments.into_iter().enumerate() {
-            if i > 0 {
-                path = path.child(sep());
-            }
-            path = path.child(
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_color(if i == last { fg } else { muted })
-                    .child(seg),
-            );
-        }
-        let path = div()
-            .id(("editor-breadcrumb-path", slot))
-            .flex_shrink(1.)
-            .min_w_0()
-            .overflow_hidden()
-            .cursor_pointer()
-            .child(path)
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                if let Some(file) = &file {
-                    this.file_tree_reveal_path(file, cx);
-                }
-            }));
-
-        let symbols = supported.then(|| {
-            let mut row = h_flex().min_w_0().overflow_hidden().items_center();
-            if chain.is_empty() {
-                row = row.child(sep()).child(div().text_color(muted).child("…"));
-            }
-            for (kind, name) in chain {
-                row = row.child(sep()).child(
-                    h_flex()
-                        .flex_none()
-                        .gap(px(4.))
-                        .whitespace_nowrap()
-                        // An impl is named by its header, `impl` and all.
-                        .when(kind != SymbolKind::Impl, |d| {
-                            d.child(div().text_color(muted).child(kind.tag()))
-                        })
-                        // The symbol is code, so it is set as code, a rung
-                        // darker than the path it hangs off.
-                        .child(
-                            div()
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .text_color(fg.opacity(0.6))
-                                .child(name),
-                        ),
-                );
-            }
-            div()
-                .id(("editor-breadcrumb-symbols", slot))
-                .flex_shrink(1.)
-                .min_w_0()
-                .overflow_hidden()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .hover(|s| s.bg(cx.theme().muted))
-                .child(row)
-                .tooltip(|window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(t(L10nKey::EditorGoToSymbolAction))
-                        .build(window, cx)
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !focused {
-                        let left = slot == 0;
-                        this.editor_focus_group(left, window, cx);
-                    }
-                    this.editor_go_to_symbol(window, cx)
-                }))
-        });
-
-        Some(
-            h_flex()
-                .id(("editor-breadcrumbs", slot))
-                .flex_none()
-                .w_full()
-                .h(px(22.))
-                .items_center()
-                .overflow_hidden()
-                .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                .text_size(gpui_kit::rems(crate::ui::right_panel::META))
-                .child(path)
-                .children(symbols)
-                .into_any_element(),
-        )
-    }
-}
-
-/// A path as the breadcrumbs spell it: from inside the project root it is in,
-/// with the root's own name first, or whole when it is in none.
-pub(crate) fn path_segments(path: &Path, roots: &[PathBuf]) -> Vec<String> {
-    let (lead, rel) = match roots
-        .iter()
-        .find_map(|r| Some((r, path.strip_prefix(r).ok()?)))
-    {
-        Some((root, rel)) => (
-            root.file_name().map(|n| n.to_string_lossy().to_string()),
-            rel.to_path_buf(),
-        ),
-        None => (None, path.to_path_buf()),
-    };
-    lead.into_iter()
-        .chain(rel.components().filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => None,
-            _ => None,
-        }))
-        .collect()
-}
-
-fn symbol_command(symbol: &outline::Symbol) -> CommandKind {
-    CommandKind::GoToSymbol {
-        line: symbol.selection.line,
-        column: symbol.selection.character,
-    }
-}
-
-/// The picker's rows, in document order, each with how deep it sits.
-pub(crate) fn symbol_rows(outline: &Outline) -> Vec<(usize, Item)> {
-    outline
-        .symbols
-        .iter()
-        .enumerate()
-        .map(|(ix, s)| {
-            let mut item = Item::new(s.name.clone(), symbol_command(s)).with_note(s.kind.tag());
-            let path = outline.container_path(ix);
-            if !path.is_empty() {
-                item = item.with_subtitle(path.join(" › "));
-            }
-            (s.depth, item)
-        })
-        .collect()
-}
-
+// Retained whole-window tests for the `nav` module, which now lives in
+// `lyrel-workbench-editor`. Keeping this anchor at the original module path
+// preserves every existing test selector.
+
+// Narrow imports for the retained whole-window tests, which drive `LyrelApp`.
 #[cfg(test)]
-mod tests {
-    use super::super::text::TextSnapshot;
-    use super::*;
-
-    fn at(path: &str, line: u32) -> NavLocation {
-        NavLocation {
-            host: HostId::LOCAL,
-            path: PathBuf::from(path),
-            buffer: None,
-            pos: Position::new(line, 0),
-        }
-    }
-
-    fn sample(path: &str, line: u32, len: usize) -> Option<Sample> {
-        Some(Sample {
-            at: at(path, line),
-            text_len: len,
-        })
-    }
-
-    #[test]
-    fn back_and_forward_walk_the_places_jumped_from() {
-        let mut h = NavHistory::default();
-        h.push(at("a.rs", 10));
-        h.push(at("b.rs", 40));
-        // Now at c.rs:5.
-        assert_eq!(h.go_back(Some(at("c.rs", 5))), Some(at("b.rs", 40)));
-        assert_eq!(h.go_back(Some(at("b.rs", 40))), Some(at("a.rs", 10)));
-        assert_eq!(h.go_back(Some(at("a.rs", 10))), None);
-        assert_eq!(h.go_forward(Some(at("a.rs", 10))), Some(at("b.rs", 40)));
-        assert_eq!(h.go_forward(Some(at("b.rs", 40))), Some(at("c.rs", 5)));
-        assert_eq!(h.go_forward(Some(at("c.rs", 5))), None);
-    }
-
-    #[test]
-    fn a_new_jump_forgets_the_way_forward() {
-        let mut h = NavHistory::default();
-        h.push(at("a.rs", 10));
-        h.push(at("b.rs", 40));
-        h.go_back(Some(at("c.rs", 5)));
-        assert_eq!(h.lens(), (1, 1));
-        h.push(at("b.rs", 40));
-        assert_eq!(h.lens(), (2, 0));
-        assert_eq!(h.go_forward(Some(at("d.rs", 0))), None);
-    }
-
-    #[test]
-    fn places_near_each_other_are_one_entry() {
-        let mut h = NavHistory::default();
-        h.push(at("a.rs", 10));
-        h.push(at("a.rs", 14));
-        assert_eq!(h.lens(), (1, 0));
-        h.push(at("a.rs", 30));
-        h.push(at("b.rs", 14));
-        assert_eq!(h.lens(), (3, 0));
-        // Back from right beside the last entry passes over it.
-        assert_eq!(h.go_back(Some(at("b.rs", 16))), Some(at("a.rs", 30)));
-    }
-
-    #[test]
-    fn the_back_stack_is_capped() {
-        let mut h = NavHistory::default();
-        for i in 0..(MAX_HISTORY as u32 + 5) {
-            h.push(at("a.rs", i * JUMP_LINES));
-        }
-        assert_eq!(h.lens().0, MAX_HISTORY);
-        let mut oldest = None;
-        let mut cur = at("z.rs", 0);
-        while let Some(l) = h.go_back(Some(cur.clone())) {
-            cur = l.clone();
-            oldest = Some(l);
-        }
-        assert_eq!(oldest, Some(at("a.rs", 5 * JUMP_LINES)));
-    }
-
-    #[test]
-    fn closed_untitled_buffers_can_be_dropped() {
-        let mut h = NavHistory::default();
-        let mut untitled = at("", 3);
-        untitled.buffer = Some(BufferId::new());
-        h.push(untitled);
-        h.push(at("a.rs", 0));
-        h.retain(|l| l.buffer.is_none());
-        assert_eq!(h.lens(), (1, 0));
-    }
-
-    #[test]
-    fn the_tracker_records_jumps_but_not_walks_or_edits() {
-        let t0 = Instant::now();
-        let mut nav = TabNav::default();
-        nav.observe(sample("a.rs", 0, 100), t0, false);
-        // Arrowing down a line at a time is not a jump.
-        for line in 1..=30 {
-            nav.observe(sample("a.rs", line, 100), t0, false);
-        }
-        assert_eq!(nav.history.lens(), (0, 0));
-        // Pasting forty lines moves the caret forty lines, and is an edit.
-        nav.observe(sample("a.rs", 70, 900), t0, false);
-        assert_eq!(nav.history.lens(), (0, 0));
-        // A click far away is.
-        nav.observe(sample("a.rs", 300, 900), t0, false);
-        assert_eq!(nav.history.back, [at("a.rs", 70)]);
-        // So is another file coming forward.
-        nav.observe(sample("b.rs", 0, 10), t0, false);
-        assert_eq!(nav.history.back, [at("a.rs", 70), at("a.rs", 300)]);
-        // No buffer in front keeps the last place for the next one.
-        nav.observe(None, t0, false);
-        nav.observe(sample("c.rs", 0, 10), t0, false);
-        assert_eq!(nav.history.back.last(), Some(&at("b.rs", 0)));
-    }
-
-    #[test]
-    fn a_pending_back_is_not_mistaken_for_a_jump() {
-        let t0 = Instant::now();
-        let mut nav = TabNav::default();
-        nav.observe(sample("a.rs", 0, 10), t0, false);
-        nav.observe(sample("b.rs", 50, 10), t0, false);
-        let target = nav.history.go_back(Some(at("b.rs", 50))).unwrap();
-        nav.expect(target, t0);
-        // The file is still opening: b.rs is on screen, and that is fine.
-        nav.observe(sample("b.rs", 50, 10), t0, false);
-        nav.observe(sample("a.rs", 0, 10), t0, false);
-        assert_eq!(nav.history.lens(), (0, 1));
-        // A target that never arrives stops being waited on.
-        nav.expect(at("gone.rs", 0), t0);
-        nav.observe(
-            sample("a.rs", 0, 10),
-            t0 + PENDING_TIMEOUT + Duration::from_secs(1),
-            false,
-        );
-        nav.observe(
-            sample("b.rs", 0, 10),
-            t0 + PENDING_TIMEOUT + Duration::from_secs(1),
-            false,
-        );
-        assert_eq!(nav.history.back, [at("a.rs", 0)]);
-    }
-
-    #[test]
-    fn paging_pasting_and_undoing_are_the_quiet_moves() {
-        use gpui_kit::component::input::{MoveDown, MovePageDown, MovePageUp, Paste, Redo, Undo};
-        assert!(is_quiet_move(&MovePageDown));
-        assert!(is_quiet_move(&MovePageUp));
-        assert!(is_quiet_move(&Paste));
-        assert!(is_quiet_move(&Undo));
-        assert!(is_quiet_move(&Redo));
-        assert!(!is_quiet_move(&MoveDown));
-    }
-
-    #[test]
-    fn a_page_down_or_a_paste_is_not_a_jump() {
-        let t0 = Instant::now();
-        let mut nav = TabNav::default();
-        nav.observe(sample("a.rs", 0, 100), t0, false);
-        nav.observe(sample("a.rs", 60, 100), t0, true);
-        nav.observe(sample("a.rs", 120, 100), t0, true);
-        assert_eq!(nav.history.lens(), (0, 0));
-        // Only the move the key made: the next one is judged on its own.
-        nav.observe(sample("a.rs", 400, 100), t0, false);
-        assert_eq!(nav.history.back, [at("a.rs", 120)]);
-    }
-
-    #[test]
-    fn saved_locations_follow_unicode_replacements_at_line_boundaries() {
-        for (old, new, line, expected) in [
-            ("α\nβ\nγ\n", "注\n释\nα\nβ\nγ\n", 0, 2),
-            ("α\nβ\nγ\nδ\n", "α\nδ\n", 2, 1),
-            ("α\nβ\nγ\nδ\n", "α\nδ\n", 3, 1),
-            ("αβ\nγ\n", "α🙂β\nγ\n", 1, 1),
-            ("α\nβ\nγ\nδ\nε\n", "β\nγ\nε\n", 2, 1),
-            ("α\nβ\nγ\nδ\n", "注\nα\nβ\n🙂\nγ\nδ\n", 1, 2),
-            ("α\nβ\nγ\n", "α改\nβ\nγ改\n", 1, 1),
-            // Equal leading/trailing UTF-8 bytes are not equal scalar values.
-            ("Ā\ntarget\n", "Ă\ninserted\ntarget\n", 1, 2),
-            ("X\n\u{80}\ntarget\n", "X\nnew\nÀ\ntarget\n", 2, 3),
-        ] {
-            let edits = NavEdit::between(
-                &TextSnapshot::Shared(Arc::new(old.into())),
-                &TextSnapshot::Shared(Arc::new(new.into())),
-            );
-            let mut history = NavHistory::default();
-            history.push(at("a.rs", line));
-            history.shift(&at("a.rs", 0), &edits);
-            let target = history.go_back(Some(at("other.rs", 0))).unwrap();
-            assert_eq!(target.pos.line, expected, "{old:?} -> {new:?}");
-        }
-    }
-
-    #[test]
-    fn saved_places_survive_unicode_edits_across_different_rope_chunks() {
-        // Distinct lines make the saved place's identity unambiguous even when
-        // the exact multiline diff has to align edits at both ends of the file.
-        let source = (0..1500)
-            .map(|line| format!("{line}: 一α😀\n"))
-            .collect::<String>();
-        let before = gpui_kit::component::input::Rope::from(source.as_str());
-        let mut after = before.clone();
-        after.insert(0, "prefix\n");
-        let prefix_only = TextSnapshot::Code(after.clone());
-        after.insert(after.len(), "tail\n");
-        let mut tail_only = before.clone();
-        tail_only.insert(tail_only.len(), "tail\n");
-        let (before, after, tail_only) = (
-            TextSnapshot::Code(before),
-            TextSnapshot::Code(after),
-            TextSnapshot::Code(tail_only),
-        );
-        for (old, new, from, expected) in [
-            (&before, &prefix_only, 700, 701),
-            (&prefix_only, &before, 701, 700),
-            (&before, &tail_only, 700, 700),
-            (&tail_only, &before, 700, 700),
-            (&before, &after, 700, 701),
-            (&before, &after, 1499, 1500),
-            (&after, &before, 701, 700),
-            (&after, &before, 1500, 1499),
-        ] {
-            let mut history = NavHistory::default();
-            history.push(at("unicode.txt", from));
-            history.shift(&at("unicode.txt", 0), &NavEdit::between(old, new));
-            assert_eq!(
-                history.go_back(None),
-                Some(at("unicode.txt", expected)),
-                "saved line {from} should follow its unchanged numbered content to {expected}; old/new bytes: {}/{}",
-                old.len(),
-                new.len(),
-            );
-        }
-    }
-
-    #[test]
-    fn unchanged_places_between_edits_follow_back_forward_and_inverse_edits() {
-        let before = (0..120)
-            .map(|line| format!("// 第{line}行🙂\n"))
-            .collect::<String>();
-        let after = format!(
-            "use std::fmt;\n{}",
-            before.replace("// 第100行🙂", "// 第100行🙂\n// 补全")
-        );
-        let before = TextSnapshot::Shared(Arc::new(before));
-        let after = TextSnapshot::Shared(Arc::new(after));
-        let mut history = NavHistory::default();
-        history.push(at("a.rs", 50));
-        history.push(at("other.rs", 0));
-        assert_eq!(
-            history.go_back(Some(at("a.rs", 110))),
-            Some(at("other.rs", 0))
-        );
-
-        for (old, new, middle, bottom) in [
-            (&before, &after, 51, 112),
-            (&after, &before, 50, 110),
-            (&before, &after, 51, 112),
-        ] {
-            history.shift(&at("a.rs", 0), &NavEdit::between(old, new));
-            assert_eq!(
-                history.go_back(Some(at("other.rs", 0))),
-                Some(at("a.rs", middle))
-            );
-            assert_eq!(
-                history.go_forward(Some(at("a.rs", middle))),
-                Some(at("other.rs", 0))
-            );
-            assert_eq!(
-                history.go_forward(Some(at("other.rs", 0))),
-                Some(at("a.rs", bottom))
-            );
-            assert_eq!(
-                history.go_back(Some(at("a.rs", bottom))),
-                Some(at("other.rs", 0))
-            );
-        }
-    }
-
-    #[test]
-    fn large_multiline_edits_do_not_approximate_unchanged_history_targets() {
-        let before = (0..1600)
-            .map(|line| format!("line {line}\n"))
-            .collect::<String>();
-        let after = "import\n".to_string()
-            + &(0..1600)
-                .map(|line| {
-                    if (600..1000).contains(&line) {
-                        format!("line {line}\n")
-                    } else {
-                        format!("changed {line}\n")
-                    }
-                })
-                .collect::<String>();
-        let before = TextSnapshot::Shared(Arc::new(before));
-        let after = TextSnapshot::Shared(Arc::new(after));
-        let mut history = NavHistory::default();
-        history.push(at("a.rs", 800));
-        history.shift(&at("a.rs", 0), &NavEdit::between(&before, &after));
-        assert_eq!(history.go_back(None), Some(at("a.rs", 801)));
-        history.push(at("a.rs", 801));
-        history.shift(&at("a.rs", 0), &NavEdit::between(&after, &before));
-        assert_eq!(history.go_back(None), Some(at("a.rs", 800)));
-    }
-
-    #[test]
-    fn places_move_with_lines_inserted_or_deleted_above_them() {
-        let mut nav = TabNav::default();
-        let t0 = Instant::now();
-        nav.observe(sample("a.rs", 40, 10), t0, false);
-        nav.observe(sample("b.rs", 0, 10), t0, false);
-        nav.history.push(at("a.rs", 90));
-        // Three lines pasted at line 10 of a.rs, then lines 20..=29 deleted.
-        let edits = [
-            NavEdit {
-                start_line: 10,
-                end_line: 10,
-                new_lines: 3,
-                at_line_start: false,
-            },
-            NavEdit {
-                start_line: 20,
-                end_line: 30,
-                new_lines: 0,
-                at_line_start: false,
-            },
-        ];
-        nav.shift(&at("a.rs", 0), &edits);
-        // b.rs is untouched; 40 → 43 → 33, 90 → 93 → 83.
-        assert_eq!(nav.history.back, [at("a.rs", 33), at("a.rs", 83)]);
-        nav.shift(&at("b.rs", 0), &edits[..1]);
-        assert_eq!(nav.last.as_ref().unwrap().at, at("b.rs", 0));
-    }
-
-    #[test]
-    fn breadcrumb_paths_start_at_their_project() {
-        let roots = [PathBuf::from("/work/lyrel")];
-        assert_eq!(
-            path_segments(Path::new("/work/lyrel/src/ui/code_editor.rs"), &roots),
-            ["lyrel", "src", "ui", "code_editor.rs"]
-        );
-        assert_eq!(
-            path_segments(Path::new("/etc/hosts"), &roots),
-            ["etc", "hosts"]
-        );
-    }
-
-    #[test]
-    fn symbol_rows_carry_their_containers_and_the_breadcrumb_chain_names_them() {
-        let src = "impl LyrelApp {\n    fn open_file(&self) {\n        let x = 1;\n    }\n}\n";
-        let outline = outline::outline_of("rust", src);
-        let rows = symbol_rows(&outline);
-        let shown: Vec<_> = rows
-            .iter()
-            .map(|(d, i)| {
-                (
-                    *d,
-                    i.title.as_str(),
-                    i.subtitle.as_deref(),
-                    i.note.as_deref(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            shown,
-            [
-                (0, "impl LyrelApp", None, Some("impl")),
-                (1, "open_file", Some("impl LyrelApp"), Some("method")),
-            ]
-        );
-        assert_eq!(
-            rows[1].1.kind,
-            CommandKind::GoToSymbol { line: 1, column: 7 }
-        );
-        let chain: Vec<_> = outline
-            .chain_at(Position::new(2, 8))
-            .into_iter()
-            .map(|i| {
-                format!(
-                    "{} {}",
-                    outline.symbols[i].kind.tag(),
-                    outline.symbols[i].name
-                )
-            })
-            .collect();
-        assert_eq!(chain, ["impl impl LyrelApp", "method open_file"]);
-    }
-}
+use crate::ui::app::LyrelApp;
+#[cfg(test)]
+use crate::ui::search::{CommandKind, SearchTab};
+#[cfg(test)]
+use gpui_kit::component::input::Position;
+#[cfg(test)]
+use gpui_kit::{App, Context, Window};
+#[cfg(test)]
+use lyrel_workbench_editor::code_editor::*;
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 pub(super) mod gpui_tests {
@@ -1679,7 +24,7 @@ pub(super) mod gpui_tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-    use lyrel_text::{EditorConfig, TextFormat};
+    use lyrel_document::text::{EditorConfig, TextFormat};
 
     /// `alpha` on line 0, `beta` on 30, `gamma` on 50.
     pub(crate) fn source() -> String {
@@ -1704,28 +49,35 @@ pub(super) mod gpui_tests {
         app.update_in(vcx, |app, window, cx| {
             let host = app.active_host(cx).expect("a host");
             let tab = app.nav_tab().expect("a tab");
-            let indent = lyrel_text::detect_indent("", "rust");
-            let id = app.editor_new_buffer(
-                host,
-                path,
-                None,
-                BufferKind::Text,
-                source(),
-                TextFormat::default(),
-                EditorConfig::default(),
-                indent,
-                None,
-                window,
-                cx,
-            );
+            let indent = lyrel_document::text::detect_indent("", "rust");
+            let id = app.editor.update(cx, |editor, cx| {
+                editor.new_buffer(
+                    host,
+                    path,
+                    None,
+                    BufferKind::Text,
+                    source(),
+                    TextFormat::default(),
+                    EditorConfig::default(),
+                    indent,
+                    None,
+                    window,
+                    cx,
+                )
+            });
+            app.watch_editor_buffer_focus(id, window, cx);
             app.editor_show_in_tab(tab, id, true, window, cx);
             id
         })
     }
 
+    /// The front buffer's text caret — where navigation history sees it.
     pub(crate) fn caret(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Position {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer()
+            let code = app.tab_code().expect("a tab with code");
+            app.editor
+                .read(cx)
+                .active_file(code)
                 .unwrap()
                 .input
                 .text()
@@ -1742,13 +94,17 @@ pub(super) mod gpui_tests {
 
     pub(crate) fn put_caret(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, line: u32) {
         app.update_in(vcx, |app, window, cx| {
-            let input = app
-                .active_buffer()
-                .unwrap()
-                .input
-                .code()
-                .expect("ordinary code editor")
-                .clone();
+            let input = {
+                let code = app.tab_code().expect("a tab with code");
+                app.editor
+                    .read(cx)
+                    .active_file(code)
+                    .unwrap()
+                    .input
+                    .code()
+                    .expect("ordinary code editor")
+                    .clone()
+            };
             input.update(cx, |s, cx| {
                 s.set_cursor_position(Position::new(line, 4), window, cx)
             });
@@ -1759,7 +115,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn go_to_symbol_previews_and_escape_puts_the_caret_back(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
 
@@ -1789,13 +145,33 @@ pub(super) mod gpui_tests {
         assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
         assert_eq!(caret(&app, &mut vcx), Position::new(5, 4), "and put back");
         draw(&app, &mut vcx);
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
+            let editor = app.editor.read(cx);
             let tab = app.nav_tab().unwrap();
-            assert!(
-                app.editor.nav.tabs[&tab].history.back.is_empty(),
-                "looking is not jumping"
-            );
+            assert!(editor.nav.tab_back_is_empty(tab), "looking is not jumping");
         });
+    }
+
+    /// The live input of the buffer in front — the panel's own answer to
+    /// "what would the keyboard act on", resolved through the editor entity.
+    fn front_input(app: &LyrelApp, cx: &App) -> EditorInput {
+        let code = app.tab_code().expect("a tab with code");
+        let tab = app.nav_tab().expect("a tab");
+        app.editor
+            .read(cx)
+            .active_editor_input(tab, code)
+            .expect("a file in front")
+    }
+
+    /// The ordinary code editor of the buffer in front.
+    fn front_code(
+        app: &LyrelApp,
+        cx: &App,
+    ) -> gpui_kit::Entity<gpui_kit::component::input::EditorState> {
+        front_input(app, cx)
+            .code()
+            .expect("ordinary code editor")
+            .clone()
     }
 
     #[gpui_kit::test]
@@ -1809,14 +185,17 @@ pub(super) mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+        while !app.read_with(&vcx, |app, cx| {
+            app.tab_code()
+                .is_some_and(|code| app.editor.read(cx).active_file(code).is_some())
+        }) {
             vcx.run_until_parked();
             assert!(Instant::now() < deadline, "Markdown open did not settle");
             std::thread::sleep(Duration::from_millis(5));
         }
         vcx.update(|window, cx| window.render_frame(cx));
         let first = app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = front_input(app, cx);
             input
                 .text()
                 .unwrap()
@@ -1826,7 +205,7 @@ pub(super) mod gpui_tests {
         });
         vcx.update(|window, cx| window.render_frame(cx));
         let second = app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_editor_input().unwrap();
+            let input = front_input(app, cx);
             input
                 .text()
                 .unwrap()
@@ -1851,7 +230,8 @@ pub(super) mod gpui_tests {
                 second.text().unwrap().read(cx).cursor_position(),
                 Position::new(4, 2)
             );
-            assert!(!app.active_buffer().unwrap().dirty);
+            let code = app.tab_code().unwrap();
+            assert!(!app.editor.read(cx).active_file(code).unwrap().dirty);
         });
     }
 
@@ -1864,19 +244,21 @@ pub(super) mod gpui_tests {
     ) -> BufferId {
         let host = app.active_host(cx).expect("a host");
         let tab = app.nav_tab().expect("a tab");
-        let id = app.editor_new_buffer(
-            host,
-            path.to_path_buf(),
-            None,
-            BufferKind::Text,
-            source.into(),
-            TextFormat::default(),
-            EditorConfig::default(),
-            lyrel_text::detect_indent(source, "markdown"),
-            None,
-            window,
-            cx,
-        );
+        let id = app.editor.update(cx, |editor, cx| {
+            editor.new_buffer(
+                host,
+                path.to_path_buf(),
+                None,
+                BufferKind::Text,
+                source.into(),
+                TextFormat::default(),
+                EditorConfig::default(),
+                lyrel_document::text::detect_indent(source, "markdown"),
+                None,
+                window,
+                cx,
+            )
+        });
         app.editor_show_in_tab(tab, id, true, window, cx);
         id
     }
@@ -1890,7 +272,7 @@ pub(super) mod gpui_tests {
             let id = open_md(app, Path::new("/nav-test/race.md"), original, window, cx);
             // Capture the old source before yielding to either executor.
             app.render_editor_breadcrumbs_for(id, 0, true, window, cx);
-            let input = app.active_editor_input().unwrap();
+            let input = front_input(app, cx);
             input.markdown().unwrap().update(cx, |view, cx| {
                 view.replace_range(0..original.len(), current, cx);
             });
@@ -1907,9 +289,7 @@ pub(super) mod gpui_tests {
         assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_buffer()
-                    .unwrap()
-                    .input
+                front_input(app, cx)
                     .text()
                     .unwrap()
                     .read(cx)
@@ -1938,11 +318,11 @@ pub(super) mod gpui_tests {
             app.render_editor_breadcrumbs_for(closed, 0, true, window, cx);
             app.editor_close_file(0, window, cx);
             open_md(app, path, replacement, window, cx);
-            app.active_editor_input()
-                .unwrap()
-                .text()
-                .unwrap()
-                .set_cursor_position(Position::new(1, 2), window, cx);
+            front_input(app, cx).text().unwrap().set_cursor_position(
+                Position::new(1, 2),
+                window,
+                cx,
+            );
         });
         vcx.run_until_parked();
         assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
@@ -1952,7 +332,8 @@ pub(super) mod gpui_tests {
         vcx.simulate_keystrokes("r e o p e n e d enter");
         assert_eq!(caret(&app, &mut vcx), Position::new(4, 2));
         app.read_with(&vcx, |app, cx| {
-            let file = app.active_buffer().unwrap();
+            let code = app.tab_code().unwrap();
+            let file = app.editor.read(cx).active_file(code).unwrap();
             assert_eq!(file.path, path);
             assert_eq!(
                 file.input.text().unwrap().read(cx).text().to_string(),
@@ -1965,7 +346,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn a_symbol_jump_can_be_walked_back_and_forward(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
 
@@ -2011,9 +392,10 @@ pub(super) mod gpui_tests {
             app.editor_navigate(false, window, cx)
         });
         vcx.run_until_parked();
-        app.read_with(&vcx, |app, _| {
+        app.read_with(&vcx, |app, cx| {
+            let code = app.tab_code().unwrap();
             assert_eq!(
-                app.active_buffer().unwrap().path,
+                app.editor.read(cx).active_file(code).unwrap().path,
                 PathBuf::from("/nav-test/a.rs")
             );
         });
@@ -2024,19 +406,13 @@ pub(super) mod gpui_tests {
     fn history_follows_edits_to_the_file(cx: &mut TestAppContext) {
         use gpui_kit::EntityInputHandler as _;
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
         put_caret(&app, &mut vcx, 50);
         // Three lines typed at the top of the file.
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app
-                .active_buffer()
-                .unwrap()
-                .input
-                .code()
-                .expect("ordinary code editor")
-                .clone();
+            let input = front_code(app, cx);
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(Some(0..0), "//\n//\n//\n", window, cx);
                 // Typing took the caret to the top; back to where it was
@@ -2079,13 +455,7 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app
-                .active_buffer()
-                .unwrap()
-                .input
-                .code()
-                .expect("ordinary code editor")
-                .clone();
+            let input = front_code(app, cx);
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),
@@ -2122,13 +492,7 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app
-                .active_buffer()
-                .unwrap()
-                .input
-                .code()
-                .expect("ordinary code editor")
-                .clone();
+            let input = front_code(app, cx);
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),
@@ -2151,9 +515,7 @@ pub(super) mod gpui_tests {
             vcx.run_until_parked();
             app.read_with(&vcx, |app, cx| {
                 assert_eq!(
-                    app.active_buffer()
-                        .unwrap()
-                        .input
+                    front_input(app, cx)
                         .text()
                         .unwrap()
                         .read(cx)
@@ -2182,7 +544,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn the_symbol_chord_puts_go_to_symbol_away(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
         app.update_in(&mut vcx, |app, window, cx| {
@@ -2204,15 +566,15 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn tab_walks_the_editors_row(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         // No file in front: Files is all the row would hold.
         assert_eq!(
-            app.read_with(&vcx, |app, _| app.editor_search_tabs()),
+            app.read_with(&vcx, |app, cx| app.editor_search_tabs(cx)),
             vec![SearchTab::Files]
         );
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         assert_eq!(
-            app.read_with(&vcx, |app, _| app.editor_search_tabs()),
+            app.read_with(&vcx, |app, cx| app.editor_search_tabs(cx)),
             vec![SearchTab::Files, SearchTab::Symbols]
         );
         app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
@@ -2232,11 +594,11 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn the_palette_offers_the_editor_commands_only_with_a_file_open(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
-        assert!(app.read_with(&vcx, |app, _| app.editor_palette_items().is_empty()));
+        lyrel_ui_base::i18n::set_locale("en");
+        assert!(app.read_with(&vcx, |app, cx| app.editor_palette_items(cx).is_empty()));
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
-        let kinds: Vec<CommandKind> = app.read_with(&vcx, |app, _| {
-            app.editor_palette_items()
+        let kinds: Vec<CommandKind> = app.read_with(&vcx, |app, cx| {
+            app.editor_palette_items(cx)
                 .into_iter()
                 .map(|i| i.kind)
                 .collect()

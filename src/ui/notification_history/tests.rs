@@ -1,7 +1,10 @@
 use super::*;
 use crate::ui::app::test_window::{harness, harness_with_tabs};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use lyrel_core::core::pane_sidecar::PaneOwner;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::session::WorkspaceId;
 
 fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
@@ -80,7 +83,7 @@ fn all_toast_severities_are_received_with_content_and_persisted_unread(cx: &mut 
 fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut TestAppContext) {
     let (app, mut window, _streams) = harness_with_tabs(cx, 1);
     let dir = isolated(&mut window);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let weak = app.downgrade();
     app.update_in(&mut window, |app, window, cx| {
         crate::ui::windows::WindowRegistry::init(cx);
@@ -337,7 +340,7 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
     settle(&mut main);
     let settings = app.read_with(&main, |app, _| app.settings_window.unwrap().0);
     cx.update_window(settings.into(), |_, window, cx| {
-        crate::ui::host_ops::HostOps::notify_err(
+        lyrel_ui_base::host_ops::HostOps::notify_err(
             window,
             cx,
             "settings save failed",
@@ -426,7 +429,7 @@ fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shel
         );
         pane
     });
-    window.dispatch_action(crate::core::actions::ParkPane);
+    window.dispatch_action(lyrel_ui_base::actions::ParkPane);
     settle(&mut window);
     app.update_in(&mut window, |app, _, cx| {
         app.tabs.select(1);
@@ -460,7 +463,7 @@ fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shel
 fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
     cx: &mut TestAppContext,
 ) {
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
+    use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
     let (app, mut window, _remote_stream) = crate::ui::app::test_window::harness_with_pane(cx);
     let dir = isolated(&mut window);
     let route = RemoteRef::new(
@@ -479,7 +482,7 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
         );
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
@@ -487,7 +490,7 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
                 resize_echo: false,
             }));
         });
-        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        let (native, stream) = lyrel_terminal::view::quiet_test_ssh_pane(1, window, cx);
         app.tabs[0].pane.split_leaf(
             remote.entity_id(),
             gpui_kit::Axis::Horizontal,
@@ -502,7 +505,7 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
             Notification::info("asynchronous native pane").pane(
                 Some(app.workspace),
                 1,
-                &crate::terminal::PaneRoute::Local,
+                &lyrel_ui_base::route::PaneRoute::Local,
             ),
             cx,
         );
@@ -530,9 +533,9 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
 
 #[gpui_kit::test]
 fn a_forgotten_remote_notification_cannot_reopen_as_a_local_workspace(cx: &mut TestAppContext) {
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
     use crate::ui::machine_mirror::MachineMirrors;
     use lyrel_core::core::machine::{Machine, Tab, Workspace};
+    use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 
     let (app, mut window) = harness(cx);
     let _dir = isolated(&mut window);

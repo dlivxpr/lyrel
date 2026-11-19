@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 
+use super::LYREL_PANE_ENV;
+
 use crate::daemon::protocol::{RemoteContext, RemoteKind, ShellSpec};
 use crate::daemon::shell_integration;
 
@@ -400,7 +402,6 @@ const TERM_PROGRAM_NAME: &str = "lyrel";
 /// Publishing the directory instead means a CLI in this shell resolves both
 /// endpoints with the very same functions the server used to open them.
 const LYREL_CONFIG_DIR_ENV: &str = "LYREL_CONFIG_DIR";
-pub(crate) const LYREL_PANE_ENV: &str = "LYREL_PANE";
 const LYREL_WS_ENV: &str = "LYREL_WS";
 
 fn config_dir_env() -> Option<String> {

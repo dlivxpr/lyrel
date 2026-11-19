@@ -173,7 +173,7 @@ fn deliver(
         );
     }
     let wire = if args.paste {
-        lyrel_core::core::paste::paste_bytes(bytes, bracketed)
+        lyrel_protocol::core::paste::paste_bytes(bytes, bracketed)
     } else {
         bytes.to_vec()
     };

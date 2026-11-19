@@ -1,5 +1,4 @@
 use super::{Inbox, Record, Severity, Source, ensure, history, navigate, source_exists};
-use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _,
@@ -15,6 +14,7 @@ use gpui_kit::{
     Styled as _, Subscription, TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window,
     div, prelude::*, rems, uniform_list,
 };
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 pub(crate) struct NotificationBell {
     view: Entity<InboxView>,
@@ -316,10 +316,10 @@ impl Render for InboxView {
                                 count,
                                 move |range, window, cx| {
                                     range
-                                        .map(|index| {
+                                        .filter_map(|index| {
                                             let record =
-                                                &inbox.read(cx).snapshot.records[count - index - 1];
-                                            render_record(record, view.clone(), window, cx)
+                                                inbox.read(cx).record_from_newest(index)?;
+                                            Some(render_record(record, view.clone(), window, cx))
                                         })
                                         .collect()
                                 },

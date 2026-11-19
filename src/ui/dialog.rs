@@ -11,52 +11,27 @@
 
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
-use gpui_kit::{
-    App, ClickEvent, Div, ElementId, Hsla, SharedString, Stateful, TestSupportExt as _, Window,
-    div, prelude::*, px, rems,
+use gpui_kit::{App, Div, ElementId, Hsla, SharedString, Stateful, div, prelude::*, px, rems};
+
+use crate::ui::right_panel::{HEADING, TEXT};
+use lyrel_ui_base::presets::Surface;
+
+// The shared card grid and button live in `lyrel-ui-base` so the workbench
+// editor's overlays and this shell chrome cannot drift apart; the composed
+// card helpers below build on them.
+pub(crate) use lyrel_ui_base::dialog::{
+    CARD_RADIUS, FIELD_H, FOOTER_H, HEADER_H, INSET, KEYCAP, Tone, button,
 };
-
-use crate::ui::presets::Surface;
-use crate::ui::right_panel::{HEADING, TAB_TEXT, TEXT};
-
-/// The card's corner — the switcher's, a notch rounder than a menu: a dialog
-/// is the one thing on screen while it is up.
-pub(crate) const CARD_RADIUS: f32 = 12.;
-
-/// The title row, the height of the switcher's search row, so a prompt that
-/// opens where the switcher just closed puts its first line in the same place.
-pub(crate) const HEADER_H: f32 = 48.;
-
-/// The button row. A 28px button in it leaves 6px above and below, the same
-/// fit as the switcher's footer and its New workspace button.
-pub(crate) const FOOTER_H: f32 = 40.;
-
-/// How far the title and the fields sit in from the card's edge — the
-/// switcher's search-row inset, so the text columns of the two line up.
-pub(crate) const INSET: f32 = 18.;
-
-/// A text field: a borderless well on the faint fill, the sidebar search's
-/// shape. The field's own `.small()` padding (8px) is what sets the text in.
-pub(crate) const FIELD_H: f32 = 28.;
 
 /// Space between a field's label and its well, and between one field and the
 /// next. Four-pixel grid: tight inside a pair, a step wider between pairs.
 const LABEL_GAP: f32 = 6.;
 const FIELD_GAP: f32 = 14.;
 
-/// A button: the field's height and the field's corner — the v5 confirm
-/// card's 28px pill-less rectangle, on every card alike.
-pub(crate) const BUTTON_H: f32 = 28.;
-const BUTTON_RADIUS: f32 = 7.;
-const BUTTON_PAD: f32 = 14.;
-
-/// A key named in a hint: an 18px cap on the faint fill.
-pub(crate) const KEYCAP: f32 = 18.;
-
 /// The ladder a dialog's hovers are taken from. Cards sit on the popover
 /// surface; the home page passes the window's own.
 pub(crate) fn popover_rungs(cx: &App) -> Surface {
-    cx.global::<crate::ui::presets::Surfaces>().popover
+    cx.global::<lyrel_ui_base::presets::Surfaces>().popover
 }
 
 /// The card itself, opaque and occluding. Callers add the header, body and
@@ -152,7 +127,7 @@ pub(crate) fn field(input: Input, cx: &App) -> Div {
     h_flex()
         .items_center()
         .h(px(FIELD_H))
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
         .child(
             div()
@@ -193,7 +168,7 @@ pub(crate) fn select_well(
         .pr(px(9.))
         .gap(px(8.))
         .items_center()
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
         .cursor_pointer()
         .child(div().flex_1().min_w_0().truncate().child(value.into()))
@@ -207,7 +182,7 @@ pub(crate) fn well(cx: &App) -> Div {
         .gap(px(4.))
         .px(px(10.))
         .py(px(8.))
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
 }
 
@@ -239,83 +214,4 @@ pub(crate) fn chord(tokens: impl IntoIterator<Item = impl Into<SharedString>>, c
         .flex_shrink_0()
         .gap(px(3.))
         .children(tokens.into_iter().map(|t| keycap(t, cx)))
-}
-
-/// What a button is asking for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tone {
-    /// The one answer a card is for: an inverted neutral, the surface's ink as
-    /// the fill — the Commit button's paint, not the accent. The accent is
-    /// already spent on focus and on the rail; a dialog of blue buttons made
-    /// every sheet look like a call to action.
-    Primary,
-    /// Everything else: the well's faint fill at rest, one rung up under the
-    /// pointer. A bare word with no shape read as a link, not as the second
-    /// answer to the question.
-    Secondary,
-    /// The action a card warns about. Red, and only on the one site that has
-    /// earned it — overriding a changed host key.
-    Danger,
-}
-
-/// A dialog button. The click handler is attached only while `enabled`: a
-/// disabled button has to be inert, not merely grey.
-///
-/// Disabled, every tone sinks to the faint fill with secondary ink — the
-/// same fall the Commit button takes — so it never advertises an action that
-/// cannot run.
-pub(crate) fn button(
-    id: impl Into<ElementId>,
-    text: impl Into<SharedString>,
-    tone: Tone,
-    enabled: bool,
-    rungs: Surface,
-    cx: &App,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
-    let theme = cx.theme();
-    let surface: Hsla = gpui_kit::rgb(rungs.base).into();
-    let (fill, hover, ink): (Option<Hsla>, Option<Hsla>, Hsla) = match (tone, enabled) {
-        // The surface's own next rung, like a well: `muted` is a step off the
-        // window, and on a dark popover it was the card's own colour.
-        (_, false) => (
-            Some(gpui_kit::rgb(rungs.hover).into()),
-            None,
-            theme.muted_foreground,
-        ),
-        (Tone::Primary, true) => {
-            let fg = theme.foreground;
-            (Some(fg), Some(fg.blend(surface.opacity(0.14))), surface)
-        }
-        (Tone::Danger, true) => {
-            let red = theme.danger;
-            (
-                Some(red),
-                Some(red.blend(surface.opacity(0.14))),
-                theme.danger_foreground,
-            )
-        }
-        (Tone::Secondary, true) => (
-            Some(gpui_kit::rgb(rungs.hover).into()),
-            Some(gpui_kit::rgb(rungs.selected).into()),
-            theme.foreground,
-        ),
-    };
-    h_flex()
-        .id(id)
-        .test_support()
-        .items_center()
-        .justify_center()
-        .h(px(BUTTON_H))
-        .px(px(BUTTON_PAD))
-        .rounded(px(BUTTON_RADIUS))
-        .text_size(rems(TAB_TEXT))
-        .when(tone != Tone::Secondary, |b| {
-            b.font_weight(gpui_kit::FontWeight::MEDIUM)
-        })
-        .text_color(ink)
-        .when_some(fill, |b, fill| b.bg(fill))
-        .when_some(hover, |b, hover| b.hover(move |s| s.bg(hover)))
-        .when(enabled, |b| b.cursor_pointer().on_click(on_click))
-        .child(text.into())
 }

@@ -1,0 +1,50 @@
+# #281 预览大文件分段传输保留的 Glim MIT 源码记录。
+# sha256 是固定 revision 下上游原始文件内容的 SHA-256（不是本地适配后的文件）。
+# 本地保留的只是 host/transfer 下的取消、准入与预算机制；见每条 notes。
+repository = "https://github.com/glimapp/glim"
+revision = "fc2183f2c5f27ddfcdc4badbab6d83d50616831b"
+license = "MIT"
+copyright = "Copyright (c) 2026 Glim contributors"
+maintainer = "Lyrel"
+owner = "#281"
+
+[[source]]
+upstream = "crates/glim-services/src/work.rs"
+local = "src/host/transfer/cancellation.rs"
+sha256 = "ae1c3c2758eb1ba8b03bcae29fa08e22ab3d6d4a7f2df77291aa230e90adbde8"
+notes = """保留 Cancelled、CancelToken（上游 Cancellation）、CancelOnDrop 的
+链式取消语义：克隆共享同一组标志，linked 合并两组，check 是逐段读取的取消点。
+Lyrel 适配：去掉 anyhow、Reader/RecordReader/SwitchReader 与 commands 运行辅助
+（本票没有这些消费者），并把显式 cancel() 暴露给关闭/替换目标的 UI 所有者。"""
+
+[[source]]
+upstream = "crates/glim-core/src/resources.rs"
+local = "src/host/transfer/admission.rs"
+sha256 = "d66e06f631aaa61e075c4396d67a3c72445de9be4e8faace800fae16fc08d3e3"
+notes = """保留 reserve_working(minimum, desired) 的先记账后分配与 WorkingPressure：
+竞争读取不能同时认领同一容量，低于 minimum 时显式失败而不是静默缩小。
+Lyrel 适配：单一传输账本、固定预算常量；去掉 ResourcePool 的 State/Cache 类目、
+LRU 回收、reclaim 弱引用与 macOS 内存余量回调；图片解码后的像素缓存仍由现有
+markdown::images lease 记账。"""
+
+[[source]]
+upstream = "crates/glim-services/src/limits.rs"
+local = "src/host/transfer/limits.rs"
+sha256 = "d513e450a33254c6582fb9d699b5a7794fada7e622d4f919e16ae257405cd718"
+notes = """保留 PreviewBudgetExceeded + preview_budget(within, message) 的具名预算机制。
+不导入 assets/reader-limits.json → OUT_DIR 的生成管线；Lyrel 的具体数值在
+host/transfer/mod.rs 的 BUDGETS 表中以 name/unit/effect/description 声明。"""
+
+[[inspected]]
+upstream = "crates/glim-services/src/work/scheduler.rs"
+sha256 = "c5db84d967f7d3f4e164f62068950bb59162f6a3aa4ab519522ce34f59235a71"
+reason = """未导入：七条 async JobClass 车道与 Permit 轮转是为 Glim 的 future 调度器服务。
+Lyrel 的 Host 读取是阻塞调用，已有 HostOps 的有界线程池与逐段请求自然限制并发；
+再引入一个 scheduler 会成为第二套调度权威，工作票明确反对。"""
+
+[[inspected]]
+upstream = "crates/glim-services/src/paged.rs"
+sha256 = "f339462fabb7d43181d088988476b96ac21649f08e3c63c7925e67a49437777f"
+reason = """仅参考、未导入：该实现使用 Unix (dev, ino) 与本地 tempfile，不是 Host-aware
+传输。Lyrel 在 LocalHost 内用平台对象身份 + change time 绑定打开版本，并在
+control 会话中复用同一 HostRead，而不是把本机 paged-file 当成远端实现。"""

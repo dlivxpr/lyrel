@@ -1,0 +1,136 @@
+[package]
+name = "lyrel-terminal"
+version.workspace = true
+edition = "2024"
+description = "The desktop terminal client: pane connection, terminal view/element, glyph protocol and Kitty/iTerm2/Sixel graphics client, smart selection, composer and prompt input, lifted out of the root workbench package."
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# Cross-crate test surface: the rooted-consumer graphics helpers, quiet test
+# panes and fixture hooks the root package's whole-window and native consumer
+# suites build on. Enabled by the root package's desktop dev-dependencies and
+# by this crate's own tests. The fixture process stays a dev-dependency;
+# only the hex wire codec is needed by the shared GPUI consumer helpers.
+test-support = ["dep:hex", "lyrel-core/test-support", "gpui-kit/test-support"]
+# The root package's native test binaries enable this name across the graph;
+# here it only keeps the cfg-gated test fixtures (quiet panes, test stream
+# pairs) compiling in feature-enabled builds, mirroring the root package.
+native-markdown-tests = []
+
+# Desktop-only client, mirroring the root package: everything below the line
+# compiles only on Windows/macOS. On Linux this crate is an empty rlib so
+# headless workspace builds are unaffected.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# Wire protocol, session values and Host contracts (via lyrel-protocol), the
+# Session Daemon clients, PTY/router and SSH/SFTP plumbing (lyrel-core), and
+# the shared desktop foundation: config global, keybinding actions, theme
+# presets, i18n, routes, notification history, SCM snapshots and Host
+# off-thread execution.
+lyrel-protocol = { path = "../lyrel-protocol" }
+lyrel-core = { path = "../lyrel-core", features = ["gssapi"] }
+lyrel-ui-base = { path = "../lyrel-ui-base" }
+gpui-kit = { workspace = true }
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+smallvec.workspace = true
+parking_lot = "0.13"
+# SIMD byte search for `ParkedCursorScanner`'s fast path, which scans every
+# output batch the client receives. Already in the tree via `lyrel-core`.
+memchr = "2"
+# Smart double-click selection patterns (URL/email/path). Already in the tree
+# transitively, so pinning it here adds no new native code.
+regex = "1"
+# The shared Rio parser/grid the GUI mirror, glyph outline decoding and the
+# graphics client budgets all build on. Only the parser/grid library is
+# taken, exactly as in the root package.
+rio-vt.workspace = true
+rio-unicode.workspace = true
+rio-graphics.workspace = true
+base64 = "0.23.1"
+sha2 = "0.11.1"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+tempfile = "3"
+# Clipboard-image paste (`view::clipboard`): stages a clipboard screenshot to
+# a temp file and transcodes Windows BMP screenshots to PNG. Already in the
+# tree via gpui's own clipboard code.
+image = "0.25"
+# Named only to implement `Handler::set_mouse_cursor_icon`, whose parameter
+# type rio-vt does not re-export; already in the tree transitively. The shape
+# mapping itself is `pointer`.
+cursor-icon = "=1.2.0"
+# Desktop notification fallback on Windows. On macOS only its
+# `set_application` is used — never `show`; see `remote::macos_notify`.
+notify-rust = "4.18.2"
+hex = { version = "0.4.3", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# The bell in `view::notices` is a user32 `MessageBeep`, and `aumid` reads the
+# per-user Start Menu shortcut back; the same pinned windows-sys line the GUI
+# already links.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Toast branding (`aumid`) and the unpackaged toast activator
+# (`desktop_notification::windows_toast`): IShellLinkW + IPropertyStore stamp
+# and read `System.AppUserModel.ID`, and the WinRT toast API renders the
+# notification body. Keep the published 0.62 binding line, same as the GUI.
+windows = { version = "0.62.2", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Storage_EnhancedStorage",
+    # IShellLinkW::GetPath takes a WIN32_FIND_DATAW, so reading an existing
+    # shortcut's target back needs the file-system bindings too.
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Notifications",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+windows-core = "0.62.2"
+# Windows dictionary segmentation for smart double-click selection; macOS
+# uses CFStringTokenizer instead.
+jieba-rs = "0.11.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# CFStringTokenizer FFI for dictionary-based CJK word segmentation on
+# double-click (`smart_select`). Already in the tree transitively.
+core-foundation = "0.10.1"
+# NSUserNotification is the click-to-reveal notification path — see
+# `remote::macos_notify` for why it is driven directly.
+objc2 = "0.6.5"
+# The terminal bell plays the system alert sound via NSBeep.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSGraphics"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserNotification"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+# The shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
+# plumbing (`graphics_fixture`), consumed via the terminal-side helpers.
+lyrel-test-support = { path = "../lyrel-test-support" }
+hex = "0.4.3"
+# The desktop foundation's scratch-config guards (`pin_test_config_dir`, the
+# `WorkspaceStore` test install) for this crate's own consumer suites; the
+# root package enables the same feature from its desktop dev-dependencies.
+lyrel-ui-base = { path = "../lyrel-ui-base", features = ["test-guards"] }
+# GPUI test harness for the view/element consumer suites.
+gpui-kit = { workspace = true, features = ["test-support"] }
+# Cross-process locking for the graphics fixture build, also built by the
+# native test feature.
+fs2 = "0.4"
+
+[lints]
+workspace = true

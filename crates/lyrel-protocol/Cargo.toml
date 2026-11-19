@@ -1,0 +1,64 @@
+[package]
+name = "lyrel-protocol"
+version.workspace = true
+edition.workspace = true
+description = "Lyrel's wire protocol, synchronous clients, shared session models, and Host contract"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0 AND MIT"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.23.1"
+gix-discover = { version = "0.57.0", features = ["sha1"] }
+hmac = "0.13.0"
+http = "1.5.0"
+ignore = "0.4"
+log.workspace = true
+memchr = "2"
+notify = "8"
+regex = "1"
+rio-grapheme-width.workspace = true
+rio-unicode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.1"
+smallvec.workspace = true
+smol.workspace = true
+tempfile = "3"
+toml_edit = "0.25.17"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+getrandom = "0.4.3"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# The width test compares the public helper to the actual VT grid.
+rio-vt.workspace = true
+
+[features]
+# Internal fault injection for daemon graphics-retention tests.
+test-support = []
+
+[lints]
+workspace = true

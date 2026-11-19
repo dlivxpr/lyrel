@@ -57,19 +57,7 @@ impl ConnectionKey {
     }
 
     pub fn from_spec(spec: &NativeSshSpec) -> Self {
-        use crate::daemon::protocol::SshProxy;
-        let mut s = format!("{}@{}:{}", spec.user, spec.host, spec.port);
-        match &spec.proxy {
-            SshProxy::None => {}
-            SshProxy::Command(c) => s.push_str(&format!("|cmd:{c}")),
-            SshProxy::Socks { host, port } => s.push_str(&format!("|socks:{host}:{port}")),
-            SshProxy::Http { host, port } => s.push_str(&format!("|http:{host}:{port}")),
-        }
-        if let Some(jump) = &spec.jump {
-            s.push_str("|jump:");
-            s.push_str(&ConnectionKey::from_spec(jump).0);
-        }
-        ConnectionKey(s)
+        Self(spec.connection_key())
     }
 }
 

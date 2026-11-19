@@ -2,9 +2,9 @@
 
 use super::*;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::HostOps;
 use gpui_kit::{Context, Focusable as _};
 use lyrel_core::core::git::ops::GitOp;
+use lyrel_ui_base::host_ops::HostOps;
 
 #[derive(Clone, Copy)]
 pub(crate) enum BranchInput {
@@ -180,7 +180,7 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         cx.update(|cx| {
-            use crate::terminal::git_data::ScmData;
+            use crate::ui::scm::data::ScmData;
             cx.set_global(ScmData::default());
             let repo = RepoKey {
                 host: HostId::LOCAL,
@@ -203,7 +203,7 @@ mod tests {
     fn reopening_a_repository_refreshes_branches_and_rejects_retired_results(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::terminal::git_data::{ScmData, ScmWatcher};
+        use crate::ui::scm::data::{ScmData, ScmWatcher};
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
             let output = std::process::Command::new("git")

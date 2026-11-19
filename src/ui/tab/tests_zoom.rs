@@ -44,8 +44,8 @@ fn a_tabs_zoom_survives_a_round_trip_to_another_tab(cx: &mut TestAppContext) {
 /// tabs are each holding one.
 #[gpui_kit::test]
 fn the_zoom_mark_is_on_whichever_tabs_are_hiding_panes(cx: &mut TestAppContext) {
-    use crate::terminal::view::quiet_test_pane;
     use crate::ui::pane::{Pane, PaneSlot};
+    use lyrel_terminal::view::quiet_test_pane;
 
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
 

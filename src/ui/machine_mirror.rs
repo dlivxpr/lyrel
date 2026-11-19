@@ -7,8 +7,8 @@ use lyrel_core::core::tab_view::same_title_ignoring_status_mark;
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 use lyrel_core::host::HostId;
 
-use crate::core::session::WorkspaceId;
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::session::WorkspaceId;
 
 /// A write a window made to its own mirror, kept for as long as a pull that
 /// was already on its way when it happened has still to land.
@@ -112,6 +112,8 @@ impl MachineMirrors {
         for write in since {
             write(machine);
         }
+        let snapshots = mirror_snapshots(machine);
+        crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
         cx.refresh_windows();
     }
 
@@ -128,10 +130,21 @@ impl MachineMirrors {
         if let Some(since) = mirrors.since_pull.get_mut(&host) {
             since.push(Box::new(edit));
         }
+        // Keep the read-only projection the lower layers read in step with the
+        // mirror: every write above lands in the published snapshots too, so a
+        // pane-liveness or title read never sees a half-written machine.
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
+        }
     }
 
     pub fn install(cx: &mut App, host: HostId, machine: Machine) {
         cx.default_global::<Self>().machines.insert(host, machine);
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
+        }
         cx.refresh_windows();
     }
 
@@ -161,6 +174,11 @@ impl MachineMirrors {
         if !applied {
             log::debug!("machine mirror for {host:?} fell behind; re-pulling");
             Self::refresh(cx, host);
+            return;
+        }
+        if let Some(machine) = Self::machine(cx, host) {
+            let snapshots = mirror_snapshots(machine);
+            crate::ui::desktop_lookups::publish_host_mirror(cx, host, snapshots);
         }
     }
 
@@ -436,7 +454,7 @@ fn apply(machine: &mut Machine, workspace: WorkspaceId, delta: &LayoutDelta) -> 
 
 fn view_of<'a>(
     cx: &'a App,
-    entry: &crate::core::session::WindowView,
+    entry: &lyrel_ui_base::session::WindowView,
 ) -> Option<(&'a Workspace, &'a [PaneRecord])> {
     let machine = MachineMirrors::machine(cx, entry.host_id())?;
     let machine_ws = entry.host.as_ref().map(|r| r.workspace).unwrap_or(entry.id);
@@ -444,7 +462,7 @@ fn view_of<'a>(
     Some((ws, &machine.panes))
 }
 
-pub fn display_name(cx: &App, entry: &crate::core::session::WindowView) -> Option<String> {
+pub fn display_name(cx: &App, entry: &lyrel_ui_base::session::WindowView) -> Option<String> {
     match view_of(cx, entry) {
         Some((ws, panes)) => Some(display_name_of(ws, panes)),
         None => entry.label.clone(),
@@ -452,8 +470,12 @@ pub fn display_name(cx: &App, entry: &crate::core::session::WindowView) -> Optio
 }
 
 pub fn display_name_of(ws: &Workspace, panes: &[PaneRecord]) -> String {
+    name_of(ws, panes).unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
+}
+
+fn name_of(ws: &Workspace, panes: &[PaneRecord]) -> Option<String> {
     if let Some(name) = ws.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        return name.to_string();
+        return Some(name.to_string());
     }
     subject_path_of(ws, panes)
         .and_then(|path| {
@@ -462,7 +484,29 @@ pub fn display_name_of(ws: &Workspace, panes: &[PaneRecord]) -> String {
                 .map(|n| n.to_string_lossy().into_owned())
         })
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
+}
+
+/// The read-only per-workspace projection the layers below the workbench read
+/// (`crate::ui::desktop_lookups`), recomputed from the machine as it stands
+/// after any write. One source of truth for what the tree says a workspace
+/// holds and what it calls it — the same pure reads the UI-facing functions
+/// in this module make.
+fn mirror_snapshots(
+    machine: &Machine,
+) -> Vec<(WorkspaceId, crate::ui::desktop_lookups::WorkspaceMirror)> {
+    machine
+        .user_workspaces()
+        .map(|ws| {
+            let pane_ids = ws.tabs.iter().flat_map(|t| t.root.pane_ids()).collect();
+            (
+                ws.id,
+                crate::ui::desktop_lookups::WorkspaceMirror::new(
+                    pane_ids,
+                    name_of(ws, &machine.panes),
+                ),
+            )
+        })
+        .collect()
 }
 
 pub fn subject_path_of(ws: &Workspace, panes: &[PaneRecord]) -> Option<String> {
@@ -520,7 +564,7 @@ fn most_common(values: impl Iterator<Item = String>) -> Option<String> {
 }
 
 pub fn display_name_for(cx: &App, client_ws: WorkspaceId) -> Option<String> {
-    let entry = crate::core::session::WorkspaceStore::all(cx).get(client_ws)?;
+    let entry = lyrel_ui_base::session::WorkspaceStore::all(cx).get(client_ws)?;
     display_name(cx, entry)
 }
 
@@ -531,7 +575,7 @@ pub fn display_name_for(cx: &App, client_ws: WorkspaceId) -> Option<String> {
 pub use lyrel_core::core::tab_view::{TabLabel, TabView, tab_views_of};
 
 pub fn tab_views_for(cx: &App, client_ws: WorkspaceId) -> Option<(Vec<TabView>, Option<TabId>)> {
-    let (ws, panes) = match crate::core::session::WorkspaceStore::all(cx).get(client_ws) {
+    let (ws, panes) = match lyrel_ui_base::session::WorkspaceStore::all(cx).get(client_ws) {
         Some(entry) => view_of(cx, entry)?,
         // Not in the store: a workspace some other client made, which this
         // window has never opened. It can only be on this machine, and its
@@ -570,7 +614,7 @@ pub fn unclaimed_local_workspaces(cx: &App) -> Vec<UnclaimedWorkspace> {
     let Some(machine) = MachineMirrors::machine(cx, HostId::LOCAL) else {
         return Vec::new();
     };
-    let views = crate::core::session::WorkspaceStore::all(cx);
+    let views = lyrel_ui_base::session::WorkspaceStore::all(cx);
     machine
         .user_workspaces()
         .filter(|ws| views.get(ws.id).is_none())
@@ -589,7 +633,7 @@ pub fn unclaimed_local_workspaces(cx: &App) -> Vec<UnclaimedWorkspace> {
         .collect()
 }
 
-pub fn subject_path(cx: &App, entry: &crate::core::session::WindowView) -> Option<String> {
+pub fn subject_path(cx: &App, entry: &lyrel_ui_base::session::WindowView) -> Option<String> {
     match view_of(cx, entry) {
         Some((ws, panes)) => subject_path_of(ws, panes).or_else(|| entry.subject.clone()),
         None => entry.subject.clone(),
@@ -598,13 +642,13 @@ pub fn subject_path(cx: &App, entry: &crate::core::session::WindowView) -> Optio
 
 pub fn display_hint(
     cx: &App,
-    entry: &crate::core::session::WindowView,
+    entry: &lyrel_ui_base::session::WindowView,
 ) -> Option<(String, Option<String>)> {
     let (ws, panes) = view_of(cx, entry)?;
     Some((display_name_of(ws, panes), subject_path_of(ws, panes)))
 }
 
-pub fn pane_ids(cx: &App, entry: &crate::core::session::WindowView) -> Option<Vec<u64>> {
+pub fn pane_ids(cx: &App, entry: &lyrel_ui_base::session::WindowView) -> Option<Vec<u64>> {
     let (ws, _) = match view_of(cx, entry) {
         Some(view) => view,
         None if MachineMirrors::ready(cx, entry.host_id()) => return Some(Vec::new()),
@@ -613,7 +657,7 @@ pub fn pane_ids(cx: &App, entry: &crate::core::session::WindowView) -> Option<Ve
     Some(ws.tabs.iter().flat_map(|t| t.root.pane_ids()).collect())
 }
 
-pub fn pane_count(cx: &App, entry: &crate::core::session::WindowView) -> Option<usize> {
+pub fn pane_count(cx: &App, entry: &lyrel_ui_base::session::WindowView) -> Option<usize> {
     pane_ids(cx, entry).map(|ids| ids.len())
 }
 
@@ -675,7 +719,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn an_unpulled_machine_falls_back_to_the_stamped_label(cx: &mut gpui_kit::TestAppContext) {
-        use crate::core::session::{WindowView, WindowViews, WorkspaceStore};
+        use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
 
         cx.update(|cx| {
             let mut view = WindowView::default();
@@ -714,6 +758,45 @@ mod tests {
         });
     }
 
+    #[gpui_kit::test]
+    fn an_unnamed_workspace_follows_the_current_language_without_a_new_pull(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::ui::desktop_lookups;
+        use lyrel_ui_base::i18n;
+        use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
+
+        cx.update(|cx| {
+            let view = WindowView::default();
+            let id = view.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                WindowViews {
+                    views: vec![view],
+                    active: None,
+                },
+            );
+            i18n::set_locale("en");
+            MachineMirrors::install(
+                cx,
+                HostId::LOCAL,
+                machine_with(Workspace {
+                    id,
+                    ..Workspace::default()
+                }),
+            );
+            assert_eq!(
+                desktop_lookups::display_name_for(cx, id).as_deref(),
+                Some("Untitled")
+            );
+
+            i18n::set_locale("zh-CN");
+            let renamed = desktop_lookups::display_name_for(cx, id);
+            i18n::set_locale("en");
+            assert_eq!(renamed.as_deref(), Some("未命名"));
+        });
+    }
+
     /// #604: a window is left out of the deltas its own ops raise, so the name
     /// the machine gave the workspace it just created reaches it only through
     /// the answer to that create. Once it has, the full tree a rebuild pulls
@@ -723,7 +806,7 @@ mod tests {
     fn a_named_workspace_reads_the_same_before_and_after_a_full_pull(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::core::session::{WindowView, WindowViews, WorkspaceStore};
+        use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
 
         cx.update(|cx| {
             let entry = WindowView::default();
@@ -793,7 +876,7 @@ mod tests {
     fn a_seeded_pane_reads_the_same_before_and_after_a_full_pull(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::core::session::{WindowView, WindowViews, WorkspaceStore};
+        use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
 
         cx.update(|cx| {
             let entry = WindowView::default();
@@ -1103,7 +1186,7 @@ mod tests {
     fn a_workspace_the_store_never_saw_is_still_listed_and_still_readable(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::core::session::{WindowView, WindowViews, WorkspaceStore};
+        use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
 
         cx.update(|cx| {
             let mine = WindowView::default();
@@ -1127,8 +1210,8 @@ mod tests {
             let projection = Workspace {
                 tabs: vec![leaf_tab(77)],
                 foreign_view: Some(lyrel_core::core::pane_sidecar::ForeignWorkspace::new(
-                    crate::core::session::RemoteRef::new(
-                        crate::core::session::RemoteTarget::Alias {
+                    lyrel_ui_base::session::RemoteRef::new(
+                        lyrel_ui_base::session::RemoteTarget::Alias {
                             alias: "remote-workbench".into(),
                         },
                         WorkspaceId::new(),

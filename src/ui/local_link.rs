@@ -4,8 +4,8 @@ use std::sync::Arc;
 use gpui_kit::{App, Global};
 use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::remote_workspace::{Backoff, RemoteStatus};
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LocalLinkStatus {
@@ -93,7 +93,7 @@ impl LocalLink {
     }
 
     /// Whether the local daemon advertised `feature` on its control hello —
-    /// [`HostLinks::peer_supports`](crate::ui::remote_connect::HostLinks::peer_supports)
+    /// [`HostLinks::peer_supports`](crate::ui::desktop_lookups::HostLinks::peer_supports)
     /// for this machine. `false` while the link is down, for the same reason.
     pub fn supports(cx: &App, feature: &str) -> bool {
         cx.try_global::<LocalLink>()
@@ -1058,7 +1058,7 @@ mod metrics_lifecycle_tests {
 
     #[gpui_kit::test]
     fn local_metrics_follow_daemon_connection_lifecycle(cx: &mut TestAppContext) {
-        use crate::ui::i18n::L10nKey;
+        use lyrel_ui_base::i18n::L10nKey;
 
         let (_app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
         // Drive the existing LocalLink seam without starting the real daemon or

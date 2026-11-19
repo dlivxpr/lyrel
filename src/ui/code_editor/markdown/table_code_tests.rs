@@ -1,6 +1,7 @@
 //! 生产工作台表格与代码消费者；native registry 使用同一完整场景和真实字体。
 use super::super::*;
 use super::foundation::{save, settle, until};
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 #[cfg(feature = "native-markdown-tests")]
 use gpui_kit::test::TestEventExt as _;
@@ -9,8 +10,8 @@ use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
 
 fn active(app: &Entity<LyrelApp>, context: &VisualTestContext) -> Entity<MarkdownEditor> {
-    app.read_with(context, |app, _| {
-        app.active_editor_input()
+    app.read_with(context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -58,7 +59,9 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/table-code.md"), window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     let first = active(&app, &context);
     context.update(|window, _| {
@@ -235,7 +238,9 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
         app.editor_open_on_host(host, Path::new("/table-code.md"), window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     assert_eq!(bytes(&active(&app, &context), &context), expected);
 }
@@ -258,7 +263,9 @@ pub(super) fn aligned_geometry(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     let view = active(&app, &context);
     for token in ["alpha", "中文", "e\u{301}", "🎉", "👩‍💻", "words words"] {
@@ -370,7 +377,9 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     let view = active(&app, &context);
     let first = original.find("R0 C0").unwrap();
@@ -461,7 +470,9 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
     assert_eq!(
         bytes(&active(&app, &context), &context),

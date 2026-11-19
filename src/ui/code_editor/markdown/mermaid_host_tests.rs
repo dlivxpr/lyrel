@@ -1,9 +1,13 @@
 //! 原生字体消费者：生产 workbench 的 Mermaid 输入、派生图形、history 与 Host 保存。
-use super::super::super::*;
+use super::super::*;
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_markdown_editor::MermaidPresentation;
+use lyrel_workbench_editor::code_editor::markdown::mermaid_host::completion_gate::{
+    COMPLETION_GATE, CompletionGate,
+};
 use std::time::{Duration, Instant};
 
 fn settle(context: &mut VisualTestContext) {
@@ -77,17 +81,16 @@ fn ready_after(
     ready(view, context)
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
-    context.dispatch_action(crate::core::actions::EditorSave);
+    context.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer()
-                .is_some_and(|file| !file.dirty && !file.saving)
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
         })
     });
 }
 
 pub(super) fn lifecycle(cx: &mut TestAppContext) {
-    use super::super::super::test_host::{FileHost, canonical_tempdir};
+    use crate::ui::code_editor::test_host::{FileHost, canonical_tempdir};
     let remote = canonical_tempdir();
     let path = remote.path().join("diagram.md");
     let original = "\u{feff}# Diagram\r\n\n```mermaid\r\nflowchart TD\nA[Start] --> B[Done]\r\n```\n\n# Next\nKEEP  \r\n";
@@ -99,10 +102,12 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -136,8 +141,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut context);
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -146,7 +151,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     ready(&view, &mut context);
     let previous_image = image(&view, &context);
     // The production go-to command enters the source of the rendered block.
-    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.dispatch_action(lyrel_ui_base::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input("5:22", cx);
         window.press("enter", cx);
@@ -177,13 +182,13 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     first.read_with(&context, |first, cx| {
         assert_eq!(first.text(), view.read(cx).text())
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let undone = ready(&view, &mut context);
     assert_eq!(undone, before);
     context.dispatch_action(gpui_kit::component::input::Redo);
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     assert_eq!(ready(&view, &mut context), changed);
     save(&app, &mut context);
@@ -221,10 +226,12 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx);
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let reopened = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let reopened = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -260,8 +267,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             expected.as_bytes()
         );
     });
-    app.read_with(&context, |app, _| {
-        assert!(!app.active_buffer().unwrap().dirty)
+    app.read_with(&context, |app, cx| {
+        with_active_file(app, cx, |file, _| assert!(!file.dirty));
     });
     context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
     settle(&mut context);
@@ -271,13 +278,6 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
 }
 
-struct CompletionGate {
-    source: String,
-    arrived: smol::channel::Sender<()>,
-    release: smol::channel::Receiver<()>,
-    returned: smol::channel::Sender<()>,
-}
-static COMPLETION_GATE: std::sync::Mutex<Option<CompletionGate>> = std::sync::Mutex::new(None);
 struct Delayed {
     arrived: smol::channel::Receiver<()>,
     release: smol::channel::Sender<()>,
@@ -317,28 +317,9 @@ impl Drop for Delayed {
         *COMPLETION_GATE.lock().unwrap() = None;
     }
 }
-// The real native result is held only after rendering; no output is replaced.
-pub(super) fn hold_completion(key: &super::Key) {
-    let gate = {
-        let mut gate = COMPLETION_GATE.lock().unwrap();
-        if gate
-            .as_ref()
-            .is_some_and(|gate| key.source.contains(&gate.source))
-        {
-            gate.take()
-        } else {
-            None
-        }
-    };
-    if let Some(gate) = gate {
-        let _ = gate.arrived.send_blocking(());
-        let _ = gate.release.recv_blocking();
-        let _ = gate.returned.send_blocking(());
-    }
-}
 
 pub(super) fn stale_completion(cx: &mut TestAppContext) {
-    use super::super::super::test_host::canonical_tempdir;
+    use crate::ui::code_editor::test_host::canonical_tempdir;
     let root = canonical_tempdir();
     let path = root.path().join("stale.md");
     let other = root.path().join("other.md");
@@ -351,10 +332,12 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -406,8 +389,8 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         app.open_file_in_editor(&other, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == other)
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |file, _| file.path == other).unwrap_or(false)
         })
     });
     removed.release(&mut context);
@@ -419,14 +402,9 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
         );
     });
     app.read_with(&context, |app, cx| {
+        let input = active_editor_input(app, cx).unwrap();
         assert_eq!(
-            app.active_editor_input()
-                .unwrap()
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string(),
+            input.text().unwrap().read(cx).text().to_string(),
             "# Other\nDO NOT CHANGE\n"
         )
     });
@@ -434,7 +412,7 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
 }
 
 pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
-    use super::super::super::test_host::canonical_tempdir;
+    use crate::ui::code_editor::test_host::canonical_tempdir;
     let root = canonical_tempdir();
     let path = root.path().join("geometry.md");
     let original = format!(
@@ -449,10 +427,12 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut context, |context| {
-        app.read_with(context, |app, _| app.active_buffer().is_some())
+        app.read_with(context, |app, cx| {
+            with_active_file(app, cx, |_, _| ()).is_some()
+        })
     });
-    let view = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -491,13 +471,14 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         use gpui_kit::component::ActiveTheme as _;
         (
             cx.theme().font_size,
-            cx.global::<crate::core::config::Config>().ui_font_size,
+            cx.global::<lyrel_ui_base::config::Config>().ui_font_size,
         )
     });
     let zoom_size = prior_ui_size * 1.25;
     // 与 SettingsWindow::set_ui_font_size 相同：配置负责工作台 rem，Theme 负责 provider。
     app.update_in(&mut context, |_, _, cx| {
-        cx.global_mut::<crate::core::config::Config>().ui_font_size = zoom_size;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = zoom_size;
         gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(zoom_size));
         cx.notify();
     });
@@ -520,7 +501,7 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         .filter(|&byte| byte == b'\n')
         .count()
         + 1;
-    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.dispatch_action(lyrel_ui_base::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input(&format!("{tail_line}:1"), cx);
         window.press("enter", cx);
@@ -552,7 +533,8 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
     app.update_in(&mut context, |_, _, cx| {
-        cx.global_mut::<crate::core::config::Config>().ui_font_size = prior_ui_size;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = prior_ui_size;
         gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size);
         cx.notify();
     });

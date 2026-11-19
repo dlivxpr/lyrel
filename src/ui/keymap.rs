@@ -1,16 +1,17 @@
 use gpui_kit::{App, Global, KeyBinding, Keystroke, Modifiers};
 
-use crate::core::actions::*;
-use crate::core::config::{Config, KeybindingOverride};
-use crate::terminal::view::{
-    AlternatePaste, ClearScrollback, CopyText, FindInTerminal, FindNext, FindPrevious,
-    InsertNewline, InsertNewlineFallback, PasteText, RunReverseSearchSelection, ToggleComposer,
-};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::palette;
 use crate::ui::search::CommandGroup;
 use crate::ui::settings::humanize_action;
 use crate::ui::theme::set_menus;
+use lyrel_core::core::config::KeybindingOverride;
+use lyrel_terminal::view::{
+    AlternatePaste, ClearScrollback, CopyText, InsertNewline, InsertNewlineFallback, PasteText,
+    RunReverseSearchSelection, ToggleComposer,
+};
+use lyrel_ui_base::actions::*;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// 原生桌面配置的纯解析路径遵循编译目标的键盘约定。
 fn native_os() -> gpui_kit::OperatingSystem {
@@ -50,7 +51,7 @@ impl Global for BaseBindings {}
 
 pub fn init(cx: &mut App) {
     if cx.try_global::<BaseBindings>().is_none() {
-        lyrel_markdown_editor::bind_keys(cx);
+        lyrel_workbench_editor::code_editor::markdown::bind_keys(cx);
         let base: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(BaseBindings(base));
     }
@@ -127,8 +128,10 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // Scope them to the actual EditorMode: ordinary fields and terminal panes
     // must keep their own commands rather than consume a no-op cursor action.
     {
-        use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
+        use lyrel_workbench_editor::code_editor::commands::{
+            SelectAllOccurrences, SelectNextOccurrence,
+        };
         let input = Some("(Input && mode == editor) || Editor");
         bindings.push(load_binding("secondary-d", SelectNextOccurrence, input, cx));
         bindings.push(load_binding(
@@ -150,7 +153,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         // field ⌘K goes straight through, without waiting for a second key.
         bindings.push(load_binding(
             "secondary-k secondary-d",
-            crate::ui::code_editor::commands::SkipOccurrence,
+            lyrel_workbench_editor::code_editor::commands::SkipOccurrence,
             Some("(Input && mode == editor) || Editor"),
             cx,
         ));
@@ -179,8 +182,10 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // document that draws a picture, so these chords never take a key from a
     // text field, a shell, or the terminal's arrows.
     {
-        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
-        let image = Some(crate::ui::code_editor::IMAGE_KEY_CONTEXT);
+        use lyrel_workbench_editor::code_editor::{
+            ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut,
+        };
+        let image = Some(lyrel_workbench_editor::code_editor::IMAGE_KEY_CONTEXT);
         let back = per_platform("ctrl--", "alt-left");
         let forward = per_platform("ctrl-shift--", "alt-right");
         bindings.extend([
@@ -205,10 +210,10 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // than the table's Cancel so it wins there: it closes the inspector
     // first, then keeps the table's selection-clearing meaning.
     {
-        use crate::ui::code_editor::{
+        use lyrel_workbench_editor::code_editor::{
             SqliteCloseValue, SqliteFocusFilter, SqliteInspectValue, SqliteRefresh,
         };
-        let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
+        let sqlite = Some(lyrel_workbench_editor::code_editor::SQLITE_KEY_CONTEXT);
         bindings.extend([
             load_binding("secondary-r", SqliteRefresh, sqlite, cx),
             load_binding("secondary-f", SqliteFocusFilter, sqlite, cx),
@@ -221,7 +226,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // presentation, so these chords never take a key from a text field, a
     // shell, the terminal or the source side of the same document.
     {
-        use crate::ui::code_editor::{
+        use lyrel_workbench_editor::code_editor::{
             CSV_KEY_CONTEXT, CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
             CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow,
         };
@@ -243,13 +248,13 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // field, a shell or the terminal keeps its own chords.
     {
         use gpui_kit::component::input::{Redo, Undo};
-        let json = Some(crate::ui::code_editor::JSON_KEY_CONTEXT);
+        let json = Some(lyrel_workbench_editor::code_editor::JSON_KEY_CONTEXT);
         bindings.extend([
             load_binding("secondary-z", Undo, json, cx),
             load_binding("secondary-shift-z", Redo, json, cx),
             load_binding("ctrl-y", Redo, json, cx),
         ]);
-        let xml = Some(crate::ui::code_editor::XML_KEY_CONTEXT);
+        let xml = Some(lyrel_workbench_editor::code_editor::XML_KEY_CONTEXT);
         bindings.extend([
             load_binding("secondary-z", Undo, xml, cx),
             load_binding("secondary-shift-z", Redo, xml, cx),
@@ -259,7 +264,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // YAML's tree uses the same shared Document history as its source view.
     {
         use gpui_kit::component::input::{Redo, Undo};
-        let yaml = Some(crate::ui::code_editor::YAML_KEY_CONTEXT);
+        let yaml = Some(lyrel_workbench_editor::code_editor::YAML_KEY_CONTEXT);
         bindings.extend([
             load_binding("secondary-z", Undo, yaml, cx),
             load_binding("secondary-shift-z", Redo, yaml, cx),
@@ -270,12 +275,12 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // book presentation, so none of these take a key from a text field, a
     // shell or the terminal.
     {
-        use crate::ui::code_editor::{
+        use lyrel_workbench_editor::code_editor::{
             BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
             BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
             BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
         };
-        let book = Some(crate::ui::code_editor::BOOK_KEY_CONTEXT);
+        let book = Some(lyrel_workbench_editor::code_editor::BOOK_KEY_CONTEXT);
         bindings.extend([
             load_binding("pageup", BookPreviousPage, book, cx),
             load_binding("pagedown", BookNextPage, book, cx),
@@ -301,10 +306,10 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // shell. PageUp/PageDown/Left/Right are handled inside the viewer so the
     // page window follows the action.
     {
-        use crate::ui::code_editor::{
+        use lyrel_workbench_editor::code_editor::{
             PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut,
         };
-        let pdf = Some(crate::ui::code_editor::PDF_KEY_CONTEXT);
+        let pdf = Some(lyrel_workbench_editor::code_editor::PDF_KEY_CONTEXT);
         bindings.extend([
             load_binding("0", PdfFitWidth, pdf, cx),
             load_binding("9", PdfFitPage, pdf, cx),
@@ -325,8 +330,10 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // The SVG preview is the same kind of framed canvas; its context exists
     // only while that side is shown, so source editing keeps its keys.
     {
-        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
-        let svg = Some(crate::ui::code_editor::SVG_KEY_CONTEXT);
+        use lyrel_workbench_editor::code_editor::{
+            ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut,
+        };
+        let svg = Some(lyrel_workbench_editor::code_editor::SVG_KEY_CONTEXT);
         let back = per_platform("ctrl--", "alt-left");
         let forward = per_platform("ctrl-shift--", "alt-right");
         bindings.extend([
@@ -346,11 +353,11 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // handled by its own key context because the engine owns the canvas and
     // has no text caret to move.
     {
-        use crate::ui::code_editor::{
+        use lyrel_workbench_editor::code_editor::{
             DrawioActualSize, DrawioCopy, DrawioCut, DrawioDelete, DrawioFit, DrawioPaste,
             DrawioRedo, DrawioUndo, DrawioZoomIn, DrawioZoomOut,
         };
-        let drawio = Some(crate::ui::code_editor::DRAWIO_KEY_CONTEXT);
+        let drawio = Some(lyrel_workbench_editor::code_editor::DRAWIO_KEY_CONTEXT);
         bindings.extend([
             load_binding("0", DrawioFit, drawio, cx),
             // Editing keys bound here cover the GPUI dispatch path — menus
@@ -379,7 +386,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // editor declares, so every other text field and the terminal keep the
     // app's keys.
     {
-        use crate::ui::code_editor::commands::{
+        use lyrel_workbench_editor::code_editor::commands::{
             CopyLineDown, CopyLineUp, DeleteLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
             MoveLineUp, MoveToMatchingBracket, SelectLine, ToggleBlockComment, ToggleLineComment,
         };
@@ -400,7 +407,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         #[cfg(target_os = "macos")]
         bindings.push(load_binding(
             "ctrl-j",
-            crate::ui::code_editor::commands::JoinLines,
+            lyrel_workbench_editor::code_editor::commands::JoinLines,
             editor,
             cx,
         ));
@@ -540,7 +547,7 @@ fn push_binding(bindings: &mut Vec<KeyBinding>, action: &str, key: &str, cx: &Ap
         for key in std::iter::once(key).chain(folded.as_deref()) {
             bindings.push(load_binding(
                 key,
-                lyrel_markdown_editor::math::editor::view::SaveFormula,
+                lyrel_workbench_editor::code_editor::markdown::SaveFormula,
                 Some("LyrelFormula"),
                 cx,
             ));
@@ -654,8 +661,8 @@ fn control_code_binding_allowed(action: &str, chord: &str) -> bool {
         || matches!(
             action_context(action),
             Some(context)
-                if context == crate::ui::code_editor::NAV_KEY_CONTEXT
-                    || context == crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT
+                if context == lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT
+                    || context == lyrel_workbench_editor::code_editor::NAV_OR_STRIP_KEY_CONTEXT
                     || context == DOCUMENT_NAVIGATION_KEY_CONTEXT
         )
         || (cfg!(not(target_os = "macos")) && chord == "ctrl-v")
@@ -2072,12 +2079,12 @@ fn action_context(action: &str) -> Option<&'static str> {
         "EditorGoToSymbol"
         | "EditorNavigateBack"
         | "EditorNavigateForward"
-        | "EditorSplitRight" => Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+        | "EditorSplitRight" => Some(lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT),
         // The group choice keeps working after the keyboard moves into the
         // strip. Strip entry and overflow additionally start in a terminal;
         // their Root consumer propagates when no document can take focus.
         "EditorFocusLeftGroup" | "EditorFocusRightGroup" => {
-            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT)
+            Some(lyrel_workbench_editor::code_editor::NAV_OR_STRIP_KEY_CONTEXT)
         }
         "FocusDocumentTabNavigation" | "EditorDocumentOverflow" => {
             Some(DOCUMENT_NAVIGATION_KEY_CONTEXT)
@@ -2233,37 +2240,37 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "EditorGoToSymbol" => load_binding(
             keystroke,
             EditorGoToSymbol,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT),
             cx,
         ),
         "EditorNavigateBack" => load_binding(
             keystroke,
             EditorNavigateBack,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT),
             cx,
         ),
         "EditorNavigateForward" => load_binding(
             keystroke,
             EditorNavigateForward,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT),
             cx,
         ),
         "EditorSplitRight" => load_binding(
             keystroke,
             EditorSplitRight,
-            Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_KEY_CONTEXT),
             cx,
         ),
         "EditorFocusLeftGroup" => load_binding(
             keystroke,
             EditorFocusLeftGroup,
-            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
             cx,
         ),
         "EditorFocusRightGroup" => load_binding(
             keystroke,
             EditorFocusRightGroup,
-            Some(crate::ui::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
+            Some(lyrel_workbench_editor::code_editor::NAV_OR_STRIP_KEY_CONTEXT),
             cx,
         ),
         "FocusDocumentTabNavigation" => load_binding(
@@ -2435,7 +2442,7 @@ mod tests {
             ("en", "New Markdown Document"),
             ("zh-CN", "新建 Markdown 文档"),
         ] {
-            crate::ui::i18n::set_locale(locale);
+            lyrel_ui_base::i18n::set_locale(locale);
             assert_eq!(action_entry("EditorNewMarkdownFile").1, label);
         }
         let binding = make_binding("EditorNewMarkdownFile", "ctrl-alt-m")
@@ -2445,7 +2452,7 @@ mod tests {
 
     #[test]
     fn every_action_has_an_authored_name() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let missing: Vec<&str> = default_bindings()
             .into_iter()
             .map(|(a, _)| a)
@@ -2460,7 +2467,7 @@ mod tests {
 
     #[test]
     fn the_page_speaks_the_same_words_as_the_rest_of_the_app() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         // The four names the critique found for one action; the menu bar, the
         // palette and the docs all say Zoom Pane.
         assert_eq!(action_entry("ToggleMaximizePane").1, "Zoom Pane");
@@ -2939,7 +2946,7 @@ mod tests {
             for chord in spec.split_whitespace() {
                 let ks =
                     Keystroke::parse_with_os(chord, native_os()).expect("default chords parse");
-                if crate::terminal::input::is_function_key(&ks.key) {
+                if lyrel_terminal::input::is_function_key(&ks.key) {
                     bound.push((action, chord));
                 }
             }
@@ -3266,8 +3273,8 @@ mod tests {
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
-    use crate::core::config::Config;
     use gpui_kit::TestAppContext;
+    use lyrel_ui_base::config::Config;
 
     #[gpui_kit::test]
     fn init_then_rebind_installs_the_merged_table(cx: &mut TestAppContext) {
@@ -3694,9 +3701,11 @@ mod gpui_tests {
     /// Terminal and ordinary-field key contexts keep their existing commands.
     #[gpui_kit::test]
     fn editor_multi_cursor_chords_outrank_the_pane_bindings(cx: &mut TestAppContext) {
-        use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::Action as _;
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
+        use lyrel_workbench_editor::code_editor::commands::{
+            SelectAllOccurrences, SelectNextOccurrence,
+        };
         cx.update(|cx| {
             running_on_json(cx, "{}");
             let in_input = |keys: &str| -> Vec<&'static str> {
@@ -3748,7 +3757,9 @@ mod gpui_tests {
             let (hits, _) = keymap.bindings_for_input(&chord, &editor);
             assert_eq!(
                 hits.first().map(|b| b.action().name()),
-                Some(crate::ui::code_editor::commands::SkipOccurrence::name_for_type())
+                Some(
+                    lyrel_workbench_editor::code_editor::commands::SkipOccurrence::name_for_type()
+                )
             );
             let (_, pending) = keymap.bindings_for_input(
                 &[Keystroke::parse_with_os("secondary-k", native_os()).unwrap()],

@@ -1,0 +1,726 @@
+//! Stable semantic rows and row-scoped image leases, separate from atomic holds.
+//! Absolute rows belong to the GUI mirror; the daemon remains authoritative.
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rio_vt::crosswords::Crosswords;
+use rio_vt::crosswords::grid::{Dimensions, Scroll};
+use rio_vt::crosswords::pos::{Column, Line};
+use rio_vt::crosswords::square::{CellFlags, Hyperlink, Wide};
+use rio_vt::crosswords::style::Style;
+use rio_vt::event::EventListener;
+
+use super::images::{CommittedImages, ImageStore};
+
+mod relocation;
+
+/// Decoded values, never Square side-table IDs or theme-resolved colours.
+#[derive(Clone)]
+pub struct ReadingCell {
+    pub c: char,
+    pub style: Style,
+    pub marks: Option<Box<[char]>>,
+    pub hyperlink: Option<Hyperlink>,
+    pub wide: Wide,
+    pub wrapped: bool,
+    pub tab_stop: bool,
+    /// The registration this row displayed when it was read. The retained row
+    /// keeps this version until it normally retires, independent of later
+    /// replacement or clear in the live registry.
+    pub glyph: Option<Arc<super::glyph::GlyphView>>,
+}
+
+struct ReadingRow {
+    cells: Vec<ReadingCell>,
+    images: CommittedImages,
+    captured_live_start: i64,
+    /// Captured while the row was still part of the mutable active screen.
+    /// Such a snapshot can be overwritten by the program before the row
+    /// scrolls into history (a TUI redrawing its input bar), so it is re-read
+    /// once the row settles into immutable history.
+    provisional: bool,
+}
+
+#[derive(PartialEq, Eq)]
+struct ReadingNeeds {
+    top: i64,
+    oldest: i64,
+    rows: usize,
+    cols: usize,
+    selected: Option<std::ops::Range<usize>>,
+}
+
+pub struct ReadingView {
+    identity: u64,
+    generation: u64,
+    last_live_start: i64,
+    last_oldest: i64,
+    top: i64,
+    captured_live_start: i64,
+    cols: usize,
+    captured_rows: usize,
+    rows: BTreeMap<i64, ReadingRow>,
+    needs: Option<ReadingNeeds>,
+    visible: std::ops::Range<i64>,
+    revision: u64,
+    relocation: Option<relocation::Relocation>,
+    /// Search and selection read a stable snapshot: their byte/absolute-row
+    /// ranges must keep matching the captured cells while they are open.
+    pinned: bool,
+    /// The pane definitions new rows resolve against. Existing rows keep the
+    /// `Arc` identity they already captured; this store is only consulted when
+    /// a row is read.
+    glyphs: Arc<super::glyph::GlyphStore>,
+}
+
+pub fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
+    term.grid.lines_evicted() as i64 + term.grid.history_size() as i64
+}
+
+/// Project an absolute GUI-mirror row onto the live grid's local line. One
+/// spelling for retained capture, relocation and search anchors.
+pub fn grid_line(origin: i64, row: i64) -> Line {
+    Line((row - origin) as i32)
+}
+
+/// Decode one grid line into the values the renderer needs. Shared by first
+/// capture and the settled-row refresh so both read a line the same way.
+fn read_cells<T: EventListener>(
+    term: &Crosswords<T>,
+    presentation: &super::presentation::ParsePresentation,
+    line: Line,
+    glyphs: Option<&super::glyph::GlyphStore>,
+) -> Vec<ReadingCell> {
+    term.grid[line][..]
+        .iter()
+        .enumerate()
+        .map(|(col, cell)| {
+            let extras = cell
+                .extras_id_checked()
+                .and_then(|id| term.grid.extras_table.get(id));
+            let c = cell.c();
+            let wide = cell.wide();
+            let spacer = matches!(wide, Wide::Spacer | Wide::LeadingSpacer);
+            ReadingCell {
+                c,
+                style: term.grid.style_of(cell),
+                marks: extras
+                    .map(|extra| extra.zerowidth.as_slice())
+                    .filter(|marks| !marks.is_empty())
+                    .map(Box::from),
+                hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
+                wide,
+                wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
+                tab_stop: presentation.is_tab_stop(col),
+                glyph: glyphs
+                    .filter(|_| !spacer && c != '\u{10eeee}')
+                    .and_then(|glyphs| glyphs.get(c as u32)),
+            }
+        })
+        .collect()
+}
+
+impl ReadingView {
+    pub fn capture<T: EventListener>(
+        term: &Crosswords<T>,
+        images: &ImageStore,
+        presentation: &super::presentation::ParsePresentation,
+        glyphs: Arc<super::glyph::GlyphStore>,
+    ) -> Self {
+        let live = live_start(term);
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let mut reading = Self {
+            identity: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            generation: presentation.reading_generation,
+            last_live_start: live,
+            last_oldest: term.grid.lines_evicted() as i64,
+            top: live - term.display_offset() as i64,
+            captured_live_start: live,
+            cols: term.columns(),
+            captured_rows: term.screen_lines(),
+            rows: BTreeMap::new(),
+            needs: None,
+            visible: live - term.display_offset() as i64
+                ..live - term.display_offset() as i64 + term.screen_lines() as i64,
+            revision: 0,
+            relocation: None,
+            pinned: false,
+            glyphs,
+        };
+        // Even a one-row scroll exposes mutable active-screen rows. Capture
+        // the entire active screen once, not only the currently visible part.
+        reading.retain_rows(
+            term,
+            images,
+            presentation,
+            live..live + term.screen_lines() as i64,
+        );
+        reading.retain_visible(term, images, presentation);
+        reading
+    }
+
+    /// Attach a resize request recorded before this reading existed. A request
+    /// whose ordered `Size` already landed needs no relocation: the capture is
+    /// already at the final geometry.
+    pub fn prepare_resize_at<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        terminal: &super::remote::RemoteTerminal,
+        target: (usize, usize),
+        revision: u64,
+        images_known: bool,
+    ) {
+        let facts = terminal.presentation_facts();
+        let applied =
+            (term.columns(), term.screen_lines()) == target && facts.resize_revision != revision;
+        drop(facts);
+        if applied {
+            return;
+        }
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.retarget(target, revision, images_known);
+        } else {
+            self.relocation = Some(relocation::Relocation::capture(
+                self,
+                term,
+                target,
+                revision,
+                images_known,
+            ));
+        }
+    }
+
+    pub fn relocating(&self) -> bool {
+        self.relocation.is_some()
+    }
+
+    pub fn relocation_scroll<T: EventListener>(&mut self, term: &Crosswords<T>) -> bool {
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.did_scroll(term);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Publish new-width semantics and row leases together, only after the VT
+    /// Size and the daemon's ordered graphics Screen have both arrived.
+    pub fn finish_resize<T: EventListener>(
+        &mut self,
+        term: &mut Crosswords<T>,
+        terminal: &super::remote::RemoteTerminal,
+    ) -> bool {
+        let Some(pending) = self.relocation.as_ref() else {
+            return false;
+        };
+        let facts = terminal.presentation_facts();
+        if !pending.ready(term, facts.resize_revision, facts.resize_images_revision) {
+            return false;
+        }
+        drop(facts);
+        let top = pending.locate(term);
+        let delta = (live_start(term) - top) as i32 - term.display_offset() as i32;
+        term.scroll_display(Scroll::Delta(delta));
+        *self = Self::capture(
+            term,
+            &terminal.images(),
+            &terminal.presentation_facts(),
+            terminal.glyphs(),
+        );
+        true
+    }
+
+    fn retain_rows<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        images: &ImageStore,
+        presentation: &super::presentation::ParsePresentation,
+        requested: std::ops::Range<i64>,
+    ) {
+        let origin = live_start(term);
+        let store = Arc::clone(&self.glyphs);
+        let glyphs = (!store.is_empty()).then_some(&*store);
+        let mut captured = Vec::new();
+        for row in requested {
+            let std::collections::btree_map::Entry::Vacant(entry) = self.rows.entry(row) else {
+                continue;
+            };
+            let line = grid_line(origin, row);
+            let cells = read_cells(term, presentation, line, glyphs);
+            captured.push((
+                line.0,
+                lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line),
+            ));
+            entry.insert(ReadingRow {
+                cells,
+                images: CommittedImages::default(),
+                captured_live_start: origin,
+                provisional: row >= origin,
+            });
+        }
+        if captured.is_empty() {
+            return;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        for (line, leases) in images.commit_reading_rows(origin, &captured) {
+            self.rows
+                .get_mut(&(origin + i64::from(line)))
+                .unwrap()
+                .images = leases;
+        }
+    }
+
+    fn retain_visible<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        images: &ImageStore,
+        presentation: &super::presentation::ParsePresentation,
+    ) {
+        let oldest = term.grid.lines_evicted() as i64;
+        let end = live_start(term) + term.screen_lines() as i64;
+        let joins = |row: i64| {
+            let frozen = self.absolute_row(row);
+            let following = self.absolute_row(row + 1);
+            let line = grid_line(live_start(term), row);
+            let wrapped = frozen.and_then(|row| row.last()).map_or_else(
+                || {
+                    term.grid[line][Column(term.columns() - 1)]
+                        .contains_cell_flag(CellFlags::WRAPLINE)
+                },
+                |cell| cell.wrapped,
+            );
+            let last = frozen.and_then(|row| row.last()).map_or_else(
+                || term.grid[line][Column(term.columns() - 1)].c(),
+                |cell| cell.c,
+            );
+            let next = following
+                .and_then(|row| row.first())
+                .map_or_else(|| term.grid[Line(line.0 + 1)][Column(0)].c(), |cell| cell.c);
+            wrapped || super::search::continues_url(last, next)
+        };
+        let mut first = (self.top - 1).max(oldest);
+        let mut last = (self.top + term.screen_lines() as i64).min(end);
+        while first > oldest && self.top - first < 32 && joins(first - 1) {
+            first -= 1;
+        }
+        while last < end && last - self.top < term.screen_lines() as i64 + 32 && joins(last - 1) {
+            last += 1;
+        }
+        self.visible = first..last;
+        self.retain_rows(term, images, presentation, first..last);
+    }
+
+    pub fn row(&self, viewport_row: i32) -> Option<&[ReadingCell]> {
+        self.rows
+            .get(&(self.top + viewport_row as i64))
+            .map(|row| row.cells.as_slice())
+    }
+
+    pub fn commit_images<T: EventListener>(&self, term: &Crosswords<T>) -> CommittedImages {
+        let mut images = Vec::new();
+        for (row, retained) in self
+            .rows
+            .range(self.top - 1..self.top + term.screen_lines() as i64)
+        {
+            retained.images.append_reading(
+                &mut images,
+                (row - self.top) as i32,
+                live_start(term) - retained.captured_live_start,
+            );
+        }
+        images.sort_unstable_by_key(super::images::placement_order);
+        CommittedImages::new(images)
+    }
+
+    pub fn belongs_to(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+
+    /// Hidden panes keep bounded semantic text, but surrender every derived
+    /// pixel lease. Existing rows are first-write-wins, so showing the pane or
+    /// resizing later cannot reacquire a released resource under the same row.
+    pub fn release_images(&mut self) {
+        for row in self.rows.values_mut() {
+            row.images = CommittedImages::default();
+        }
+    }
+
+    pub fn distance<T: EventListener>(&self, term: &Crosswords<T>) -> usize {
+        (live_start(term) - self.top).max(0) as usize
+    }
+
+    /// Reconcile automatic emulator offset changes without moving our anchor.
+    /// History is read lazily, first-write-wins, and cannot outlive retention.
+    pub fn reconcile<T: EventListener>(&mut self, term: &mut Crosswords<T>) -> bool {
+        let live = live_start(term);
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.sync_offset(term);
+            return true;
+        }
+        let oldest = term.grid.lines_evicted() as i64;
+        if term.columns() == self.cols
+            && term.screen_lines() == self.captured_rows
+            && (live < self.last_live_start || oldest < self.last_oldest)
+        {
+            return false;
+        }
+        self.last_live_start = live;
+        self.last_oldest = oldest;
+        self.top = self.top.clamp(term.grid.lines_evicted() as i64, live);
+        // Eviction is not a new generation: retain surviving content, but
+        // permanently discard rows and leases before the new oldest row.
+        while self
+            .rows
+            .first_key_value()
+            .is_some_and(|(row, _)| *row < oldest)
+        {
+            self.rows.pop_first();
+            self.revision = self.revision.wrapping_add(1);
+        }
+        let distance = self.distance(term);
+        let delta = distance as i32 - term.display_offset() as i32;
+        if delta != 0 {
+            term.scroll_display(Scroll::Delta(delta));
+        }
+        true
+    }
+
+    pub fn maintain<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        terminal: &super::remote::RemoteTerminal,
+        selected: Option<std::ops::Range<usize>>,
+    ) {
+        if self.relocation.is_some() {
+            return;
+        }
+        let presentation = terminal.presentation_facts();
+        // A row captured from the active screen was only a temporary frame of
+        // whatever the program was drawing. Once output pushes it into
+        // history, the grid holds its final content — read that instead of
+        // painting the stale frame (an agent TUI's old input bar, typically).
+        self.refresh_settled(term, &presentation);
+        let needs = ReadingNeeds {
+            top: live_start(term) - term.display_offset() as i64,
+            oldest: term.grid.lines_evicted() as i64,
+            rows: term.screen_lines(),
+            cols: term.columns(),
+            selected,
+        };
+        if self.needs.as_ref() == Some(&needs) {
+            return;
+        }
+        self.top = needs.top;
+        let images = terminal.images();
+        self.retain_visible(term, &images, &presentation);
+        if let Some(range) = needs.selected.as_ref().filter(|range| !range.is_empty()) {
+            let first = ((range.start / self.cols) as i64).max(needs.oldest);
+            let last = ((range.end.saturating_sub(1) / self.cols + 1) as i64)
+                .min(live_start(term) + needs.rows as i64);
+            if let Some(previous) = self
+                .needs
+                .as_ref()
+                .and_then(|needs| needs.selected.as_ref())
+                .filter(|range| !range.is_empty())
+            {
+                let previous_first = (previous.start / self.cols) as i64;
+                let previous_last = (previous.end.saturating_sub(1) / self.cols + 1) as i64;
+                self.retain_rows(
+                    term,
+                    &images,
+                    &presentation,
+                    first..last.min(previous_first),
+                );
+                self.retain_rows(term, &images, &presentation, first.max(previous_last)..last);
+            } else {
+                self.retain_rows(term, &images, &presentation, first..last);
+            }
+        }
+        self.prune(needs.selected.clone());
+        self.needs = Some(needs);
+    }
+
+    /// Re-read retained rows that were captured from the active screen and
+    /// have since scrolled into history. The grid line is immutable from then
+    /// on, so this is the last time its content can differ from the snapshot.
+    fn refresh_settled<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        presentation: &super::presentation::ParsePresentation,
+    ) {
+        if self.pinned {
+            return;
+        }
+        let store = Arc::clone(&self.glyphs);
+        let glyphs = (!store.is_empty()).then_some(&*store);
+        let live = live_start(term);
+        let mut changed = false;
+        for (&row, retained) in self.rows.iter_mut() {
+            if !retained.provisional || row >= live {
+                continue;
+            }
+            // A row that carried an image keeps the captured placeholder
+            // identity its lease was taken for; its text stays frozen with it.
+            if !retained.images.is_empty() {
+                retained.provisional = false;
+                continue;
+            }
+            retained.cells = read_cells(term, presentation, grid_line(live, row), glyphs);
+            retained.provisional = false;
+            changed = true;
+        }
+        if changed {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
+    }
+
+    pub fn columns(&self) -> usize {
+        self.cols
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn allocation_observation(&self) -> serde_json::Value {
+        serde_json::json!({
+            "rows": self.rows.len(),
+            "cells": self.rows.values().map(|row| row.cells.len()).sum::<usize>(),
+            "imageSlices": self.rows.values().map(|row| row.images.len()).sum::<usize>(),
+        })
+    }
+
+    pub fn identity(&self) -> (u64, i64, usize, i64, i64) {
+        (
+            self.identity,
+            self.top,
+            self.cols,
+            self.visible.start,
+            self.visible.end,
+        )
+    }
+
+    pub fn content_identity(&self) -> (u64, u64) {
+        (self.identity, self.revision)
+    }
+
+    pub fn top(&self) -> i64 {
+        self.top
+    }
+
+    pub fn rows(&self) -> impl Iterator<Item = (i64, &[ReadingCell])> {
+        self.rows
+            .iter()
+            .map(|(&row, retained)| (row, retained.cells.as_slice()))
+    }
+
+    pub fn bounds(&self) -> (i64, i64) {
+        (
+            self.rows
+                .first_key_value()
+                .map_or(self.top, |(&row, _)| row),
+            self.rows.last_key_value().map_or(self.top, |(&row, _)| row),
+        )
+    }
+
+    pub fn absolute_row(&self, row: i64) -> Option<&[ReadingCell]> {
+        self.rows.get(&row).map(|row| row.cells.as_slice())
+    }
+
+    pub fn intersects_rows(&self, first: i64, last: i64) -> bool {
+        self.rows.range(first..=last).next().is_some()
+    }
+
+    /// A reading session needs the original mutable screen, its current
+    /// viewport/sliver, and rows spanned by the user's selection — not every
+    /// immutable history row it has ever visited.
+    fn prune(&mut self, selected: Option<std::ops::Range<usize>>) {
+        let visible = &self.visible;
+        let before = self.rows.len();
+        let captured =
+            self.captured_live_start..self.captured_live_start + self.captured_rows as i64;
+        let cols = self.cols.max(1);
+        self.rows.retain(|&row, _| {
+            visible.contains(&row)
+                || captured.contains(&row)
+                || selected.as_ref().is_some_and(|range| {
+                    row >= (range.start / cols) as i64
+                        && row <= (range.end.saturating_sub(1) / cols) as i64
+                })
+        });
+        if self.rows.len() != before {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub fn selected_text(
+        &self,
+        selection: &super::presentation::PresentedSelection,
+    ) -> Option<String> {
+        let range = selection.range();
+        if range.is_empty() {
+            return None;
+        }
+        let first = (range.start / self.cols) as i64;
+        let last = (range.end.saturating_sub(1) / self.cols) as i64;
+        let start = range.start;
+        let end = range.end;
+        let retained = self.rows.range(first..=last);
+        if retained.clone().count() != (last - first + 1) as usize {
+            return None;
+        }
+        Some(super::presentation::copy_rows(
+            retained.map(|(&row, retained)| {
+                let wrapped = retained.cells.last().is_some_and(|cell| cell.wrapped);
+                (
+                    wrapped,
+                    retained.cells.iter().enumerate().map(move |(col, cell)| {
+                        super::presentation::CopyCell {
+                            c: if cell.c == '\u{10eeee}' { ' ' } else { cell.c },
+                            marks: if cell.c == '\u{10eeee}' {
+                                None
+                            } else {
+                                cell.marks.as_deref()
+                            },
+                            spacer: matches!(cell.wide, Wide::Spacer | Wide::LeadingSpacer),
+                            tab_stop: cell.tab_stop,
+                            selected: row as usize * self.cols + col >= start
+                                && (row as usize * self.cols + col) < end,
+                        }
+                    }),
+                )
+            }),
+            selection.clicks() >= 3,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rio_vt::performer::handler::Processor;
+
+    fn text(row: &[ReadingCell]) -> String {
+        row.iter()
+            .map(|cell| cell.c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn a_row_captured_from_the_active_screen_is_reread_once_it_settles() {
+        let size = crate::size::TermSize::new(20, 4);
+        let mut term = crate::remote::test_term(size);
+        let mut parser = Processor::default();
+        parser.advance(&mut term, b"row0\r\nrow1\r\nrow2\r\n");
+        // An agent TUI's input bar on the mutable last screen row.
+        parser.advance(&mut term, b"\x1b[4;1H\x1b[2KBAR-INPUT");
+
+        let images = ImageStore::new();
+        let presentation = super::super::presentation::ParsePresentation::new(20);
+        let mut reading = ReadingView::capture(
+            &term,
+            &images,
+            &presentation,
+            Arc::new(crate::glyph::GlyphStore::new()),
+        );
+        assert!(
+            reading
+                .rows()
+                .any(|(_, row)| text(row).contains("BAR-INPUT")),
+            "the capture includes the active screen"
+        );
+
+        // The TUI clears the bar, then output pushes that row into history.
+        parser.advance(&mut term, b"\x1b[4;1H\x1b[2K");
+        for _ in 0..4 {
+            parser.advance(&mut term, b"\r\n");
+        }
+        reading.refresh_settled(&term, &presentation);
+        assert!(
+            !reading
+                .rows()
+                .any(|(_, row)| text(row).contains("BAR-INPUT")),
+            "a row that settled into history must show its final content, not the \
+             mutable frame captured while it was still active"
+        );
+    }
+
+    fn glyph_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
+        rio_graphics::glyph::glyf_decode::Outline {
+            contours: Vec::new(),
+            x_min: 0,
+            y_min: 0,
+            x_max: i32::from(side),
+            y_max: i32::from(side),
+        }
+    }
+
+    fn captured_definition(reading: &ReadingView, cp: char) -> Arc<crate::glyph::GlyphView> {
+        reading
+            .rows()
+            .flat_map(|(_, row)| row.iter())
+            .find(|cell| cell.c == cp)
+            .and_then(|cell| cell.glyph.clone())
+            .expect("the reading row captured its registration")
+    }
+
+    #[test]
+    fn glyph_reading_row_keeps_the_registration_it_captured() {
+        use rio_graphics::glyph_layout::GlyphLayout;
+        let cp = 0x100000u32;
+        let ch = char::from_u32(cp).unwrap();
+        let size = crate::size::TermSize::new(20, 4);
+        let mut term = crate::remote::test_term(size);
+        Processor::default().advance(&mut term, ch.to_string().as_bytes());
+        let images = ImageStore::new();
+        let presentation = super::super::presentation::ParsePresentation::new(20);
+        let store = Arc::new(crate::glyph::GlyphStore::new());
+        store.apply(cp, glyph_outline(10), 1000, 1, GlyphLayout::default());
+
+        let reading = ReadingView::capture(&term, &images, &presentation, Arc::clone(&store));
+        let captured = captured_definition(&reading, ch);
+        let revision = captured.revision;
+        assert_eq!(captured.outline.x_max, 10);
+
+        store.apply(cp, glyph_outline(20), 1000, 1, GlyphLayout::default());
+        let retained = captured_definition(&reading, ch);
+        assert_eq!(
+            retained.revision, revision,
+            "a replacement does not rewrite the retained row"
+        );
+        assert_eq!(retained.outline.x_max, 10);
+
+        let fresh = ReadingView::capture(&term, &images, &presentation, Arc::clone(&store));
+        let live = captured_definition(&fresh, ch);
+        assert_ne!(
+            live.revision, revision,
+            "a new capture resolves the replacement"
+        );
+        assert_eq!(live.outline.x_max, 20);
+    }
+
+    /// A pending wrap on the bottom row must not scroll when the next event is
+    /// a cursor move — ConPTY repaints full-width rows followed by CUP, and
+    /// materializing the wrap would push chrome rows into scrollback.
+    #[test]
+    fn a_pending_wrap_does_not_scroll_on_cursor_address() {
+        let size = crate::size::TermSize::new(10, 4);
+        let mut term = crate::remote::test_term(size);
+        let mut parser = Processor::default();
+        parser.advance(&mut term, b"r0........\r\nr1........\r\nr2........\r\n");
+        // Bottom row full-width write -> wrap pending.
+        parser.advance(&mut term, b"r3........");
+        assert_eq!(term.grid.history_size(), 0);
+        parser.advance(&mut term, b"\x1b[4;1H");
+        assert_eq!(term.grid.history_size(), 0, "CUP materialized the wrap");
+        parser.advance(&mut term, b"..........");
+        parser.advance(&mut term, b"\r");
+        assert_eq!(term.grid.history_size(), 0, "CR materialized the wrap");
+        parser.advance(&mut term, b"\x1b[4;1H\n");
+        assert_eq!(term.grid.history_size(), 1, "LF at bottom must scroll once");
+    }
+}

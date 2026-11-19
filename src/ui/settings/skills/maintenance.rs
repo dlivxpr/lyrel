@@ -1,14 +1,12 @@
 //! Frozen, single-installation maintenance plans owned by the settings session.
 use super::*;
 use gpui_kit::component::checkbox::Checkbox;
-use lyrel_core::{
-    core::github::Transport,
-    host::{Host, SharedHost},
-    skills::{
-        catalog,
-        install::{self, InstallDecision, InstallPreview, InstallStatus, InstallTarget},
-        maintenance::{self, LocalChanges, RemovalStatus, RemovePreview, UpdateStatus},
-    },
+use lyrel_core::host::{Host, SharedHost};
+use lyrel_insights::github::Transport;
+use lyrel_insights::skills::{
+    catalog,
+    install::{self, InstallDecision, InstallPreview, InstallStatus, InstallTarget},
+    maintenance::{self, LocalChanges, RemovalStatus, RemovePreview, UpdateStatus},
 };
 
 #[cfg(test)]
@@ -235,8 +233,14 @@ impl SettingsWindow {
                         .map(MaintenanceReview::Remove)
                         .map_err(|e| e.to_string())
                 } else {
-                    let http = injected
-                        .unwrap_or_else(|| catalog::desktop_github_transport(proxy.as_deref()));
+                    let http = injected.unwrap_or_else(|| {
+                        catalog::desktop_github_transport(
+                            lyrel_core::daemon::install::proxy::resolve(
+                                "https://api.github.com",
+                                proxy.as_deref(),
+                            ),
+                        )
+                    });
                     Ok(MaintenanceReview::Update(maintenance::check_update(
                         host,
                         target,

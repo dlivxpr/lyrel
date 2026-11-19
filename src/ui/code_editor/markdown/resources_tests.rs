@@ -1,8 +1,13 @@
 //! 工作台资源消费者；native runner 在 OS 主线程复用相同生产入口。
 use super::super::*;
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{ClipboardEntry, ClipboardItem, TestAppContext, VisualTestContext};
+#[cfg(test)]
+use lyrel_ui_base::i18n::t;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn settle(cx: &mut VisualTestContext) {
@@ -49,14 +54,14 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/images.md"), window, cx)
     });
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut vcx);
-    let second = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&vcx, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -92,13 +97,14 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
     );
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
-                .unwrap()
-                .markdown_resources
-                .as_ref()
-                .unwrap()
-                .read(cx)
-                .is_loaded(&src)
+            with_active_file(app, cx, |file, cx| {
+                file.markdown_resources
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .is_loaded(&src)
+            })
+            .unwrap_or(false)
         })
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
@@ -107,10 +113,10 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
         assert_eq!(view.document().read(cx).encode().unwrap(), source)
     });
     vcx.dispatch_action(gpui_kit::component::input::Redo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| {
-            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        app.read_with(cx, |app, cx| {
+            with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
         })
     });
     let saved = std::fs::read(remote.path().join("images.md")).unwrap();
@@ -122,25 +128,26 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
     });
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer().is_some_and(|file| {
+            with_active_file(app, cx, |file, cx| {
                 file.input.text().unwrap().read(cx).text().to_string() == inserted
             })
+            .unwrap_or(false)
         })
     });
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .markdown()
-                .unwrap()
-                .read(cx)
-                .document()
-                .read(cx)
-                .encode()
-                .unwrap(),
-            saved
-        )
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(
+                file.input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                saved
+            )
+        });
     });
 }
 
@@ -171,10 +178,10 @@ fn shared_images_follow_latest_document_not_a_stale_presentation(cx: &mut TestAp
         app.editor_open_on_host(host, Path::new("/images.md"), window, cx)
     });
     until(&mut context, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -184,8 +191,8 @@ fn shared_images_follow_latest_document_not_a_stale_presentation(cx: &mut TestAp
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -210,27 +217,20 @@ fn shared_images_follow_latest_document_not_a_stale_presentation(cx: &mut TestAp
         });
         until(&mut context, |cx| {
             app.read_with(cx, |app, cx| {
-                let resources = app
-                    .active_buffer()
-                    .unwrap()
-                    .markdown_resources
-                    .as_ref()
-                    .unwrap()
-                    .read(cx);
-                resources.is_loaded(block) && resources.is_loaded(inline)
+                with_active_file(app, cx, |file, cx| {
+                    let resources = file.markdown_resources.as_ref().unwrap().read(cx);
+                    resources.is_loaded(block) && resources.is_loaded(inline)
+                })
+                .unwrap_or(false)
             })
         });
         app.read_with(&context, |app, cx| {
-            let resources = app
-                .active_buffer()
-                .unwrap()
-                .markdown_resources
-                .as_ref()
-                .unwrap()
-                .read(cx);
-            assert!(!resources.is_loaded("old.png"));
-            assert!(!resources.is_loaded("missing.png"));
-            assert!(!resources.is_loaded("also-missing.png"));
+            with_active_file(app, cx, |file, cx| {
+                let resources = file.markdown_resources.as_ref().unwrap().read(cx);
+                assert!(!resources.is_loaded("old.png"));
+                assert!(!resources.is_loaded("missing.png"));
+                assert!(!resources.is_loaded("also-missing.png"));
+            });
             assert_eq!(first.read(cx).text(), latest);
             assert_eq!(second.read(cx).text(), latest);
         });
@@ -252,10 +252,10 @@ pub(super) fn renamed_mdx_links_in_both_views(cx: &mut TestAppContext) {
         app.editor_open_on_host(host, Path::new("/links.mdx"), window, cx);
     });
     until(&mut context, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
-    let first = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let first = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -265,8 +265,8 @@ pub(super) fn renamed_mdx_links_in_both_views(cx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx))
     });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| {
-        app.active_editor_input()
+    let second = app.read_with(&context, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -316,10 +316,11 @@ pub(super) fn renamed_mdx_links_in_both_views(cx: &mut TestAppContext) {
         });
         context.simulate_click(target, gpui_kit::Modifiers::none());
         until(&mut context, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer().is_some_and(|file| {
+            app.read_with(cx, |app, cx| {
+                with_active_file(app, cx, |file, _| {
                     file.path == Path::new("/target.md") && file.host.id() == HostId(2383)
                 })
+                .unwrap_or(false)
             })
         });
     }
@@ -351,10 +352,10 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
         app.editor_open_on_host(host.clone(), Path::new("/links.md"), window, cx)
     });
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
-    let view = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&vcx, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -480,8 +481,10 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             assert_eq!(view.selected_range().start, anchor);
             assert_eq!(view.selected_range().end, at + 30);
         });
-        app.read_with(&vcx, |app, _| {
-            assert_eq!(app.active_buffer().unwrap().path, Path::new("/links.md"))
+        app.read_with(&vcx, |app, cx| {
+            with_active_file(app, cx, |file, _| {
+                assert_eq!(file.path, Path::new("/links.md"))
+            });
         });
         let selected = view.read_with(&vcx, |view, _| view.selected_range());
         vcx.update(|window, cx| window.input("Q", cx));
@@ -495,18 +498,19 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
     } else {
         vcx.update(|window, cx| window.pointer_up(target, MouseButton::Left, cx));
         until(&mut vcx, |cx| {
-            app.read_with(cx, |app, _| {
-                app.active_buffer()
-                    .is_some_and(|file| file.path == Path::new("/linked.md"))
+            app.read_with(cx, |app, cx| {
+                with_active_file(app, cx, |file, _| file.path == Path::new("/linked.md"))
+                    .unwrap_or(false)
             })
         });
         app.read_with(&vcx, |app, cx| {
-            let file = app.active_buffer().unwrap();
-            assert_eq!(file.host.id(), HostId(2381));
-            assert_eq!(
-                file.input.text().unwrap().read(cx).text().to_string(),
-                "# Owning remote target\n"
-            );
+            with_active_file(app, cx, |file, cx| {
+                assert_eq!(file.host.id(), HostId(2381));
+                assert_eq!(
+                    file.input.text().unwrap().read(cx).text().to_string(),
+                    "# Owning remote target\n"
+                );
+            });
         });
         assert_eq!(
             std::fs::read(remote.path().join("links.md")).unwrap(),
@@ -544,10 +548,10 @@ pub(super) fn image_preview_resize(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
-    let view = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&vcx, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -702,10 +706,11 @@ fn unsaved_image_paste_explains_save_location_without_source_or_assets(cx: &mut 
         )
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
-        assert!(file.untitled.is_some());
-        assert_eq!(file.input.text().unwrap().read(cx).text().len(), 0);
-        assert!(!file.dirty);
+        with_active_file(app, cx, |file, cx| {
+            assert!(file.untitled.is_some());
+            assert_eq!(file.input.text().unwrap().read(cx).text().len(), 0);
+            assert!(!file.dirty);
+        });
     });
 }
 
@@ -722,7 +727,7 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         app.editor_open_on_host(host.clone(), Path::new("/late.md"), window, cx)
     });
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
     let gate = host.pause_next_write();
     vcx.update(|_, cx| {
@@ -748,42 +753,21 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         })
     });
     app.read_with(&vcx, |app, cx| {
-        assert!(
-            !app.active_buffer()
-                .unwrap()
-                .input
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string()
-                .contains("assets/")
-        );
-        assert!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string()
-                .contains("Changed ")
-        );
+        with_active_file(app, cx, |file, cx| {
+            let text = file.input.text().unwrap().read(cx).text().to_string();
+            assert!(!text.contains("assets/"));
+            assert!(text.contains("Changed "));
+        });
     });
     assert_eq!(
         std::fs::read(remote.path().join("late.md")).unwrap(),
         b"# Original\n"
     );
     let before = app.read_with(&vcx, |app, cx| {
-        app.active_buffer()
-            .unwrap()
-            .input
-            .text()
-            .unwrap()
-            .read(cx)
-            .text()
-            .to_string()
+        with_active_file(app, cx, |file, cx| {
+            file.input.text().unwrap().read(cx).text().to_string()
+        })
+        .unwrap()
     });
     host.fail_next_write();
     vcx.dispatch_action(gpui_kit::component::input::Paste);
@@ -799,17 +783,12 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         })
     });
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string(),
-            before
-        )
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(
+                file.input.text().unwrap().read(cx).text().to_string(),
+                before
+            )
+        });
     });
     assert_eq!(
         std::fs::read_dir(remote.path().join("assets"))
@@ -825,7 +804,7 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
 fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut TestAppContext) {
     use std::io::{Read as _, Write as _};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    crate::ui::i18n::set_locale("zh-CN");
+    lyrel_ui_base::i18n::set_locale("zh-CN");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -903,17 +882,12 @@ fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut Test
         "opening requests only the document's actual network image, without a separate click"
     );
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(
-            app.active_buffer()
-                .unwrap()
-                .input
-                .text()
-                .unwrap()
-                .read(cx)
-                .text()
-                .to_string(),
-            source
-        )
+        with_active_file(app, cx, |file, cx| {
+            assert_eq!(
+                file.input.text().unwrap().read(cx).text().to_string(),
+                source
+            )
+        });
     });
     assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
     stop.store(true, Ordering::SeqCst);
@@ -966,10 +940,10 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), Path::new("/resources.md"), window, cx)
     });
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| app.active_buffer().is_some())
+        app.read_with(cx, |app, cx| with_active_file(app, cx, |_, _| ()).is_some())
     });
-    let view = app.read_with(&vcx, |app, _| {
-        app.active_editor_input()
+    let view = app.read_with(&vcx, |app, cx| {
+        active_editor_input(app, cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -999,10 +973,10 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         assert!(view.is_live());
         assert_eq!(view.text(), expected);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| {
-            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        app.read_with(cx, |app, cx| {
+            with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
         })
     });
     assert_eq!(
@@ -1010,10 +984,10 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         expected.as_bytes()
     );
     vcx.dispatch_action(gpui_kit::component::input::Undo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
-        app.read_with(cx, |app, _| {
-            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        app.read_with(cx, |app, cx| {
+            with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
         })
     });
     assert_eq!(
@@ -1033,7 +1007,7 @@ fn a_large_preview_image_streams_on_its_owning_host(cx: &mut TestAppContext) {
     use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
     use std::sync::atomic::Ordering;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let directory = canonical_tempdir();
     std::fs::write(directory.path().join("picture.md"), "![large](large.png)\n").unwrap();
     let bytes = noise_png(1400, 1000);
@@ -1050,9 +1024,12 @@ fn a_large_preview_image_streams_on_its_owning_host(cx: &mut TestAppContext) {
     });
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
-                .and_then(|file| file.markdown_resources.as_ref())
-                .is_some_and(|resources| resources.read(cx).is_loaded("large.png"))
+            with_active_file(app, cx, |file, cx| {
+                file.markdown_resources
+                    .as_ref()
+                    .is_some_and(|resources| resources.read(cx).is_loaded("large.png"))
+            })
+            .unwrap_or(false)
         })
     });
     assert_eq!(
@@ -1069,7 +1046,7 @@ fn closing_a_document_cancels_its_picture_transfer(cx: &mut TestAppContext) {
     use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
     use std::sync::atomic::Ordering;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let directory = canonical_tempdir();
     std::fs::write(directory.path().join("gated.md"), "![gated](gated.png)\n").unwrap();
     let bytes = noise_png(1000, 800);

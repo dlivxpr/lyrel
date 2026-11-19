@@ -8,11 +8,11 @@ fn a_retired_batch_cannot_discard_successor_window_edits(cx: &mut gpui_kit::Test
     let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
     for revisit in [false, true] {
         let (ws, tab, batch) = app.update_in(&mut vcx, |app, _, cx| {
-            let view = crate::core::session::WindowView::default();
+            let view = lyrel_ui_base::session::WindowView::default();
             let ws = view.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![view],
                     active: Some(ws),
                 },
@@ -75,7 +75,7 @@ fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
     Retiring {
         tab,
         panes,
-        route: crate::terminal::PaneRoute::Local,
+        route: lyrel_ui_base::route::PaneRoute::Local,
     }
 }
 

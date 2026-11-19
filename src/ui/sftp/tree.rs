@@ -149,7 +149,7 @@ impl LyrelApp {
         cx.spawn(async move |app, cx| {
             let (path, reply) = cx
                 .background_spawn(async move {
-                    let reply = route.list(&path);
+                    let reply = SftpClient::list(&route, &path);
                     (path, reply)
                 })
                 .await;

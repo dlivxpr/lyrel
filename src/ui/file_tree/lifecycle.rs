@@ -2,28 +2,10 @@
 //! execute navigation; they never manipulate cache or operation bookkeeping.
 
 use super::*;
-use crate::ui::search::files::FileList;
+use lyrel_ui_base::file_search::{FileList, IndexKey};
 use std::time::{Duration, Instant};
 
-const REVALIDATE_AFTER: Duration = Duration::from_secs(5);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct IndexKey {
-    host: HostId,
-    cwds: Vec<PathBuf>,
-}
-
-impl IndexKey {
-    pub(crate) fn new(host: HostId, mut cwds: Vec<PathBuf>) -> Self {
-        cwds.sort();
-        cwds.dedup();
-        Self { host, cwds }
-    }
-
-    pub(crate) fn cwds(&self) -> &[PathBuf] {
-        &self.cwds
-    }
-}
+const REVALIDATE_AFTER: Duration = std::time::Duration::from_secs(5);
 
 struct Walked {
     key: IndexKey,
@@ -48,25 +30,6 @@ pub(super) fn browsable_roots(mut roots: Vec<PathBuf>, home: Option<PathBuf>) ->
     if roots.is_empty() {
         roots.extend(home);
     }
-    roots
-}
-
-/// Quick open excludes HOME, filesystem roots and redundant nested roots.
-/// Panel content search instead uses the resolved pane roots without fallback.
-pub(crate) fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for root in resolved {
-        if home.is_some_and(|home| root == home) || root.parent().is_none() || roots.contains(&root)
-        {
-            continue;
-        }
-        roots.push(root);
-    }
-    let all = roots.clone();
-    roots.retain(|root| {
-        !all.iter()
-            .any(|other| other != root && root.starts_with(other))
-    });
     roots
 }
 
@@ -314,7 +277,7 @@ impl FileTreeState {
     }
 
     pub(crate) fn file_list(&self, key: &IndexKey) -> FileList {
-        if key.cwds.is_empty() {
+        if key.cwds().is_empty() {
             return FileList::NoRoots;
         }
         match &self.quick_open.last {
@@ -325,7 +288,7 @@ impl FileTreeState {
 
     pub(crate) fn begin_file_index(&mut self, key: &IndexKey) -> Option<u64> {
         let store = &mut self.quick_open;
-        if key.cwds.is_empty()
+        if key.cwds().is_empty()
             || store
                 .walking
                 .as_ref()
@@ -374,6 +337,7 @@ mod tests {
     use super::*;
     use crate::ui::app::test_window;
     use gpui_kit::TestAppContext;
+    use lyrel_ui_base::file_search::searchable_roots;
 
     fn entry(name: &str) -> TreeEntry {
         TreeEntry {
@@ -474,7 +438,7 @@ mod tests {
             assert!(tree.begin_file_index(&local).is_none());
             let current = tree.begin_file_index(&remote).unwrap();
             assert!(!tree.finish_file_index(old, local.clone(), FileList::Failed));
-            let index = Arc::new(crate::ui::search::files::build_index(
+            let index = Arc::new(lyrel_ui_base::file_search::build_index(
                 &[PathBuf::from("/project")],
                 vec![PathBuf::from("/project/main.rs")],
                 false,

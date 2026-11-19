@@ -1,12 +1,12 @@
 //! Production Root consumers for manual-activation navigation, not private focus helpers.
-use crate::core::actions::{
-    FocusRightPanelNavigation, FocusSettingsNavigation, FocusTerminalTabNavigation,
-    ShowRightPanelFiles,
-};
-use crate::core::config::RightPanelTab;
 use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext, px, size};
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_ui_base::actions::{
+    FocusRightPanelNavigation, FocusSettingsNavigation, FocusTerminalTabNavigation,
+    ShowRightPanelFiles,
+};
 fn settle(cx: &mut VisualTestContext) {
     for _ in 0..4 {
         cx.run_until_parked();
@@ -23,7 +23,7 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
     cx: &mut TestAppContext,
 ) {
     for locale in ["en", "zh-CN"] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
         vcx.simulate_resize(size(px(1000.), px(720.)));
         let content = app.update_in(&mut vcx, |app, window, cx| {
@@ -77,7 +77,7 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
             );
         });
     }
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }
 
 #[gpui_kit::test]
@@ -175,7 +175,7 @@ fn settings_navigation_retry_yields_to_external_input_focus(cx: &mut TestAppCont
 #[gpui_kit::test]
 fn settings_navigation_is_vertical_manual_and_restores_page_focus(cx: &mut TestAppContext) {
     for locale in ["en", "zh-CN"] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         let (settings, mut vcx) = crate::ui::settings::test_window::harness(cx);
         vcx.simulate_resize(size(px(960.), px(700.)));
         vcx.dispatch_action(FocusSettingsNavigation);
@@ -252,5 +252,5 @@ fn settings_navigation_is_vertical_manual_and_restores_page_focus(cx: &mut TestA
             );
         });
     }
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }

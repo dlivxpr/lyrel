@@ -1,9 +1,9 @@
 use super::*;
-use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use lyrel_core::core::machine::{LayoutDelta, Tab as TreeTab, Workspace};
 use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
+use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 
 #[gpui_kit::test]
 fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
@@ -27,7 +27,7 @@ fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
         app.workspace = window_id;
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
@@ -35,7 +35,7 @@ fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
                 resize_echo: false,
             }))
         });
-        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        let (native, stream) = lyrel_terminal::view::quiet_test_ssh_pane(1, window, cx);
         app.tabs[0].pane.split_leaf(
             remote.entity_id(),
             Axis::Horizontal,
@@ -159,7 +159,7 @@ fn native_sidecar_window(
         app.workspace = window_id;
         let remote = app.tabs[0].pane.first_leaf().unwrap();
         remote.terminal().unwrap().update(cx, |terminal, _| {
-            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+            terminal.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: route.workspace,
                 target: route.target.clone(),
                 spec: None,
@@ -167,7 +167,7 @@ fn native_sidecar_window(
                 resize_echo: false,
             }));
         });
-        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        let (native, stream) = lyrel_terminal::view::quiet_test_ssh_pane(1, window, cx);
         let native = PaneSlot::Ready(native);
         if native_only {
             app.tabs[0].pane = Pane::Leaf(native.clone());
@@ -223,7 +223,7 @@ fn sidecar_closed_native_leaf_preserves_other_views_input_and_presentation(
                 crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(ScopedPane::workspace(1))
             })
             .unwrap();
-        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
+        let (native, stream) = lyrel_terminal::view::quiet_test_ssh_pane(2, window, cx);
         let surviving = PaneSlot::Ready(native);
         app.tabs[0]
             .pane

@@ -14,8 +14,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ui::host_ops::Host;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::host_ops::Host;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// How deep a dropped folder is followed before the copy gives up.
 ///
@@ -70,7 +70,7 @@ pub(crate) fn copy_into_dir(
     dir: &Path,
     overwrite: bool,
 ) -> DropReport {
-    let local = lyrel_core::host::local::LocalHost::shared();
+    let local = lyrel_core::host::local::shared();
     copy_between_hosts(local.as_ref(), host, sources, dir, overwrite)
 }
 
@@ -306,7 +306,7 @@ fn copy_file(
         // share keeps that as a second file beside the first (#942). The
         // distro has no use for the mark, and Linux mode bits are the share's
         // to pick anyway, so only the contents go.
-        if lyrel_core::host::local::is_wsl_share(dest) {
+        if lyrel_core::lyrel_protocol::host::local::is_wsl_share(dest) {
             let mut from = std::fs::File::open(src)?;
             let mut to = std::fs::File::create(dest)?;
             io::copy(&mut from, &mut to)?;

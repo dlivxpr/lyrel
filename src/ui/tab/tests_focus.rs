@@ -212,7 +212,7 @@ fn a_landing_pane_inherits_what_its_pending_slot_was_told(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn a_tab_switch_returns_to_the_pane_focus_arrived_in(cx: &mut TestAppContext) {
     use super::{LyrelApp, test_window::harness};
-    use crate::terminal::view::quiet_test_pane;
+    use lyrel_terminal::view::quiet_test_pane;
 
     let (app, mut vcx) = harness(cx);
     let (left, right, elsewhere, _held) = app.update_in(&mut vcx, |app, window, cx| {
@@ -280,13 +280,13 @@ fn watched_split(
 ) -> (
     Entity<super::LyrelApp>,
     gpui_kit::VisualTestContext,
-    Entity<crate::terminal::view::TerminalView>,
-    Entity<crate::terminal::view::TerminalView>,
+    Entity<lyrel_terminal::view::TerminalView>,
+    Entity<lyrel_terminal::view::TerminalView>,
     gpui_kit::FocusHandle,
     impl Sized,
 ) {
     use super::{LyrelApp, test_window::harness};
-    use crate::terminal::view::quiet_test_pane;
+    use lyrel_terminal::view::quiet_test_pane;
 
     let (app, mut vcx) = harness(cx);
     let (left, right, elsewhere, held) = app.update_in(&mut vcx, |app, window, cx| {
@@ -382,8 +382,8 @@ fn zooming_from_off_the_panes_zooms_the_remembered_pane(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn reordering_two_split_tabs_keeps_identity_mru_and_each_panes_focus(cx: &mut TestAppContext) {
     use super::LyrelApp;
-    use crate::core::actions::{MoveTabRight, SelectNextTab};
-    use crate::terminal::view::quiet_test_pane;
+    use lyrel_terminal::view::quiet_test_pane;
+    use lyrel_ui_base::actions::{MoveTabRight, SelectNextTab};
 
     let (app, mut vcx, _left, first_right, _elsewhere, _held) = watched_split(cx);
     let (second_right, ids, _second_streams) = app.update_in(&mut vcx, |app, window, cx| {

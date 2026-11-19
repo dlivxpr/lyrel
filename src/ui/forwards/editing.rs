@@ -1,10 +1,11 @@
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{App, AppContext as _, Context, Entity, Window};
 
-use super::route::{ForwardOwnerKey, ForwardRoute};
 use super::{ForwardFields, Forwarding, rule_of};
 use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind, SshForwardRule};
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_terminal::forward_client::ForwardClient;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::route::{ForwardOwnerKey, ForwardRoute};
 
 /// Rejection permits the short form's alternate port; no answer never does.
 enum PlaceOutcome {
@@ -90,7 +91,7 @@ impl Forwarding {
     }
 
     pub(crate) fn refresh(&mut self, route: &ForwardRoute) {
-        self.accept_list(route.list());
+        self.accept_list(ForwardClient::list(route));
     }
 
     pub(super) fn fields(&self, cx: &App) -> ForwardFields {
@@ -142,7 +143,7 @@ impl Forwarding {
             }
         };
         if let Some(old) = self.mf_editing.clone() {
-            let Some(list) = route.remove(old.id) else {
+            let Some(list) = ForwardClient::remove(route, old.id) else {
                 self.mf_recovery = Some(Recovery {
                     owner: route.owner_key(),
                     previous,
@@ -178,15 +179,17 @@ impl Forwarding {
                 if let Some(old) = &previous {
                     let before: Vec<u64> = self.managed.iter().map(|m| m.id).collect();
                     let restored_rule = rule_of(old);
-                    let restored = route.add(restored_rule.clone()).and_then(|list| {
-                        let mut candidates = list.iter().filter(|forward| {
-                            !before.contains(&forward.id) && matches_rule(&restored_rule, forward)
+                    let restored =
+                        ForwardClient::add(route, restored_rule.clone()).and_then(|list| {
+                            let mut candidates = list.iter().filter(|forward| {
+                                !before.contains(&forward.id)
+                                    && matches_rule(&restored_rule, forward)
+                            });
+                            let restored = candidates.next().cloned();
+                            let unique = candidates.next().is_none();
+                            self.managed = list;
+                            restored.filter(|_| unique)
                         });
-                        let restored = candidates.next().cloned();
-                        let unique = candidates.next().is_none();
-                        self.managed = list;
-                        restored.filter(|_| unique)
-                    });
                     if let Some(restored) = restored {
                         self.mf_editing = Some(restored);
                     } else {
@@ -223,7 +226,7 @@ impl Forwarding {
             self.mf_recovery = Some(recovery);
             return None;
         }
-        let Some(list) = route.list() else {
+        let Some(list) = ForwardClient::list(route) else {
             self.mf_recovery = Some(recovery);
             return None;
         };
@@ -251,7 +254,7 @@ impl Forwarding {
                         self.mf_editing = Some(added.clone());
                         recovery.previous = Some(added);
                     } else if added.enabled && matches!(added.status, ForwardStatus::Error(_)) {
-                        let Some(list) = route.remove(added.id) else {
+                        let Some(list) = ForwardClient::remove(route, added.id) else {
                             recovery.mutation = Unanswered::Remove {
                                 id: added.id,
                                 rejected: true,
@@ -273,7 +276,7 @@ impl Forwarding {
             Unanswered::Remove { id, rejected } => {
                 if *rejected {
                     if self.managed.iter().any(|forward| forward.id == *id) {
-                        let Some(list) = route.remove(*id) else {
+                        let Some(list) = ForwardClient::remove(route, *id) else {
                             self.mf_recovery = Some(recovery);
                             return None;
                         };
@@ -300,7 +303,7 @@ impl Forwarding {
         draft: &SshForwardRule,
     ) -> PlaceOutcome {
         let before: Vec<u64> = self.managed.iter().map(|m| m.id).collect();
-        let Some(list) = route.add(rule.clone()) else {
+        let Some(list) = ForwardClient::add(route, rule.clone()) else {
             self.mf_recovery = Some(Recovery {
                 owner: route.owner_key(),
                 previous: previous.clone(),
@@ -341,7 +344,7 @@ impl Forwarding {
         let Some((id, msg)) = broken else {
             return PlaceOutcome::Placed;
         };
-        let Some(list) = route.remove(id) else {
+        let Some(list) = ForwardClient::remove(route, id) else {
             self.mf_recovery = Some(Recovery {
                 owner: route.owner_key(),
                 previous: previous.clone(),
@@ -407,7 +410,7 @@ impl Forwarding {
     }
 
     pub(crate) fn remove(&mut self, route: &ForwardRoute, forward_id: u64) {
-        self.accept_list(route.remove(forward_id));
+        self.accept_list(ForwardClient::remove(route, forward_id));
     }
 
     /// Return the previous rule only after a successful switch, for the
@@ -419,7 +422,7 @@ impl Forwarding {
         enabled: bool,
     ) -> anyhow::Result<Option<ManagedForward>> {
         let forward = self.managed.iter().find(|m| m.id == forward_id).cloned();
-        match route.set_enabled(forward_id, enabled) {
+        match ForwardClient::set_enabled(route, forward_id, enabled) {
             Ok(list) => {
                 self.managed = list;
                 Ok(forward)

@@ -3,23 +3,13 @@ mod native;
 
 use native::Backend;
 
-use std::sync::Mutex;
-
 use crate::core::cli_agent::AgentStatus;
-use crate::core::config::{Config, NotifyMode};
-use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::{App, AppContext};
+use lyrel_core::core::config::NotifyMode;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
-
-/// Handed out to callers that live outside the UI thread — notification click
-/// handlers, which run on a platform callback thread and can only enqueue.
-///
-/// The dispatch loop is created once, for the whole process. A window can be
-/// built and retired many times (the tray keeps the app alive windowless), so
-/// the channel must survive as long as the app does — it does, because the
-/// loop outlives every window.
-static SENDER: Mutex<Option<smol::channel::Sender<TrayAction>>> = Mutex::new(None);
 
 /// Whether an icon is actually on the bar right now.
 ///
@@ -33,12 +23,6 @@ static ICON_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// Whether the app still has a visible presence once its last window closes.
 pub(crate) fn icon_is_up() -> bool {
     ICON_UP.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// A sender for the current tray dispatch loop, if one is running.
-#[cfg(any(target_os = "macos", all(target_os = "windows", not(test))))]
-pub(crate) fn sender() -> Option<smol::channel::Sender<TrayAction>> {
-    SENDER.lock().ok()?.clone()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,15 +99,15 @@ impl TraySnapshot {
         for (n, word) in [
             (
                 count(AgentStatus::Waiting),
-                t(crate::ui::i18n::L10nKey::PanelAgentWaiting),
+                t(lyrel_ui_base::i18n::L10nKey::PanelAgentWaiting),
             ),
             (
                 count(AgentStatus::Working),
-                t(crate::ui::i18n::L10nKey::PanelAgentWorking),
+                t(lyrel_ui_base::i18n::L10nKey::PanelAgentWorking),
             ),
             (
                 count(AgentStatus::Done),
-                t(crate::ui::i18n::L10nKey::PanelAgentDone),
+                t(lyrel_ui_base::i18n::L10nKey::PanelAgentDone),
             ),
         ] {
             if n > 0 {
@@ -133,7 +117,7 @@ impl TraySnapshot {
         if parts.is_empty() {
             "lyrel".to_string()
         } else {
-            crate::ui::i18n::t_fmt(
+            lyrel_ui_base::i18n::t_fmt(
                 L10nKey::TrayTooltipAgents,
                 &[("parts", &parts.join(t(L10nKey::TrayAgentSep)))],
             )
@@ -173,9 +157,9 @@ pub(crate) fn menu_spec(snap: &TraySnapshot) -> Vec<SpecItem> {
                 }
             }
             AgentStatus::Working => {
-                format!(" — {}", t(crate::ui::i18n::L10nKey::PanelAgentWorking))
+                format!(" — {}", t(lyrel_ui_base::i18n::L10nKey::PanelAgentWorking))
             }
-            AgentStatus::Done => format!(" — {}", t(crate::ui::i18n::L10nKey::PanelAgentDone)),
+            AgentStatus::Done => format!(" — {}", t(lyrel_ui_base::i18n::L10nKey::PanelAgentDone)),
             AgentStatus::Idle => String::new(),
         };
         items.push(SpecItem::Item {
@@ -288,7 +272,7 @@ mod tests {
 
     #[test]
     fn attention_follows_waiting_and_tooltip_counts() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert!(snapshot_with_agent(AgentStatus::Waiting).attention());
         assert!(!snapshot_with_agent(AgentStatus::Working).attention());
         assert!(!snapshot_with_agent(AgentStatus::Done).attention());
@@ -296,7 +280,7 @@ mod tests {
             snapshot_with_agent(AgentStatus::Waiting).tooltip(),
             format!(
                 "lyrel — 1 {}",
-                t(crate::ui::i18n::L10nKey::PanelAgentWaiting)
+                t(lyrel_ui_base::i18n::L10nKey::PanelAgentWaiting)
             )
         );
         assert_eq!(TraySnapshot::default().tooltip(), "lyrel");
@@ -315,9 +299,9 @@ mod tests {
                 .collect()
         }
         let snap = TraySnapshot::default();
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let english = commands(menu_spec(&snap));
-        crate::ui::i18n::set_locale("zh-CN");
+        lyrel_ui_base::i18n::set_locale("zh-CN");
         let chinese = commands(menu_spec(&snap));
         assert_eq!(
             english.iter().map(|(id, _)| id).collect::<Vec<_>>(),
@@ -330,7 +314,7 @@ mod tests {
 
     #[test]
     fn menu_spec_shape() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let empty = menu_spec(&TraySnapshot::default());
         let labels: Vec<_> = empty
             .iter()
@@ -461,9 +445,24 @@ pub(crate) fn init(cx: &mut App) {
     }
 
     let (tx, rx) = smol::channel::unbounded::<TrayAction>();
-    if let Ok(mut slot) = SENDER.lock() {
-        *slot = Some(tx.clone());
-    }
+
+    // The notification-click bridge: platform activation callbacks enqueue a
+    // typed `TerminalHostEvent` on a process-wide channel (they may run on a COM
+    // or AppKit thread, never the UI thread), and this loop — created with
+    // the tray channel, surviving every window — turns it into the same
+    // reveal dispatch a tray click gets. A click with no window owning the
+    // pane stays inert, exactly as a stale tray click does.
+    let (activation_tx, activation_rx) =
+        smol::channel::unbounded::<lyrel_ui_base::notification_bridge::TerminalHostEvent>();
+    lyrel_ui_base::notification_bridge::install(activation_tx);
+    cx.spawn(async move |cx| {
+        while let Ok(activation) = activation_rx.recv().await {
+            let lyrel_ui_base::notification_bridge::TerminalHostEvent::Reveal { leaf_id } =
+                activation;
+            cx.update(|cx| dispatch(TrayAction::RevealPane { leaf_id }, cx));
+        }
+    })
+    .detach();
 
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv().await {
@@ -518,7 +517,7 @@ pub(crate) fn init(cx: &mut App) {
                 }
                 shown = None;
             }
-            let language = crate::ui::i18n::current_language_code();
+            let language = lyrel_ui_base::i18n::current_language_code();
             if let Some(backend) = backend.as_mut()
                 && shown
                     .as_ref()

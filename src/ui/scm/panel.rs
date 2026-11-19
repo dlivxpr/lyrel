@@ -26,21 +26,21 @@ use lyrel_core::core::git::status::{
     ChangeCode, DecoStatus, HeadState, RepoOperation, RepoPath, StatusEntry, WorkingTreeStatus,
 };
 
-use crate::terminal::git_data::status_of;
-use crate::terminal::git_diff::DiffSource;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{HostId, SharedHost};
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::right_panel::{
     META, META_MONO, ROW_INSET, SEARCH_H, action_strip, git_badge, info_chip,
 };
-use crate::ui::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
 use crate::ui::scm::ScmIntent;
+use crate::ui::scm::data::status_of;
+use crate::ui::scm::diff::DiffSource;
 use crate::ui::scm::path::split_display_path;
 use crate::ui::scm::state::{BranchInput, RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm::tree::{TreeRow, normalize_query, path_matches, tree_rows};
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
 
 /// Shared compact pitch for working-tree and commit-detail file rows.
 ///
@@ -491,7 +491,7 @@ impl LyrelApp {
     /// `render`, and taking the global mutably there queues a global-observer
     /// effect on every frame.
     fn scm_network_busy(&self, repo: &RepoKey, cx: &gpui_kit::App) -> bool {
-        cx.try_global::<crate::terminal::git_data::ScmData>()
+        cx.try_global::<crate::ui::scm::data::ScmData>()
             .is_some_and(|data| data.network_slots(repo.host, &repo.root) > 0)
     }
 
@@ -710,7 +710,7 @@ impl LyrelApp {
             .scm
             .commit_input(repo, status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         div()
             .key_context(COMMIT_KEY_CONTEXT)
             .flex_none()
@@ -993,7 +993,7 @@ impl LyrelApp {
             .min_h_0()
             .child(title)
             .children(pinned)
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "panel-scm-scrollbar",
                 scroller,
                 &self.scm.scroll,
@@ -1037,12 +1037,12 @@ impl LyrelApp {
     ) -> RepoLookup {
         let id = host.id();
         if let Some(root) = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .and_then(|cache| cache.repo_root_for(id, cwd))
         {
             return RepoLookup::Root(root.to_path_buf());
         } else if cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .is_some_and(|cache| cache.known_repo_for(id, cwd) == Some(None))
         {
             return RepoLookup::NotARepo;
@@ -1059,7 +1059,7 @@ impl LyrelApp {
             return RepoLookup::Pending;
         }
         let dir = cwd.to_path_buf();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host.clone(),
             cx,
             move |h| {
@@ -1136,8 +1136,8 @@ impl LyrelApp {
         if self.scm.watch.is_some() {
             return;
         }
-        self.scm.watch = Some(cx.observe_global::<crate::terminal::git_data::ScmData>(
-            |this, cx| {
+        self.scm.watch = Some(
+            cx.observe_global::<crate::ui::scm::data::ScmData>(|this, cx| {
                 let Some((key, seen)) = this.scm.seen.clone() else {
                     return;
                 };
@@ -1146,8 +1146,8 @@ impl LyrelApp {
                     this.scm.seen = Some((key, now));
                     cx.notify();
                 }
-            },
-        ));
+            }),
+        );
     }
 
     fn scm_groups(
@@ -1161,7 +1161,9 @@ impl LyrelApp {
         // included — sits 1px from the next, so two hovered neighbours read
         // as two fills rather than one long one.
         let query = self.scm_filter_query(cx);
-        let tree = cx.global::<crate::core::config::Config>().scm_changes_tree;
+        let tree = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .scm_changes_tree;
         let mut matched = 0;
         let mut list = v_flex()
             .px(px(CONTENT_INSET))
@@ -1276,7 +1278,9 @@ impl LyrelApp {
                 input
             }
         };
-        let tree = cx.global::<crate::core::config::Config>().scm_changes_tree;
+        let tree = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .scm_changes_tree;
         // The tile shows where it goes, not where you are — the rows under it
         // already say which view this is.
         let (glyph, tip) = match tree {
@@ -1317,7 +1321,7 @@ impl LyrelApp {
         foldable: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
         let muted = cx.theme().muted_foreground;
         let id = SharedString::from(format!("scm-dir-{group:?}-{key}"));
@@ -1410,7 +1414,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let count = entries.len();
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let id = SharedString::from(format!("scm-group-{group:?}"));
         let actions = self.scm_group_actions(&id, repo, group, entries, sf.hover, cx);
         h_flex()
@@ -1487,7 +1491,7 @@ impl LyrelApp {
         depth: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
         let path = entry.path.as_str().to_string();
         let (name, dir) = split_display_path(&path);
@@ -1800,7 +1804,7 @@ impl LyrelApp {
                     // repository's paths belong to its own filesystem and
                     // are left spelled the way that machine spells them.
                     let text = match repo.host == HostId::LOCAL {
-                        true => crate::ui::path_display::native_separators(&absolute)
+                        true => lyrel_ui_base::path_display::native_separators(&absolute)
                             .display()
                             .to_string(),
                         false => absolute.display().to_string(),
@@ -1818,7 +1822,7 @@ impl LyrelApp {
                 PopupMenuItem::new(crate::ui::right_panel::reveal_label()).on_click({
                     let absolute = absolute.clone();
                     move |_, _window, cx| {
-                        cx.reveal_path(&crate::ui::path_display::native_separators(&absolute))
+                        cx.reveal_path(&lyrel_ui_base::path_display::native_separators(&absolute))
                     }
                 }),
             );
@@ -1856,7 +1860,7 @@ impl LyrelApp {
             return;
         };
         let Some(seen) = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
             .and_then(|cache| cache.status_for(repo.host, &repo.root))
         else {
             return;
@@ -2021,8 +2025,8 @@ pub(crate) fn tracking_chip(
 /// loudest thing on an idle panel. Both read from here so they cannot drift
 /// apart: the commit area is one block, and two greys a shade off each other
 /// look like a mistake rather than a hierarchy.
-fn field_fill(sf: crate::ui::presets::Surface) -> u32 {
-    crate::ui::presets::mix(sf.base, sf.hover, 0.5)
+fn field_fill(sf: lyrel_ui_base::presets::Surface) -> u32 {
+    lyrel_ui_base::presets::mix(sf.base, sf.hover, 0.5)
 }
 
 /// One half of the split commit control: paints nothing, ever.
@@ -2066,7 +2070,7 @@ struct CommitPaint {
 /// The label ink is the opaque surface rather than `theme.background`, which
 /// carries the window's transparency when one is configured.
 fn commit_paint(live: bool, cx: &gpui_kit::App) -> CommitPaint {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let fg = cx.theme().foreground;
     match live {
         true => {
@@ -2274,11 +2278,12 @@ fn verb_all_tooltip(verb: RowVerb) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::actions::{ScmCommit, ToggleFullscreen};
-    use crate::core::config::{CoreConfig, DiffViewMode, RightPanelTab};
     use crate::ui::app::test_window::harness;
     use gpui_kit::TestAppContext;
+    use lyrel_core::core::config::{DiffViewMode, RightPanelTab};
     use lyrel_core::core::git::status::{ConflictKind, EntryKind, RepoPath};
+    use lyrel_ui_base::actions::{ScmCommit, ToggleFullscreen};
+    use lyrel_ui_base::config::CoreConfig;
 
     fn entry(path: &str, index: ChangeCode, worktree: ChangeCode, kind: EntryKind) -> StatusEntry {
         StatusEntry {
@@ -2772,7 +2777,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn commit_action_is_scoped_to_the_message_box(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (_app, mut vcx) = harness(cx);
 
         let (in_box, outside, window_wide) = vcx.update(|window, cx| {
@@ -2817,7 +2822,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_commit_draft_follows_its_repository(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let (a, b) = (repo("/a"), repo("/b"));
         let status_a = status_of_repo("/a", Vec::new());
@@ -2853,7 +2858,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_merge_prefills_the_box_with_gits_own_message(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let key = repo("/a");
         let mut status = status_of_repo("/a", Vec::new());
@@ -2869,7 +2874,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_rejected_commit_keeps_the_message_it_was_given(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let key = repo("/a");
         let before = status_of_repo("/a", Vec::new());
@@ -2908,7 +2913,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_landed_commit_clears_only_its_unchanged_draft(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let (a, b) = (repo("/a"), repo("/b"));
         let before = status_of_repo("/a", Vec::new());
@@ -2957,7 +2962,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn preparing_or_rejecting_an_amend_does_not_arm_draft_cleanup(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let key = repo("/a");
         let before = status_of_repo("/a", Vec::new());
@@ -2992,7 +2997,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn scm_tab_opens_and_config_round_trips(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         app.update_in(&mut vcx, |app, window, cx| {
@@ -3030,7 +3035,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn the_new_config_fields_default_to_todays_behaviour(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         let cfg = CoreConfig::default();
@@ -3042,20 +3047,20 @@ mod tests {
         app.update(&mut vcx, |app, cx| app.scm_toggle_graph(cx));
         assert!(app.read_with(&vcx, |app, _| app.scm.graph().expanded));
         assert!(vcx.update(|_, cx| {
-            cx.global::<crate::core::config::Config>()
+            cx.global::<lyrel_ui_base::config::Config>()
                 .scm_graph_expanded
         }));
 
         app.update(&mut vcx, |app, cx| app.toggle_diff_view_mode(cx));
         assert_eq!(
-            vcx.update(|_, cx| cx.global::<crate::core::config::Config>().diff_view),
+            vcx.update(|_, cx| cx.global::<lyrel_ui_base::config::Config>().diff_view),
             DiffViewMode::Unified
         );
     }
 
     #[gpui_kit::test]
     fn a_folded_group_stays_folded_across_rerenders(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         app.update_in(&mut vcx, |app, window, cx| {
@@ -3090,9 +3095,9 @@ mod render_idle_gpui_tests {
     use super::*;
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{render_probe, test_window};
-    use crate::ui::host_ops::HostId;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
+    use lyrel_ui_base::host_ops::HostId;
 
     const BUDGET: u64 = 200;
 
@@ -3201,11 +3206,11 @@ mod render_idle_gpui_tests {
         let want = root.clone();
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, cx| {
             app.scm.pane_repo().is_some_and(|r| r.root == want)
-                && crate::terminal::git_data::status_of(cx, HostId::LOCAL, &want).is_some()
+                && crate::ui::scm::data::status_of(cx, HostId::LOCAL, &want).is_some()
         });
 
         let status = app.update_in(&mut vcx, |app, _, cx| {
-            crate::terminal::git_data::status_of(
+            crate::ui::scm::data::status_of(
                 cx,
                 HostId::LOCAL,
                 &app.scm.pane_repo().cloned().unwrap().root,
@@ -3250,7 +3255,7 @@ mod render_idle_gpui_tests {
             vcx.executor().advance_clock(Duration::from_millis(300));
             vcx.run_until_parked();
             let fresh = vcx.update(|_, cx| {
-                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                let data = cx.global::<crate::ui::scm::data::ScmData>();
                 !data.is_stale(repo.host, &repo.root)
                     && !data.is_change_pending(repo.host, &repo.root)
             });
@@ -3272,7 +3277,7 @@ mod render_idle_gpui_tests {
         for _ in 0..3 {
             render_probe::arm(BUDGET);
             let requested_epoch = app.update_in(&mut vcx, |app, _, cx| {
-                let data = cx.global_mut::<crate::terminal::git_data::ScmData>();
+                let data = cx.global_mut::<crate::ui::scm::data::ScmData>();
                 data.bump(repo.host, &repo.root);
                 let epoch = data.epoch(repo.host, &repo.root);
                 app.scm_refresh(host.clone(), repo.root.clone(), cx);
@@ -3282,7 +3287,7 @@ mod render_idle_gpui_tests {
             loop {
                 vcx.run_until_parked();
                 if vcx.update(|_, cx| {
-                    !cx.global::<crate::terminal::git_data::ScmData>()
+                    !cx.global::<crate::ui::scm::data::ScmData>()
                         .is_stale(repo.host, &repo.root)
                 }) {
                     break;
@@ -3291,7 +3296,7 @@ mod render_idle_gpui_tests {
                     Instant::now() < deadline,
                     "the refresh never completed: requested epoch={requested_epoch}, current={:?}",
                     vcx.update(|_, cx| {
-                        let data = cx.global::<crate::terminal::git_data::ScmData>();
+                        let data = cx.global::<crate::ui::scm::data::ScmData>();
                         (
                             data.epoch(repo.host, &repo.root),
                             data.is_stale(repo.host, &repo.root),
@@ -3310,7 +3315,7 @@ mod render_idle_gpui_tests {
         // including the decoration index consumed by the Files panel.
         std::fs::write(root.join("after.txt"), "after\n").unwrap();
         app.update_in(&mut vcx, |app, _, cx| {
-            cx.global_mut::<crate::terminal::git_data::ScmData>()
+            cx.global_mut::<crate::ui::scm::data::ScmData>()
                 .bump(repo.host, &repo.root);
             app.scm_refresh(host.clone(), repo.root.clone(), cx);
         });
@@ -3326,7 +3331,7 @@ mod render_idle_gpui_tests {
         vcx.update(|_, cx| {
             let status = status_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(status.total_entries, 2);
-            let index = crate::terminal::git_data::index_of(cx, repo.host, &repo.root).unwrap();
+            let index = crate::ui::scm_snapshot::index_of(cx, repo.host, &repo.root).unwrap();
             assert_eq!(index.file("after.txt"), Some(DecoStatus::Untracked));
         });
     }
@@ -3390,7 +3395,7 @@ mod render_idle_gpui_tests {
                 root.display(),
                 app.read_with(vcx, |app, cx| format!(
                     "pane root={:?}, panel root={:?}, remote counts={:?}",
-                    cx.global::<crate::terminal::git_status::GitStatusCache>()
+                    cx.global::<crate::ui::scm::status_cache::GitStatusCache>()
                         .repo_root_for(HostId::LOCAL, root),
                     app.scm.pane_repo().map(|repo| &repo.root),
                     app.github
@@ -3546,7 +3551,7 @@ mod render_idle_gpui_tests {
     #[gpui_kit::test]
     fn the_changes_list_folds_into_a_tree_and_filters_by_path(cx: &mut TestAppContext) {
         let _serial = serial();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = scratch("tree");
         git(&root, &["init", "--quiet"]);
         std::fs::create_dir_all(root.join("src/ui")).unwrap();
@@ -3561,7 +3566,7 @@ mod render_idle_gpui_tests {
         // `a_settled_source_control_panel_reaches_render_idle`.
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, |app, cx| {
             app.scm.pane_repo().is_some_and(|r| {
-                crate::terminal::git_data::status_of(cx, r.host, &r.root)
+                crate::ui::scm::data::status_of(cx, r.host, &r.root)
                     .is_some_and(|s| s.untracked().count() == 3)
             })
         });
@@ -3580,7 +3585,10 @@ mod render_idle_gpui_tests {
 
         // `src` holds nothing but `ui`, so the two share one row.
         app.update(&mut vcx, |app, cx| app.scm_toggle_changes_tree(cx));
-        assert!(vcx.update(|_, cx| cx.global::<crate::core::config::Config>().scm_changes_tree));
+        assert!(vcx.update(|_, cx| {
+            cx.global::<lyrel_ui_base::config::Config>()
+                .scm_changes_tree
+        }));
         assert!(drawn(&mut vcx, src_ui));
         assert!(!drawn(&mut vcx, "scm-dir-Untracked-src"));
         assert!(drawn(&mut vcx, "scm-dir-Untracked-docs"));

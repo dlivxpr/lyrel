@@ -1,9 +1,10 @@
 use super::*;
-use crate::core::keychain::{CredentialStore, InMemoryCredentialStore};
+use crate::core::keychain::{CredentialStore as _, InMemoryCredentialStore};
 use crate::ui::app::{LyrelApp, test_window::harness};
 use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext, TestAppContext, VisualTestContext};
+use lyrel_insights::usage::accounts::{SecretVault, VaultError};
 use std::{collections::VecDeque, sync::mpsc};
 
 const BALANCE: &[u8] = br#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}"#;
@@ -66,7 +67,7 @@ impl BalanceHttp for Http {
 fn install(
     vcx: &mut VisualTestContext,
     path: std::path::PathBuf,
-    vault: Arc<dyn CredentialStore>,
+    vault: Arc<dyn SecretVault>,
     http: Arc<dyn BalanceHttp>,
     seed: bool,
 ) -> Option<Uuid> {
@@ -542,20 +543,18 @@ struct LockedVault {
     inner: InMemoryCredentialStore,
     locked: AtomicBool,
 }
-impl CredentialStore for LockedVault {
-    fn get(&self, s: &str, a: &str) -> crate::core::keychain::CredentialResult<Option<String>> {
-        self.inner.get(s, a)
+impl SecretVault for LockedVault {
+    fn secret(&self, s: &str, a: &str) -> Result<Option<String>, VaultError> {
+        self.inner.secret(s, a)
     }
-    fn set(&self, s: &str, a: &str, v: &str) -> crate::core::keychain::CredentialResult<()> {
+    fn set_secret(&self, s: &str, a: &str, v: &str) -> Result<(), VaultError> {
         if self.locked.load(Ordering::SeqCst) {
-            return Err(crate::core::keychain::CredentialError::Backend(
-                "locked".into(),
-            ));
+            return Err(VaultError("locked".into()));
         }
-        self.inner.set(s, a, v)
+        self.inner.set_secret(s, a, v)
     }
-    fn delete(&self, s: &str, a: &str) -> crate::core::keychain::CredentialResult<()> {
-        self.inner.delete(s, a)
+    fn delete_secret(&self, s: &str, a: &str) -> Result<(), VaultError> {
+        self.inner.delete_secret(s, a)
     }
 }
 
@@ -942,7 +941,7 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
         ("en", 14., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 18., gpui_kit::component::ThemeMode::Dark),
     ] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         app.update_in(&mut vcx, |_, window, cx| {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
             gpui_kit::component::Theme::update(cx, |theme| {
@@ -998,5 +997,5 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
             .name,
         "Renamed at narrow zoom"
     );
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }

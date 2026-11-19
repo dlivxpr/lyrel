@@ -6,7 +6,7 @@ use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 fn close_confirmation_keeps_its_original_pane_when_focus_changes(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-        cx.global_mut::<Config>().confirm_close = crate::core::config::ConfirmClose::Always;
+        cx.global_mut::<Config>().confirm_close = lyrel_core::core::config::ConfirmClose::Always;
         let left = app.tabs[0].pane.first_leaf().unwrap();
         let right = app.tabs.remove(1).pane.first_leaf().unwrap();
         app.tabs[0]

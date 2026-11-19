@@ -41,14 +41,14 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(occupied.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.untitled.is_some() && !file.saving)
-                && app.editor.waiters.is_empty()
+                && app.editor.read(cx).waiters.is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert!(file.path.as_os_str().is_empty());
         assert!(file.dirty);
@@ -63,15 +63,15 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(recovered.clone()));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.tabs[0].id(), original);
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert_eq!(file.path, recovered);
         assert!(file.untitled.is_none());

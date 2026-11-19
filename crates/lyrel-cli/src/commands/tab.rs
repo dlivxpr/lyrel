@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::machine::{Machine, PaneSeed};
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::core::tab_view::tab_views_of;
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::core::machine::{Machine, PaneSeed};
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::core::tab_view::tab_views_of;
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 use serde_json::{Value, json};
 
 use super::pane::hang_up_removed_panes;
@@ -82,9 +82,9 @@ fn tab_ls(explicit: Option<&str>, ctx: &Context, backend: &mut dyn Backend) -> R
 /// still has. A tab naming a deleted group is an auto tab, the same way the
 /// sidebar draws it.
 fn pinned_group_of<'a>(
-    ws: &'a lyrel_core::core::machine::Workspace,
-    tab: &lyrel_core::core::machine::Tab,
-) -> Option<&'a lyrel_core::core::group_key::PinnedGroup> {
+    ws: &'a lyrel_protocol::core::machine::Workspace,
+    tab: &lyrel_protocol::core::machine::Tab,
+) -> Option<&'a lyrel_protocol::core::group_key::PinnedGroup> {
     ws.groups.get(tab.group?)
 }
 
@@ -194,7 +194,7 @@ fn adopt_pane(
 
 /// The workspace a pane was spawned for, if it is still on this machine.
 fn owner_of(
-    info: &lyrel_core::daemon::protocol::PaneInfo,
+    info: &lyrel_protocol::daemon::protocol::PaneInfo,
     machine: &Machine,
 ) -> Option<WorkspaceId> {
     let owner = info.owner.as_deref()?;

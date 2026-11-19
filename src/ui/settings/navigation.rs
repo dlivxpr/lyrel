@@ -126,7 +126,8 @@ impl SettingsNavigation {
     pub(super) fn navigate(&mut self, setting: Option<L10nKey>, config: &Config) {
         self.focused_setting = match setting {
             Some(L10nKey::SettingsCustomPath)
-                if config.working_directory.strategy != crate::core::config::WdStrategy::Custom =>
+                if config.working_directory.strategy
+                    != lyrel_core::core::config::WdStrategy::Custom =>
             {
                 Some(L10nKey::SettingsStartIn)
             }

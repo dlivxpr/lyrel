@@ -19,13 +19,15 @@ use crate::daemon::protocol::{
     SftpTransferKind, SftpTransferSpec,
 };
 use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
-use crate::terminal::RemoteTerminal;
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{
     HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
 };
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
+use lyrel_terminal::RemoteTerminal;
+use lyrel_terminal::sftp_client::SftpClient;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::route::SftpRoute;
 
 mod revalidation;
 mod selection;
@@ -72,109 +74,11 @@ pub(crate) enum SftpEdit {
     },
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SftpRoute {
-    pane_id: u64,
-    workspace: Option<crate::terminal::PaneWorkspace>,
-}
-
-impl SftpRoute {
-    pub(crate) fn new(pane_id: u64, workspace: Option<crate::terminal::PaneWorkspace>) -> Self {
-        Self { pane_id, workspace }
-    }
-
-    /// What makes this route *this* route, for a [`HostId`]. Keyed by pane —
-    /// two panes into the same server are two routes, because every op is
-    /// addressed to a pane's SSH connection — and by workspace, because a
-    /// workspace pane's id was minted by the far daemon and can collide with
-    /// a local one.
-    ///
-    /// [`HostId`]: crate::ui::host_registry::HostId
-    pub(crate) fn connection_key(&self) -> String {
-        match &self.workspace {
-            Some(ws) => format!("sftp:{}:{}", ws.workspace, self.pane_id),
-            None => format!("sftp:{}", self.pane_id),
-        }
-    }
-
-    fn workspace_op(
-        &self,
-        op: crate::daemon::protocol::WorkspaceOp,
-    ) -> Option<crate::daemon::protocol::WorkspaceRequest> {
-        RemoteTerminal::workspace_request(self.workspace.as_ref()?, self.pane_id, op)
-    }
-
-    pub(crate) fn list(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpList {
-            path: path.to_string(),
-        }) else {
-            return RemoteTerminal::sftp_list(self.pane_id, path);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpEntries(e)) => Ok(e),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    pub(crate) fn op(&self, op: SftpOp) -> SftpOpResult {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpOp { op: op.clone() })
-        else {
-            return RemoteTerminal::sftp_op(self.pane_id, op);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpOpResult(r)) => r,
-            Ok(other) => SftpOpResult::Error(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => SftpOpResult::Error(e.to_string()),
-        }
-    }
-
-    pub(crate) fn transfer_start(&self, spec: SftpTransferSpec) -> Result<u64, String> {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferStart {
-                spec: spec.clone(),
-            })
-        else {
-            return RemoteTerminal::sftp_transfer_start(spec);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferStarted { job_id }) => Ok(job_id),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    pub(crate) fn transfer_list(&self) -> Result<Vec<SftpJobProgress>, String> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferList)
-        else {
-            return RemoteTerminal::sftp_transfer_list(self.pane_id);
-        };
-        match RemoteTerminal::on_workspace(req) {
-            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferProgress(jobs)) => Ok(jobs),
-            Ok(other) => Err(t_fmt(
-                L10nKey::SftpErrorUnexpectedReply,
-                &[("reply", &format!("{other:?}"))],
-            )),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
-
-type SftpPaneKey = (Option<crate::core::session::WorkspaceId>, u64);
+type SftpPaneKey = (Option<lyrel_ui_base::session::WorkspaceId>, u64);
 
 pub(crate) struct SftpPanelState {
     pub(crate) open_pane_id: Option<u64>,
-    pub(crate) open_workspace: Option<crate::terminal::PaneWorkspace>,
+    pub(crate) open_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
     pub(crate) cwd: String,
     pub(crate) cwds: std::collections::HashMap<SftpPaneKey, String>,
     shell_cwds: std::collections::HashMap<SftpPaneKey, String>,
@@ -233,8 +137,9 @@ impl SftpPanelState {
 
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
         let filter_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::SearchFiles))
+            InputState::new(window, cx).placeholder(lyrel_ui_base::i18n::t(
+                lyrel_ui_base::i18n::L10nKey::SearchFiles,
+            ))
         });
         let sub = cx.subscribe_in(&filter_input, window, |_this, _input, ev, _w, cx| {
             if matches!(ev, gpui_kit::component::input::InputEvent::Change) {
@@ -431,7 +336,7 @@ pub(crate) fn free_local_path(
 
 impl LyrelApp {
     pub(crate) fn toggle_sftp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::core::config::RightPanelTab;
+        use lyrel_core::core::config::RightPanelTab;
         if self.right_panel_visible && self.right_panel_tab == RightPanelTab::Files {
             self.toggle_right_panel(cx);
             return;
@@ -498,10 +403,10 @@ impl LyrelApp {
     }
 
     fn sftp_route(&self) -> SftpRoute {
-        SftpRoute {
-            pane_id: self.sftp_panel.open_pane_id.unwrap_or_default(),
-            workspace: self.sftp_panel.open_workspace.clone(),
-        }
+        SftpRoute::new(
+            self.sftp_panel.open_pane_id.unwrap_or_default(),
+            self.sftp_panel.open_workspace.clone(),
+        )
     }
 
     fn pane_workspace(
@@ -509,7 +414,7 @@ impl LyrelApp {
         pane_id: u64,
         window: &Window,
         cx: &App,
-    ) -> Option<crate::terminal::PaneWorkspace> {
+    ) -> Option<lyrel_ui_base::route::PaneWorkspace> {
         let leaf = self
             .tabs
             .get(self.tabs.active_index())?
@@ -566,7 +471,9 @@ impl LyrelApp {
         let generation = self.sftp_panel.nav_gen;
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.op(SftpOp::Realpath { path: ".".into() }) })
+                .background_spawn(async move {
+                    SftpClient::op(&route, SftpOp::Realpath { path: ".".into() })
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -611,10 +518,10 @@ impl LyrelApp {
 
         let list_path = path.clone();
         let route = self.sftp_route();
-        let key = (route.workspace.as_ref().map(|ws| ws.workspace), pane_id);
+        let key = (route.workspace().map(|ws| ws.workspace), pane_id);
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.list(&list_path) })
+                .background_spawn(async move { SftpClient::list(&route, &list_path) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -663,7 +570,7 @@ impl LyrelApp {
             return;
         }
         let cwd = self.sftp_panel.cwd.clone();
-        let input = crate::ui::prefill::filled_box(cwd, window, cx);
+        let input = lyrel_terminal::prefill::filled_box(cwd, window, cx);
         input.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(
             &input,
@@ -737,15 +644,13 @@ impl LyrelApp {
     /// neither, so the buffer holds the host itself and stays saveable for as
     /// long as it is open.
     ///
-    /// [`Host`]: crate::ui::host_ops::Host
+    /// [`Host`]: lyrel_ui_base::host_ops::Host
     /// [`RemoteHost`]: lyrel_core::host::remote::RemoteHost
-    fn sftp_editor_host(&self, cx: &gpui_kit::App) -> Option<crate::ui::host_ops::SharedHost> {
+    fn sftp_editor_host(&self, cx: &gpui_kit::App) -> Option<lyrel_ui_base::host_ops::SharedHost> {
         self.sftp_panel.open_pane_id?;
-        if let Some(host) =
-            self.sftp_panel.open_workspace.as_ref().and_then(|ws| {
-                crate::ui::host_registry::HostRegistry::lookup(cx, ws.target.host_id())
-            })
-        {
+        if let Some(host) = self.sftp_panel.open_workspace.as_ref().and_then(|ws| {
+            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, ws.target.host_id())
+        }) {
             return Some(host);
         }
         Some(std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(
@@ -798,7 +703,7 @@ impl LyrelApp {
             remote,
             recursive,
         };
-        match self.sftp_route().transfer_start(spec) {
+        match SftpClient::transfer_start(&self.sftp_route(), spec) {
             Ok(_) => self.sftp_panel.error = None,
             Err(e) => self.sftp_panel.error = Some(e),
         }
@@ -830,7 +735,7 @@ impl LyrelApp {
         let generation = self.sftp_panel.nav_gen;
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { route.op(SftpOp::Readlink { path }) })
+                .background_spawn(async move { SftpClient::op(&route, SftpOp::Readlink { path }) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.sftp_panel.navigation_is_current(pane_id, generation) {
@@ -872,7 +777,9 @@ impl LyrelApp {
     ) {
         let route = self.sftp_route();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { route.op(op) }).await;
+            let result = cx
+                .background_spawn(async move { SftpClient::op(&route, op) })
+                .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.sftp_panel.open_pane_id != Some(pane_id) {
                     return;
@@ -923,16 +830,18 @@ impl LyrelApp {
 
     pub(crate) fn sftp_begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::NewFolderName))
+            InputState::new(window, cx).placeholder(lyrel_ui_base::i18n::t(
+                lyrel_ui_base::i18n::L10nKey::NewFolderName,
+            ))
         });
         self.sftp_open_edit(input.clone(), SftpEdit::NewFolder(input), window, cx);
     }
 
     pub(crate) fn sftp_begin_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::NewFileName))
+            InputState::new(window, cx).placeholder(lyrel_ui_base::i18n::t(
+                lyrel_ui_base::i18n::L10nKey::NewFileName,
+            ))
         });
         self.sftp_open_edit(input.clone(), SftpEdit::NewFile(input), window, cx);
     }
@@ -943,7 +852,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = crate::ui::prefill::filled_box(remote_basename(&name), window, cx);
+        let input = lyrel_terminal::prefill::filled_box(remote_basename(&name), window, cx);
         let edit = SftpEdit::Rename {
             original: name,
             input: input.clone(),
@@ -960,7 +869,7 @@ impl LyrelApp {
         let octal = format!("{:o}", entry.permissions & 0o777);
         let readable = mode_string(entry.permissions);
         let path = entry.path.clone();
-        let input = crate::ui::prefill::filled_box(octal, window, cx);
+        let input = lyrel_terminal::prefill::filled_box(octal, window, cx);
         let edit = SftpEdit::Chmod {
             path,
             readable,
@@ -1080,7 +989,7 @@ impl LyrelApp {
             if let Ok(Ok(Some(paths))) = rx.await {
                 let entries = cx
                     .background_spawn(async move {
-                        route.list(&directory).map(|entries| (directory, entries))
+                        SftpClient::list(&route, &directory).map(|entries| (directory, entries))
                     })
                     .await;
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -1139,7 +1048,7 @@ impl LyrelApp {
             1..=3 => clashes.join(", "),
             _ => format!("{}, …", clashes[..3].join(", ")),
         };
-        let body = crate::ui::i18n::t_plural(
+        let body = lyrel_ui_base::i18n::t_plural(
             L10nKey::SftpReplaceBody,
             clashes.len(),
             &[("names", &names)],
@@ -1188,7 +1097,7 @@ impl LyrelApp {
                 remote: remote_join(&cwd, &name),
                 recursive,
             };
-            match self.sftp_route().transfer_start(spec) {
+            match SftpClient::transfer_start(&self.sftp_route(), spec) {
                 Ok(job_id) => {
                     self.sftp_panel.uploads_awaiting_listing.insert(job_id);
                 }
@@ -1226,12 +1135,12 @@ impl LyrelApp {
 
     pub(crate) fn sftp_reveal_download(&self, local: String, cx: &mut Context<Self>) {
         let local = Path::new(&local);
-        cx.reveal_path(&crate::ui::path_display::native_separators(local));
+        cx.reveal_path(&lyrel_ui_base::path_display::native_separators(local));
     }
 
     fn sftp_poll_jobs(&mut self, cx: &mut Context<Self>) {
         if self.sftp_panel.open_pane_id.is_some() {
-            let jobs = self.sftp_route().transfer_list();
+            let jobs = SftpClient::transfer_list(&self.sftp_route());
             self.sftp_apply_jobs(jobs, cx);
         }
     }
@@ -1286,7 +1195,7 @@ impl LyrelApp {
 
     fn sftp_files_visible(&self, cx: &App) -> bool {
         self.right_panel_open(cx)
-            && self.right_panel_tab == crate::core::config::RightPanelTab::Files
+            && self.right_panel_tab == lyrel_core::core::config::RightPanelTab::Files
     }
 
     fn sftp_start_polling(&mut self, cx: &mut Context<Self>) {
@@ -1317,7 +1226,7 @@ impl LyrelApp {
                     .flatten();
                 let Some(route) = pane else { break };
                 let jobs = cx
-                    .background_spawn(async move { route.transfer_list() })
+                    .background_spawn(async move { SftpClient::transfer_list(&route) })
                     .await;
                 let keep = this
                     .update(cx, |this, cx| {
@@ -1354,7 +1263,7 @@ impl LyrelApp {
                 // never a second permanent timer or a queue of directory requests.
                 let (request, entries) = cx
                     .background_spawn(async move {
-                        let entries = route.list(request.path());
+                        let entries = SftpClient::list(&route, request.path());
                         (request, entries)
                     })
                     .await;
@@ -1409,7 +1318,7 @@ impl LyrelApp {
             .child(breadcrumb)
             .child(filter)
             .children(form)
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "sftp-list-scrollbar",
                 list,
                 &self.sftp_panel.scroll,
@@ -1602,7 +1511,7 @@ impl LyrelApp {
         let well = cx.theme().muted;
         let foreground = cx.theme().foreground;
         let surface: gpui_kit::Hsla =
-            gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.base).into();
+            gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar.base).into();
         let (title, input): (String, _) = match self.sftp_panel.editing.as_ref()? {
             SftpEdit::NewFolder(input) => (t(L10nKey::SftpEditNewFolder).to_string(), input),
             SftpEdit::NewFile(input) => (t(L10nKey::SftpEditNewFile).to_string(), input),
@@ -1749,7 +1658,7 @@ impl LyrelApp {
     fn render_sftp_go_up_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (name_ink, muted) = (theme.sidebar_foreground, theme.muted_foreground);
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         h_flex()
             .id("sftp-go-up")
             .items_center()
@@ -1787,11 +1696,18 @@ impl LyrelApp {
         // rail's title ink, the size a tabular caption at the trailing end.
         let name_ink = cx.theme().sidebar_foreground;
         let muted = cx.theme().muted_foreground;
-        let list_hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.hover);
+        let list_hover = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .popover
+                .hover,
+        );
         let selected = self.sftp_panel.selected.contains(path);
         let expanded = self.sftp_panel.expanded.contains(path);
-        let selected_fill =
-            gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.selected);
+        let selected_fill = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .popover
+                .selected,
+        );
         let entry = tree::SftpTarget {
             path: path.to_owned(),
             entry: entry.clone(),
@@ -2074,7 +1990,11 @@ impl LyrelApp {
         // reading, and blue is kept for the things you can press.
         let (ink, track) = (cx.theme().foreground, cx.theme().muted);
         let divider = cx.theme().sidebar_border;
-        let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover);
+        let hover = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .sidebar
+                .hover,
+        );
         let expanded = self.sftp_panel.tray_expanded || history;
 
         let running = jobs
@@ -2210,7 +2130,7 @@ impl LyrelApp {
             // The list caps at 200px and scrolls past it; it was the last
             // scroll area in the app with nothing to say so. This wrapper only
             // overlays the bar, so the box keeps the height it already had.
-            crate::ui::scrollbar::over_vertical_scroll(
+            lyrel_ui_base::scrollbar::over_vertical_scroll(
                 "sftp-transfers-scrollbar",
                 div()
                     .id("sftp-transfers-list")
@@ -2569,16 +2489,16 @@ mod tests {
 
     #[test]
     fn the_overwrite_question_counts_correctly_in_every_locale() {
-        use crate::ui::i18n::{L10nKey, t_plural};
+        use lyrel_ui_base::i18n::{L10nKey, t_plural};
         for locale in ["en", "zh-CN"] {
-            crate::ui::i18n::set_locale(locale);
+            lyrel_ui_base::i18n::set_locale(locale);
             for n in [1usize, 2, 7] {
                 let body = t_plural(L10nKey::SftpReplaceBody, n, &[("names", "a.txt")]);
                 assert!(body.contains("a.txt"), "{locale}/{n}: {body}");
                 assert!(!body.contains("{names}"), "{locale}/{n}: {body}");
             }
         }
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
     }
 
     fn entry(name: &str, kind: SftpEntryKind, target_is_dir: bool) -> SftpEntry {
@@ -2675,14 +2595,15 @@ mod tests {
 #[cfg(test)]
 mod gpui_tests {
     use super::SftpEdit;
-    use crate::core::config::{Config, RightPanelTab};
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use gpui_kit::component::input::InputState;
     use gpui_kit::{AppContext, Entity, Focusable as _, TestAppContext, VisualTestContext};
+    use lyrel_core::core::config::RightPanelTab;
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);

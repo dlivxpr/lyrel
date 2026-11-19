@@ -1,7 +1,7 @@
 use super::*;
-use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 
 #[gpui_kit::test]
 fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut TestAppContext) {
@@ -24,7 +24,7 @@ fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut 
         app.workspace = remote_id;
         let target = app.tabs[0].pane.first_leaf().unwrap();
         target.terminal().unwrap().update(cx, |view, _| {
-            view.set_workspace(Some(crate::terminal::PaneWorkspace {
+            view.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
                 workspace: WorkspaceId::new(),
                 target: RemoteTarget::direct("me", "pip-remote", 22),
                 spec: None,
@@ -32,7 +32,7 @@ fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut 
                 resize_echo: false,
             }));
         });
-        let (ssh, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        let (ssh, stream) = lyrel_terminal::view::quiet_test_ssh_pane(1, window, cx);
         app.tabs[0].pane.split_leaf(
             target.entity_id(),
             Axis::Horizontal,

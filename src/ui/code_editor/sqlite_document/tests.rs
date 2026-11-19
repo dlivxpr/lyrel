@@ -9,6 +9,7 @@ use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
+use gpui_kit::component::table::TableSelection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
@@ -71,8 +72,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn sqlite_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<SqliteView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .sqlite()
             .expect("a SQLite document")
@@ -85,8 +86,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path && file.input.sqlite().is_some())
         })
     });
@@ -170,7 +171,7 @@ fn people_database(dir: &Path, name: &str, marker: &str, rows: usize) -> PathBuf
 
 #[gpui_kit::test]
 fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "people.sqlite", "Ada", 501);
     let before = std::fs::read(&path).expect("source bytes");
@@ -183,23 +184,28 @@ fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAp
         !dump.0.is_empty() && !dump.1.is_empty()
     });
     until(&mut cx, |cx| {
-        view.read_with(cx, |view, _| view.state.total == Some(501))
+        view.read_with(cx, |view, _| view.total() == Some(501))
     });
 
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.sqlite().is_some(), "a SQLite document");
         assert!(!file.dirty, "a database is never unsaved");
         assert!(!file.input.is_text(), "no fake text buffer");
         assert_eq!(file.path, path);
-        assert!(app.sqlite_document_active());
+        assert!(app.sqlite_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, path.clone()))
         );
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "a database is not a language-server text file"
         );
     });
@@ -274,7 +280,7 @@ fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAp
 
 #[gpui_kit::test]
 fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_path = people_database(dir.path(), "data.sqlite", "local", 2);
     let local_bytes = std::fs::read(&local_path).expect("local source bytes");
@@ -290,12 +296,12 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         app.editor_open_on_host(second, &local_path, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.tab_code()
                 .and_then(TabCode::active_id)
                 .is_some_and(|id| id != local)
                 && app
-                    .editor_active_location()
+                    .editor_active_location(cx)
                     .is_some_and(|(host, _)| host == HostId(69))
         })
     });
@@ -312,8 +318,8 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         app.editor_open_on_host(mapped, Path::new("/data.sqlite"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.editor_active_location()
+        app.read_with(cx, |app, cx| {
+            app.editor_active_location(cx)
                 .is_some_and(|(host, _)| host == HostId(70))
         })
     });
@@ -345,7 +351,7 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -376,14 +382,12 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
     });
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
+            app.active_buffer(cx)
                 .filter(|file| file.path == empty)
                 .and_then(|file| file.input.sqlite().cloned())
                 .is_some_and(|view| {
                     view.read_with(cx, |view, _| {
-                        view.state.view.is_some()
-                            && !view.state.busy
-                            && view.state.objects.is_empty()
+                        view.view_id().is_some() && !view.is_busy() && view.object_count() == 0
                     })
                 })
         })
@@ -393,7 +397,7 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "split.sqlite", "Ada", 501);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -404,8 +408,8 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
         assert!(app.editor_split(window, cx), "the database splits");
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            let Some(file) = app.editor.buffers.get(id) else {
+        app.read_with(cx, |app, cx| {
+            let Some(file) = app.editor.read(cx).buffers.get(id) else {
                 return false;
             };
             let Some(code) = app.tab_code() else {
@@ -423,8 +427,13 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
         })
     });
 
-    let (primary, second, first_group, second_group) = app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("retained document");
+    let (primary, second, first_group, second_group) = app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("retained document");
         let code = app.tab_code().expect("visible editor group");
         let tab = app
             .tabs
@@ -447,16 +456,16 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
 
     use gpui_kit::component::scroll::ScrollbarHandle as _;
     let primary_scroll = primary.read_with(&cx, |view, cx| {
-        view.grid.read(cx).vertical_scroll_handle.clone()
+        view.grid().read(cx).vertical_scroll_handle.clone()
     });
     let second_scroll = second.read_with(&cx, |view, cx| {
-        view.grid.read(cx).vertical_scroll_handle.clone()
+        view.grid().read(cx).vertical_scroll_handle.clone()
     });
     let primary_horizontal = primary.read_with(&cx, |view, cx| {
-        view.grid.read(cx).horizontal_scroll_handle.clone()
+        view.grid().read(cx).horizontal_scroll_handle.clone()
     });
     let second_horizontal = second.read_with(&cx, |view, cx| {
-        view.grid.read(cx).horizontal_scroll_handle.clone()
+        view.grid().read(cx).horizontal_scroll_handle.clone()
     });
     let second_offset = second_scroll.offset();
     let second_horizontal_offset = second_horizontal.offset();
@@ -552,7 +561,7 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "filter.sqlite", "Ada", 5);
     let before = std::fs::read(&path).expect("source bytes");
@@ -568,7 +577,7 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
         window.input("Ada", cx);
     });
     until_named(&mut cx, "filter-ada", |cx| {
-        view.read_with(cx, |view, _| view.state.search == "Ada") && dump(&view, cx).1.len() == 1
+        view.read_with(cx, |view, _| view.search() == "Ada") && dump(&view, cx).1.len() == 1
     });
     let rows = dump(&view, &cx).1;
     assert_eq!(rows.len(), 1);
@@ -576,7 +585,7 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
     let status = view.read_with(&cx, |view, _| view.status_text());
     assert!(status.contains("filter"), "the filter is visible: {status}");
     assert_eq!(
-        view.read_with(&cx, |view, _| view.state.total),
+        view.read_with(&cx, |view, _| view.total()),
         Some(1),
         "the count answers the filtered rows"
     );
@@ -588,7 +597,7 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
         window.input("900719925474099", cx);
     });
     until_named(&mut cx, "filter-digits", |cx| {
-        view.read_with(cx, |view, _| view.state.search == "900719925474099")
+        view.read_with(cx, |view, _| view.search() == "900719925474099")
             && dump(&view, cx).1.len() == 1
     });
     assert_eq!(dump(&view, &cx).1[0][1], "9007199254740993");
@@ -600,14 +609,14 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
         window.press("backspace", cx);
     });
     until_named(&mut cx, "filter-cleared", |cx| {
-        view.read_with(cx, |view, _| view.state.search.is_empty()) && dump(&view, cx).1.len() == 5
+        view.read_with(cx, |view, _| view.search().is_empty()) && dump(&view, cx).1.len() == 5
     });
     // 迟到的旧串行落地被丢弃：伪造一个旧代的页结果，当前数据不被覆盖。
     view.update(&mut cx, |view, cx| {
-        view.document.update(cx, |document, cx| {
+        view.document().update(cx, |document, cx| {
             document.on_page(
-                document.epoch.wrapping_sub(1),
-                document.page_serial,
+                document.epoch().wrapping_sub(1),
+                document.page_serial(),
                 view_id.expect("a live read view"),
                 Ok(lyrel_core::host::sqlite::SqlitePage {
                     page: 0,
@@ -629,7 +638,7 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
     // 表头三次点击走完降序→升序→还原。
     cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
     until_named(&mut cx, "sort-desc", |cx| {
-        view.read_with(cx, |view, _| view.state.sort == Some((1, true)))
+        view.read_with(cx, |view, _| view.sort() == Some((1, true)))
             && dump(&view, cx)
                 .1
                 .first()
@@ -642,12 +651,12 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
     );
     cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
     until_named(&mut cx, "sort-asc", |cx| {
-        view.read_with(cx, |view, _| view.state.sort == Some((1, false)))
+        view.read_with(cx, |view, _| view.sort() == Some((1, false)))
             && dump(&view, cx).1.first().is_some_and(|row| row[2] == "Ada")
     });
     cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
     until_named(&mut cx, "sort-clear", |cx| {
-        view.read_with(cx, |view, _| view.state.sort.is_none())
+        view.read_with(cx, |view, _| view.sort().is_none())
             && dump(&view, cx).1.first().is_some_and(|row| row[2] == "Ada")
     });
 
@@ -657,11 +666,11 @@ fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext
         window.input("o", cx);
     });
     until_named(&mut cx, "filter-o", |cx| {
-        view.read_with(cx, |view, _| view.state.search == "o") && !dump(&view, cx).1.is_empty()
+        view.read_with(cx, |view, _| view.search() == "o") && !dump(&view, cx).1.is_empty()
     });
     cx.update(|window, cx| window.click(("icon-sort", 2usize), cx));
     until_named(&mut cx, "sort-with-filter", |cx| {
-        view.read_with(cx, |view, _| view.state.sort == Some((1, true)))
+        view.read_with(cx, |view, _| view.sort() == Some((1, true)))
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.view_id()),
@@ -698,7 +707,7 @@ fn big_value_database(dir: &Path) -> PathBuf {
 
 #[gpui_kit::test]
 fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = big_value_database(dir.path());
     let before = std::fs::read(&path).expect("source bytes");
@@ -795,7 +804,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     // BLOB 单元格以十六进制展示与复制；复制的 hex 精确还原字节。
     // payload 列在窄视口外，先用真实横向滚动把它带入视口再双击。
     view.update(&mut cx, |view, cx| {
-        view.grid.update(cx, |grid, cx| grid.scroll_to_col(3, cx));
+        view.grid().update(cx, |grid, cx| grid.scroll_to_col(3, cx));
     });
     settle(&mut cx);
     cx.update(|window, cx| window.double_click("table-cell-0:3", cx));
@@ -806,7 +815,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     });
     view.read_with(&cx, |view, cx| {
         assert_eq!(
-            view.grid.read(cx).selection(),
+            view.grid().read(cx).selection(),
             TableSelection::Cell(0, 3),
             "the double-click selected the payload cell before inspecting it"
         );
@@ -848,7 +857,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
     // 非有限 REAL 保持 REAL 类型到达检查器与剪贴板，不变成 NULL 或空串。
     view.update(&mut cx, |view, cx| {
-        view.grid.update(cx, |grid, cx| grid.scroll_to_col(4, cx));
+        view.grid().update(cx, |grid, cx| grid.scroll_to_col(4, cx));
     });
     settle(&mut cx);
     cx.update(|window, cx| window.double_click("table-cell-0:4", cx));
@@ -884,7 +893,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
     // NULL 单元格显示 NULL 且复制只提示，不把空字符串当值。
     view.update(&mut cx, |view, cx| {
-        view.grid.update(cx, |grid, cx| grid.scroll_to_col(2, cx));
+        view.grid().update(cx, |grid, cx| grid.scroll_to_col(2, cx));
     });
     settle(&mut cx);
     cx.update(|window, cx| window.double_click("table-cell-1:2", cx));
@@ -937,7 +946,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     });
     until_named(&mut cx, "detail-closed-by-filter", |cx| {
         view.read_with(cx, |view, _| {
-            view.state.search == "zzz" && view.detail.is_none()
+            view.search() == "zzz" && view.detail.is_none()
         })
     });
     cx.update(|window, _| {
@@ -956,7 +965,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
 #[gpui_kit::test]
 fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = dir.path().join("wal.sqlite");
     let writer = rusqlite::Connection::open(&path).expect("the writer opens");
@@ -973,7 +982,7 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
     open(&app, &mut cx, &path);
     let view = sqlite_view(&app, &cx);
     until_named(&mut cx, "wal-open", |cx| {
-        view.read_with(cx, |view, _| view.state.total == Some(2)) && dump(&view, cx).1.len() == 2
+        view.read_with(cx, |view, _| view.total() == Some(2)) && dump(&view, cx).1.len() == 2
     });
     assert!(
         view.read_with(&cx, |view, _| view.status_text())
@@ -986,14 +995,14 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
         .execute("INSERT INTO items VALUES (3, 'three')", [])
         .expect("the writer commits while the reader is open");
     view.update(&mut cx, |view, cx| {
-        view.document.update(cx, |document, cx| {
+        view.document().update(cx, |document, cx| {
             document.navigate(0, cx);
             document.load_count(cx);
         });
     });
     settle(&mut cx);
     assert_eq!(
-        view.read_with(&cx, |view, _| view.state.total),
+        view.read_with(&cx, |view, _| view.total()),
         Some(2),
         "the open read view keeps its snapshot"
     );
@@ -1001,7 +1010,7 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
     // 刷新打开新视图才看到新行；浏览过程不写主库文件。
     cx.update(|window, cx| window.click("sqlite-refresh", cx));
     until_named(&mut cx, "wal-refresh", |cx| {
-        view.read_with(cx, |view, _| view.state.total == Some(3))
+        view.read_with(cx, |view, _| view.total() == Some(3))
             && cells_contain(&dump(&view, cx), "three")
     });
     assert_eq!(
@@ -1014,28 +1023,4 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
         "no rollback journal appeared"
     );
     drop(writer);
-}
-
-/// A TEXT value that is not valid UTF-8 must not be shown through
-/// replacement characters: the viewer keeps the bytes visible as hex, and
-/// the panel says why.
-#[test]
-fn invalid_utf8_text_is_shown_as_its_bytes() {
-    let value = SqliteValue::Text {
-        preview: b"ok\xffA".to_vec(),
-        total: 4,
-    };
-    let text = super::detail_text(&value);
-    assert!(
-        !text.contains('\u{fffd}'),
-        "no replacement characters stood in for bytes: {text}"
-    );
-    assert!(
-        text.contains("ff"),
-        "the invalid byte stays visible as hex: {text}"
-    );
-    assert!(
-        text.contains("ok"),
-        "the printable bytes keep their ASCII column: {text}"
-    );
 }

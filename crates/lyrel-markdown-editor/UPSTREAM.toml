@@ -20,7 +20,8 @@ formula_import_owner = "#241"
 # 双轴审查：关闭 presentation 只结束自己的 composition；格式转换是独立 history 屏障，
 # no-op range batch 不覆盖上一事务的 Undo 选区；选择/搜索 quads 共享单帧 starts。
 # Host-facing record 采用 non_exhaustive 与 Default/必要构造器；图片源扫描迁到权威 snapshot。
-# document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
+# document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于 lyrel-document
+# 的 text 模块（default-features = false 的 GUI-free Apache-2.0 codec）。
 # 公式结构源导入 src/math；Lyrel 原创 markdown_formula Host 负责 seat、版本、range commit、菜单与返焦。
 # GUI 仅 GPUI Kit/Fast；GUI-free RaTeX 0.1.15 使用正式 registry，未导入 GPL 应用层或独立 Markdown renderer。
 # 本地公式适配：严格 AST 保真检查、未修改树不序列化、原始定界符/body-only 提交、Escape 取消；

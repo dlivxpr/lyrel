@@ -6,12 +6,13 @@ use super::{
 /// nothing on the window's machine could.
 #[test]
 fn a_remote_windows_native_ssh_pane_is_ended_here_and_the_rest_by_its_machine() {
-    let local = crate::terminal::PaneRoute::Local;
+    let local = lyrel_ui_base::route::PaneRoute::Local;
     let leaves = vec![(4, local.clone(), false), (5, local.clone(), true)];
 
     let (held, here) = split_machine_held(true, &leaves);
-    let ids =
-        |v: &[(u64, crate::terminal::PaneRoute)]| v.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let ids = |v: &[(u64, lyrel_ui_base::route::PaneRoute)]| {
+        v.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+    };
     assert_eq!(ids(&held), vec![4]);
     assert_eq!(ids(&here), vec![5]);
 
@@ -25,20 +26,22 @@ fn a_remote_windows_native_ssh_pane_is_ended_here_and_the_rest_by_its_machine() 
 }
 #[test]
 fn a_layout_that_came_back_short_says_how_short() {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     for n in [1usize, 2, 9] {
-        let text = crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, n, &[]);
+        let text =
+            lyrel_ui_base::i18n::t_plural(lyrel_ui_base::i18n::L10nKey::AppTabsNotRestored, n, &[]);
         assert!(text.contains(&n.to_string()), "{n}: {text}");
         assert!(!text.contains("{count}"), "the placeholder leaked: {text}");
     }
     // Singular is not "1 tabs".
-    let one = crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, 1, &[]);
+    let one =
+        lyrel_ui_base::i18n::t_plural(lyrel_ui_base::i18n::L10nKey::AppTabsNotRestored, 1, &[]);
     assert!(one.contains("1 tab "), "{one}");
 }
 #[test]
 fn restore_only_attaches_panes_the_workspace_owns_or_nobody_claims() {
-    let ours = crate::core::session::WorkspaceId::new();
-    let theirs = crate::core::session::WorkspaceId::new();
+    let ours = lyrel_ui_base::session::WorkspaceId::new();
+    let theirs = lyrel_ui_base::session::WorkspaceId::new();
     let alive: std::collections::HashMap<u64, Option<String>> = [
         (1, Some(ours.to_string())),
         (2, Some(theirs.to_string())),
@@ -74,8 +77,8 @@ fn restore_only_attaches_panes_the_workspace_owns_or_nobody_claims() {
 
 #[test]
 fn a_dead_pane_keeps_its_id_so_its_screen_can_be_asked_for() {
-    let ours = crate::core::session::WorkspaceId::new();
-    let theirs = crate::core::session::WorkspaceId::new();
+    let ours = lyrel_ui_base::session::WorkspaceId::new();
+    let theirs = lyrel_ui_base::session::WorkspaceId::new();
     let alive: std::collections::HashMap<u64, Option<String>> =
         [(1, Some(ours.to_string())), (2, Some(theirs.to_string()))]
             .into_iter()
@@ -124,10 +127,10 @@ fn a_native_ssh_pane_the_server_no_longer_has_is_dialled_again() {
 #[gpui_kit::test]
 fn a_connecting_pane_saves_the_agent_it_is_rebuilding(cx: &mut gpui_kit::TestAppContext) {
     use crate::core::cli_agent::CLIAgent;
-    use crate::core::session::SessionPane;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
     use gpui_kit::AppContext as _;
+    use lyrel_ui_base::session::SessionPane;
 
     cx.update(|cx| {
         let pending = cx.new(|cx| {

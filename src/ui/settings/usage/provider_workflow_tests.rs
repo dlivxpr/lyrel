@@ -1520,7 +1520,7 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     // frames at a time, so read the select's accessibility label from the
     // element registry instead of the last frame's painted texts.
     page.update(&mut vcx, |_, cx| {
-        crate::ui::i18n::set_locale("zh-CN");
+        lyrel_ui_base::i18n::set_locale("zh-CN");
         cx.notify();
     });
     vcx.run_until_parked();
@@ -1537,7 +1537,7 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     page.update(&mut vcx, |_, cx| {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         cx.notify();
     });
 

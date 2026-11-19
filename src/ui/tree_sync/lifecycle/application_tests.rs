@@ -13,12 +13,12 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
     let handle = vcx.window_handle();
     let weak = app.downgrade();
     let (ws, epoch, machine, pane) = app.update_in(&mut vcx, |app, window, cx| {
-        let mut view = crate::core::session::WindowView::default();
+        let mut view = lyrel_ui_base::session::WindowView::default();
         view.id = app.workspace;
         let ws = view.id;
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![view],
                 active: Some(ws),
             },
@@ -49,7 +49,7 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
         (ws, epoch, machine, pane)
     });
 
-    vcx.dispatch_action(crate::core::actions::TogglePanePip);
+    vcx.dispatch_action(lyrel_ui_base::actions::TogglePanePip);
     vcx.update(|_, cx| {
         assert_eq!(
             app.read(cx).tabs[0].pip_slot(cx).unwrap().entity_id(),

@@ -2,13 +2,14 @@
 #
 # The GUI must not touch the filesystem or git directly.
 #
-# Once a workspace can live on a remote machine, a path held by `ui::` or
-# `terminal::` is not necessarily a path on *this* box, and `std::path`'s
+# Once a workspace can live on a remote machine, a path held by desktop UI or
+# terminal code is not necessarily a path on *this* box, and `std::path`'s
 # fs-backed APIs quietly answer for the wrong machine:
 # `canonicalize` walks the local filesystem, `is_absolute` says `false` for
 # `/home/me` on Windows, `read_dir` lists the client's disk. Everything that may
-# be looking at a workspace path has to go through `ui::host_ops` / the `Host`
-# trait, which routes to the local disk or the far side as appropriate.
+# be looking at a workspace path has to go through `lyrel-ui-base`'s host_ops /
+# the `Host` trait, which routes to the local disk or the far side as
+# appropriate.
 #
 # This script enforces that. It is deliberately *not* the raw grep from the
 # contract: run bare, that grep reports 42 hits on a clean tree — not one of them
@@ -31,45 +32,43 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-ROOTS=(src/ui src/terminal)
-
 # Allowlist entries are `<path>|<literal pattern>`, one per line. `<path>|*`
 # exempts a file wholesale (used only for the boundary module itself). The
 # pattern side is matched as a plain substring of the offending line.
 ALLOW=$(
     cat <<'EOF'
 # The host boundary itself: every routed filesystem call lands here by design.
-src/ui/host_ops.rs|*
+crates/lyrel-ui-base/src/host_ops.rs|*
 
 # Themes and presets are app-owned files under the local config dir
 # (`themes_dir()`), never a workspace path — a remote workspace does not carry
 # the user's color schemes with it.
-src/ui/presets.rs|std::fs::
-src/ui/presets.rs|.is_absolute()
+crates/lyrel-ui-base/src/presets.rs|std::fs::
+crates/lyrel-ui-base/src/presets.rs|.is_absolute()
 src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 
 # The editor's record of which files each tab had open is app state under the
 # local config dir, like the themes above — not a file in any workspace.
-src/ui/editor_session.rs|std::fs::read
+crates/lyrel-workbench-editor/src/editor_session.rs|std::fs::read
 
 # EPUB 章节与全书索引只打开 host.open_read 已复制出的 NamedTempFile；
 # 阅读记录只在本机 config_path("reader-state") 下，Host/path 仅用于记录键。
 # 保留逐调用模式，不能豁免此模块对未来工作区路径的其它本机操作。
-src/ui/code_editor/book_document.rs|std::fs::File::open(&temp)
-src/ui/code_editor/book_document.rs|std::fs::File::open(&path)
-src/ui/code_editor/book_document.rs|std::fs::read(path)
-src/ui/code_editor/book_document.rs|std::fs::create_dir_all(parent)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::File::open(&temp)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::File::open(&path)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::read(path)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::create_dir_all(parent)
 
 # draw.io 的 WebView2 profile 只由 private_data_dir() 在本机 temp_dir() 下
 # 用 128-bit 随机名称创建；Host::start 不接收工作区路径，Drop 仅清理该 profile。
 # 仅放行已核对的两个调用，不豁免模块中的其它文件系统操作。
-src/ui/code_editor/drawio_engine/surface.rs|std::fs::create_dir_all(&path)
-src/ui/code_editor/drawio_engine/surface.rs|std::fs::remove_dir_all(&self.data_dir)
+crates/lyrel-workbench-editor/src/code_editor/drawio_engine/surface.rs|std::fs::create_dir_all(&path)
+crates/lyrel-workbench-editor/src/code_editor/drawio_engine/surface.rs|std::fs::remove_dir_all(&self.data_dir)
 
 # 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
 # Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
-src/ui/notification_history.rs|std::fs::read
-src/ui/notification_history.rs|std::fs::create_dir_all
+crates/lyrel-ui-base/src/notification_history.rs|std::fs::read
+crates/lyrel-ui-base/src/notification_history.rs|std::fs::create_dir_all
 
 # Reading a private key off *this* machine to hash it into a keychain account
 # (`core::keychain`). The key is the client's credential; the far side never
@@ -80,6 +79,13 @@ src/ui/settings/ssh/credentials.rs|std::fs::read
 # The host editor asking which of those keys is on this machine before it offers
 # a passphrase box for one — the same client-side key, never a workspace path.
 src/ui/settings/ssh/credentials.rs|std::fs::metadata
+
+# Desktop SSH client config starts at the local ~/.ssh/config; Include paths
+# resolve relative to those client files, never to a workspace or remote home.
+crates/lyrel-ui-base/src/ssh_config.rs|pattern.is_absolute()
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::read_dir(parent)
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::metadata(&path)
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::read_to_string(&path)
 
 # 统计设置只读取 config_path("statistics-settings.json")，不消费工作区路径。
 src/ui/settings/statistics/storage.rs|std::fs::read
@@ -93,38 +99,49 @@ src/ui/settings/usage/browser/chromium.rs|use std::fs::{self, File}
 # Shell history lives in the local user's home (`~/.zsh_history` &co.) and backs
 # this app's own history search. A remote pane's history is the remote shell's
 # business, read over the wire, not through here.
-src/terminal/history.rs|std::fs::
+crates/lyrel-terminal/src/history.rs|std::fs::
 
 # Completion is already remote-aware: a remote pane is signalled by `cwd: None`,
 # which disables exactly these local-filesystem candidate sources in favour of
 # `remote_path_request` / `remote_path_candidates`. The `$PATH` scan is likewise
 # this machine's `$PATH`, deliberately withheld from remote panes.
-src/terminal/completion.rs|std::fs::read_dir
-src/terminal/completion.rs|.is_absolute()
+crates/lyrel-terminal/src/completion.rs|std::fs::read_dir
+crates/lyrel-terminal/src/completion.rs|.is_absolute()
 
 # Bundled completion specs shipped in `assets/completions`, resolved from the
 # app bundle / dev manifest dir. Program data, not user or workspace data.
-src/terminal/signature.rs|std::fs::read_to_string
+crates/lyrel-terminal/src/signature.rs|std::fs::read_to_string
 
 # Opening a path scraped out of terminal output resolves it against the local
 # cwd — a local-pane affordance; `resolve_existing_path` declines when there is
 # no local cwd.
-src/terminal/search.rs|.is_absolute()
+crates/lyrel-terminal/src/search.rs|.is_absolute()
 
 # Clipboard-image paste stages the bytes into the OS temp dir so an agent TUI
 # can be handed a path. Always `std::env::temp_dir()` on this machine.
-src/terminal/paste.rs|std::fs::create_dir_all
-src/terminal/paste.rs|std::fs::write
+crates/lyrel-terminal/src/paste.rs|std::fs::create_dir_all
+crates/lyrel-terminal/src/paste.rs|std::fs::write
 # The source side of a paste/drop upload into a remote pane: the paths the
 # clipboard or desktop hands over are on this machine by construction, so
 # asking whether one is a directory is a local read. The remote side of the
 # copy goes over SFTP.
-src/terminal/paste.rs|std::fs::metadata
+crates/lyrel-terminal/src/paste.rs|std::fs::metadata
+
+# Toast branding (Windows-only `aumid`): compares and creates paths under the
+# per-user Start Menu / the current executable's directory on this machine —
+# never a workspace or remote path.
+crates/lyrel-terminal/src/aumid.rs|.canonicalize()
+crates/lyrel-terminal/src/aumid.rs|std::fs::create_dir_all
+
+# The glyph-protocol test helper reads the reply file the local fixture
+# process was just asked to write, under the test's own temp dir. Test-support
+# surface only (`test-support` feature / cfg(test)).
+crates/lyrel-terminal/src/test_support.rs|std::fs::read_to_string
 
 # Asking whether a file would be *launched* rather than shown before handing it
 # to the desktop opener. Only reachable behind `host_id.is_local()` — a path on
 # another machine takes the earlier arm and never gets here.
-src/ui/code_editor.rs|std::fs::metadata
+crates/lyrel-workbench-editor/src/code_editor.rs|std::fs::metadata
 
 # The source side of a file drop. What the desktop hands over is by
 # construction a path on the desktop's own machine, so reading it is a local
@@ -140,25 +157,19 @@ src/ui/file_copy.rs|std::fs::
 # looks for project markers above a file (`Cargo.toml`, `package.json`, …),
 # and checks a server binary is executable. A remote workspace gets language
 # servers by running them over there, not by routing these reads.
-src/ui/lsp/editor.rs|std::fs::read_to_string
-src/ui/lsp/locations.rs|std::fs::read_to_string
-src/ui/lsp/mod.rs|std::fs::read_to_string
-src/ui/lsp/servers.rs|std::fs::metadata
-src/ui/lsp/servers.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/editor.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/locations.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/mod.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/servers.rs|std::fs::metadata
+crates/lyrel-workbench-editor/src/lsp/servers.rs|std::fs::read_to_string
 # LSP fixtures are excluded through their actual cfg(test) module declaration.
 EOF
 )
 
-# Module traversal uses the existing Node.js prerequisite; no compiler/build.
-# A guard that scans nothing reports success, which is the one failure mode worse
-# than a noisy guard. Fail loudly if a root has moved out from under us.
-for root in "${ROOTS[@]}"; do
-    if [ ! -d "$root" ]; then
-        echo "check-host-boundary: scan root '$root' does not exist (moved? renamed?)" >&2
-        exit 2
-    fi
-done
-
+# Module traversal and the scan-root policy live in host-boundary.cjs — this
+# script only supplies the allowlist, so the roots cannot drift apart into two
+# lists. The scanner fails loudly (exit 2) when a required root has moved out
+# from under us, and refuses implausibly small scan sets.
 export HOST_BOUNDARY_ALLOW="$ALLOW"
 node .github/scripts/host-boundary.cjs
 

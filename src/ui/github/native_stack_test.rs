@@ -49,7 +49,7 @@ fn native_stacked_pull_panel() {
         lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(&root).unwrap());
     let config = directory.join("config");
     std::fs::create_dir_all(&config).unwrap();
-    crate::core::config::set_config_dir(config);
+    lyrel_core::core::config::set_config_dir(config);
     let data = directory.join("pulls.json");
     if !data.exists() {
         let pulls = vec![
@@ -70,14 +70,14 @@ fn native_stacked_pull_panel() {
         .with_assets(crate::ui::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            let mut config = crate::core::config::Config::default();
+            let mut config = lyrel_ui_base::config::Config::default();
             config.install_cli_on_path = false;
             config.check_for_updates = false;
             config.auto_download_updates = false;
             config.cursor_blink = false;
             cx.set_global(config);
             crate::register_bundled_fonts(cx);
-            crate::ui::presets::load_registry(cx);
+            lyrel_ui_base::presets::load_registry(cx);
             crate::ui::theme::apply_theme(None, cx);
             crate::ui::keymap::init(cx);
             crate::ui::windows::WindowRegistry::init(cx);
@@ -93,12 +93,12 @@ fn native_stacked_pull_panel() {
                     let app = cx.new(|cx| {
                         let mut app = LyrelApp::with_session(
                             None,
-                            Some(crate::core::session::Session::default()),
+                            Some(lyrel_ui_base::session::Session::default()),
                             window,
                             cx,
                         );
                         let (view, mut socket) =
-                            crate::terminal::view::quiet_test_pane(1, window, cx);
+                            lyrel_terminal::view::quiet_test_pane(1, window, cx);
                         app.tabs
                             .push(crate::ui::tab::Tab::new(crate::ui::pane::Pane::leaf(
                                 crate::ui::pane::PaneSlot::Ready(view),

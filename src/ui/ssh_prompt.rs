@@ -8,12 +8,12 @@ use gpui_kit::{
 
 use crate::core::keychain::{CredentialStore as _, OsCredentialStore};
 use crate::daemon::protocol::{AuthPromptKind, AuthResponse, SshPhase};
-use crate::terminal::view::TerminalView;
+use lyrel_terminal::view::TerminalView;
 
 use super::app::LyrelApp;
 use super::dialog::{self, Tone};
-use super::i18n::{L10nKey, t, t_fmt};
 use super::right_panel::{META, META_MONO, TEXT};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// The sheet's width, and the width of the banners stacked above it, so the
 /// column reads as one.
@@ -714,7 +714,7 @@ impl LyrelApp {
                 // click — a mis-aimed click would abandon an authentication
                 // attempt mid-handshake. It gets the scrim, so it reads as
                 // modal, and Escape stays the only way out.
-                .bg(crate::ui::presets::scrim_fill(cx))
+                .bg(lyrel_ui_base::presets::scrim_fill(cx))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1396,9 +1396,9 @@ mod tests {
 #[cfg(test)]
 mod focus_tests {
     use super::*;
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use gpui_kit::{TestAppContext, VisualTestContext, WindowHandle};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     fn harness(cx: &mut TestAppContext) -> (WindowHandle<LyrelApp>, VisualTestContext) {
         cx.executor().allow_parking();

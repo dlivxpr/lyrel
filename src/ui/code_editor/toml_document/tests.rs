@@ -13,7 +13,8 @@ use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
-use lyrel_code_editor::toml::projection;
+use lyrel_document::toml::projection;
+use lyrel_markdown_editor::Document;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -61,8 +62,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn toml_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<TomlView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .toml()
             .expect("a TOML document")
@@ -94,8 +95,8 @@ fn open(
         app.editor_open_on_host(host, &at, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.toml().is_some())
         })
     });
@@ -208,10 +209,10 @@ fn type_source(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -355,7 +356,7 @@ fn assert_original(remote_file: &Path, local_file: &Path) {
 
 #[gpui_kit::test]
 fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     // The mapped Host's file and a same-named local decoy: only the owning
@@ -373,16 +374,21 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 
     let (id, view) = open_ready(&app, &mut cx, host.clone(), &path);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(!file.dirty, "an untouched TOML opens clean");
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "native TOML is not a code language-service file"
         );
-        assert!(app.toml_document_active());
+        assert!(app.toml_document_active(cx));
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.mode()),
@@ -552,7 +558,7 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -567,7 +573,7 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 
 #[gpui_kit::test]
 fn table_aot_inline_and_key_commands_preserve_interleaved_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "structures.toml", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(2930));
@@ -780,7 +786,7 @@ fn table_aot_inline_and_key_commands_preserve_interleaved_bytes(tcx: &mut TestAp
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert!(maybe_row(&reopened, &mut cx, "$.b.child.keep").is_some());
@@ -791,7 +797,7 @@ fn table_aot_inline_and_key_commands_preserve_interleaved_bytes(tcx: &mut TestAp
 fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_structure(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(2931));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -818,9 +824,9 @@ fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_struc
                 .visible()
         );
     });
-    app.read_with(&cx, |app, _| {
-        assert!(app.active_buffer().unwrap().input.text().is_some());
-        assert!(!app.active_buffer().unwrap().dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(app.active_buffer(cx).unwrap().input.text().is_some());
+        assert!(!app.active_buffer(cx).unwrap().dirty);
     });
     toggle_mode(&broken_view, &mut cx);
     let text = source_text(&app, &cx);
@@ -905,7 +911,7 @@ fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_struc
 
 #[gpui_kit::test]
 fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "split.toml", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(2932));
@@ -927,8 +933,8 @@ fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut Test
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("TOML buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("TOML buffer");
         (
             file.presentations.toml_existing(tab, right).expect("front"),
             file.presentations.toml_existing(tab, left).expect("other"),
@@ -1091,23 +1097,23 @@ fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut Test
     });
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| {
+        app.read_with(&cx, |app, cx| {
             let group = app.tab_code().map(|code| code.group);
-            app.active_buffer().is_some_and(|file| {
+            app.active_buffer(cx).is_some_and(|file| {
                 group.is_some_and(|group| file.presentations.toml_existing(tab, group).is_some())
             })
         }),
         "the other presentation still owns the document"
     );
     assert!(
-        app.read_with(&cx, |app, _| !app.editor.buffers.is_empty()),
+        app.read_with(&cx, |app, cx| !app.editor.read(cx).buffers.is_empty()),
         "one presentation close does not retire the shared document"
     );
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
 }
 
@@ -1115,7 +1121,7 @@ fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut Test
 fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.toml", ORIGINAL);
     let target = dir.path().join("persisted.toml");
@@ -1124,7 +1130,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     cx.simulate_resize(size(px(1800.), px(1200.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     // A tree edit, then Save As to a new owning-Host target.
@@ -1133,12 +1139,12 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"changed\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -1150,10 +1156,10 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     // completes. Pause the write, edit the tree again, then let the old save
     // finish: the target keeps the old bytes and the document stays dirty.
     let release = host.pause_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.saving)
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.saving)
         })
     });
     click_row(&view, &mut cx, "$.title");
@@ -1163,8 +1169,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     until(&mut cx, |cx| is_ready(&view, cx));
     release.send(()).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1182,10 +1188,10 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1210,15 +1216,15 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     );
     assert!(source_text(&app, &cx).contains("\"kept\""));
     assert!(
-        app.read_with(&cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.dirty)
+        app.read_with(&cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.dirty)
         }),
         "the kept tree edit is unsaved work"
     );
     std::fs::write(&target, b"title = \"external\"\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -1252,8 +1258,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         "the tree edit must reach the shared source"
     );
     assert!(
-        app.read_with(&cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.dirty)
+        app.read_with(&cx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.dirty)
         }),
         "the applied tree edit leaves the document dirty"
     );
@@ -1261,16 +1267,16 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.update_in(&mut cx, |app, window, cx| app.editor_has_focus(window, cx)),
         "the applied tree edit returns focus to the editor panel"
     );
-    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    cx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut cx);
     assert!(
         cx.has_pending_prompt(),
         "an unsaved tree edit must prompt before close"
     );
-    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    cx.simulate_prompt_answer(lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "cancelled close keeps the document"
     );
     assert_eq!(std::fs::read(&target).unwrap(), kept);
@@ -1283,7 +1289,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &target);
     assert_eq!(
@@ -1301,7 +1307,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
 fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );

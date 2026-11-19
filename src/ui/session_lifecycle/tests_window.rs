@@ -1,9 +1,9 @@
-use crate::core::actions::CloseWindow;
-use crate::core::config::Config;
-use crate::core::session::Session;
 use crate::ui::app::LyrelApp;
 use crate::ui::windows::WindowRegistry;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use lyrel_ui_base::actions::CloseWindow;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::session::Session;
 
 /// `CloseWindow` has to close the window, and close it the way the red
 /// button does.
@@ -20,7 +20,7 @@ use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 /// window's tabs on the floor.
 #[gpui_kit::test]
 fn dispatching_close_window_takes_the_window_down_with_its_registration(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -124,10 +124,10 @@ fn close_window_shortcut_keeps_the_native_tab_close_distinct(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut TestAppContext) {
-    use crate::core::actions::EditorNewFile;
-    use crate::core::config::KeybindingOverride;
-    use crate::ui::i18n::{L10nKey, t};
     use gpui_kit::test::TestWindowExt as _;
+    use lyrel_core::core::config::KeybindingOverride;
+    use lyrel_ui_base::actions::EditorNewFile;
+    use lyrel_ui_base::i18n::{L10nKey, t};
 
     let (app, mut vcx, _streams) = registered_tabs(cx);
     vcx.update(|_, cx| {
@@ -164,13 +164,13 @@ fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut Te
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     vcx.run_until_parked();
     assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.tab_code().and_then(|code| code.active_id()),
             Some(edited),
             "Cancel keeps the same document open"
         );
-        assert_eq!(app.editor_unsaved(), vec![edited]);
+        assert_eq!(app.editor_unsaved(cx), vec![edited]);
         assert_eq!(app.tabs.len(), 2, "closing a window must not close a tab");
     });
     vcx.update(|window, cx| {

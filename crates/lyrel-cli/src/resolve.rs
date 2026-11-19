@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::machine::{Machine, TabId, Workspace};
-use lyrel_core::core::session::WorkspaceId;
+use lyrel_protocol::core::machine::{Machine, TabId, Workspace};
+use lyrel_protocol::core::session::WorkspaceId;
 
 use crate::address::{TabAddress, WorkspaceAddress};
 

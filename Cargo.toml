@@ -13,11 +13,6 @@ default-run = "lyrel-app"
 name = "lyrel-app"
 path = "src/main.rs"
 
-[[bin]]
-name = "lyrel-updater"
-path = "src/bin/lyrel-updater.rs"
-required-features = ["updater"]
-
 # AppKit initialization must run on the process main thread, not a libtest worker.
 [[test]]
 name = "native_markdown"
@@ -32,9 +27,13 @@ harness = false
 required-features = ["native-markdown-tests"]
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-# The framework-free half of lyrel: wire protocol, session daemon, PTY, the
-# native SSH engine, and the domain model the headless `lyrel-server` shares with
-# this GUI. Everything that does *not* need gpui lives there.
+# The standalone updater's library half: the shared update contract (layout
+# markers, backup naming, the VerifyPlan/InstallPlan argv layouts, and the
+# UpdateOutcome record) consumed by this coordinator and by the
+# `lyrel-updater` executable, which lives in `crates/lyrel-updater`. GPUI-free,
+# like everything else at this seam.
+lyrel-updater = { path = "crates/lyrel-updater" }
+# The framework-free daemon and Host execution behind the protocol facade.
 # `gssapi` is off in lyrel-core's defaults (a static musl `lyrel-server` cannot
 # link the system krb5 it binds); the GUI, which builds against a real desktop
 # toolchain, turns it on so managed SSH connections keep offering
@@ -44,66 +43,43 @@ required-features = ["native-markdown-tests"]
 # client used only to *download* a `lyrel-server` onto a remote machine
 # (decision D5). The server binary is the thing being downloaded, so it can
 # never take that path; the GUI, which is the client that pushes it, can.
-#
-# `github` is the right panel's GitHub tab: the same HTTPS client, pointed at
-# api.github.com.
-lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "github", "terminal-width"] }
+lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install"] }
 
-gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
-lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
-lyrel-code-editor = { path = "crates/lyrel-code-editor" }
-lyrel-text = { path = "crates/lyrel-text" }
-lyrel-epub = { path = "crates/lyrel-epub" }
-# GUI-free PDF reading backend adapted from the pinned Zorite MIT viewer.
-lyrel-pdf = { path = "crates/lyrel-pdf" }
-base64 = "0.23.1"
-# Session and shell tokens are 128-bit OS entropy, never a timestamp or a
-# hash of the document. `getrandom` is already in the tree.
-getrandom = "0.3.4"
+# The shared GPUI desktop foundation: the config global wrapper, keybinding
+# actions, workspace store, off-thread Host execution, theme presets, i18n,
+# bounded notification history, routes and read-only snapshots. Desktop-only
+# like the GUI itself; on Linux this is an empty rlib so headless workspace
+# builds are unaffected.
+lyrel-ui-base = { path = "crates/lyrel-ui-base" }
+
+# GUI-free insights above the `lyrel-protocol` Host seam: the right panel's GitHub
+# tab, Settings' skills/statistics/usage backends and their browser session
+# readers. The GUI is this crate's only production consumer — the headless
+# server and CLI never link it — so it stays a desktop-only dependency, while
+# the crate itself remains Linux-buildable (browser modules gated there).
+lyrel-insights = { path = "crates/lyrel-insights" }
+gpui-kit = { workspace = true }
+# Only the opt-in main-thread Markdown consumer harness needs this direct edge.
+lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor", optional = true }
+# Independent desktop clients; the window shell owns their composition.
+lyrel-terminal = { path = "crates/lyrel-terminal" }
+lyrel-workbench-editor = { path = "crates/lyrel-workbench-editor" }
 
 anyhow.workspace = true
 log.workspace = true
 chrono = "0.4.45"
-# Smart double-click selection patterns (URL/email/path). Already in the tree
-# transitively, so pinning it here adds no new native code.
-regex = "1"
-# Reuse the locked parser for stable release precedence and strict tag validation.
 semver = "=1.0.28"
-# Navigation must preserve unchanged lines inside atomic multiline replacements.
-# Keep the linear-space diff, without a character-level engine.
-similar = { version = "=3.2.1", default-features = false }
-# SIMD byte search for `ParkedCursorScanner`'s fast path
-# (`terminal::parked_cursor`), which scans every output batch the client
-# receives — the same skip-ahead the
-# tokenizers in `lyrel-core` already use. Already in the tree via `lyrel-core`,
-# so this pins no new code.
-memchr = "2"
 # Grapheme-cluster boundaries for the sidebar's label elision
 # (`ui::tab_strip`). Cutting a label by `char` tears emoji apart: a ZWJ
 # sequence loses its joiner, `❤️` loses the variation selector that makes it an
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
-# Scalar widths remain needed by preedit ink detection and copy unwrapping.
-# Input-bar cluster widths instead use lyrel-core's optional terminal-width.
-rio-unicode.workspace = true
-# Fair reader/painter locking without maintaining an emulator-specific lock.
-parking_lot = "0.13"
-# Outline queries use the same published grammars as the editor highlighter.
-# Kit's editor shares the native library; the 0.27 links conflict is not resolvable yet.
-tree-sitter = "=0.26.13"
 smol.workspace = true
 smallvec.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 tempfile = "3"
-# Browser session import stays desktop-local; database recovery runs in memory.
-rusqlite = { version = "0.42.0", features = ["bundled"] }
-rusty-leveldb = "4.0.2"
-snap = "1"
-fs2 = "0.4"
-zeroize = "1"
-sha2 = "0.11.1"
 # LaunchServices sends files and custom URL schemes through gpui's unified
 # open-URL callback. `url` keeps the decoding and SSH authority parsing here
 # standards-compliant rather than treating percent escapes as literal paths,
@@ -111,11 +87,9 @@ sha2 = "0.11.1"
 # userinfo and man-page names back out.
 url = "2"
 percent-encoding = "2"
-# The code editor's language-server client (`ui::lsp`). The same version
-# gpui-component's LSP hooks take their types from.
-lsp-types = { version = "0.97.0", features = ["proposed"] }
-# Diff base decoding uses the opened file's selected encoding without changing its representation.
-encoding_rs = "0.8.35"
+# Clear transient form credentials when they leave scope.
+zeroize = "1"
+sha2 = "0.11.1"
 
 
 # SSH profile ids in the connection manager UI (`ui::ssh_connect`,
@@ -134,13 +108,6 @@ uuid = { version = "1.28.0", features = ["v4", "serde"] }
 # the account scheme) stays in core, where `config.json` parsing needs it.
 keyring = "4"
 
-# Theme files. lyrel themes are authored as YAML (`~/.config/lyrel/themes/*.yaml`,
-# our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
-# plist) so the large iTerm color-scheme ecosystem drops straight in.
-# The maintained YAML parser reads desktop theme files.
-yaml_serde.workspace = true
-plist = "1"
-
 # Clipboard-image paste (`terminal::view`). When the clipboard holds a screenshot
 # and a coding-agent TUI (Claude Code &co.) is in the pane, off macOS we stage the
 # image to a temp file and paste its path — agents attach an image path the same way
@@ -157,17 +124,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "win-sys
 # See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
 # `capture` output through the same grid.
 rio-vt.workspace = true
-rio-graphics.workspace = true
 
-# Named only to implement `Handler::set_mouse_cursor_icon`, whose parameter
-# type rio-vt does not re-export; already in the tree transitively, so this
-# pins no new code. The shape mapping itself is `terminal::pointer`.
-cursor-icon = "=1.2.0"
 
-# Desktop notification fallback on Windows. On macOS only its
-# `set_application` is used — never `show`; see
-# `terminal::remote::macos_notify` for why.
-notify-rust = "4.18.2"
 
 # Filesystem watcher for live config reload: watches `config.json` and reloads
 # `Config` + re-applies the theme without a restart. The code panel (file tree /
@@ -177,8 +135,6 @@ notify = "8"
 # Rasterize tray and document SVGs; file-editor resource policy supplies safe resolvers.
 # Kit's own published SVG versions remain unpatched.
 resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images", "svgz"] }
-# Native Mermaid families and safe SVG output; no browser, Node.js or ELK runtime.
-merman = { version = "=0.9.2", default-features = false, features = ["all-diagrams", "complete-svg"] }
 
 # Native tray on Windows and macOS.
 tray-icon = "0.26.1"
@@ -188,7 +144,6 @@ tray-icon = "0.26.1"
 # PATH comes back mangled. 0.61 is already in the tree (tray-icon pulls it), so
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
-aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -221,17 +176,7 @@ windows-sys = { version = "0.61", features = [
 # The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
 # the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
 raw-window-handle = "0.6"
-# The draw.io preview's child surface only. No general browser is exposed;
-# wry is deliberately not used because it cannot enforce the resource,
-# permission and file-panel policy this ticket requires.
-webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
-jieba-rs = "0.11.0"
-# The standalone updater extracts only Windows release ZIPs. Reuse the async
-# reader already present in Cargo.lock and enable only the Deflate codec emitted
-# by PowerShell's Compress-Archive.
-async_zip = { version = "0.0.19", default-features = false, features = ["deflate"], optional = true }
-
 # COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
 # System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
 # before it honors an unpackaged app's toast identity (otherwise the toast
@@ -270,11 +215,6 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
-# The draw.io preview's macOS child surface. Wry wraps a real WKWebView for
-# this one engine; Windows still uses its own WebView2 host so the stricter
-# resource filter exists on both platforms.
-wry = { version = "=0.57.2", default-features = false }
-raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
@@ -302,29 +242,68 @@ futures-channel = "0.3"
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 lyrel-core = { path = "crates/lyrel-core", features = ["test-support"] }
+lyrel-insights = { path = "crates/lyrel-insights", features = ["test-support"] }
+# Test builds turn the foundation's scratch-config guards on (the
+# cross-crate `test-guards` feature); release builds never see them.
+lyrel-ui-base = { path = "crates/lyrel-ui-base", features = ["test-guards"] }
+# The editor-session store's read/write guards follow the same cross-crate
+# contract: root test builds compile the workbench editor without `cfg(test)`,
+# so the `test-support` feature carries the guard instead.
+lyrel-workbench-editor = { path = "crates/lyrel-workbench-editor", features = ["test-support"] }
+# Shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
+# (the `lyrel-graphics-fixture` binary target of this package).
+lyrel-test-support = { path = "crates/lyrel-test-support" }
+# The terminal client's test surface (rooted-consumer graphics helpers, quiet
+# test panes) the whole-window and native consumer suites build on.
+lyrel-terminal = { path = "crates/lyrel-terminal", features = ["test-support"] }
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
 # Workbench fixtures encode images and inspect the lossless YAML tree.
 gif = "0.14.2"
+# Whole-window snapshot-harness tests build glyph outlines for the production
+# TerminalElement paint path (the terminal crate re-exports the paint side
+# only in its own tests).
+rio-graphics.workspace = true
 tiff = "0.11.3"
 yaml-edit = { version = "=0.3.6", default-features = false }
-# Self-made PDF fixtures for the production workbench seam; never linked into
-# the released library.
-lyrel-pdf = { path = "crates/lyrel-pdf", features = ["test-fixtures"] }
+# Format and Markdown tests exercise the real document types and fixture engines.
+lyrel-document = { path = "crates/lyrel-document", features = ["formats", "test-fixtures"] }
+lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor" }
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+encoding_rs.workspace = true
+# Browser import moved to `lyrel-insights`, but the desktop workflow tests and
+# the SQLite document fixtures still build real SQLite databases themselves —
+# a dev-only dependency, never linked into the released GUI.
+rusqlite = { version = "0.42.0", features = ["bundled"] }
 
 [lints]
 workspace = true
 
 [features]
 default = []
-updater = ["dep:async_zip"]
-test-support = ["lyrel-core/test-support", "gpui-kit/test-support"]
-native-markdown-tests = ["test-support"]
+test-support = [
+    "lyrel-core/test-support",
+    "gpui-kit/test-support",
+    "lyrel-terminal/test-support",
+]
+# The native test binaries call `pin_test_config_dir`, which now lives in
+# `lyrel-ui-base`; the feature keeps the foundation's guards available in
+# exactly the builds that can call it (test builds get them from the
+# dev-dependency instead).
+native-markdown-tests = [
+    "test-support",
+    "lyrel-ui-base/test-guards",
+    "lyrel-terminal/native-markdown-tests",
+    "lyrel-workbench-editor/native-markdown-tests",
+    "dep:lyrel-markdown-editor",
+]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
+# 含根包共 13 个成员：协议与会话核心、领域引擎、桌面应用、仅测试支持。
 members = ["crates/*"]
-# Windows/macOS 默认包含 editor；Linux 排除两个 desktop 包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-code-editor", "crates/lyrel-text", "crates/lyrel-epub", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+# 默认成员面向 Windows/macOS；此清单不随构建目标变化。
+# Linux headless 用 CI 与安装指南中的 --workspace --exclude 显式选包。
+default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"
@@ -333,6 +312,8 @@ edition = "2024"
 version = "0.3.5"
 
 [workspace.dependencies]
+encoding_rs = "0.8.44"
+
 # The public facade selects Fast consistently for component, base, assets and platform.
 gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 
@@ -341,11 +322,11 @@ gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
 #
 # Only the parser/grid library is taken: Rio's own PTY, windowing and
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
-# mode stacks the daemon folds for replay stay in `lyrel-core`'s own
-# `term_modes`.
+# mode stacks the daemon folds for replay stay in `lyrel-protocol`'s `term_modes`.
 rio-vt = { version = "=0.5.32", default-features = false }
-# Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
+# Unicode segmentation and width primitives match the pinned Rio grid.
 rio-unicode = "=0.5.32"
+rio-grapheme-width = "=0.5.32"
 # Types plus the released `glyf` outline decoder and registry. `glyph` adds
 # skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
 # validates and retains registrations with it; the GUI decodes accepted bodies

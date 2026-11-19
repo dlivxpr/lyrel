@@ -6,7 +6,7 @@ use crate::commands::test_support::mock;
 #[test]
 fn worktree_kimi_task_fails_before_creating_a_checkout_or_touching_any_pane() {
     let repo = tempfile::tempdir().unwrap();
-    lyrel_core::core::config::set_config_dir(repo.path().join("config"));
+    lyrel_protocol::core::config::set_config_dir(repo.path().join("config"));
     let repo_arg = repo.path().to_str().unwrap();
     for task in ["修复问题\n保留交互", "--model other", "fork source", "/new"] {
         let mut backend = mock();

@@ -2853,14 +2853,8 @@ mod kitty_graphics {
     use std::sync::Arc;
 
     use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
-
-    mod fixture {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/support/kitty_pty.rs"
-        ));
-    }
-    use fixture::{hex, unhex};
+    use lyrel_test_support::hex::{hex, unhex};
+    use lyrel_test_support::pty as fixture;
 
     #[test]
     #[ignore = "PTY fixture launched explicitly by the daemon-session tests"]

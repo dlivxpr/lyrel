@@ -891,7 +891,7 @@ impl SettingsWindow {
                 if data_page {
                     pane.child(body)
                 } else {
-                    pane.child(crate::ui::scrollbar::with_inset_vertical_scrollbar(
+                    pane.child(lyrel_ui_base::scrollbar::with_inset_vertical_scrollbar(
                         "settings-content-scrollbar",
                         body,
                         s.navigation.scroll(),
@@ -1178,7 +1178,7 @@ impl SettingsWindow {
             )))
             .selected(active)
             .accessibility_label(t(target.title()))
-            .line_height(gpui_kit::relative(1.618_034))
+            .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
             // Pointer activation keeps the page content in charge, as the
             // non-focusable rows did; keyboard entry owns the ring instead.
             .capture_any_mouse_down(|_, window, _| window.prevent_default())

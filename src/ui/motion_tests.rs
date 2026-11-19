@@ -1,10 +1,11 @@
-use crate::core::config::{Config, MotionPreference};
 use crate::ui::app::test_window;
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings::test_window as settings_window;
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use lyrel_core::core::config::MotionPreference;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 fn choose_motion(vcx: &mut gpui_kit::VisualTestContext, index: usize) {
     vcx.update(|window, cx| {
@@ -25,7 +26,8 @@ fn motion_preference_round_trips_through_settings_and_reload(cx: &mut TestAppCon
     // a save→load→assert sequence atomic against a concurrent writer.
     let _config_file = Config::lock_config_file();
     let (settings, mut vcx) = settings_window::harness(cx);
-    let dir = crate::core::config::config_dir_path().expect("the harness pins a scratch config");
+    let dir =
+        lyrel_core::core::config::config_dir_path().expect("the harness pins a scratch config");
     settings.update_in(&mut vcx, |settings, window, cx| {
         cx.global_mut::<Config>().font_size = 17.0;
         settings.navigate_settings(
@@ -95,7 +97,7 @@ fn motion_preference_round_trips_through_settings_and_reload(cx: &mut TestAppCon
         let mut announced = false;
         crate::apply_reloaded_config(
             cx,
-            crate::core::config::Config::load_with_outcome(),
+            lyrel_ui_base::config::Config::load_with_outcome(),
             &mut announced,
         );
     });

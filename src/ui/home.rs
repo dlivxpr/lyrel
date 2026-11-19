@@ -7,10 +7,12 @@ use gpui_kit::{
     TestSupportExt as _, div, prelude::*, px,
 };
 
-use crate::core::actions::{NewTab, OpenSettings, ReopenClosedTab, TogglePalette, ToggleSwitcher};
-use crate::core::session::{SessionPane, SessionTab};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::actions::{
+    NewTab, OpenSettings, ReopenClosedTab, TogglePalette, ToggleSwitcher,
+};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::session::{SessionPane, SessionTab};
 
 /// What a window with no tabs open can actually do. `SplitRight`/`SplitDown`
 /// were listed here too, but both need a pane to split and return without a
@@ -120,10 +122,10 @@ pub(crate) fn waiting_for(secs: u64) -> String {
 /// about those (#580). `None` shows the path in full.
 pub(crate) fn display_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
     let text = path.to_string_lossy();
-    let text = crate::ui::path_display::readable_path(&text);
+    let text = lyrel_ui_base::path_display::readable_path(&text);
     // Same home-abbreviation the Info panel and tab strip use: separators
     // normalized, case folded (#544).
-    let shortened = crate::ui::path_display::abbreviate_home(&text, home).into_owned();
+    let shortened = lyrel_ui_base::path_display::abbreviate_home(&text, home).into_owned();
     if shortened.chars().count() <= PICKER_PATH_MAX {
         return shortened;
     }
@@ -179,13 +181,19 @@ pub(crate) fn key_hint(action: &str, cx: &App) -> Option<String> {
 
 fn home_shortcut_label(action: &str, closed: Option<&str>) -> String {
     let label = match action {
-        "NewTab" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeNewTab),
-        "ReopenClosedTab" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeReopenClosedTab),
-        "ToggleSwitcher" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeSwitchWorkspace),
-        "TogglePalette" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeSearchEverywhere),
-        "SplitRight" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeSplitRight),
-        "SplitDown" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeSplitDown),
-        "OpenSettings" => crate::ui::i18n::t(crate::ui::i18n::L10nKey::HomeSettings),
+        "NewTab" => lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeNewTab),
+        "ReopenClosedTab" => {
+            lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeReopenClosedTab)
+        }
+        "ToggleSwitcher" => {
+            lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSwitchWorkspace)
+        }
+        "TogglePalette" => {
+            lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSearchEverywhere)
+        }
+        "SplitRight" => lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSplitRight),
+        "SplitDown" => lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSplitDown),
+        "OpenSettings" => lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSettings),
         _ => action,
     };
     if action == "ReopenClosedTab" {
@@ -222,7 +230,7 @@ impl LyrelApp {
         let nothing_to_reopen = next_closed.is_none();
         // Rows on the sidebar's shape: no fill at rest, the window's hover
         // rung under the pointer, the chord in a faint cap at the far end.
-        let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.hover);
+        let hover = gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::Surfaces>().window.hover);
         let mut list = v_flex()
             .gap(px(2.))
             .w(px(HOME_LIST_W))
@@ -243,7 +251,7 @@ impl LyrelApp {
                     .gap(px(12.))
                     .items_center()
                     .justify_between()
-                    .rounded(crate::ui::rounding::ROW_RADIUS)
+                    .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                     .cursor_pointer()
                     .hover(move |row| row.bg(hover))
                     .when(emphasized || action == "NewTab", |row| {
@@ -357,10 +365,12 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod strip_layout_tests {
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceStore};
     use crate::daemon::install::{InstallPhase, InstallProgress as _};
-    use crate::ui::remote_connect::HostChoice;
+    use crate::ui::desktop_lookups::HostChoice;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+    use lyrel_ui_base::session::{
+        RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceStore,
+    };
 
     fn box_at(port: u16) -> RemoteTarget {
         RemoteTarget::Direct {
@@ -495,7 +505,7 @@ mod strip_layout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::i18n::set_locale;
+    use lyrel_ui_base::i18n::set_locale;
     use std::path::PathBuf;
 
     fn leaf(cwd: Option<&str>) -> SessionPane {
@@ -564,7 +574,7 @@ mod tests {
             asleep_view: None,
             presentation: Default::default(),
             pane: SessionPane::Split {
-                axis: crate::core::session::SessionAxis::Horizontal,
+                axis: lyrel_ui_base::session::SessionAxis::Horizontal,
                 ratio: 0.5,
                 a: Box::new(leaf(None)),
                 b: Box::new(leaf(Some("/tmp/demo"))),

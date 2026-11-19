@@ -35,7 +35,7 @@ impl LyrelApp {
             launch_argv: launch_argv.unwrap_or_else(|| vec![agent.binary().into()]),
             scope,
         };
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -68,7 +68,7 @@ impl LyrelApp {
     /// Bind a retained connecting slot. Creation errors are asynchronous and
     /// remain on PendingPane; callers place this identity before it can land.
     pub(crate) fn new_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         owner: Option<WorkspaceId>,
         font_size: f32,
         working_directory: Option<std::path::PathBuf>,
@@ -94,7 +94,7 @@ impl LyrelApp {
     /// Bind an existing attachment without permitting a fresh replacement shell.
     /// A missing or unreachable pane remains an attach-only pending failure.
     pub(crate) fn attach_existing_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         pane: u64,
         owner: WorkspaceId,
         font_size: f32,
@@ -117,7 +117,7 @@ impl LyrelApp {
     }
 
     fn pending_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
+        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         owner: Option<WorkspaceId>,
         font_size: f32,
         working_directory: Option<std::path::PathBuf>,
@@ -201,7 +201,7 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |_app, _view, _: &crate::terminal::view::ProgressChanged, _window, cx| {
+            |_app, _view, _: &lyrel_terminal::view::ProgressChanged, _window, cx| {
                 cx.notify();
             },
         )
@@ -209,7 +209,7 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, view, ev: &crate::terminal::view::ProgramStatusChanged, window, cx| {
+            |app, view, ev: &lyrel_terminal::view::ProgramStatusChanged, window, cx| {
                 app.on_program_status_changed(view, &ev.0, window, cx);
             },
         )
@@ -217,7 +217,7 @@ impl LyrelApp {
         cx.subscribe_in(
             &view,
             window,
-            |app, _view, _: &crate::terminal::view::AgentSessionChanged, _window, cx| {
+            |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
                 app.save_session(cx);
             },
         )
@@ -225,7 +225,7 @@ impl LyrelApp {
         cx.subscribe_in(
             &view,
             window,
-            |app, _view, ev: &crate::terminal::view::AgentDetected, _window, cx| {
+            |app, _view, ev: &lyrel_terminal::view::AgentDetected, _window, cx| {
                 app.note_agent_detected(ev.0, cx);
             },
         )
@@ -233,7 +233,7 @@ impl LyrelApp {
         cx.subscribe_in(
             &view,
             window,
-            |app, view, _: &crate::terminal::view::AuthPromptReady, window, cx| {
+            |app, view, _: &lyrel_terminal::view::AuthPromptReady, window, cx| {
                 app.on_auth_prompt_ready(view.clone(), window, cx);
             },
         )
@@ -241,7 +241,7 @@ impl LyrelApp {
         cx.subscribe_in(
             &view,
             window,
-            |_app, view, _: &crate::terminal::view::GlyphUnsupported, window, cx| {
+            |_app, view, _: &lyrel_terminal::view::GlyphUnsupported, window, cx| {
                 let (workspace, pane, route) = {
                     let view = view.read(cx);
                     (view.owner_workspace(), view.pane_id, view.pane_route())
@@ -259,7 +259,7 @@ impl LyrelApp {
         cx.subscribe_in(
             &view,
             window,
-            |_app, view, _: &crate::terminal::view::TitleContractUnsupported, window, cx| {
+            |_app, view, _: &lyrel_terminal::view::TitleContractUnsupported, window, cx| {
                 let (workspace, pane, route) = {
                     let view = view.read(cx);
                     (view.owner_workspace(), view.pane_id, view.pane_route())
@@ -274,9 +274,35 @@ impl LyrelApp {
             },
         )
         .detach();
+        Self::watch_terminal_scm(view, cx);
         Self::watch_open_file_requests(&view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
+    }
+
+    pub(super) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
+        cx.subscribe(
+            view,
+            |_app, _view, ev: &lyrel_terminal::view::ScmRepoChanged, cx| {
+                cx.default_global::<crate::ui::scm::data::ScmData>()
+                    .bump(ev.host_id, &ev.root);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            view,
+            |app, view, ev: &lyrel_terminal::view::ScmStatusRefreshRequested, cx| {
+                app.scm_badge_probe(ev.host_id, ev.cwd.clone(), ev.trigger, view.downgrade(), cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            view,
+            |app, view, ev: &lyrel_terminal::view::ScmRootRecheckRequested, cx| {
+                app.scm_recheck_root(ev.host_id, ev.cwd.clone(), view.downgrade(), cx);
+            },
+        )
+        .detach();
     }
 
     /// Authoritative program frames reach every window independently. The
@@ -315,12 +341,12 @@ impl LyrelApp {
     }
 
     pub(super) fn kill_pane_off_thread(
-        route: crate::terminal::PaneRoute,
+        route: lyrel_ui_base::route::PaneRoute,
         pane_id: u64,
         cx: &mut App,
     ) {
         cx.background_executor()
-            .spawn(async move { crate::terminal::RemoteTerminal::kill_pane_on(&route, pane_id) })
+            .spawn(async move { lyrel_terminal::RemoteTerminal::kill_pane_on(&route, pane_id) })
             .detach();
     }
 
@@ -335,7 +361,7 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
+            |app, view, ev: &lyrel_ui_base::desktop_file::OpenFileRequested, window, cx| {
                 // The popup can outlive focus changes. Resolve its retained pane,
                 // never the workspace that happened to receive the later action.
                 if view.read(cx).host_id() == ev.host_id

@@ -8,13 +8,13 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 use lyrel_core::daemon::control::{ControlClient, ControlHello};
 
-use crate::core::actions::{
+use crate::ui::app::test_window::harness_with_tabs;
+use lyrel_ui_base::actions::{
     EditorNewFile, RestorePanePip, SelectNextTab, ToggleDocumentFill, TogglePanePip,
 };
-use crate::core::session::{
+use lyrel_ui_base::session::{
     RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
 };
-use crate::ui::app::test_window::harness_with_tabs;
 
 pub(crate) struct HostServer {
     pub(crate) client: Arc<ControlClient>,
@@ -27,8 +27,7 @@ impl HostServer {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let thread = std::thread::spawn(move || {
-            lyrel_core::host::server::serve(server, lyrel_core::host::local::LocalHost::new())
-                .unwrap();
+            lyrel_core::host::server::serve(server, lyrel_core::host::local::new()).unwrap();
         });
         let client = Arc::new(
             ControlClient::over_tcp(
@@ -85,13 +84,16 @@ pub(crate) fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     }
 }
 
-pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: crate::ui::i18n::L10nKey) {
+pub(crate) fn assert_metrics_status(
+    vcx: &mut VisualTestContext,
+    key: lyrel_ui_base::i18n::L10nKey,
+) {
     vcx.update(|window, _| window.refresh());
     settle(vcx);
     vcx.update(|window, _| {
         assert_eq!(
             window.find("status-host-metrics").label(),
-            Some(crate::ui::i18n::t(key)),
+            Some(lyrel_ui_base::i18n::t(key)),
         );
     });
     assert!(
@@ -154,7 +156,8 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     for (width, font) in [(1440., 16.), (720., 20.)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |_, _, cx| {
-            cx.global_mut::<crate::core::config::Config>().ui_font_size = font;
+            cx.global_mut::<lyrel_ui_base::config::Config>()
+                .ui_font_size = font;
             cx.notify();
         });
         settle(&mut vcx);
@@ -225,8 +228,7 @@ impl RemoteServer {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let thread = std::thread::spawn(move || {
-            lyrel_core::host::server::serve(server, lyrel_core::host::local::LocalHost::new())
-                .unwrap();
+            lyrel_core::host::server::serve(server, lyrel_core::host::local::new()).unwrap();
         });
         let host = lyrel_core::host::remote::RemoteHost::over_tcp(
             stream,
@@ -242,7 +244,7 @@ impl RemoteServer {
 
     fn install(&self, vcx: &mut VisualTestContext) {
         vcx.update(|_, cx| {
-            crate::ui::remote_connect::HostLinks::insert(cx, self.host.clone(), self.host.home())
+            crate::ui::desktop_lookups::HostLinks::insert(cx, self.host.clone(), self.host.home())
         });
     }
 }

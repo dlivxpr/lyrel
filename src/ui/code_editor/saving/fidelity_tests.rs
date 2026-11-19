@@ -32,10 +32,10 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
     }
 }
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -44,8 +44,8 @@ fn view(
     app: &Entity<LyrelApp>,
     cx: &VisualTestContext,
 ) -> Entity<lyrel_markdown_editor::EditorState> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .unwrap()
             .markdown()
             .unwrap()
@@ -99,13 +99,13 @@ fn encodings(cx: &mut TestAppContext) {
             app.open_file_in_editor(&path, window, cx)
         });
         until(&mut vcx, |vcx| {
-            app.read_with(vcx, |app, _| {
-                app.active_buffer().is_some_and(|file| file.path == path)
+            app.read_with(vcx, |app, cx| {
+                app.active_buffer(cx).is_some_and(|file| file.path == path)
             })
         });
         let presentation = view(&app, &vcx);
         for _ in 0..2 {
-            vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            vcx.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
             settle(&mut vcx);
             save(&app, &mut vcx);
             assert_eq!(std::fs::read(&path).unwrap(), *original, "untouched {name}");
@@ -130,7 +130,7 @@ fn encodings(cx: &mut TestAppContext) {
             app.open_file_in_editor(&path, window, cx)
         });
         until(&mut vcx, |vcx| {
-            app.read_with(vcx, |app, _| app.active_buffer().is_some())
+            app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
         });
         save(&app, &mut vcx);
         assert_eq!(std::fs::read(&path).unwrap(), *original, "reopened {name}");
@@ -151,7 +151,7 @@ fn explicit_policy(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     // Conversion is deliberate and undoable, unlike rendering or ordinary save.
     app.update_in(&mut vcx, |app, _, cx| app.toggle_line_ending(cx));
@@ -164,7 +164,7 @@ fn explicit_policy(cx: &mut TestAppContext) {
     settle(&mut vcx);
     save(&app, &mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), original);
-    vcx.dispatch_action(crate::core::actions::EditorTrimTrailingWhitespace);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorTrimTrailingWhitespace);
     settle(&mut vcx);
     save(&app, &mut vcx);
     assert_eq!(
@@ -190,7 +190,7 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     let first = view(&app, &vcx);
     app.update_in(&mut vcx, |app, window, cx| {
@@ -205,7 +205,7 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
     });
     vcx.update(|window, cx| window.input("!", cx));
     settle(&mut vcx);
-    let id = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().id());
+    let id = app.read_with(&vcx, |app, cx| app.active_buffer(cx).unwrap().id());
     let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
     app.update_in(&mut vcx, |app, window, cx| app.close_tab(0, window, cx));
     settle(&mut vcx);
@@ -218,19 +218,21 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
     app.update_in(&mut vcx, |app, _, cx| app.toggle_line_ending(cx));
     settle(&mut vcx);
     app.update_in(&mut vcx, |app, window, cx| app.activate(1, window, cx));
-    vcx.dispatch_action(crate::core::actions::EditorNewMarkdownFile);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorNewMarkdownFile);
     settle(&mut vcx);
     vcx.update(|window, cx| window.input("different target", cx));
     release.send(()).unwrap();
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| !app.editor.buffers.get(id).unwrap().saving)
+        app.read_with(vcx, |app, cx| {
+            !app.editor.read(cx).buffers.get(id).unwrap().saving
+        })
     });
     assert_eq!(
         std::fs::read(&stored).unwrap(),
         b"\xef\xbb\xbf!# Original\r\nbody  \nattached$$x$$literal"
     );
     app.read_with(&vcx, |app, cx| {
-        let file = app.editor.buffers.get(id).unwrap();
+        let file = app.editor.read(cx).buffers.get(id).unwrap();
         assert!(
             file.dirty,
             "completion must not clean later content/representation"
@@ -246,7 +248,7 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
             "!later# Original\nbody  \nattached$$x$$literal"
         );
         assert_eq!(
-            app.active_buffer()
+            app.active_buffer(cx)
                 .unwrap()
                 .input
                 .text()
@@ -286,20 +288,9 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
     let stored = dir.path().join("first.txt");
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let id = app.update_in(&mut vcx, |app, window, cx| {
-        let n = app.editor.buffers.next_untitled();
-        let id = app.editor_new_buffer(
-            host.clone(),
-            PathBuf::new(),
-            Some(n),
-            BufferKind::Markdown,
-            String::new(),
-            TextFormat::default(),
-            EditorConfig::default(),
-            lyrel_text::detect_indent("", "markdown"),
-            None,
-            window,
-            cx,
-        );
+        let id = app.editor.update(cx, |editor, cx| {
+            editor.new_untitled(host.clone(), BufferKind::Markdown, window, cx)
+        });
         app.editor_show_in_tab(app.tabs[0].id(), id, true, window, cx);
         id
     });
@@ -318,12 +309,16 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
     enter_path(&mut vcx, &path);
     until(&mut vcx, |vcx| {
         host.entered.load(Ordering::SeqCst)
-            && app.read_with(vcx, |app, _| {
-                app.editor.buffers.get(id).is_some_and(|file| !file.saving)
+            && app.read_with(vcx, |app, cx| {
+                app.editor
+                    .read(cx)
+                    .buffers
+                    .get(id)
+                    .is_some_and(|file| !file.saving)
             })
     });
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert!(file.untitled.is_some());
         assert!(
             file.path.as_os_str().is_empty(),
@@ -341,12 +336,12 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
         );
     });
     assert!(!stored.exists());
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &path);
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && !file.saving && !file.dirty)
         })
     });
@@ -355,7 +350,7 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
         b"attached$$x$$literal\n<Unknown />"
     );
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert_eq!(
             file.input
@@ -389,7 +384,7 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
         b"attached$$x$$literal\n<Unknown />"
     );
     app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().unwrap();
+        let file = app.active_buffer(cx).unwrap();
         assert_eq!(file.id(), id);
         assert_eq!(file.path, path);
         assert_eq!(presentation.read(cx).document().entity_id(), document);
@@ -407,7 +402,7 @@ fn encoding_cancel_recover(cx: &mut TestAppContext) {
         app.open_file_in_editor(&path, window, cx)
     });
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     let presentation = view(&app, &vcx);
     presentation.update_in(&mut vcx, |view, window, cx| {
@@ -416,21 +411,21 @@ fn encoding_cancel_recover(cx: &mut TestAppContext) {
     });
     vcx.update(|window, cx| window.input("中", cx));
     settle(&mut vcx);
-    vcx.dispatch_action(crate::core::actions::CloseActiveTab);
+    vcx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut vcx);
     vcx.simulate_prompt_answer(t(L10nKey::Save));
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     settle(&mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), original);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::EditorSaveAsUtf8));
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -460,14 +455,14 @@ fn save_as_conflict_and_rename(cx: &mut TestAppContext) {
         app.editor_open_on_host(host.clone(), &occupied, window, cx)
     });
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+        app.read_with(vcx, |app, cx| app.active_buffer(cx).is_some())
     });
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == path)
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx).is_some_and(|file| file.path == path)
         })
     });
     let first = view(&app, &vcx);
@@ -477,7 +472,7 @@ fn save_as_conflict_and_rename(cx: &mut TestAppContext) {
     });
     vcx.update(|window, cx| window.input("!", cx));
     settle(&mut vcx);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &occupied);
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
@@ -487,21 +482,21 @@ fn save_as_conflict_and_rename(cx: &mut TestAppContext) {
         std::fs::read(dir.path().join("occupied.md")).unwrap(),
         b"OCCUPIED"
     );
-    app.read_with(&vcx, |app, _| {
-        assert_eq!(app.active_buffer().unwrap().path, path);
-        assert!(app.active_buffer().unwrap().dirty);
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.active_buffer(cx).unwrap().path, path);
+        assert!(app.active_buffer(cx).unwrap().dirty);
     });
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut vcx);
     let second = view(&app, &vcx);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &target);
     until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.active_buffer()
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.saving && !file.dirty)
         })
     });

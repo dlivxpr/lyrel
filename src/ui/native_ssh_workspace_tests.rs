@@ -13,13 +13,20 @@ fn wait_for_link(cx: &mut TestAppContext, host: HostId) {
         }) {
             return;
         }
-        assert!(Instant::now() < deadline, "real native SSH reconnect did not finish");
+        assert!(
+            Instant::now() < deadline,
+            "real native SSH reconnect did not finish"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 fn attachment(host: &RemoteHost, workspace: WorkspaceId) -> lyrel_core::core::machine::Attachment {
-    match host.client().call(ControlRequest::WorkspaceTree { workspace }).unwrap() {
+    match host
+        .client()
+        .call(ControlRequest::WorkspaceTree { workspace })
+        .unwrap()
+    {
         ReplyOk::WorkspaceTree(tree) => tree.attachment.clone().expect("workspace holder"),
         other => panic!("expected real workspace tree, got {other:?}"),
     }
@@ -28,21 +35,33 @@ fn attachment(host: &RemoteHost, workspace: WorkspaceId) -> lyrel_core::core::ma
 struct OwnedWorkspace(Arc<RemoteHost>, WorkspaceId);
 impl Drop for OwnedWorkspace {
     fn drop(&mut self) {
-        let _ = self.0.client().call(ControlRequest::WorkspaceRemove { workspace: self.1 });
+        let _ = self
+            .0
+            .client()
+            .call(ControlRequest::WorkspaceRemove { workspace: self.1 });
     }
 }
 
 #[gpui_kit::test]
 #[ignore = "requires explicit isolated pinned native SSH/SFTP and same-commit server; run alone"]
 fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContext) {
-    let binary = PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit local server"));
+    let binary = PathBuf::from(
+        std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit local server"),
+    );
     let mut fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
-    crate::core::config::set_config_dir(fixture.local_config_dir());
+    lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     let observer = fixture.connect_control();
     let remote_id = WorkspaceId::new();
-    assert!(matches!(observer.client().call(ControlRequest::WorkspaceCreate {
-        name: Some("isolated reconnect ownership".into()), workspace: Some(remote_id),
-    }).unwrap(), ReplyOk::WorkspaceTree(_)));
+    assert!(matches!(
+        observer
+            .client()
+            .call(ControlRequest::WorkspaceCreate {
+                name: Some("isolated reconnect ownership".into()),
+                workspace: Some(remote_id),
+            })
+            .unwrap(),
+        ReplyOk::WorkspaceTree(_)
+    ));
     let mut owned = OwnedWorkspace(observer.clone(), remote_id);
 
     let (app, vcx) = crate::ui::app::test_window::harness(cx);
@@ -63,15 +82,34 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
     cx.update(|cx| {
         cx.global_mut::<Config>().ssh_profiles.push(profile);
         crate::ui::windows::WindowRegistry::init(cx);
-        crate::ui::windows::WindowRegistry::register(cx, workspace, vcx.window_handle(), app.downgrade());
-        crate::ui::windows::WindowRegistry::register(cx, local_workspace, other_vcx.window_handle(), other_window.downgrade());
-        let mut remote = crate::core::session::WindowView::on_remote(RemoteRef::new(target.clone(), remote_id));
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            workspace,
+            vcx.window_handle(),
+            app.downgrade(),
+        );
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            local_workspace,
+            other_vcx.window_handle(),
+            other_window.downgrade(),
+        );
+        let mut remote = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
+            target.clone(),
+            remote_id,
+        ));
         remote.id = workspace;
         remote.open = true;
-        let mut local = crate::core::session::WindowView::default();
+        let mut local = lyrel_ui_base::session::WindowView::default();
         local.id = local_workspace;
         local.open = true;
-        WorkspaceStore::install_for_test(cx, crate::core::session::WindowViews { views: vec![remote, local], active: Some(workspace) });
+        WorkspaceStore::install_for_test(
+            cx,
+            lyrel_ui_base::session::WindowViews {
+                views: vec![remote, local],
+                active: Some(workspace),
+            },
+        );
         launch_attempt(cx, host, target.clone());
     });
     wait_for_link(cx, host);
@@ -82,26 +120,54 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
     // control client acquires the workspace before its reconnect can run.
     fixture.restart_router();
     cx.update(|cx| {
-        remote_connect::HostLinks::remove(cx, host);
+        desktop_lookups::HostLinks::remove(cx, host);
         RemoteLinks::mark(cx, host, |link| {
             link.state = LinkState::Reconnecting;
             link.attach_sent.clear();
         });
     });
-    let other = fixture.connect_control_as(&target.connection_key(), "isolated-active-client", "isolated-other-desktop");
+    let other = fixture.connect_control_as(
+        &target.connection_key(),
+        "isolated-active-client",
+        "isolated-other-desktop",
+    );
     owned.0 = other.clone();
-    assert!(matches!(other.client().call(ControlRequest::WorkspaceAttach { id: remote_id.to_string() }).unwrap(), ReplyOk::Attached { .. }));
-    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop");
+    assert!(matches!(
+        other
+            .client()
+            .call(ControlRequest::WorkspaceAttach {
+                id: remote_id.to_string()
+            })
+            .unwrap(),
+        ReplyOk::Attached { .. }
+    ));
+    assert_eq!(
+        attachment(&other, remote_id).hostname,
+        "isolated-other-desktop"
+    );
     cx.update(|cx| launch_attempt(cx, host, target.clone()));
     wait_for_link(cx, host);
-    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop", "automatic reconnect stole the active client's workspace");
+    assert_eq!(
+        attachment(&other, remote_id).hostname,
+        "isolated-other-desktop",
+        "automatic reconnect stole the active client's workspace"
+    );
     cx.update(|cx| {
-        assert_eq!(RemoteLinks::status_of(cx, workspace), Some(RemoteStatus::Preempted { by: "isolated-other-desktop".into() }));
+        assert_eq!(
+            RemoteLinks::status_of(cx, workspace),
+            Some(RemoteStatus::Preempted {
+                by: "isolated-other-desktop".into()
+            })
+        );
         pump_attachments(cx, host);
     });
     cx.background_executor.run_until_parked();
     cx.run_until_parked();
-    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop", "the next supervisor pass stole the yielded workspace");
+    assert_eq!(
+        attachment(&other, remote_id).hostname,
+        "isolated-other-desktop",
+        "the next supervisor pass stole the yielded workspace"
+    );
     cx.update(|cx| {
         RemoteLinks::retry_now(cx, workspace);
         pump_attachments(cx, host);
@@ -112,9 +178,19 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
         if attachment(&other, remote_id).hostname != "isolated-other-desktop" {
             break;
         }
-        assert!(Instant::now() < deadline, "explicit Take Back failed to acquire the workspace");
+        assert!(
+            Instant::now() < deadline,
+            "explicit Take Back failed to acquire the workspace"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(attachment(&other, remote_id).hostname, remote_connect::client_hostname());
-    assert_eq!(other_window.read_with(cx, |app, _| app.workspace), local_workspace, "unrelated rooted window remains valid");
+    assert_eq!(
+        attachment(&other, remote_id).hostname,
+        remote_connect::client_hostname()
+    );
+    assert_eq!(
+        other_window.read_with(cx, |app, _| app.workspace),
+        local_workspace,
+        "unrelated rooted window remains valid"
+    );
 }

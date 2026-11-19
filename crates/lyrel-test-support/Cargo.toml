@@ -1,0 +1,68 @@
+[package]
+name = "lyrel-test-support"
+version.workspace = true
+edition.workspace = true
+description = "Shared GPUI-free test fixtures for Lyrel: real PTY/protocol producers, native-SSH fixture, and the lightweight graphics fixture process"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+# The library interface is GPUI-free: everything here compiles headless on
+# Linux so lyrel-core, lyrel-server and lyrel-cli tests can consume the shared
+# fixtures through [dev-dependencies] without pulling desktop-only stacks.
+
+# A real process, not a libtest target: the desktop consumer tests spawn this
+# binary for the daemon and for each PTY producer. `test = false` keeps
+# `cargo test` from building or running a harness for it.
+[[bin]]
+name = "lyrel-graphics-fixture"
+path = "src/main.rs"
+test = false
+
+# Keep these features identical to the root GUI's lyrel-core dependency: the
+# fixture must be able to share the test build's core artifacts instead of
+# compiling a second, differently-featured core (and every GUI crate above it)
+# on first use. `test-support` mirrors the workspace's unified test graph
+# (`--features test-support` on the root package), which enables tokio's
+# `test-util` for lyrel-core.
+#
+# The old `github` feature is gone: skills/statistics/GitHub moved to
+# `lyrel-insights`, and core no longer defines the feature.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+lyrel-core = { path = "../lyrel-core", features = [
+    "gssapi",
+    "remote-install",
+    "test-support",
+] }
+# Cross-process locking for the on-demand graphics-fixture build and its
+# ConPTY staging (the consumer tests may all race the first build).
+fs2 = "0.4"
+
+# The library is consumed by headless Linux test runs too (CI builds every
+# member): keep a headless Linux build possible without enabling the
+# desktop-only GSSAPI dependency.
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+lyrel-core = { path = "../lyrel-core" }
+
+[dependencies]
+# Fixture source-identity hash (also a build dependency: build.rs includes the
+# same module).
+sha2 = "0.11.1"
+# The native-SSH fixture sandboxes disposable routers in temp dirs.
+tempfile = "3"
+# Standard desktop configuration written by the native-SSH fixture.
+serde_json = "1"
+# Unique names for shared-memory media objects.
+uuid = { version = "1.28.0", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Memory"] }
+
+[build-dependencies]
+sha2 = "0.11.1"
+
+[lints]
+workspace = true

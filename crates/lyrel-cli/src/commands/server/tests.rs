@@ -4,10 +4,10 @@ use crate::commands::test_support::cli;
 use crate::commands::test_support::human;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
-use lyrel_core::daemon::control::CONTROL_VERSION;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
-use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
+use lyrel_protocol::daemon::control::CONTROL_VERSION;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
+use lyrel_protocol::daemon::protocol::PROTOCOL_VERSION;
 
 #[test]
 fn a_machine_flag_refuses_the_local_server_verbs() {
@@ -31,7 +31,7 @@ fn a_machine_flag_refuses_the_local_server_verbs() {
 
 #[test]
 fn status_and_machine_ls_are_single_aggregate_requests() {
-    use lyrel_core::daemon::control::{RouteInfo, ServerStatus};
+    use lyrel_protocol::daemon::control::{RouteInfo, ServerStatus};
 
     let mut backend = mock();
     backend.replies.push_back(ReplyOk::Status(ServerStatus {

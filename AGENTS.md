@@ -6,32 +6,42 @@ lyrel 是基于 l0ng-ai 的 Apache-2.0 终端源码独立开发的 Rust/GPUI 终
 
 产品/根包为 `lyrel`，GUI 为 `lyrel-app`，CLI crate/命令为 `lyrel-cli` / `lyrel`，共享核心为 `lyrel-core`，server 为 `lyrel-server`，updater 为 `lyrel-updater`。独立 stable 版本、`LYREL_*` 环境变量、数据与凭据命名空间不自动读取、迁移或接管其他产品实例；更名不重置 IPC 协议版本。仓库：`https://github.com/dlivxpr/lyrel`。
 
-GUI/CLI 经共享 core 连接独立 Session Daemon，daemon 持有 PTY/shell/coding agent，并通过 SSH/stdio 连接远端 server；会话不依赖窗口存活。GUI 可用自身的 `--daemon` 模式拉起 daemon，server 是同一核心的 headless 入口。正式架构见 `docs/reference/architecture.mdx`。
+GUI/CLI 经 `lyrel-protocol` 连接独立 Session Daemon；`lyrel-core` 重导出协议并持有 daemon、PTY、shell/coding agent 和 SSH/stdio 远端接线。会话不依赖窗口存活；GUI 的 `--daemon` 与 headless `lyrel-server` 使用同一实现。正式架构见 `docs/reference/architecture.mdx`。
 
 ## 修改入口
 
 | 路径 | 职责与约束 |
 | --- | --- |
 | `src/main.rs`、`src/lib.rs::run` | 保留平台 subsystem 的薄 binary；GUI/daemon/agent-hook 分发与应用注册 |
-| `src/ui/`、`src/terminal/` | 工作台、编辑器、设置、终端输入与渲染；`app.rs` / `view.rs` 等大文件按行为定位范围阅读 |
-| `crates/lyrel-core/` | 无 GPUI 的领域模型、Host、daemon、PTY、SSH、IPC；共享逻辑在此修改 |
+| `src/ui/` | 窗口装配、标签页、文件树、SCM、设置与平台集成；跨能力事件在 `LyrelApp` 接线 |
+| `crates/lyrel-ui-base/` | 桌面共享配置、快捷键、主题、通知、工作区视图状态与 Host 适配；不依赖终端、文档引擎或窗口 shell |
+| `crates/lyrel-terminal/` | pane 客户端、终端输入与绘制、图形缓存及终端局部测试 |
+| `crates/lyrel-workbench-editor/` | `EditorPanelState`、文档生命周期、格式呈现、LSP 和 draw.io WebView；通过 `EditorPanelEvent` 连接窗口 |
+| `crates/lyrel-protocol/` | 无 GPUI 的 wire、IPC 客户端、配置、会话值类型与 Host 契约；CLI 使用不带 SQLite 引擎的 LocalHost |
+| `crates/lyrel-core/` | Session Daemon、持久化、PTY、SSH、RemoteHost 与注入 LocalHost 的只读 SQLite 引擎 |
+| `crates/lyrel-server/` | 无 GUI 的 daemon 与 stdio bridge 入口；唯一生产依赖为 `lyrel-core` |
 | `src/daemon.rs`、`src/core/` | core 重导出与 GUI/系统适配，不复制共享实现 |
 | `crates/lyrel-cli/src/cli.rs`、`crates/lyrel-cli/src/backend.rs` | CLI 参数契约；依赖替换沿用 `Backend` trait 分层 |
-| `crates/lyrel-markdown-editor/`、`crates/lyrel-text/` | editor 源码适配；`lyrel-text` 保持 GUI-free，不反向依赖 editor |
-| `crates/lyrel-core/src/core/config.rs`、`src/core/config.rs` | 配置解析/进程覆盖；GUI 包装与测试写盘守卫 |
+| `crates/lyrel-document/`、`crates/lyrel-markdown-editor/` | GUI-free 文本 codec 与 `formats` 引擎；Markdown editor 只启用 codec，不反向依赖工作台 |
+| `crates/lyrel-insights/` | 经 Host 执行 skills 和统计，拥有 GitHub 与用量数据；GPUI 设置呈现和系统凭据留在根包 |
+| `crates/lyrel-updater/` | Windows／macOS 更新程序、共享布局与安装计划；行为与打包契约见 `docs/reference/updates.mdx` |
+| `crates/lyrel-protocol/src/core/config.rs` | 配置解析与进程覆盖；GPUI 包装和测试写盘守卫由 `lyrel-ui-base` 持有 |
+| `crates/lyrel-test-support/` | 跨包 PTY、协议与 SSH 测试夹具及 `lyrel-graphics-fixture` 进程；测试以 dev-dependency 复用 |
 | `Cargo.toml`、`Cargo.lock`、`.cargo/config.toml` | workspace、统一版本、features、锁定依赖与开发别名 |
 | `scripts/`、`.github/`、`docs/docs.json` | 开发与平台脚本、CI/发布工作流、文档导航 |
 
+13 个包的生产依赖分层见 `docs/reference/architecture.mdx`。根包与 updater、UI base、Markdown editor、terminal、workbench editor 仅在 Windows／macOS 构建；Linux headless 的选包命令见开发 Skill。终端与编辑工作台独立编译，不相互依赖。
+
 ## 工程底线
 
-- 工作区路径可能属于远端。文件、Git、监视等经 `Host` / `SharedHost` 注入，GUI 通过 `src/ui/host_ops.rs` 的 `HostOps` 在线程池执行；不能用本地文件系统解释远端路径或在 UI 线程执行阻塞 Host 调用。
-- `lyrel-core` 不依赖 GPUI，系统凭据存储留在 GUI；`lyrel-server` 唯一生产依赖为 core。Windows/macOS 到 Linux 的 SSH/SFTP、Host/PTY 和 WSL 接线不可因桌面退役删除。
+- 工作区路径可能属于远端。文件、Git、监视等经 `Host` / `SharedHost` 注入，GUI 通过 `lyrel-ui-base` 的 `HostOps` 在线程池执行；不能用本地文件系统解释远端路径或在 UI 线程执行阻塞 Host 调用。
+- `lyrel-protocol` 和 `lyrel-core` 不依赖 GPUI；CLI 生产路径只依赖前者，不链接 SSH、Tokio、SQLite 或 PTY 引擎。`lyrel-server` 唯一生产依赖为 core。系统凭据留在 GUI；保留 Windows/macOS 到 Linux 的 SSH/SFTP、Host/PTY 和 WSL 接线。
 - daemon 持有并持久化机器/工作区/标签页/pane 树；`src/ui/machine_mirror.rs` 的拉取期间本地写重放必须保留，避免旧快照覆盖新操作。
 - GPUI 沿用 `Entity`、`Global`、`cx.spawn`、`background_executor`；GUI 只经 `gpui-kit` 官方 Fast 类型。daemon 的 std 线程/channel 与 SSH 引擎的 Tokio runtime 不混作同一个异步环境。
 - Host/文件错误用 `io::Result`，二进制边界用 `anyhow` 上下文；GUI 经 `HostOps::run_in` 和 `HostOps::notify_err` / error notification 呈现失败，保留 CLI 错误链与子进程退出码。
-- 修改终端输出热路径保留 `src/terminal/view.rs` 的隐藏 pane 通知门控，不因不可见输出触发整窗重绘。
-- UI 颜色取 `src/ui/presets.rs` / `src/ui/theme.rs` 的语义角色；文案经 `L10nKey` 同步 `en`、`zh-CN`。`system` 是配置模式，不是第三种翻译语言；OS 界面语言解析不能用 PTY locale 替代。
-- IPC 修改前读 `crates/lyrel-core/src/daemon/control.rs` 和 `crates/lyrel-core/src/daemon/protocol.rs`；增删 control 变体提升 `CONTROL_VERSION`，可忽略字段按 feature 协商，pane 协议版本另行处理。
+- 修改终端输出热路径保留 `lyrel-terminal` 的隐藏 pane 通知门控，不因不可见输出触发整窗重绘。
+- UI 颜色取 `lyrel-ui-base` 的语义角色；文案经 `L10nKey` 同步 `en`、`zh-CN`。`system` 是配置模式，不是第三种翻译语言；OS 界面语言解析不能用 PTY locale 替代。
+- IPC 修改前读 `crates/lyrel-protocol/src/daemon/control.rs` 和 `crates/lyrel-protocol/src/daemon/protocol.rs`；增删 control 变体提升 `CONTROL_VERSION`，可忽略字段按 feature 协商，pane 协议版本另行处理。
 - 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path、`[patch]` 或修改下载源码。例外仅限 #236 的 Zorite editor/bidi、#241 的 ratex GUI，以及 #279 在正式架构文档「上游源码复用与适配」清单批准的固定 Glim MIT / Zorite MIT `gpui-pdf`；清单内优先复用真实实现，逐文件记录来源、原始摘要、许可和本地适配，不扩展到 GPL 应用代码或清单外资源。
 - Windows ConPTY 与 Windows server 仅支持 x86_64，远端 ARM64 Windows 明确拒绝；固定 ConPTY 文件对、许可、架构、版本和摘要校验 fail-closed，不静默回退系统实现，构建脚本不隐式下载。
 - 默认配置为 Unix `~/.config/lyrel`、Windows `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。测试/调试必须隔离，不能影响安装实例。产品 `TERM_PROGRAM=lyrel`，标准环境变量键保持原样；#248 兼容身份只限已知 coding agent 的命令作用域，显式值优先，结束恢复 pane 基线。

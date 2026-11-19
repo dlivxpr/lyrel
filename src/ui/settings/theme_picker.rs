@@ -541,7 +541,7 @@ impl SettingsWindow {
             }
             Err(e) => {
                 log::warn!("failed to duplicate theme: {e}");
-                crate::ui::host_ops::HostOps::notify_err(
+                lyrel_ui_base::host_ops::HostOps::notify_err(
                     window,
                     cx,
                     t(L10nKey::ThemeDuplicateFailed),

@@ -11,11 +11,11 @@ mod workflow_tests;
 use super::kit::Tk;
 use super::shell::MenuEntry;
 use super::*;
-use crate::ui::host_ops::HostOps;
-use crate::ui::host_registry::HostRegistry;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{Disableable, button::ButtonVariants, spinner::Spinner};
-use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
+use lyrel_insights::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
+use lyrel_ui_base::host_ops::HostOps;
+use lyrel_ui_base::host_registry::HostRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,7 +49,7 @@ pub(crate) fn schedule_local_warmup(cx: &mut App) {
                 agent: None,
                 launch: cx.global::<Config>().agent_launch.clone(),
                 stored: Arc::default(),
-                path: Some(crate::core::config::config_path(
+                path: Some(lyrel_core::core::config::config_path(
                     "statistics-settings.json",
                 )?),
                 opencode_sources: Vec::new(),
@@ -793,7 +793,7 @@ impl SettingsWindow {
             .flex_1()
             .min_h_0()
             .min_w_0()
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "statistics-content-scrollbar",
                 body,
                 &state.content_scroll,
@@ -805,15 +805,15 @@ impl SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use chrono::Datelike;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
+    use lyrel_ui_base::session::Session;
 
     #[gpui_kit::test]
     fn statistics_search_loads_native_totals_and_keeps_machine_scope(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir(temp.path().join("sessions")).unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
             ("en", 944., gpui_kit::component::ThemeMode::Dark),
             ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
         ] {
-            crate::ui::i18n::set_locale(locale);
+            lyrel_ui_base::i18n::set_locale(locale);
             vcx.simulate_resize(gpui_kit::size(px(width), px(800.)));
             app.update_in(&mut vcx, |app, window, cx| {
                 gpui_kit::component::Theme::change(mode, Some(window), cx);
@@ -1124,7 +1124,7 @@ mod tests {
                 );
             });
         }
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, _window, cx| {
             let state = app.active_settings().unwrap();
             assert!(state.navigation.section() == SettingsSection::Statistics);

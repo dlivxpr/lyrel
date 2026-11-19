@@ -254,8 +254,7 @@ fn a_peer_without_native_metrics_capability_is_unavailable_without_breaking_its_
         .unwrap();
         (host, thread)
     }
-    let (native, native_thread) =
-        connect(lyrel_core::host::local::LocalHost::new(), "native-metrics");
+    let (native, native_thread) = connect(lyrel_core::host::local::new(), "native-metrics");
     // A server acting as a Host proxy serves real Host operations, but does not
     // advertise that it owns a native whole-machine sampler. No fake replies.
     let (proxy, proxy_thread) = connect(native.clone().into_shared(), "non-native-metrics");

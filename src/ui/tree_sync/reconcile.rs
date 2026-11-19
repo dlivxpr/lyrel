@@ -5,7 +5,7 @@ use lyrel_core::core::machine::{
 use lyrel_core::daemon::control::ControlRequest;
 
 use crate::core::group_key::WorkspaceGroups;
-use crate::core::session::WorkspaceId;
+use lyrel_ui_base::session::WorkspaceId;
 
 use super::desired::{DesiredNode, DesiredTab};
 /// The machine's tabs a sync must leave alone: every one the window is not

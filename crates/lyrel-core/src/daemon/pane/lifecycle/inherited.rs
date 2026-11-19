@@ -31,7 +31,7 @@ impl AdoptedMaster {
         // `lsof`, ssh transports — must not inherit another pane's master: a
         // child holding one keeps the pty open after this pane closes it, and
         // the hangup the shell should see never comes.
-        if let Err(e) = crate::daemon::handoff::close_on_exec_again(fd) {
+        if let Err(e) = crate::daemon::singleton::close_on_exec_again(fd) {
             log::warn!("could not restore close-on-exec on adopted pty {fd}: {e}");
         }
         Ok(Self {

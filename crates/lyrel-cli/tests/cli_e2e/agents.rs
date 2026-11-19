@@ -86,7 +86,7 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
                 output.extend_from_slice(&bytes)
             }
             DaemonMsg::AgentStatus(Some(state)) => {
-                waiting = state.status == lyrel_core::core::cli_agent::AgentStatus::Waiting
+                waiting = state.status == lyrel_protocol::core::cli_agent::AgentStatus::Waiting
             }
             DaemonMsg::AgentStatus(None) => waiting = false,
             DaemonMsg::Exited { code } => {

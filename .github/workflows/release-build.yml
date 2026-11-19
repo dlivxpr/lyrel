@@ -74,11 +74,12 @@ jobs:
         shell: pwsh
         run: '& ./scripts/prepare-conpty.ps1'
 
-      # 一次 feature 统一编译全部默认 bins，不重复构建无 updater 的桌面图。
-      - name: Build all default binaries with updater
+      # default-members 含 lyrel-updater：一次编译全部默认 bins（含独立
+      # updater crate），不重复构建。
+      - name: Build all default binaries
         working-directory: lyrel
-        shell: bash
-        run: cargo build --release --locked --features updater --target x86_64-pc-windows-msvc
+        shell: pwsh
+        run: '& ./scripts/cargo-windows.ps1 build --release --locked --target x86_64-pc-windows-msvc'
 
       - name: Archive desktop packaging inputs
         working-directory: lyrel
@@ -128,10 +129,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: false
 
-      - name: Build all default binaries with updater
+      - name: Build all default binaries
         working-directory: lyrel
         shell: bash
-        run: cargo build --release --locked --features updater --target aarch64-apple-darwin
+        run: cargo build --release --locked --target aarch64-apple-darwin
 
       # tar 保留 macOS 可执行权限；只带打包输入，不传 target 缓存或整个源码树。
       - name: Archive desktop packaging inputs
@@ -522,7 +523,8 @@ jobs:
 
       - name: Build lyrel-server
         working-directory: lyrel
-        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
+        shell: pwsh
+        run: '& ./scripts/cargo-windows.ps1 build --release --locked -p lyrel-server --target ${{ matrix.target }}'
 
       - name: Assert the binary needs no VC++ redistributable
         working-directory: lyrel

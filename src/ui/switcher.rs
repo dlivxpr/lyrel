@@ -12,15 +12,16 @@ use gpui_kit::{
 use lyrel_core::core::machine::TabId;
 use lyrel_core::core::session::{RemoteTarget, RouteSnapshot, WorkspaceId};
 
-use crate::core::actions::{SwitcherAcross, SwitcherAcrossBack};
-use crate::core::session::WorkspaceStore;
 use crate::daemon::install::InstallPhase;
-use crate::terminal::pane_liveness::Liveness;
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
+use crate::ui::desktop_lookups::{HostChoice, HostLinks, home_for_host, local_home};
+use crate::ui::pane_liveness::Liveness;
+use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
 use crate::ui::remote_workspace::connection::ConnectionState;
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
+use lyrel_ui_base::actions::{SwitcherAcross, SwitcherAcrossBack};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::session::WorkspaceStore;
 
 const CARD_W: f32 = 760.0;
 
@@ -229,7 +230,7 @@ pub(crate) struct OrphanPane {
 /// Every pane id the local machine's workspaces hold — what the registry
 /// listing is measured against to find the orphans (#596).
 fn held_local_pane_ids(cx: &App) -> HashSet<u64> {
-    crate::ui::machine_mirror::MachineMirrors::machine(cx, crate::core::session::HostId::LOCAL)
+    crate::ui::machine_mirror::MachineMirrors::machine(cx, lyrel_ui_base::session::HostId::LOCAL)
         .map(|machine| {
             machine
                 .workspaces
@@ -267,7 +268,7 @@ fn workspace_name_of(owner: &str, cx: &App) -> Option<String> {
     let id = owner.parse::<WorkspaceId>().ok()?;
     let machine = crate::ui::machine_mirror::MachineMirrors::machine(
         cx,
-        crate::core::session::HostId::LOCAL,
+        lyrel_ui_base::session::HostId::LOCAL,
     )?;
     let ws = machine.user_workspaces().find(|ws| ws.id == id)?;
     Some(crate::ui::machine_mirror::display_name_of(
@@ -433,11 +434,11 @@ enum HostItem {
 fn host_items(hosts: Vec<HostChoice>, query: &str, local_label: &str) -> Vec<HostItem> {
     let query = query.trim();
     let mut items: Vec<HostItem> = Vec::new();
-    if query.is_empty() || crate::ui::search::fuzzy_score(query, local_label).is_some() {
+    if query.is_empty() || lyrel_ui_base::fuzzy::fuzzy_score(query, local_label).is_some() {
         items.push(HostItem::Local);
     }
     items.extend(
-        remote_connect::filter_hosts(&hosts, query)
+        crate::ui::desktop_lookups::filter_hosts(&hosts, query)
             .into_iter()
             .map(HostItem::Host),
     );
@@ -467,11 +468,11 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         remote_connect::register(cx);
-        remote_connect::sweep_wsl(cx);
+        crate::ui::desktop_lookups::sweep_wsl(cx);
         let query = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(crate::ui::i18n::t(
-                    crate::ui::i18n::L10nKey::SearchWorkspacesAndMachines,
+                .placeholder(lyrel_ui_base::i18n::t(
+                    lyrel_ui_base::i18n::L10nKey::SearchWorkspacesAndMachines,
                 ))
                 // On macOS a held Ctrl turns every click into a right click,
                 // and the input answers a right click with Cut/Copy/Paste —
@@ -705,7 +706,7 @@ impl LyrelApp {
     fn switcher_groups(&self, cx: &mut Context<Self>) -> Vec<Group> {
         let now = crate::ui::home::now_secs();
         let current = self.workspace;
-        crate::terminal::pane_liveness::sweep(cx);
+        crate::ui::pane_liveness::sweep(cx);
 
         let mut groups: Vec<Group> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -756,7 +757,7 @@ impl LyrelApp {
                 });
                 // A row's path is on the workspace's own machine, so that is
                 // the machine whose home may shorten it (#580).
-                let home = crate::ui::path_display::home_for_host(app, w.host_id());
+                let home = home_for_host(app, w.host_id());
                 groups[slot].rows.push(Row {
                     id: w.id,
                     name: crate::ui::machine_mirror::display_name(app, w)
@@ -768,7 +769,7 @@ impl LyrelApp {
                         .unwrap_or_default(),
                     when: crate::ui::home::relative_time(now, w.last_active),
                     last_active: w.last_active,
-                    live: crate::terminal::pane_liveness::liveness_of(app, w),
+                    live: crate::ui::pane_liveness::liveness_of(app, w),
                     open: w.open,
                     current: w.id == current,
                     preempted: false,
@@ -783,7 +784,7 @@ impl LyrelApp {
         // Listed once for the whole frame: the pending groups below name
         // themselves from it, and so does the pass that settles every group's
         // link state further down.
-        let configured = remote_connect::available_hosts(cx);
+        let configured = crate::ui::desktop_lookups::available_hosts(cx);
 
         for target in self.pending_machines() {
             let key = target.to_string();
@@ -797,7 +798,7 @@ impl LyrelApp {
                 // announce itself to the banners below by a raw UUID (#485).
                 // The pass below overwrites this while the profile is still
                 // configured; this is what is left when it is not.
-                label: remote_connect::label_from_hosts(&configured, &target),
+                label: crate::ui::desktop_lookups::label_from_hosts(&configured, &target),
                 key,
                 endpoint: String::new(),
                 target: Some(target),
@@ -875,7 +876,7 @@ impl LyrelApp {
             let app: &App = cx;
             // Unclaimed *local* workspaces: their paths are on this machine,
             // so this machine's home is the right one to measure them by.
-            let local_home = crate::ui::path_display::local_home();
+            let local_home = local_home();
             let rows: Vec<Row> = crate::ui::machine_mirror::unclaimed_local_workspaces(app)
                 .into_iter()
                 .filter(|ws| !listed.contains(&ws.id))
@@ -920,7 +921,7 @@ impl LyrelApp {
                 // A remote client can take one of this computer's workspaces
                 // too, and the row says so the same way.
                 let taken: HashSet<WorkspaceId> =
-                    RemoteLinks::preempted_on(cx, crate::core::session::HostId::LOCAL)
+                    RemoteLinks::preempted_on(cx, lyrel_ui_base::session::HostId::LOCAL)
                         .into_iter()
                         .collect();
                 for row in &mut group.rows {
@@ -1003,7 +1004,7 @@ impl LyrelApp {
     /// in strip order; other workspaces' tabs come in the order they have.
     pub(crate) fn tab_rows_for(&self, id: WorkspaceId, mru: bool, cx: &App) -> Vec<TabRow> {
         if id == self.workspace {
-            let now_ms = crate::core::config::unix_now().saturating_mul(1000);
+            let now_ms = lyrel_core::core::config::unix_now().saturating_mul(1000);
             let order = match mru {
                 true => self.tabs.by_mru(),
                 false => (0..self.tabs.len()).collect(),
@@ -1052,12 +1053,12 @@ impl LyrelApp {
         let host = WorkspaceStore::all(cx).get(id).map(|w| w.host_id());
         let git = |cwd: Option<&str>| -> Option<lyrel_core::core::git::GitStatus> {
             let (host, cwd) = (host?, cwd?);
-            cx.try_global::<crate::terminal::git_status::GitStatusCache>()?
+            cx.try_global::<crate::ui::scm::status_cache::GitStatusCache>()?
                 .status_for(host, std::path::Path::new(cwd))
         };
         // These rows describe a workspace on `host`, and the cwds they carry
         // are that machine's. Only its home may shorten them (#580).
-        let home = host.and_then(|host| crate::ui::path_display::home_for_host(cx, host));
+        let home = host.and_then(|host| home_for_host(cx, host));
         views
             .into_iter()
             .enumerate()
@@ -1118,7 +1119,7 @@ impl LyrelApp {
         supervised: Option<&MachineStatus>,
         cx: &mut Context<Self>,
     ) -> Link {
-        let has_link = remote_connect::HostLinks::get(cx, target.host_id()).is_some();
+        let has_link = crate::ui::desktop_lookups::HostLinks::get(cx, target.host_id()).is_some();
         link_from(self.connect.state(), target, supervised, has_link)
     }
 
@@ -1258,7 +1259,7 @@ impl LyrelApp {
     fn form_items(&self, form: &CreateForm, cx: &App) -> Vec<HostItem> {
         let query = form.host.read(cx).value().trim().to_string();
         host_items(
-            remote_connect::available_hosts(cx),
+            crate::ui::desktop_lookups::available_hosts(cx),
             &query,
             t(L10nKey::SwitcherThisComputer),
         )
@@ -1356,7 +1357,7 @@ impl LyrelApp {
                 self.switch_workspace(None, window, cx);
                 self.name_fresh_workspace(name, window, cx);
             }
-            Some(choice) => match remote_connect::HostLinks::home(cx, choice.target.host_id()) {
+            Some(choice) => match HostLinks::home(cx, choice.target.host_id()) {
                 Some(home) => {
                     self.close_switcher(window, cx);
                     self.create_remote_workspace(choice.target.clone(), home, window, cx);
@@ -1701,7 +1702,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let sw = self.switcher.as_ref()?;
-        let scrim = crate::ui::presets::scrim_fill(cx);
+        let scrim = lyrel_ui_base::presets::scrim_fill(cx);
         let card = match &sw.page {
             Page::Create(form) => self.render_create_card(form, window, cx),
             Page::List => self.render_list_card(window, cx),
@@ -1815,7 +1816,7 @@ impl LyrelApp {
                     .flex_shrink_0()
                     .border_r_1()
                     .border_color(border)
-                    .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                    .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                         "switcher-workspaces-scrollbar",
                         div()
                             .id("switcher-workspaces")
@@ -1837,7 +1838,7 @@ impl LyrelApp {
                             sw.hover_tabs = *hovered;
                         }
                     }))
-                    .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                    .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                         "switcher-tabs-scrollbar",
                         div()
                             .id("switcher-tabs")
@@ -2259,7 +2260,7 @@ impl LyrelApp {
             .mb(px(2.))
             .px(px(10.))
             .py(px(8.))
-            .rounded(crate::ui::rounding::ROW_RADIUS)
+            .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
             .border_1()
             .border_color(theme.border)
             .child(
@@ -2674,12 +2675,13 @@ impl LyrelApp {
             .map(|h| h.label.clone())
             .unwrap_or_else(|| t(L10nKey::SwitcherThisComputer).to_string());
         let chosen_local = form.chosen.is_none();
-        let chosen_dot: Option<gpui_kit::Hsla> = form.chosen.as_ref().map(|h| {
-            match remote_connect::HostLinks::get(cx, h.target.host_id()).is_some() {
-                true => gpui_kit::rgb(crate::ui::tab_strip::LIVE_DOT).into(),
-                false => gpui_kit::rgb(crate::ui::tab_strip::UNKNOWN_DOT).into(),
-            }
-        });
+        let chosen_dot: Option<gpui_kit::Hsla> =
+            form.chosen
+                .as_ref()
+                .map(|h| match HostLinks::get(cx, h.target.host_id()).is_some() {
+                    true => gpui_kit::rgb(crate::ui::tab_strip::LIVE_DOT).into(),
+                    false => gpui_kit::rgb(crate::ui::tab_strip::UNKNOWN_DOT).into(),
+                });
 
         let header = h_flex()
             .items_center()
@@ -2731,7 +2733,7 @@ impl LyrelApp {
                 .gap(px(6.))
                 .px(px(8.))
                 .h(px(crate::ui::dialog::FIELD_H))
-                .rounded(crate::ui::rounding::ROW_RADIUS)
+                .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                 .bg(well)
         };
 
@@ -2806,7 +2808,7 @@ impl LyrelApp {
                     .min_h(px(ROW_H))
                     .py(px(4.))
                     .px(px(ROW_PAD))
-                    .rounded(crate::ui::rounding::ROW_RADIUS)
+                    .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                     .overflow_hidden()
                     .cursor_pointer()
                     .when(picked, |r| r.bg(picked_bg))
@@ -2828,8 +2830,7 @@ impl LyrelApp {
                         )
                         .into_any_element(),
                     HostItem::Host(host) => {
-                        let lit =
-                            remote_connect::HostLinks::get(cx, host.target.host_id()).is_some();
+                        let lit = HostLinks::get(cx, host.target.host_id()).is_some();
                         base.child(host_glyph(
                             false,
                             Some(match lit {
@@ -2874,7 +2875,7 @@ impl LyrelApp {
             }
             host_block = host_block.child(
                 div()
-                    .rounded(crate::ui::rounding::ROW_RADIUS)
+                    .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
                     .border_1()
                     .border_color(border)
                     .child(
@@ -3442,8 +3443,8 @@ fn host_menu(
     )
 }
 
-fn rungs(cx: &App) -> crate::ui::presets::Surface {
-    cx.global::<crate::ui::presets::Surfaces>().popover
+fn rungs(cx: &App) -> lyrel_ui_base::presets::Surface {
+    cx.global::<lyrel_ui_base::presets::Surfaces>().popover
 }
 
 fn hover_fill(cx: &App) -> gpui_kit::Rgba {
@@ -3518,8 +3519,8 @@ mod tests {
     fn disconnecting_the_machine_this_window_is_on_does_not_crash(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::core::session::{RemoteRef, WindowView, WindowViews};
         use crate::ui::windows::WindowRegistry;
+        use lyrel_ui_base::session::{RemoteRef, WindowView, WindowViews};
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
         let target = RemoteTarget::Alias {
@@ -3670,7 +3671,7 @@ mod tests {
     fn a_pending_machine_whose_profile_is_gone_is_not_named_by_its_uuid(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use crate::core::session::RemoteTarget;
+        use lyrel_ui_base::session::RemoteTarget;
 
         let (app, _vcx) = crate::ui::app::test_window::harness(cx);
 
@@ -3714,7 +3715,7 @@ mod tests {
     /// actually do, since a machine reached by address has no profile to open.
     #[test]
     fn every_ssh_machine_offers_its_host_form_and_nothing_else_does() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             host_form_label(&RemoteTarget::Profile {
                 id: uuid::Uuid::new_v4()
@@ -4125,9 +4126,9 @@ mod gpui_tests {
     fn sidecar_projection_never_becomes_a_local_or_remote_switcher_workspace(
         cx: &mut TestAppContext,
     ) {
-        use crate::core::session::{HostId, RemoteRef, RemoteTarget, WorkspaceId};
         use lyrel_core::core::machine::{Machine, PaneRecord, Tab, Workspace};
         use lyrel_core::core::pane_sidecar::ForeignWorkspace;
+        use lyrel_ui_base::session::{HostId, RemoteRef, RemoteTarget, WorkspaceId};
 
         let (app, _vcx) = crate::ui::app::test_window::harness(cx);
         let target = RemoteTarget::Alias {
@@ -4192,7 +4193,7 @@ mod gpui_tests {
     fn a_deleted_remote_workspace_leaves_the_switcher(cx: &mut TestAppContext) {
         use gpui_kit::VisualContext as _;
 
-        use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId};
+        use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId};
 
         let (app, vcx) = crate::ui::app::test_window::harness(cx);
         let handle = vcx.window_handle();
@@ -4207,9 +4208,9 @@ mod gpui_tests {
         let doomed = view.id;
 
         app.update(cx, |app, cx| {
-            crate::core::session::WorkspaceStore::install_for_test(
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![view],
                     active: None,
                 },

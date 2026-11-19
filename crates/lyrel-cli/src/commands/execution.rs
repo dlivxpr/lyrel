@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::machine::PaneSeed;
-use lyrel_core::core::session::WorkspaceId;
-use lyrel_core::daemon::control::ControlRequest;
+use lyrel_protocol::core::machine::PaneSeed;
+use lyrel_protocol::core::session::WorkspaceId;
+use lyrel_protocol::daemon::control::ControlRequest;
 use serde_json::json;
 use std::time::Duration;
 

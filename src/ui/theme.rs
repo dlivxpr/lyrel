@@ -1,19 +1,18 @@
-use gpui_kit::component::scroll::ScrollbarMode;
-use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
-    App, Background, Hsla, Menu, MenuItem, OsAction, Pixels, Styled, SystemMenuType, Window,
-    WindowBackgroundAppearance, linear_color_stop, linear_gradient, px, rgb,
+    App, Background, Hsla, Menu, MenuItem, OsAction, SystemMenuType, Window,
+    WindowBackgroundAppearance, linear_color_stop, linear_gradient, rgb,
 };
 
-use crate::core::actions::*;
-use crate::core::config::{Config, WindowBackdrop};
-use crate::terminal::view::{
-    ClearScrollback, CopyText, CutText, FindInTerminal, FindNext, FindPrevious, PasteText,
-    RedoEdit, SelectAll, UndoEdit,
+use lyrel_core::core::config::WindowBackdrop;
+use lyrel_terminal::view::{
+    ClearScrollback, CopyText, CutText, PasteText, RedoEdit, SelectAll, UndoEdit,
 };
-use crate::ui::i18n::{L10nKey, t};
-use crate::ui::presets;
-use crate::ui::presets::Fill;
+use lyrel_ui_base::actions::*;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::presets;
+use lyrel_ui_base::presets::Fill;
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 
@@ -187,7 +186,7 @@ fn window_menu_items(cx: &App) -> Vec<MenuItem> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let order = crate::ui::windows::menu_order(cx);
-    let store = crate::core::session::WorkspaceStore::all(cx);
+    let store = lyrel_ui_base::session::WorkspaceStore::all(cx);
 
     let slot_action = crate::ui::tab_strip::select_workspace_action;
 
@@ -285,46 +284,6 @@ fn window_background_with_alpha(bg: &presets::ActiveBackground, alpha: f32) -> B
             linear_color_stop(stop(left), 0.),
             linear_color_stop(stop(right), 1.),
         ),
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SystemAppearance {
-    dark: bool,
-}
-
-impl gpui_kit::Global for SystemAppearance {}
-
-fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
-    matches!(
-        appearance,
-        gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
-    )
-}
-
-pub(crate) fn refresh_system_appearance(cx: &mut App) {
-    let dark = is_dark(cx.window_appearance());
-    cx.set_global(SystemAppearance { dark });
-}
-
-pub(crate) fn note_system_appearance(window: &Window, cx: &mut App) {
-    let dark = is_dark(window.appearance());
-    cx.set_global(SystemAppearance { dark });
-}
-
-pub(crate) fn system_dark(cx: &App) -> bool {
-    cx.try_global::<SystemAppearance>()
-        .is_some_and(|appearance| appearance.dark)
-}
-
-pub(crate) fn effective_preset_id(cx: &App) -> String {
-    let config = cx.global::<Config>();
-    if !config.theme_follow_system {
-        config.theme_preset.clone()
-    } else if system_dark(cx) {
-        config.theme_preset_dark.clone()
-    } else {
-        config.theme_preset_light.clone()
     }
 }
 
@@ -913,57 +872,34 @@ pub(crate) fn replay_window_backdrop_on_scale_change(window: &Window, cx: &mut A
     }
 }
 
-/// The interface face gpui-component started out with, read once before
-/// anything overrode it.
-///
-/// [`Theme::change`] only rewrites `font_family` when the theme config names
-/// one, and none of ours does — so a face written into the theme below stays
-/// written for the life of the process. Keeping the stock value here is what
-/// lets **Interface font family → Default** put the system face back on the
-/// spot; without it the setting would save `None`, leave the window looking
-/// exactly as it did, and only come true at the next launch.
-struct StockUiFont(gpui_kit::SharedString);
-
-impl gpui_kit::Global for StockUiFont {}
-
+/// Install the configured preset as the live theme: the native appearance,
+/// the per-window backdrop, then the shared theme globals and chrome face in
+/// `lyrel_ui_base::presentation` (which the terminal client's tests also
+/// install directly).
 pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     let follow = cx.global::<Config>().theme_follow_system;
     if follow {
         sync_native_appearance(None);
         #[cfg(target_os = "macos")]
-        refresh_system_appearance(cx);
+        lyrel_ui_base::presentation::refresh_system_appearance(cx);
     }
-    let theme = presets::by_id(cx, &effective_preset_id(cx));
+    let theme = presets::by_id(cx, &lyrel_ui_base::presentation::effective_preset_id(cx));
     // Cache the mode beside the machine tree: the daemon is a separate process
     // and reads it back when it spawns a Windows pane, where ConPTY drops an
     // OSC 11 background query before lyrel's emulator can answer it. Derived
     // state, so it deliberately stays out of the user's `config.json`.
     crate::core::machine::note_appearance(theme.dark);
     let config = cx.global::<Config>();
-    let mode = if theme.dark {
-        ThemeMode::Dark
-    } else {
-        ThemeMode::Light
-    };
     let blur = config.window_blur.unwrap_or(theme.blur);
     // A material needs some translucency to be visible; without an explicit
     // opacity override it defaults to SYSTEM_MATERIAL_OPACITY instead of
     // 1.0. Derived from the *resolved* appearance so old builds where
     // Blur/Acrylic fall back to plain transparency stay opaque by default.
     let fill_opacity = effective_window_opacity(config, &theme, blur);
-    let opacity = (fill_opacity < 1.0).then_some(fill_opacity);
     if !follow {
         sync_native_appearance(Some(theme.dark));
     }
-    let m = theme.neutrals();
-    let surfaces = theme.surfaces();
-    let sem = theme.semantics();
-    let interaction = theme.interactions();
-    let active = theme.active_palette(config.theme_legible_palette);
-
     let backdrop = config.window_backdrop;
-    let ui_font_family = config.ui_font_family.clone();
-    let ui_font_size = px(config.ui_font_size);
 
     if let Some(window) = window.as_deref_mut() {
         let appearance = window_appearance(backdrop, blur, fill_opacity);
@@ -979,320 +915,12 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
         }
     }
 
-    Theme::change(mode, window.as_deref_mut(), cx);
-    cx.set_global(active);
-    cx.set_global(presets::ActiveBackground {
-        fill: theme.background.clone(),
-        opacity,
-        image: theme.image.clone(),
-    });
-    cx.set_global(surfaces.clone());
-    cx.set_global(interaction);
-    cx.set_global(theme.parking());
-    cx.set_global(presets::ActiveAccent(m.accent));
-    // Same treatment as `Surfaces`: derived once here rather than recomputed
-    // in `render`, because the graph reads it once per visible row per frame
-    // and each entry costs a contrast bisection on three surfaces.
-    cx.set_global(presets::ActiveLanes(theme.lanes()));
-
-    if !cx.has_global::<StockUiFont>() {
-        let stock = Theme::global(cx).font_family.clone();
-        cx.set_global(StockUiFont(stock));
-    }
-    let stock = cx.global::<StockUiFont>().0.clone();
-
-    let t = Theme::global_mut(cx);
-    t.font_size = ui_font_size;
-    // Toasts belong above the global status bar, in the bottom-right corner.
-    // The margin follows the bar's `1.625rem` height at the same UI scale plus
-    // the standard 8px gap, so zooming the interface keeps them clear of it.
-    t.notification.placement = gpui_kit::Anchor::BottomRight;
-    t.notification.margins.bottom = ui_font_size * 1.625 + px(8.);
-    t.notification.margins.right = px(8.);
-    // Assigned in both directions, never only when set: this is the one place
-    // that decides the chrome's face, so it has to say "back to stock" as
-    // plainly as it says "use Inter".
-    t.font_family = match ui_font_family {
-        Some(family) if !family.trim().is_empty() => family.into(),
-        _ => stock,
-    };
-    let mut base: Hsla = rgb(m.background).into();
-    if let Some(o) = opacity {
-        base.a = o;
-    }
-    t.background = base;
-    t.foreground = rgb(m.foreground).into();
-    t.border = rgb(m.border).into();
-    t.secondary = rgb(m.secondary).into();
-    // Ink, not fill. gpui-component resolves both of these from its *stock*
-    // foreground, so a button's label and the detail panel's section headings
-    // were the only text in the window not written in the preset's own colour.
-    t.button_foreground = rgb(m.foreground).into();
-    t.secondary_foreground = rgb(m.foreground).into();
-    t.muted = rgb(m.muted).into();
-    t.muted_foreground = rgb(m.muted_foreground).into();
-    // Components read both ThemeColor fields and layered tokens. Keep both
-    // routes on our palette instead of leaking the component library defaults.
-    t.tokens.foreground = Hsla::from(rgb(m.foreground)).into();
-    t.tokens.border = Hsla::from(rgb(m.border)).into();
-    t.tokens.muted = Hsla::from(rgb(m.muted)).into();
-    t.tokens.muted_foreground = Hsla::from(rgb(m.muted_foreground)).into();
-    t.tokens.secondary = Hsla::from(rgb(m.secondary)).into();
-    t.tokens.secondary_foreground = Hsla::from(rgb(m.foreground)).into();
-    t.button = rgb(m.popover).into();
-    t.button_secondary = rgb(m.secondary).into();
-    t.button_secondary_foreground = rgb(m.foreground).into();
-    t.tokens.button = Hsla::from(rgb(m.popover)).into();
-    t.tokens.button_foreground = Hsla::from(rgb(m.foreground)).into();
-    t.tokens.button_secondary = Hsla::from(rgb(m.secondary)).into();
-    t.tokens.button_secondary_foreground = Hsla::from(rgb(m.foreground)).into();
-    t.popover = rgb(m.popover).into();
-    t.tokens.popover = Hsla::from(rgb(m.popover)).into();
-    t.tokens.popover_foreground = Hsla::from(rgb(m.foreground)).into();
-    // The field beside the token, not a duplicate of it: gpui-component reads
-    // this one for every tooltip, dropdown menu and date picker it draws. Left
-    // unset it keeps the stock near-white, so menus and tooltips ignored the
-    // preset and came out brighter than the window they float over.
-    t.popover_foreground = rgb(m.foreground).into();
-
-    let accent_fill = rgb(interaction.choice);
-    let accent_text: Hsla = rgb(interaction.choice_ink).into();
-    t.accent = accent_fill.into();
-    t.accent_foreground = accent_text;
-    t.tokens.accent = Hsla::from(accent_fill).into();
-    t.tokens.accent_foreground = accent_text.into();
-
-    let primary_base: Hsla = rgb(interaction.primary.fill).into();
-    let primary_hover: Hsla = rgb(interaction.primary_hover).into();
-    let primary_active: Hsla = rgb(interaction.primary_pressed).into();
-    let primary_text: Hsla = rgb(interaction.primary.on_fill).into();
-    t.primary = primary_base;
-    t.primary_hover = primary_hover;
-    t.primary_active = primary_active;
-    t.primary_foreground = primary_text;
-    t.button_primary_foreground = primary_text;
-    t.tokens.primary = primary_base.into();
-    t.tokens.primary_hover = primary_hover.into();
-    t.tokens.primary_active = primary_active.into();
-    t.tokens.primary_foreground = primary_text.into();
-    t.tokens.button_primary = primary_base.into();
-    t.tokens.button_primary_hover = primary_hover.into();
-    t.tokens.button_primary_active = primary_active.into();
-    t.tokens.button_primary_foreground = primary_text.into();
-
-    let steps = |c: u32| {
-        (
-            Hsla::from(rgb(c)),
-            Hsla::from(rgb(presets::mix(c, m.background, 0.15))),
-            Hsla::from(rgb(presets::mix(c, m.foreground, 0.15))),
-        )
-    };
-
-    let (ink, ink_hover, ink_active) = steps(sem.danger.ink);
-    let (fill, fill_hover, fill_active) = steps(sem.danger.fill);
-    let on_fill = Hsla::from(rgb(sem.danger.on_fill));
-    t.danger = ink;
-    t.danger_hover = ink_hover;
-    t.danger_active = ink_active;
-    t.danger_foreground = on_fill;
-    t.tokens.danger = fill.into();
-    t.tokens.danger_hover = fill_hover.into();
-    t.tokens.danger_active = fill_active.into();
-    t.tokens.danger_foreground = on_fill.into();
-    t.tokens.button_danger = fill.into();
-    t.tokens.button_danger_hover = fill_hover.into();
-    t.tokens.button_danger_active = fill_active.into();
-    t.tokens.button_danger_foreground = on_fill.into();
-
-    let (ink, ink_hover, ink_active) = steps(sem.warning.ink);
-    let (fill, fill_hover, fill_active) = steps(sem.warning.fill);
-    let on_fill = Hsla::from(rgb(sem.warning.on_fill));
-    t.warning = ink;
-    t.warning_hover = ink_hover;
-    t.warning_active = ink_active;
-    t.warning_foreground = on_fill;
-    t.tokens.warning = fill.into();
-    t.tokens.warning_hover = fill_hover.into();
-    t.tokens.warning_active = fill_active.into();
-    t.tokens.warning_foreground = on_fill.into();
-    t.tokens.button_warning = fill.into();
-    t.tokens.button_warning_hover = fill_hover.into();
-    t.tokens.button_warning_active = fill_active.into();
-    t.tokens.button_warning_foreground = on_fill.into();
-
-    let (ink, ink_hover, ink_active) = steps(sem.success.ink);
-    let (fill, fill_hover, fill_active) = steps(sem.success.fill);
-    let on_fill = Hsla::from(rgb(sem.success.on_fill));
-    t.success = ink;
-    t.success_hover = ink_hover;
-    t.success_active = ink_active;
-    t.success_foreground = on_fill;
-    t.tokens.success = fill.into();
-    t.tokens.success_hover = fill_hover.into();
-    t.tokens.success_active = fill_active.into();
-    t.tokens.success_foreground = on_fill.into();
-    t.tokens.button_success = fill.into();
-    t.tokens.button_success_hover = fill_hover.into();
-    t.tokens.button_success_active = fill_active.into();
-    t.tokens.button_success_foreground = on_fill.into();
-
-    let (ink, ink_hover, ink_active) = steps(sem.info.ink);
-    let (fill, fill_hover, fill_active) = steps(sem.info.fill);
-    let on_fill = Hsla::from(rgb(sem.info.on_fill));
-    t.info = ink;
-    t.info_hover = ink_hover;
-    t.info_active = ink_active;
-    t.info_foreground = on_fill;
-    t.tokens.info = fill.into();
-    t.tokens.info_hover = fill_hover.into();
-    t.tokens.info_active = fill_active.into();
-    t.tokens.info_foreground = on_fill.into();
-    t.tokens.button_info = fill.into();
-    t.tokens.button_info_hover = fill_hover.into();
-    t.tokens.button_info_active = fill_active.into();
-    t.tokens.button_info_foreground = on_fill.into();
-
-    // The command-line highlighter paints commands, flags, paths, strings and
-    // operators with these, and the find bar flags a bad regex with `red`.
-    // Unset they hold gpui-component's stock ramp, one ramp for every dark
-    // preset and one for every light one — so the line you were typing kept a
-    // palette the output right above it had already left behind.
-    t.red = rgb(theme.ansi_ink(1)).into();
-    t.green = rgb(theme.ansi_ink(2)).into();
-    t.yellow = rgb(theme.ansi_ink(3)).into();
-    t.blue = rgb(theme.ansi_ink(4)).into();
-    t.magenta = rgb(theme.ansi_ink(5)).into();
-    t.cyan = rgb(theme.ansi_ink(6)).into();
-
-    t.link = rgb(sem.link.ink).into();
-    t.link_hover = rgb(presets::mix(sem.link.ink, m.foreground, 0.25)).into();
-    t.link_active = rgb(presets::mix(sem.link.ink, m.background, 0.20)).into();
-    t.tokens.link = Hsla::from(rgb(sem.link.ink)).into();
-    t.tokens.link_hover = Hsla::from(rgb(presets::mix(sem.link.ink, m.foreground, 0.25))).into();
-    t.tokens.link_active = Hsla::from(rgb(presets::mix(sem.link.ink, m.background, 0.20))).into();
-
-    let knob = if presets::is_lighter(m.background, m.foreground) {
-        m.background
-    } else {
-        m.foreground
-    };
-    t.tokens.background = Hsla::from(rgb(m.background)).into();
-    t.tokens.switch_thumb = Hsla::from(rgb(knob)).into();
-    t.tokens.switch = Hsla::from(rgb(surfaces.window.selected)).into();
-
-    // On-switches, sliders and primary actions share the accent role.
-    t.tokens.slider_bar = Hsla::from(rgb(m.accent)).into();
-    t.tokens.slider_thumb = Hsla::from(rgb(knob)).into();
-
-    t.caret = rgb(m.caret).into();
-    t.selection = rgb(m.selection).into();
-
-    let scrollbar_thumb: Hsla = rgb(presets::mix(m.background, m.foreground, 0.18)).into();
-    let scrollbar_thumb_hover: Hsla = rgb(presets::mix(m.background, m.foreground, 0.34)).into();
-    t.scrollbar = gpui_kit::transparent_black();
-    t.scrollbar_thumb = scrollbar_thumb;
-    t.scrollbar_thumb_hover = scrollbar_thumb_hover;
-    t.tokens.scrollbar = gpui_kit::transparent_black().into();
-    t.tokens.scrollbar_thumb = scrollbar_thumb.into();
-    t.tokens.scrollbar_thumb_hover = scrollbar_thumb_hover.into();
-
-    // Not `should_auto_hide_scrollbars()`. That preference answers a question
-    // about *legacy* scrollbars — the ones that take a gutter out of the layout
-    // — and macOS says "don't hide them" for anyone with a mouse plugged in.
-    // Ours are overlay bars painted on top of the content, so honouring it
-    // parked an opaque bar over the switcher's tab column for the whole time
-    // the panel was open, with nothing to fade it out. Every list in the app
-    // gets the same bar, so it fades everywhere or nowhere.
-    t.scrollbar_mode = ScrollbarMode::Scrolling;
-
-    t.radius = px(8.);
-
-    // Flat controls, floating panels. `Theme::shadow` gates exactly one thing —
-    // the `shadow_xs` an inline control (button, input, select trigger,
-    // checkbox, radio, slider knob) paints under itself — and never the drop
-    // shadow on a menu, tooltip or popover, which every one of those draws
-    // unconditionally. Left on, every field and button in the window carried a
-    // faint lift that nothing else here has: this chrome separates surfaces with
-    // low-contrast fills and hairlines, so a control sitting a millimetre above
-    // the panel was the one place claiming depth, and it read as a rendering
-    // artefact rather than as a material. Panels that really do float keep
-    // their shadow.
-    t.shadow = false;
-
-    let sidebar_bg = Hsla::from(rgb(m.sidebar));
-    // The current tab is a place, not an action: a neutral step of the rail's
-    // own ladder plus a heavier title, never the accent. Blue is left to the
-    // things that can be pressed.
-    let sidebar_sel = rgb(surfaces.sidebar.selected);
-    // `t.sidebar` stays the opaque theme token: the settings theme picker
-    // paints with it on top of the (opaque) settings overlay, so diluting
-    // it would wash out that panel. The workspace sidebar/right-panel
-    // surfaces get their translucent variant at render time instead —
-    // see `workspace_surface_color`.
-    t.sidebar = sidebar_bg.into();
-    t.tokens.sidebar = sidebar_bg.into();
-    // The lighter tier: every `sidebar_border` site is a pane meeting another
-    // pane, and both already carry their own fill. See `Neutrals`.
-    t.sidebar_border = rgb(m.divider).into();
-    t.sidebar_foreground = rgb(surfaces.sidebar.text_resting).into();
-    t.sidebar_accent = sidebar_sel.into();
-    t.tokens.sidebar_accent = Hsla::from(sidebar_sel).into();
-    t.sidebar_accent_foreground = rgb(surfaces.sidebar.text_selected).into();
-
-    t.list.active_highlight = true;
-    t.list_active = rgb(interaction.choice).into();
-    t.list_active_border = rgb(interaction.choice).into();
-    t.list_hover = rgb(surfaces.popover.hover).into();
-    // The matched substring in a searchable list is still text. Its fallback
-    // would be gpui-component's stock `blue`, and the obvious accent fill is a
-    // background role; both can sit legibly enough on the popover but not on
-    // the keyboard row, which is painted in `accent`. `accent_foreground` is
-    // the ink already paired with that fill, and it clears the popover behind
-    // the unselected rows too. The row keeps the role paired with its own
-    // surface, so the match never turns into the least readable text in the
-    // list; `ProfileChoice::render_highlighted` adds the weight that makes the
-    // match stand out when the hue matches the row's ink.
-    let search_match_ink = t.accent_foreground;
-    t.list_highlight_foreground = search_match_ink;
-
-    // gpui-component's `input` is the border role, also used by default
-    // buttons. Giving it the field background would erase their outlines.
-    t.input = rgb(interaction.input_border).into();
-    t.tokens.input = Hsla::from(rgb(interaction.input_border)).into();
-
-    let button_hover: Hsla = rgb(surfaces.window.hover).into();
-    let button_active: Hsla = rgb(surfaces.window.selected).into();
-    t.tokens.button_hover = button_hover.into();
-    t.tokens.button_active = button_active.into();
-    t.tokens.secondary_hover = button_hover.into();
-    t.tokens.secondary_active = button_active.into();
-    t.tokens.button_secondary_hover = button_hover.into();
-    t.tokens.button_secondary_active = button_active.into();
-
-    t.ring = rgb(m.accent).into();
-    t.tokens.ring = Hsla::from(rgb(m.accent)).into();
-    // Every splitter and panel edge lights up with this while you drag it, and
-    // the drop target for a dragged-in file tints with it. Unset it is a fixed
-    // blue from gpui-component's stock theme — the same blue under all nine
-    // presets. It is an interaction highlight, so it belongs with the focus
-    // ring and the on-switch.
-    t.drag_border = rgb(m.accent).into();
-
-    // Keep the editor body transparent so it inherits gradients and wallpaper.
-    // The published editor paints scrolling text before the fixed line-number
-    // gutter, so that gutter must be opaque to cover text scrolling beneath it.
-    // Match the existing document surface; only this narrow column stops showing
-    // the background image. Active-line and invisible ink stay translucent.
-    let ink: Hsla = rgb(m.foreground).into();
-    let mut highlight = (*t.highlight_theme).clone();
-    highlight.style.editor_background = Some(gpui_kit::transparent_black());
-    highlight.style.editor_gutter_background = Some(t.sidebar);
-    highlight.style.editor_active_line = Some(ink.opacity(0.06));
-    highlight.style.editor_line_number = Some(rgb(m.muted_foreground).into());
-    highlight.style.editor_active_line_number = Some(ink);
-    highlight.style.editor_invisible = Some(ink.opacity(0.25));
-    t.highlight_theme = std::sync::Arc::new(highlight);
-    Theme::sync_base(cx);
+    lyrel_ui_base::presentation::install_preset_theme(
+        window.as_deref_mut(),
+        cx,
+        &theme,
+        material_active(backdrop, blur),
+    );
 
     #[cfg(target_os = "macos")]
     if let Some(window) = window.as_deref_mut() {
@@ -1300,28 +928,11 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     }
 }
 
-/// Shared opaque floating surface. In-window GPUI layers cannot blur the
-/// terminal beneath them, so depth comes from the edge and shadow instead.
-pub(crate) fn floating_surface<T: Styled>(element: T, cx: &App) -> T {
-    let theme = cx.theme();
-    element
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
-        .border_1()
-        .border_color(theme.border.opacity(0.65))
-        .rounded(crate::ui::rounding::POPOVER_RADIUS)
-        .shadow_xl()
-}
+pub(crate) use lyrel_ui_base::presentation::{
+    effective_preset_id, floating_surface, hairline, note_system_appearance,
+    refresh_system_appearance, system_dark,
+};
 
-/// One device pixel: the v4 hairline, 0.5px on a Retina panel and a whole
-/// pixel on a 1x one. A literal `px(0.5)` would be antialiased down to half
-/// its ink on a 1x display, under the contrast floor `divider` is held to.
-pub(crate) fn hairline(window: &Window) -> Pixels {
-    px(1. / window.scale_factor().max(1.))
-}
-
-/// Tabular figures, so a column of counts, sizes and positions keeps its
-/// digits on one grid while the numbers change under it.
 pub(crate) fn tabular_figures() -> gpui_kit::FontFeatures {
     gpui_kit::FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]))
 }
@@ -1382,13 +993,16 @@ fn sync_native_appearance(_dark: Option<bool>) {}
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
+    use gpui_kit::component::Theme;
     #[cfg(target_os = "windows")]
     use gpui_kit::point;
+    use gpui_kit::{Styled, px};
+    use lyrel_ui_base::presentation::SystemAppearance;
 
     #[gpui_kit::test]
     fn effective_preset_follows_the_cached_system_appearance(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            cx.set_global(Config(crate::core::config::CoreConfig {
+            cx.set_global(Config(lyrel_ui_base::config::CoreConfig {
                 theme_follow_system: true,
                 theme_preset_light: "light-slot".into(),
                 theme_preset_dark: "dark-slot".into(),
@@ -1513,8 +1127,8 @@ mod tests {
     fn profile_match_ink_clears_the_real_list_backgrounds(cx: &mut TestAppContext) {
         let (_app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
         fn packed(color: Hsla) -> u32 {
-            let rgb = crate::terminal::palette::hsla_to_rgb(color);
-            (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32
+            let [r, g, b] = lyrel_ui_base::palette::hsla_to_rgb(color);
+            (r as u32) << 16 | (g as u32) << 8 | b as u32
         }
         let warm = presets::Theme {
             id: "search-highlight-warm".into(),
@@ -1596,9 +1210,12 @@ mod tests {
         }
         // The untouched default — Auto, no blur, no opacity override — is the
         // case the report hit: it must come out opaque.
-        let resolved =
-            windows_background_appearance(crate::core::config::WindowBackdrop::Auto, false, 22_621);
-        let opacity = default_window_opacity(crate::core::config::WindowBackdrop::Auto, false);
+        let resolved = windows_background_appearance(
+            lyrel_core::core::config::WindowBackdrop::Auto,
+            false,
+            22_621,
+        );
+        let opacity = default_window_opacity(lyrel_core::core::config::WindowBackdrop::Auto, false);
         assert_eq!(windows_window_appearance(resolved, opacity), Opaque);
     }
 
@@ -1703,7 +1320,7 @@ mod tests {
 
     #[test]
     fn windows_background_appearance_falls_back_by_build() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         let a = |b: WindowBackdrop, blur: bool, build: u32| {
             windows_background_appearance(b, blur, build)
         };
@@ -1804,7 +1421,7 @@ mod tests {
 
     #[test]
     fn auto_never_counts_as_a_material() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // Every config written before this setting existed carries `Auto`,
         // and many of them carry `window_blur: true` from the old switch.
         // Those windows were opaque, with opaque sidebars — an update must
@@ -1822,7 +1439,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn an_explicitly_picked_material_lowers_the_default_opacity() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // The counterpart to the check above: opting in through the dropdown
         // is what buys the translucent default, on a build that supports it.
         if windows_build_number() < 22_621 {
@@ -1846,7 +1463,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_windows_backdrop_defers_to_the_local_blur_toggle() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // On non-Windows, `window_backdrop` is a Windows-only setting with
         // no local UI to clear it; every variant must defer to the local
         // blur toggle so the switch's checked state always matches what is
@@ -1874,7 +1491,7 @@ mod tests {
 
     #[test]
     fn supported_backdrops_follow_the_build() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         assert_eq!(
             supported_backdrops_for(22_621),
             &[

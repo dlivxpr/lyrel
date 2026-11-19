@@ -13,8 +13,6 @@
 //! bounded current projection, because daemon recency can move without either
 //! counter. Ordinary output never clones a record set or rebuilds a tooltip.
 
-use crate::terminal::view::TerminalView;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::program_status::{record_label, state_label};
 use crate::ui::tab::Tab;
 use gpui_kit::component::{ActiveTheme as _, v_flex};
@@ -22,6 +20,8 @@ use gpui_kit::{AnyElement, App, Entity, EntityId, SharedString, Window, div, pre
 use lyrel_core::core::program_status::{
     ProgramRecord, ProgramState, ProgramStatusClient, plain_program_text,
 };
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use std::rc::Rc;
 
 /// How many records besides the representative the hover card lists.

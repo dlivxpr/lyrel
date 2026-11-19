@@ -9,11 +9,11 @@ use gpui_kit::{Context, PromptButton, PromptLevel, Window};
 use lyrel_core::core::git::ops::{Destructive, GitOp, PullMode};
 use lyrel_core::core::git::status::{StatusProbe, WorkingTreeStatus, probe_status};
 
-use crate::core::config::DiffViewMode;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::scm::state::{BranchInput, RepoKey};
+use lyrel_core::core::config::DiffViewMode;
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// One entry point for every source control verb.
 ///
@@ -76,7 +76,9 @@ impl LyrelApp {
     /// Global like `diff_view`: someone who reads changes by directory reads
     /// every repository's that way.
     pub(crate) fn scm_toggle_changes_tree(&mut self, cx: &mut Context<Self>) {
-        let next = !cx.global::<crate::core::config::Config>().scm_changes_tree;
+        let next = !cx
+            .global::<lyrel_ui_base::config::Config>()
+            .scm_changes_tree;
         self.update_config(cx, |cfg| cfg.scm_changes_tree = next);
         cx.notify();
     }
@@ -86,7 +88,7 @@ impl LyrelApp {
     /// Global rather than per-overlay, matching `diffEditor.renderSideBySide`:
     /// someone who prefers unified prefers it for every file.
     pub(crate) fn toggle_diff_view_mode(&mut self, cx: &mut Context<Self>) {
-        let next = match cx.global::<crate::core::config::Config>().diff_view {
+        let next = match cx.global::<lyrel_ui_base::config::Config>().diff_view {
             DiffViewMode::Split => DiffViewMode::Unified,
             DiffViewMode::Unified => DiffViewMode::Split,
         };
@@ -162,7 +164,7 @@ impl LyrelApp {
     /// command only, without recreating a cache owner or background watch.
     pub(crate) fn with_scm_status(
         &mut self,
-        host: crate::ui::host_ops::SharedHost,
+        host: lyrel_ui_base::host_ops::SharedHost,
         root: std::path::PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -173,12 +175,12 @@ impl LyrelApp {
         {
             return;
         }
-        if let Some(status) = crate::terminal::git_data::status_of(cx, host.id(), &root) {
+        if let Some(status) = crate::ui::scm::data::status_of(cx, host.id(), &root) {
             ready(self, &status, window, cx);
             return;
         }
         let expected = host.clone();
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,

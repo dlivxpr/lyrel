@@ -6,15 +6,15 @@ use crate::commands::test_support::human;
 use crate::commands::test_support::json_of;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
-use lyrel_core::core::agent_hooks::HookAgent;
-use lyrel_core::core::agent_hooks::HooksState;
-use lyrel_core::core::cli_agent::CLIAgent;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
+use lyrel_protocol::core::agent_hooks::HookAgent;
+use lyrel_protocol::core::agent_hooks::HooksState;
+use lyrel_protocol::core::cli_agent::CLIAgent;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
 use serde_json::json;
 
 fn detect_agent(backend: &mut MockBackend, pane_id: u64, agent: CLIAgent) {
-    use lyrel_core::core::machine::AgentFacts;
+    use lyrel_protocol::core::machine::AgentFacts;
 
     let pane = backend
         .machine
@@ -34,7 +34,7 @@ fn detect_agent(backend: &mut MockBackend, pane_id: u64, agent: CLIAgent) {
 
 #[test]
 fn agents_distinguishes_no_agent_from_a_healthy_agent() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
 
     let mut backend = mock();
     backend.replies.push_back(ReplyOk::AgentStates(Vec::new()));
@@ -123,7 +123,7 @@ fn agents_reports_outdated_hooks_with_the_update_action() {
 
 #[test]
 fn agents_json_keeps_the_existing_agents_shape_when_there_is_no_diagnostic() {
-    use lyrel_core::core::cli_agent::AgentStatus;
+    use lyrel_protocol::core::cli_agent::AgentStatus;
 
     let mut backend = mock();
     let mut reporting = agent_state(1, AgentStatus::Waiting);
@@ -142,7 +142,7 @@ fn agents_json_keeps_the_existing_agents_shape_when_there_is_no_diagnostic() {
 
 #[test]
 fn agents_for_column_keeps_missing_age_unknown_and_future_clocks_non_negative() {
-    use lyrel_core::daemon::control::PaneAgentState;
+    use lyrel_protocol::daemon::control::PaneAgentState;
     let old: PaneAgentState = serde_json::from_value(json!({
         "pane_id":7, "state":{"status":"waiting"}
     }))

@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::machine::{PaneSeed, Workspace};
-use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+use lyrel_protocol::core::machine::{PaneSeed, Workspace};
+use lyrel_protocol::daemon::control::{ControlRequest, ReplyOk};
 use serde_json::{Value, json};
 
 use super::pane::hang_up_removed_panes;

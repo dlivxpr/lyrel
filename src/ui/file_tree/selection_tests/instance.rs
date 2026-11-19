@@ -2,11 +2,11 @@
 //! stop a completed backing read before its UI callback, not an executor queue.
 use super::host::{NamespaceHost, ReadKind};
 use super::*;
-use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
-use crate::terminal::PaneWorkspace;
 use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::file_tree::read_probe::{InstanceTicket, Landing};
-use crate::ui::search::files::FileList;
+use lyrel_ui_base::file_search::FileList;
+use lyrel_ui_base::route::PaneWorkspace;
+use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
 use std::time::{Duration, Instant};
 
 fn backing(name: &str) -> tempfile::TempDir {
@@ -273,9 +273,9 @@ fn host_instance_go_to_file_after_hidden_reconnect_uses_current_adapter(cx: &mut
     vcx.update(|window, cx| window.press("enter", cx));
     until(&mut vcx, "current adapter file opens", |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.editor_active_local_file().is_some_and(|file| {
-                file.path == Path::new("/repo/needle-shared.txt")
-                    && file.input.read(cx).text().to_string() == "current adapter\n"
+            app.editor_active_local_file(cx).is_some_and(|file| {
+                file.path() == Path::new("/repo/needle-shared.txt")
+                    && file.input().read(cx).text().to_string() == "current adapter\n"
             })
         })
     });
@@ -484,8 +484,8 @@ fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppCo
         &mut vcx,
         "quick-open selected current adapter file",
         |vcx| {
-            app.read_with(vcx, |app, _| {
-                app.editor_active_location().is_some_and(|(host, path)| {
+            app.read_with(vcx, |app, cx| {
+                app.editor_active_location(cx).is_some_and(|(host, path)| {
                     host == HostId::LOCAL && path == Path::new("/repo").join("new.txt")
                 })
             })

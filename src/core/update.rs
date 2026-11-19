@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::core::config::Config;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 const REPO: &str = "dlivxpr/lyrel";
 
@@ -61,21 +61,10 @@ static DOWNLOAD_VERIFYING: AtomicBool = AtomicBool::new(false);
 const PROGRESS_TICK: Duration = Duration::from_millis(120);
 
 #[cfg(target_os = "windows")]
-const WINDOWS_INNO_INSTALL_MARKER: &str = ".lyrel-inno-install";
-#[cfg(target_os = "windows")]
-const WINDOWS_INNO_INSTALL_MARKER_CONTENT: &[u8] = b"inno-v1";
-#[cfg(target_os = "windows")]
-const WINDOWS_PORTABLE_MARKER: &str = ".lyrel-portable";
-#[cfg(target_os = "windows")]
-const WINDOWS_PORTABLE_MARKER_CONTENT: &[u8] = b"portable-v1";
-/// What the updater names the directory it moves the old portable files into.
-#[cfg(target_os = "windows")]
-const WINDOWS_PORTABLE_BACKUP_PREFIX: &str = ".lyrel-update-backup-";
-/// Present inside that backup from before the first installed file moves
-/// until the replacement is complete — see `PORTABLE_BACKUP_INCOMPLETE` in
-/// src/bin/lyrel-updater.rs, which this duplicates like the markers above.
-#[cfg(target_os = "windows")]
-const WINDOWS_PORTABLE_BACKUP_INCOMPLETE: &str = ".lyrel-replace-incomplete";
+use lyrel_updater::markers::{
+    INNO_INSTALL_MARKER, INNO_INSTALL_MARKER_CONTENT, PORTABLE_BACKUP_INCOMPLETE,
+    PORTABLE_BACKUP_PREFIX, PORTABLE_MARKER, PORTABLE_MARKER_CONTENT,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AvailableUpdate {
@@ -947,7 +936,7 @@ pub fn apply_pending_at_launch() -> bool {
 /// before any window exists; `spawn_check`'s hydration carries the result
 /// into Settings.
 pub fn absorb_update_outcome_at_launch() {
-    use lyrel_core::daemon::install::outcome::{UpdateOutcome, read_outcome};
+    use lyrel_updater::outcome::{UpdateOutcome, read_outcome};
 
     let Some(path) = update_outcome_path() else {
         return;
@@ -1141,11 +1130,11 @@ fn scan_portable_backups(dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let named = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(WINDOWS_PORTABLE_BACKUP_PREFIX));
+            .is_some_and(|name| name.starts_with(PORTABLE_BACKUP_PREFIX));
         if !named || !path.is_dir() {
             continue;
         }
-        if path.join(WINDOWS_PORTABLE_BACKUP_INCOMPLETE).is_file() {
+        if path.join(PORTABLE_BACKUP_INCOMPLETE).is_file() {
             interrupted.push(path);
         } else {
             finished.push(path);
@@ -1284,36 +1273,22 @@ impl PendingUpdate {
         .launch()
     }
 
-    /// The pieces of a staged Inno plan that the elevated launch needs, read
-    /// out of `rest` by position — the order `prepare_windows_update` pushes
-    /// them. A plan that cannot name every piece is not elevated.
+    /// The staged plan read back through the shared contract: the seven
+    /// persisted positionals parse into the same `InstallPlan` shape the
+    /// updater executable installs from (see
+    /// `lyrel_updater::windows::InstallPlan::parse_rest`). A plan that
+    /// cannot name every piece is not elevated.
     #[cfg(target_os = "windows")]
-    fn elevated_parts(&self) -> Option<ElevatedPlanParts> {
-        if !self.needs_elevation || self.command != "install" || self.rest.len() != 7 {
+    fn elevated_plan(&self) -> Option<lyrel_updater::windows::InstallPlan> {
+        if !self.needs_elevation
+            || self.command != lyrel_updater::windows::InstallPlan::COMMAND
+            || self.rest.len() != 7
+            || self.expected_sha256.is_none()
+        {
             return None;
         }
-        Some(ElevatedPlanParts {
-            installer: self.rest[0].clone(),
-            asset_name: self.rest[2].to_str()?.to_string(),
-            install_dir: self.rest[3].clone(),
-            version: self.rest[4].to_str()?.to_string(),
-            log: self.rest[5].clone(),
-            stage: self.rest[6].clone(),
-            expected_sha256: self.expected_sha256.clone()?,
-        })
+        lyrel_updater::windows::InstallPlan::parse_rest(&self.rest, std::process::id()).ok()
     }
-}
-
-/// See [`PendingUpdate::elevated_parts`].
-#[cfg(target_os = "windows")]
-struct ElevatedPlanParts {
-    installer: PathBuf,
-    asset_name: String,
-    install_dir: PathBuf,
-    version: String,
-    log: PathBuf,
-    stage: PathBuf,
-    expected_sha256: String,
 }
 
 /// How asking Windows to start the privileged half ended. Only `Started`
@@ -1339,8 +1314,8 @@ impl PendingUpdate {
     fn launch_elevated(&self) -> Result<ElevationStart> {
         use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 
-        let mut parts = self
-            .elevated_parts()
+        let plan = self
+            .elevated_plan()
             .context("the staged package does not describe an elevated install")?;
         // The prompt names the installation this process is running from, not
         // the one the plan names. `update.json` lives in the user's config
@@ -1353,7 +1328,6 @@ impl PendingUpdate {
             .parent()
             .context("the installed updater names no directory")?
             .to_path_buf();
-        parts.install_dir = installed_dir.clone();
         let Some(status) = update_elevation_status_path() else {
             anyhow::bail!("no config directory for the elevation status file");
         };
@@ -1362,6 +1336,12 @@ impl PendingUpdate {
         let Some(outcome) = update_outcome_path() else {
             anyhow::bail!("no config directory for the install outcome file");
         };
+        // The digest anchors the whole chain; a plan without one is not an
+        // elevated plan at all.
+        let expected_sha256 = self
+            .expected_sha256
+            .clone()
+            .context("the staged package does not describe an elevated install")?;
         let app = std::env::current_exe().context("locating the running app")?;
         // Stale markers from an earlier attempt have to be gone: the watcher
         // reads both files, and would otherwise act on a dead attempt's
@@ -1369,28 +1349,27 @@ impl PendingUpdate {
         let _ = std::fs::remove_file(&status);
         let _ = std::fs::remove_file(&outcome);
 
-        let mut watcher = Command::new(&self.updater);
-        watcher
-            .arg("relaunch-watcher")
-            .arg("--status-file")
-            .arg(&status)
-            .arg("--result-file")
-            .arg(&outcome)
-            .arg("--app-path")
-            .arg(&app)
-            .arg("--log")
-            .arg(&parts.log)
-            .arg("--expected-version")
-            .arg(&parts.version)
+        // The watcher goes first so a declined prompt leaves exactly one
+        // medium-integrity process to reap; its argv is the WatcherPlan
+        // contract from lyrel_updater.
+        let watcher_plan = lyrel_updater::windows::WatcherPlan {
+            status_file: status.clone(),
+            result_file: outcome.clone(),
+            app,
+            log: plan.log.clone(),
+            version: plan.expected_version.clone(),
             // So the watcher can tell a GUI that is quitting from one that
             // stayed: a declined prompt leaves this process on screen, and
             // the relaunch it would otherwise perform on its own timeout
             // would put a second window beside it.
-            .arg("--gui-pid")
-            .arg(std::process::id().to_string());
-        if let Some(dir) = &self.config_dir {
-            watcher.arg("--config-dir").arg(dir);
-        }
+            gui_pid: Some(std::process::id()),
+            // The watcher's whole reason to exist is the relaunch; the
+            // relaunched app must answer for the same config directory
+            // this process staged the update against (#504).
+            config_dir: self.config_dir.clone(),
+        };
+        let mut watcher = Command::new(&self.updater);
+        watcher.args(watcher_plan.argv());
         let mut watcher = lyrel_core::core::proc::hide_console(&mut watcher)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1398,8 +1377,23 @@ impl PendingUpdate {
             .spawn()
             .context("launching the relaunch watcher")?;
 
-        let parameters =
-            elevated_stage_arguments(&parts, &status, &outcome, self.config_dir.as_deref());
+        // Everything the privileged first stage needs crosses on its command
+        // line, quoted for the CRT splitter (see
+        // `lyrel_updater::windows::ElevatedStagePlan::command_line`).
+        let stage_plan = lyrel_updater::windows::ElevatedStagePlan {
+            gui_pid: std::process::id(),
+            installer: plan.installer,
+            asset_name: plan.asset_name,
+            install_dir: installed_dir.clone(),
+            expected_version: plan.expected_version,
+            log: plan.log,
+            stage: plan.stage,
+            expected_sha256,
+            status_file: status,
+            result_file: Some(outcome),
+            config_dir: self.config_dir.clone(),
+        };
+        let parameters = stage_plan.command_line();
         match shell_execute_elevated(&installed_updater, &parameters, &installed_dir) {
             Ok(()) => Ok(ElevationStart::Started),
             Err(code) => {
@@ -1408,7 +1402,7 @@ impl PendingUpdate {
                 // whole 15-minute grace waiting for a chain that will never
                 // report, while the app it was to relaunch is still running.
                 let _ = watcher.kill();
-                let _ = std::fs::remove_file(&status);
+                let _ = std::fs::remove_file(&stage_plan.status_file);
                 if code == ERROR_CANCELLED {
                     return Ok(ElevationStart::Declined);
                 }
@@ -1418,92 +1412,6 @@ impl PendingUpdate {
             }
         }
     }
-}
-
-/// The command line for the privileged first stage, as a single string:
-/// ShellExecuteEx hands it to the child's CRT argv splitter verbatim, so
-/// every argument is quoted — the install directory typically lives under
-/// `C:\Program Files`. Built as an `OsString` so a path that is not valid
-/// Unicode survives the round trip.
-#[cfg(target_os = "windows")]
-fn elevated_stage_arguments(
-    parts: &ElevatedPlanParts,
-    status_file: &Path,
-    outcome: &Path,
-    config_dir: Option<&Path>,
-) -> std::ffi::OsString {
-    let mut line = std::ffi::OsString::new();
-    let mut push = |arg: &std::ffi::OsStr| push_quoted(&mut line, arg);
-    push(std::ffi::OsStr::new("elevated-stage"));
-    push(std::ffi::OsStr::new(&std::process::id().to_string()));
-    push(parts.installer.as_os_str());
-    push(std::ffi::OsStr::new(&parts.asset_name));
-    push(parts.install_dir.as_os_str());
-    push(std::ffi::OsStr::new(&parts.version));
-    push(parts.log.as_os_str());
-    push(parts.stage.as_os_str());
-    push(std::ffi::OsStr::new("--expected-sha256"));
-    push(std::ffi::OsStr::new(&parts.expected_sha256));
-    push(std::ffi::OsStr::new("--status-file"));
-    push(status_file.as_os_str());
-    if let Some(dir) = config_dir {
-        push(std::ffi::OsStr::new("--config-dir"));
-        push(dir.as_os_str());
-    }
-    push(std::ffi::OsStr::new("--result-file"));
-    push(outcome.as_os_str());
-    line
-}
-
-/// Appends one argument the way `CommandLineToArgvW` — and the CRT splitter
-/// the elevated helper is parsed by — reads back verbatim.
-///
-/// Wrapping in quotes is not enough on its own. A backslash is an escape
-/// character only in front of a quote, so a path that *ends* in one
-/// (`--config-dir "D:\lyrel\"`) escapes its own closing quote and swallows the
-/// rest of the command line into a single argument; an embedded quote splits
-/// one argument into several. Neither can be reached across the integrity
-/// boundary — every value here comes from this user's own session — but the
-/// receiver runs elevated, and an argument list it can misread is not a thing
-/// to leave to the shape of a path.
-#[cfg(target_os = "windows")]
-fn push_quoted(line: &mut std::ffi::OsString, arg: &std::ffi::OsStr) {
-    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
-
-    const QUOTE: u16 = b'"' as u16;
-    const BACKSLASH: u16 = b'\\' as u16;
-
-    let mut quoted = vec![QUOTE];
-    // The run of backslashes immediately behind the cursor: doubled if a
-    // quote follows it, left alone otherwise.
-    let mut backslashes = 0usize;
-    for unit in arg.encode_wide() {
-        match unit {
-            BACKSLASH => {
-                backslashes += 1;
-                quoted.push(unit);
-            }
-            QUOTE => {
-                quoted.resize(quoted.len() + backslashes, BACKSLASH);
-                quoted.push(BACKSLASH);
-                quoted.push(QUOTE);
-                backslashes = 0;
-            }
-            _ => {
-                backslashes = 0;
-                quoted.push(unit);
-            }
-        }
-    }
-    // The closing quote is a quote like any other: the run in front of it has
-    // to be doubled too.
-    quoted.resize(quoted.len() + backslashes, BACKSLASH);
-    quoted.push(QUOTE);
-
-    if !line.is_empty() {
-        line.push(" ");
-    }
-    line.push(std::ffi::OsString::from_wide(&quoted));
 }
 
 /// Starts `executable` elevated — the `runas` verb is what turns the request
@@ -1581,7 +1489,7 @@ struct UpdateState {
 
 impl UpdateState {
     fn path() -> Option<std::path::PathBuf> {
-        crate::core::config::config_path("update.json")
+        lyrel_core::core::config::config_path("update.json")
     }
 
     fn load() -> Self {
@@ -1608,7 +1516,7 @@ impl UpdateState {
                 return;
             }
         };
-        if let Err(e) = crate::core::config::write_atomic(&path, json.as_bytes()) {
+        if let Err(e) = lyrel_core::core::config::write_atomic(&path, json.as_bytes()) {
             log::warn!("failed to write {}: {e}", path.display());
         }
     }
@@ -1677,7 +1585,7 @@ fn desktop_asset_version(name: &str) -> Option<&str> {
 ///
 /// Until this runs gpui holds a null client and every remote image quietly
 /// fails. The only remote images lyrel draws are the GitHub-hosted ones in an
-/// issue's text (see `core::github::markdown`). Built with the update check's
+/// issue's text (see `lyrel_insights::github::markdown`). Built with the update check's
 /// user agent and proxy; a proxy changed later applies from the next launch.
 pub(crate) fn install_image_client(cx: &mut App) {
     let manual_proxy = cx.global::<Config>().http_proxy.clone();
@@ -1994,20 +1902,7 @@ fn updater_speaks_elevation(install_dir: &Path) -> bool {
         .stderr(Stdio::null());
     let output = lyrel_core::core::proc::hide_console(&mut command).output();
     let Ok(output) = output else { return false };
-    output.status.success() && capabilities_cover_elevation(&output.stdout)
-}
-
-/// The pure half, so the token matching is testable without spawning a real
-/// helper. Mirrors `ELEVATION_CAPABILITIES` in the updater.
-#[cfg(target_os = "windows")]
-fn capabilities_cover_elevation(stdout: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(stdout) else {
-        return false;
-    };
-    let tokens: std::collections::HashSet<&str> = text.lines().map(str::trim).collect();
-    ["elevated-stage", "install-elevated", "relaunch-watcher"]
-        .iter()
-        .all(|capability| tokens.contains(capability))
+    output.status.success() && lyrel_updater::capabilities_cover_elevation(&output.stdout)
 }
 
 fn prepare_update(
@@ -2111,7 +2006,7 @@ impl PreparedUpdate {
 /// Where the updater records how the install ended; the next launch merges it
 /// into the update state (`absorb_update_outcome_at_launch`).
 fn update_outcome_path() -> Option<PathBuf> {
-    crate::core::config::config_path(lyrel_core::daemon::install::outcome::OUTCOME_FILE_NAME)
+    lyrel_core::core::config::config_path(lyrel_updater::outcome::OUTCOME_FILE_NAME)
 }
 
 /// The file the privileged first stage writes its pid into so the de-elevated
@@ -2122,7 +2017,7 @@ fn update_outcome_path() -> Option<PathBuf> {
 /// shape, including over-the-shoulder (#504).
 #[cfg(target_os = "windows")]
 fn update_elevation_status_path() -> Option<PathBuf> {
-    crate::core::config::config_path("update-elevation.status")
+    lyrel_core::core::config::config_path("update-elevation.status")
 }
 
 /// The named options after the positional arguments. Everything the updater
@@ -2131,18 +2026,14 @@ fn update_elevation_status_path() -> Option<PathBuf> {
 /// spawning process's environment, so a `LYREL_CONFIG_DIR` set there would
 /// fall back to the administrator's config directory exactly in the case
 /// that needs the caller's (#504). The updater re-exports the variable for
-/// the children it spawns itself.
+/// the children it spawns itself. The flag layout lives in
+/// `lyrel_updater::TailOptions`, the parser the updater executable shares.
 fn updater_tail_args(config_dir: Option<&Path>, outcome: Option<&Path>) -> Vec<std::ffi::OsString> {
-    let mut args = Vec::new();
-    if let Some(dir) = config_dir {
-        args.push(std::ffi::OsString::from("--config-dir"));
-        args.push(dir.as_os_str().to_os_string());
+    lyrel_updater::TailOptions {
+        config_dir: config_dir.map(Path::to_path_buf),
+        result_file: outcome.map(Path::to_path_buf),
     }
-    if let Some(outcome) = outcome {
-        args.push(std::ffi::OsString::from("--result-file"));
-        args.push(outcome.as_os_str().to_os_string());
-    }
-    args
+    .argv()
 }
 
 #[cfg(target_os = "macos")]
@@ -2184,37 +2075,30 @@ fn prepare_macos_update(
     let dir = staging.path().to_path_buf();
     let archive = write_staged_asset(&dir, asset_name, archive)?;
     let checksums = write_staged_asset(&dir, "checksums.txt", checksums)?;
-    run_updater(
-        &updater,
-        [
-            PathBuf::from("verify"),
-            current.clone(),
-            archive.clone(),
-            checksums.clone(),
-            PathBuf::from(asset_name),
-            dir.clone(),
-            PathBuf::from(version),
-        ],
-    )?;
-    let log =
-        crate::core::config::config_path("update.log").unwrap_or_else(|| dir.join("update.log"));
-    if let Some(parent) = log.parent() {
-        std::fs::create_dir_all(parent).context("creating the update log directory")?;
-    }
+    let log = log_path(&dir)?;
+    // One plan shape drives the pre-flight verification and the persisted
+    // install plan; the argv layouts live in lyrel_updater (see
+    // `lyrel_updater::macos`).
+    let plan = lyrel_updater::macos::InstallPlan {
+        parent_pid: 0, // supplied fresh by the launch that runs the plan
+        current: current.clone(),
+        archive: archive.clone(),
+        checksums: checksums.clone(),
+        asset_name: asset_name.to_string(),
+        stage: dir.clone(),
+        expected_version: version.to_string(),
+        log,
+        config_dir: lyrel_core::core::config::config_dir_path(),
+        result_file: None,
+    };
+    run_updater(&updater, plan.verify_plan().argv())?;
     let dir = staging.keep();
+    let rest = plan.rest();
     Ok(PreparedUpdate {
         updater,
-        command: "install".to_string(),
-        rest: vec![
-            current,
-            archive,
-            checksums,
-            PathBuf::from(asset_name),
-            dir.clone(),
-            PathBuf::from(version),
-            log,
-        ],
-        config_dir: crate::core::config::config_dir_path(),
+        command: lyrel_updater::macos::InstallPlan::COMMAND.to_string(),
+        rest,
+        config_dir: plan.config_dir.clone(),
         stage: dir,
         needs_elevation: false,
         expected_sha256: None,
@@ -2270,34 +2154,59 @@ fn prepare_windows_update(
     let checksums = write_staged_asset(&dir, "checksums.txt", checksums)?;
 
     // Verification runs before the GUI commits to quitting. Both Windows
-    // update modes repeat their archive checks after the parent exits.
-    let install_command = match &layout {
+    // update modes repeat their archive checks after the parent exits. One
+    // plan per layout drives the pre-flight argv and the persisted install
+    // plan; the layouts live in lyrel_updater (see `lyrel_updater::windows`).
+    let config_dir = lyrel_core::core::config::config_dir_path();
+    let (command, rest) = match &layout {
         WindowsUpdateLayout::Inno(_) => {
-            run_updater(
-                &bundled,
-                [
-                    PathBuf::from("verify"),
-                    package.clone(),
-                    checksums.clone(),
-                    PathBuf::from(asset_name),
-                    PathBuf::from(version),
-                ],
-            )?;
-            "install"
+            let verify = lyrel_updater::windows::VerifyPlan::Installer {
+                installer: package.clone(),
+                checksums: checksums.clone(),
+                asset_name: asset_name.to_string(),
+                expected_version: version.to_string(),
+            };
+            run_updater(&bundled, verify.argv())?;
+            let plan = lyrel_updater::windows::InstallPlan {
+                parent_pid: 0, // supplied fresh by the launch that runs it
+                installer: package.clone(),
+                checksums: checksums.clone(),
+                asset_name: asset_name.to_string(),
+                install_dir: install_dir.clone(),
+                expected_version: version.to_string(),
+                log: log_path(&dir)?,
+                stage: dir.clone(),
+                config_dir: config_dir.clone(),
+                result_file: None,
+                expected_sha256: None,
+            };
+            (lyrel_updater::windows::InstallPlan::COMMAND, plan.rest())
         }
         WindowsUpdateLayout::Portable(_) => {
-            run_updater(
-                &bundled,
-                [
-                    PathBuf::from("verify-portable"),
-                    package.clone(),
-                    checksums.clone(),
-                    PathBuf::from(asset_name),
-                    PathBuf::from(version),
-                    dir.clone(),
-                ],
-            )?;
-            "install-portable"
+            let verify = lyrel_updater::windows::VerifyPlan::Portable {
+                archive: package.clone(),
+                checksums: checksums.clone(),
+                asset_name: asset_name.to_string(),
+                expected_version: version.to_string(),
+                stage: dir.clone(),
+            };
+            run_updater(&bundled, verify.argv())?;
+            let plan = lyrel_updater::windows::PortableInstallPlan {
+                parent_pid: 0, // supplied fresh by the launch that runs it
+                archive: package.clone(),
+                checksums: checksums.clone(),
+                asset_name: asset_name.to_string(),
+                install_dir: install_dir.clone(),
+                expected_version: version.to_string(),
+                log: log_path(&dir)?,
+                stage: dir.clone(),
+                config_dir: config_dir.clone(),
+                result_file: None,
+            };
+            (
+                lyrel_updater::windows::PortableInstallPlan::COMMAND,
+                plan.rest(),
+            )
         }
     };
 
@@ -2307,29 +2216,28 @@ fn prepare_windows_update(
     std::fs::copy(&bundled, &updater)
         .with_context(|| format!("copying the Windows updater to {}", updater.display()))?;
 
-    let log =
-        crate::core::config::config_path("update.log").unwrap_or_else(|| dir.join("update.log"));
-    if let Some(parent) = log.parent() {
-        std::fs::create_dir_all(parent).context("creating the update log directory")?;
-    }
     let dir = staging.keep();
     Ok(PreparedUpdate {
         updater,
-        command: install_command.to_string(),
-        rest: vec![
-            package,
-            checksums,
-            PathBuf::from(asset_name),
-            install_dir,
-            PathBuf::from(version),
-            log,
-            dir.clone(),
-        ],
-        config_dir: crate::core::config::config_dir_path(),
+        command: command.to_string(),
+        rest,
+        config_dir,
         stage: dir,
         needs_elevation,
         expected_sha256,
     })
+}
+
+/// Where the updater's best-effort log lives; the config directory when one
+/// is resolvable, else the staging directory.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn log_path(stage: &Path) -> Result<PathBuf> {
+    let log = lyrel_core::core::config::config_path("update.log")
+        .unwrap_or_else(|| stage.join("update.log"));
+    if let Some(parent) = log.parent() {
+        std::fs::create_dir_all(parent).context("creating the update log directory")?;
+    }
+    Ok(log)
 }
 
 #[cfg(target_os = "macos")]
@@ -2397,15 +2305,15 @@ fn current_windows_update_layout() -> Option<WindowsUpdateLayout> {
 #[cfg(target_os = "windows")]
 fn windows_update_layout_for(executable: &Path) -> Option<WindowsUpdateLayout> {
     let directory = executable.parent()?;
-    let inno = directory.join(WINDOWS_INNO_INSTALL_MARKER);
-    let portable = directory.join(WINDOWS_PORTABLE_MARKER);
+    let inno = directory.join(INNO_INSTALL_MARKER);
+    let portable = directory.join(PORTABLE_MARKER);
     // A stale or mixed marker must not switch the installer shape.
     if inno.exists() {
         return (!portable.exists()
-            && std::fs::read(inno).ok()?.as_slice() == WINDOWS_INNO_INSTALL_MARKER_CONTENT)
+            && std::fs::read(inno).ok()?.as_slice() == INNO_INSTALL_MARKER_CONTENT)
             .then(|| WindowsUpdateLayout::Inno(directory.to_path_buf()));
     }
-    (std::fs::read(portable).ok()? == WINDOWS_PORTABLE_MARKER_CONTENT)
+    (std::fs::read(portable).ok()? == PORTABLE_MARKER_CONTENT)
         .then(|| WindowsUpdateLayout::Portable(directory.to_path_buf()))
 }
 
@@ -2610,7 +2518,7 @@ fn can_stage_replacement_in(dir: &Path) -> bool {
         .is_ok()
 }
 
-fn run_updater(updater: &Path, args: impl IntoIterator<Item = PathBuf>) -> Result<()> {
+fn run_updater(updater: &Path, args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<()> {
     let mut command = Command::new(updater);
     command.args(args);
     let output = lyrel_core::core::proc::hide_console(&mut command)
@@ -2913,7 +2821,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let interrupted = root.path().join(".lyrel-update-backup-cut");
         std::fs::create_dir(&interrupted).unwrap();
-        std::fs::write(interrupted.join(WINDOWS_PORTABLE_BACKUP_INCOMPLETE), b"").unwrap();
+        std::fs::write(interrupted.join(PORTABLE_BACKUP_INCOMPLETE), b"").unwrap();
         let finished = root.path().join(".lyrel-update-backup-done");
         std::fs::create_dir(&finished).unwrap();
         let legacy = root.path().join(".otherterm-update-backup-cut");
@@ -3020,7 +2928,7 @@ mod tests {
     #[test]
     fn update_state_round_trips_and_defaults() {
         let _lock = UPDATE_STATE_LOCK.lock().unwrap();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let path = UpdateState::path().expect("config dir pinned");
 
         let _ = std::fs::remove_file(&path);
@@ -3146,10 +3054,10 @@ mod tests {
     /// writing both would race each other.
     #[test]
     fn an_updater_outcome_is_absorbed_exactly_once() {
-        use lyrel_core::daemon::install::outcome::{UpdateOutcome, write_outcome};
+        use lyrel_updater::outcome::{UpdateOutcome, write_outcome};
 
         let _lock = UPDATE_STATE_LOCK.lock().unwrap();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let state_path = UpdateState::path().expect("config dir pinned");
         let outcome_path = update_outcome_path().expect("config dir pinned");
         let _ = std::fs::remove_file(&state_path);
@@ -3300,25 +3208,25 @@ mod tests {
         std::fs::write(root.path().join(".otherterm-portable"), b"portable-v1").unwrap();
         assert_eq!(windows_update_layout_for(&executable), None);
 
-        std::fs::write(root.path().join(WINDOWS_PORTABLE_MARKER), b"portable-v1").unwrap();
+        std::fs::write(root.path().join(PORTABLE_MARKER), b"portable-v1").unwrap();
         assert_eq!(
             windows_update_layout_for(&executable),
             Some(WindowsUpdateLayout::Portable(root.path().to_path_buf()))
         );
 
-        std::fs::write(root.path().join(WINDOWS_INNO_INSTALL_MARKER), b"inno-v1").unwrap();
+        std::fs::write(root.path().join(INNO_INSTALL_MARKER), b"inno-v1").unwrap();
         assert_eq!(windows_update_layout_for(&executable), None);
-        std::fs::remove_file(root.path().join(WINDOWS_PORTABLE_MARKER)).unwrap();
+        std::fs::remove_file(root.path().join(PORTABLE_MARKER)).unwrap();
         assert_eq!(
             windows_update_layout_for(&executable),
             Some(WindowsUpdateLayout::Inno(root.path().to_path_buf()))
         );
 
-        std::fs::write(root.path().join(WINDOWS_INNO_INSTALL_MARKER), b"invalid").unwrap();
+        std::fs::write(root.path().join(INNO_INSTALL_MARKER), b"invalid").unwrap();
         assert_eq!(windows_update_layout_for(&executable), None);
 
-        std::fs::remove_file(root.path().join(WINDOWS_INNO_INSTALL_MARKER)).unwrap();
-        std::fs::write(root.path().join(WINDOWS_PORTABLE_MARKER), b"invalid").unwrap();
+        std::fs::remove_file(root.path().join(INNO_INSTALL_MARKER)).unwrap();
+        std::fs::write(root.path().join(PORTABLE_MARKER), b"invalid").unwrap();
         assert_eq!(windows_update_layout_for(&executable), None);
         assert_eq!(
             std::fs::read(root.path().join(".otherterm-inno-install")).unwrap(),
@@ -3392,7 +3300,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let executable = root.path().join("lyrel-app.exe");
         std::fs::write(&executable, b"test app").unwrap();
-        std::fs::write(root.path().join(WINDOWS_INNO_INSTALL_MARKER), b"inno-v1").unwrap();
+        std::fs::write(root.path().join(INNO_INSTALL_MARKER), b"inno-v1").unwrap();
         let layout = windows_update_layout_for(&executable).unwrap();
 
         // A writable temp directory is never the all-users installation, so
@@ -3479,28 +3387,6 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn an_elevation_capable_updater_is_recognised_by_its_own_answer() {
-        assert!(capabilities_cover_elevation(
-            b"elevated-stage\ninstall-elevated\nrelaunch-watcher\n"
-        ));
-        // Order and unrelated tokens are the updater's business.
-        assert!(capabilities_cover_elevation(
-            b"install\nrelaunch-watcher\nelevated-stage\ninstall-elevated\n"
-        ));
-        // An old updater exits with a usage error: no tokens, no chain, and
-        // the install falls back to pointing at the release page.
-        assert!(!capabilities_cover_elevation(
-            b"usage: lyrel-updater <command> [args]"
-        ));
-        assert!(!capabilities_cover_elevation(b""));
-        // Two of the three verbs is not the chain.
-        assert!(!capabilities_cover_elevation(
-            b"elevated-stage\ninstall-elevated\n"
-        ));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
     fn an_elevated_plan_names_every_piece_the_chain_needs() {
         let digest = "ab".repeat(32);
         let stage = PathBuf::from(r"C:\Users\someone\AppData\Local\Temp\lyrel-update-x");
@@ -3510,8 +3396,8 @@ mod tests {
             plan_version: PLAN_VERSION,
             updater: stage.join("lyrel-updater.exe"),
             command: "install".into(),
-            // The order `prepare_windows_update` pushes: installer, checksums,
-            // asset name, install dir, version, log, stage.
+            // The order `prepare_windows_update` persists, from
+            // `lyrel_updater::windows::InstallPlan::rest`.
             rest: vec![
                 stage.join("lyrel-27.0.0-windows-x86_64-setup.exe"),
                 stage.join("checksums.txt"),
@@ -3527,114 +3413,29 @@ mod tests {
             expected_sha256: expected_sha256.map(str::to_string),
         };
 
-        let parts = plan(true, Some(&digest))
-            .elevated_parts()
-            .expect("a complete elevated plan yields its parts");
+        // A complete elevated plan reads back through the shared contract
+        // (`lyrel_updater::windows::InstallPlan::parse_rest`) with every
+        // piece the chain names.
+        let parsed = plan(true, Some(&digest))
+            .elevated_plan()
+            .expect("a complete elevated plan parses");
         assert_eq!(
-            parts.installer,
+            parsed.installer,
             stage.join("lyrel-27.0.0-windows-x86_64-setup.exe")
         );
-        assert_eq!(parts.asset_name, "lyrel-27.0.0-windows-x86_64-setup.exe");
-        assert_eq!(parts.install_dir, PathBuf::from(r"C:\Program Files\lyrel"));
-        assert_eq!(parts.version, "27.0.0");
-        assert_eq!(parts.expected_sha256, digest);
+        assert_eq!(parsed.asset_name, "lyrel-27.0.0-windows-x86_64-setup.exe");
+        assert_eq!(parsed.install_dir, PathBuf::from(r"C:\Program Files\lyrel"));
+        assert_eq!(parsed.expected_version, "27.0.0");
+        assert_eq!(parsed.checksums, stage.join("checksums.txt"));
+        assert_eq!(parsed.log, stage.join("update.log"));
+        assert_eq!(parsed.stage, stage);
 
         // Not flagged, or flagged but missing the digest that anchors the
         // chain's trust, is not an elevated plan at all.
-        assert!(plan(false, Some(&digest)).elevated_parts().is_none());
-        assert!(plan(true, None).elevated_parts().is_none());
+        assert!(plan(false, Some(&digest)).elevated_plan().is_none());
+        assert!(plan(true, None).elevated_plan().is_none());
         let mut short = plan(true, Some(&digest));
         short.rest.truncate(6);
-        assert!(short.elevated_parts().is_none());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn the_elevated_command_line_quotes_every_argument() {
-        let parts = ElevatedPlanParts {
-            installer: PathBuf::from(r"C:\Users\some one\stage\setup.exe"),
-            asset_name: "lyrel-27.0.0-windows-x86_64-setup.exe".into(),
-            install_dir: PathBuf::from(r"C:\Program Files\lyrel"),
-            version: "27.0.0".into(),
-            log: PathBuf::from(r"C:\Users\some one\stage\update.log"),
-            stage: PathBuf::from(r"C:\Users\some one\stage"),
-            expected_sha256: "ab".repeat(32),
-        };
-        let line = elevated_stage_arguments(
-            &parts,
-            Path::new(r"C:\Users\some one\.config\lyrel\update-elevation.status"),
-            Path::new(r"C:\Users\some one\.config\lyrel\update-outcome.json"),
-            Some(Path::new(r"C:\Users\some one\.config\lyrel")),
-        )
-        .into_string()
-        .expect("the test paths are valid Unicode");
-
-        assert!(line.starts_with("\"elevated-stage\" "), "{line}");
-        assert!(
-            line.contains(&format!("\"{}\"", std::process::id())),
-            "{line}"
-        );
-        // A space in a path must never reach the CRT splitter unquoted.
-        assert!(line.contains(r#""C:\Program Files\lyrel""#), "{line}");
-        assert!(
-            line.contains(r#""C:\Users\some one\stage\setup.exe""#),
-            "{line}"
-        );
-        assert!(
-            line.contains(&format!(
-                "\"--expected-sha256\" \"{}\"",
-                parts.expected_sha256
-            )),
-            "{line}"
-        );
-        assert!(
-            line.contains(
-                r#""--status-file" "C:\Users\some one\.config\lyrel\update-elevation.status""#
-            ),
-            "{line}"
-        );
-        assert!(
-            line.contains(r#""--config-dir" "C:\Users\some one\.config\lyrel""#),
-            "{line}"
-        );
-        assert!(
-            line.contains(
-                r#""--result-file" "C:\Users\some one\.config\lyrel\update-outcome.json""#
-            ),
-            "{line}"
-        );
-    }
-
-    /// The CRT splitter the elevated helper is parsed by treats a backslash
-    /// as an escape only in front of a quote — so a config directory ending
-    /// in one would otherwise escape its own closing quote and eat every
-    /// argument after it, including `--result-file`, which is the file the
-    /// watcher waits on.
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn a_trailing_backslash_does_not_escape_its_own_closing_quote() {
-        let quote = |value: &str| {
-            let mut line = std::ffi::OsString::new();
-            push_quoted(&mut line, std::ffi::OsStr::new(value));
-            line.into_string().expect("valid Unicode in, valid out")
-        };
-
-        assert_eq!(
-            quote(r"C:\Program Files\lyrel"),
-            r#""C:\Program Files\lyrel""#
-        );
-        // Doubled only in front of the closing quote.
-        assert_eq!(quote(r"D:\lyrel\"), r#""D:\lyrel\\""#);
-        assert_eq!(quote(r"D:\lyrel\\"), r#""D:\lyrel\\\\""#);
-        // An embedded quote is escaped, and the run in front of it doubled.
-        assert_eq!(quote(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(quote(r#"a\"b"#), r#""a\\\"b""#);
-        // Interior backslashes are literal: doubling them would rename paths.
-        assert_eq!(quote(r"a\b"), r#""a\b""#);
-
-        let mut line = std::ffi::OsString::new();
-        push_quoted(&mut line, std::ffi::OsStr::new("one"));
-        push_quoted(&mut line, std::ffi::OsStr::new("two"));
-        assert_eq!(line.into_string().unwrap(), r#""one" "two""#);
+        assert!(short.elevated_plan().is_none());
     }
 }

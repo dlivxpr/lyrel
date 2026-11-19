@@ -7,10 +7,10 @@ use crate::commands::test_support::json_of;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::pane_info;
 use crate::commands::test_support::run_cli;
-use lyrel_core::core::machine::Axis;
-use lyrel_core::core::machine::PaneSeed;
-use lyrel_core::daemon::control::ControlRequest;
-use lyrel_core::daemon::control::ReplyOk;
+use lyrel_protocol::core::machine::Axis;
+use lyrel_protocol::core::machine::PaneSeed;
+use lyrel_protocol::daemon::control::ControlRequest;
+use lyrel_protocol::daemon::control::ReplyOk;
 use serde_json::Value;
 
 #[test]

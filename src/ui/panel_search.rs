@@ -30,10 +30,10 @@ use gpui_kit::{
 use lyrel_core::host::{ContentHit, ContentLimits, ContentQuery};
 
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::HostOps;
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT_MONO};
+use lyrel_ui_base::host_ops::HostOps;
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 use model::{FileGroup, Outcome, SearchKey, SearchRun};
 
@@ -271,8 +271,11 @@ impl LyrelApp {
             let root = roots
                 .iter()
                 .map(|r| {
-                    crate::ui::path_display::abbreviate_home(&r.to_string_lossy(), home.as_deref())
-                        .into_owned()
+                    lyrel_ui_base::path_display::abbreviate_home(
+                        &r.to_string_lossy(),
+                        home.as_deref(),
+                    )
+                    .into_owned()
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -569,7 +572,7 @@ impl LyrelApp {
         collapsed: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let muted = cx.theme().muted_foreground;
         let path = group.path.clone();
         h_flex()
@@ -657,7 +660,7 @@ impl LyrelApp {
     }
 
     fn panel_search_hit_row(&self, hit: &ContentHit, cx: &mut Context<Self>) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let mark = HighlightStyle {
             background_color: Some(cx.theme().yellow.opacity(0.35)),
             ..Default::default()
@@ -736,10 +739,10 @@ fn first_line(e: &str) -> &str {
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
-    use crate::core::config::RightPanelTab;
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{render_probe, test_window};
     use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext};
+    use lyrel_core::core::config::RightPanelTab;
     use std::path::Path;
 
     fn serial() -> std::sync::MutexGuard<'static, ()> {
@@ -933,9 +936,9 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             vcx.background_executor.run_until_parked();
-            if app.read_with(&vcx, |app, _| {
-                app.editor_active_location().is_some_and(|(host, path)| {
-                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+            if app.read_with(&vcx, |app, cx| {
+                app.editor_active_location(cx).is_some_and(|(host, path)| {
+                    host == lyrel_ui_base::host_ops::HostId::LOCAL && path == expected_target
                 })
             }) {
                 break;
@@ -943,8 +946,8 @@ mod gpui_tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "the search hit opened the wrong file: expected {expected_target:?}, got {:?}",
-                app.read_with(&vcx, |app, _| {
-                    app.editor_active_location()
+                app.read_with(&vcx, |app, cx| {
+                    app.editor_active_location(cx)
                         .map(|(host, path)| (host, path.to_path_buf()))
                 })
             );
@@ -1084,9 +1087,9 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             vcx.background_executor.run_until_parked();
-            if app.read_with(&vcx, |app, _| {
-                app.editor_active_location().is_some_and(|(host, path)| {
-                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+            if app.read_with(&vcx, |app, cx| {
+                app.editor_active_location(cx).is_some_and(|(host, path)| {
+                    host == lyrel_ui_base::host_ops::HostId::LOCAL && path == expected_target
                 })
             }) {
                 break;
@@ -1099,10 +1102,9 @@ mod gpui_tests {
         }
         app.read_with(&vcx, |app, cx| {
             let file = app
-                .editor
-                .local_file(app.tab_code().unwrap().active_id().unwrap())
+                .editor_active_local_file(cx)
                 .expect("the hit opened a local code editor");
-            let input = file.input.read(cx);
+            let input = file.input().read(cx);
             let cursor = input.cursor_position();
             assert_eq!((cursor.line, cursor.character), (1, 2));
             assert_eq!(input.text().to_string(), refreshed);

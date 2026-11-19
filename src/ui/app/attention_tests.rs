@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 fn register(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
     let weak = app.downgrade();
     app.update_in(vcx, |app, window, cx| {
-        app.workspace = crate::core::session::WorkspaceId::new();
+        app.workspace = lyrel_ui_base::session::WorkspaceId::new();
         WindowRegistry::register(cx, app.workspace, window.window_handle(), weak);
     });
 }
@@ -77,7 +77,7 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(
 ) {
     let (a, mut av, mut ast) = harness_with_tabs(cx, 3);
     let (b, mut bv, mut bst) = harness_with_tabs(cx, 2);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     av.update(|_, cx| WindowRegistry::init(cx));
     register(&a, &mut av);
     register(&b, &mut bv);
@@ -86,7 +86,7 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(
     let done = pane(&a, 2, &mut av);
     let oldest = pane(&b, 0, &mut bv);
     let unknown = pane(&b, 1, &mut bv);
-    let now = crate::core::config::unix_now().saturating_mul(1000);
+    let now = lyrel_core::core::config::unix_now().saturating_mul(1000);
     report(
         &newer,
         &mut ast[1],
@@ -173,7 +173,7 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(
 
 #[gpui_kit::test]
 fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut TestAppContext) {
-    use crate::core::config::KeybindingOverride;
+    use lyrel_core::core::config::KeybindingOverride;
     let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
     vcx.update(|_, cx| WindowRegistry::init(cx));
     register(&app, &mut vcx);

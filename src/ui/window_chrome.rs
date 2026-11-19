@@ -11,10 +11,10 @@ use gpui_kit::{
     AnyElement, App, Axis, ClickEvent, Pixels, Point, Window, img, point, prelude::*, px, rems,
 };
 
-use crate::core::actions::{
+use lyrel_ui_base::actions::{
     SplitDown, SplitRight, ToggleLeftPanel, TogglePalette, ToggleRightPanel,
 };
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 48.;
 
@@ -107,7 +107,9 @@ pub(crate) const TILE_GLYPH_XS: f32 = 11.;
 
 const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
 
-pub(crate) const CONTENT_INSET: f32 = 12.;
+/// Horizontal inset between window-chrome content and the frame. Shared
+/// through `lyrel-ui-base` so the editor's chromeless surfaces agree.
+pub(crate) use lyrel_ui_base::display::CONTENT_INSET;
 
 const TILE_EDGE_GAP: f32 = 5.;
 
@@ -274,7 +276,14 @@ fn chrome_tile_variant_for(selected: bool, cx: &gpui_kit::App) -> ButtonCustomVa
         // and, with the right panel open, two tiles read as current at once.
         // Hover takes the step the palette derives for it. (A selected button
         // never renders the hover style, so this only reaches the rest.)
-        .hover(gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover).into())
+        .hover(
+            gpui_kit::rgb(
+                cx.global::<lyrel_ui_base::presets::Surfaces>()
+                    .sidebar
+                    .hover,
+            )
+            .into(),
+        )
         .active(cx.theme().sidebar_accent)
 }
 
@@ -508,11 +517,11 @@ mod gpui_tests {
     };
     #[cfg(target_os = "macos")]
     use super::{TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
-    use crate::core::actions::{ActivateTab1, ActivateTab2};
-    use crate::core::config::RightPanelTab;
     use crate::daemon::protocol::ClientMsg;
     use crate::daemon::transport::Stream;
     use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
+    use lyrel_core::core::config::RightPanelTab;
+    use lyrel_ui_base::actions::{ActivateTab1, ActivateTab2};
     /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
     /// contents, and there are two ways it does that: it carries the whole point
     /// as a rule painted transparent (the strip's `TitleBar`, the rail's header,
@@ -579,7 +588,7 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             settle(vcx);
-            if app.read_with(vcx, |app, _| app.editor_active_local_file().is_some()) {
+            if app.read_with(vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
                 return;
             }
             assert!(
@@ -644,7 +653,8 @@ mod gpui_tests {
         let edge_controls = ["titlebar-left-panel", "titlebar-right-panel"];
         for (width, font_size) in [(1440., 16.), (760., 16.), (1440., 20.), (760., 20.)] {
             app.update_in(&mut vcx, |_, _, cx| {
-                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                cx.global_mut::<lyrel_ui_base::config::Config>()
+                    .ui_font_size = font_size;
                 cx.notify();
             });
             vcx.simulate_resize(size(px(width), px(900.)));
@@ -653,7 +663,7 @@ mod gpui_tests {
                 assert!(!window.is_fullscreen());
                 edge_controls.map(|id| window.find(id).bounds())
             });
-            vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+            vcx.dispatch_action(lyrel_ui_base::actions::ToggleFullscreen);
             settle(&mut vcx);
             let fullscreen = vcx.update(|window, _| {
                 assert!(window.is_fullscreen());
@@ -683,7 +693,7 @@ mod gpui_tests {
                     );
                 });
             }
-            vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+            vcx.dispatch_action(lyrel_ui_base::actions::ToggleFullscreen);
             settle(&mut vcx);
             vcx.update(|window, _| {
                 assert!(!window.is_fullscreen());
@@ -705,7 +715,8 @@ mod gpui_tests {
         ];
         for (width, font_size) in [(760., 16.), (1440., 20.)] {
             app.update_in(&mut vcx, |_, _, cx| {
-                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                cx.global_mut::<lyrel_ui_base::config::Config>()
+                    .ui_font_size = font_size;
                 gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
                 cx.notify();
             });
@@ -713,7 +724,7 @@ mod gpui_tests {
             settle(&mut vcx);
             let windowed = vcx.update(|window, _| controls.map(|id| window.find(id).bounds()));
             for fullscreen in [true, false] {
-                vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+                vcx.dispatch_action(lyrel_ui_base::actions::ToggleFullscreen);
                 settle(&mut vcx);
                 // Fullscreen feedback overlays the toolbar while entering and
                 // dismissing. Move away so hover cannot hold it open, then let
@@ -919,7 +930,9 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         wait_for_editor(&app, &mut vcx);
-        let editor = app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
+        let editor = app.read_with(&vcx, |app, cx| {
+            app.editor_active_local_file(cx).unwrap().into_input()
+        });
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
         }));
@@ -1011,7 +1024,7 @@ mod gpui_tests {
                 settle(&mut vcx);
                 let ready = app.read_with(&vcx, |app, cx| {
                     app.scm.pane_repo().is_some_and(|repo| {
-                        crate::terminal::git_data::status_of(cx, repo.host, &repo.root)
+                        crate::ui::scm::data::status_of(cx, repo.host, &repo.root)
                             .is_some_and(|status| status.total_entries == expected)
                     })
                 });
@@ -1175,7 +1188,7 @@ mod gpui_tests {
     }
     #[gpui_kit::test]
     fn file_fill_keeps_search_available_and_returns_input_to_the_document(cx: &mut TestAppContext) {
-        use crate::core::actions::ToggleDocumentFill;
+        use lyrel_ui_base::actions::ToggleDocumentFill;
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("navigation.txt");
         std::fs::write(&path, "").unwrap();
@@ -1194,8 +1207,9 @@ mod gpui_tests {
             wait_for_editor(&app, &mut vcx);
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
-            let editor =
-                app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
+            let editor = app.read_with(&vcx, |app, cx| {
+                app.editor_active_local_file(cx).unwrap().into_input()
+            });
             vcx.simulate_keystrokes("a");
             settle(&mut vcx);
             let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
@@ -1257,11 +1271,12 @@ mod gpui_tests {
             assert!(app.sidebar_width.get() > initial.0 + 40.);
             assert!(app.right_panel_width.get() > initial.1 + 40.);
             assert_eq!(
-                cx.global::<crate::core::config::Config>().sidebar_width,
+                cx.global::<lyrel_ui_base::config::Config>().sidebar_width,
                 app.sidebar_width.get()
             );
             assert_eq!(
-                cx.global::<crate::core::config::Config>().right_panel_width,
+                cx.global::<lyrel_ui_base::config::Config>()
+                    .right_panel_width,
                 app.right_panel_width.get()
             );
         });

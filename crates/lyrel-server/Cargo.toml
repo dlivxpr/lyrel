@@ -23,6 +23,13 @@ lyrel-core = { path = "../lyrel-core" }
 # It has to live in this crate because that is the crate that owns the binary —
 # `CARGO_BIN_EXE_lyrel-server` only exists for its own tests.
 [dev-dependencies]
+# The shared conformance module is compiled only under `test` or core's
+# `test-support` feature; this crate's tests reach it from outside, so the
+# test graph turns the feature on here. Production builds are untouched.
+lyrel-core = { path = "../lyrel-core", features = ["test-support"] }
+# The real stdio server exercises insights' public skills/statistics consumers.
+lyrel-insights = { path = "../lyrel-insights" }
+chrono = "0.4.45"
 # Sandboxes for the suite: an empty directory per case, removed on drop. The
 # server is on this machine, so a local temp dir is a path in its namespace.
 tempfile = "3"
@@ -36,6 +43,9 @@ png = "0.18"
 # a pid needs `kill(2)`, which `Child` cannot express once ownership has moved
 # to the thread collecting the exit.
 libc = "0.2.191"
+# Shared PTY producers and the pinned native-SSH fixture for the integration
+# and live-endpoint targets.
+lyrel-test-support = { path = "../lyrel-test-support" }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61.2", features = [

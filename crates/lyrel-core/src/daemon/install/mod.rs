@@ -2,11 +2,9 @@ use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-pub mod asset;
 pub mod checksums;
 #[cfg(feature = "remote-install")]
 pub mod download;
-pub mod outcome;
 #[cfg(feature = "remote-install")]
 pub mod package;
 #[cfg(feature = "remote-install")]
@@ -15,14 +13,17 @@ pub mod ssh_ops;
 pub mod windows_host;
 pub mod wsl;
 
+// The release-asset naming, the dialect-named server filename, the `--protocol`
+// probe flag, and the version handshake are wire-side naming: they derive from
+// the dialect numbers and ride the install prompts. They live in
+// `lyrel-protocol` and are re-exported here so existing
+// `lyrel_core::daemon::install::*` paths keep working.
 pub use asset::{RemotePaths, RemotePlatform, UnsupportedTarget};
 pub use checksums::ChecksumError;
+pub use lyrel_protocol::daemon::install::asset;
+pub use lyrel_protocol::daemon::install::{PROTOCOL_FLAG, RemoteProtocol, client_version};
 
 use crate::daemon::ssh::SshConnection;
-
-pub fn client_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
 
 const BINARY_MODE: u32 = 0o755;
 const DIR_MODE: u32 = 0o700;
@@ -326,36 +327,10 @@ pub fn install_confirm() -> Arc<dyn InstallConfirm> {
         .unwrap_or_else(|_| Arc::new(DenyInstall))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InstallPhase {
-    Downloading {
-        done: u64,
-        total: Option<u64>,
-    },
-    Uploading {
-        done: u64,
-        total: u64,
-    },
-    /// The bytes are there and the far end is being waited on. Both a first
-    /// install and a restart end here, which is why its caption says starting
-    /// rather than restarting.
-    Restarting,
-}
-
-impl InstallPhase {
-    pub fn fraction(&self) -> Option<f32> {
-        let (done, total) = match *self {
-            InstallPhase::Downloading { done, total } => (done, total?),
-            InstallPhase::Uploading { done, total } => (done, total),
-            InstallPhase::Restarting => return None,
-        };
-        if total == 0 {
-            return None;
-        }
-        Some((done as f32 / total as f32).clamp(0.0, 1.0))
-    }
-}
+// `InstallPhase` and `MismatchedRemoteDaemon` ride the route prompt frames, so
+// their wire shapes live in `lyrel-protocol`; the policies that produce and
+// consume them are this module's.
+pub use lyrel_protocol::daemon::router::{InstallPhase, MismatchedRemoteDaemon};
 
 pub trait InstallProgress: Send + Sync {
     fn report(&self, host: &str, phase: InstallPhase);
@@ -399,50 +374,6 @@ pub fn install_progress() -> Arc<dyn InstallProgress> {
         .lock()
         .map(|slot| slot.clone())
         .unwrap_or_else(|_| Arc::new(SilentProgress))
-}
-
-pub const PROTOCOL_FLAG: &str = "--protocol";
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RemoteProtocol {
-    pub control: u32,
-    pub protocol: u32,
-    pub build: String,
-}
-
-impl RemoteProtocol {
-    pub fn of_this_build() -> RemoteProtocol {
-        RemoteProtocol {
-            control: crate::daemon::control::CONTROL_VERSION,
-            protocol: crate::daemon::protocol::PROTOCOL_VERSION,
-            build: client_version().to_string(),
-        }
-    }
-
-    pub fn dialect(&self) -> (u32, u32) {
-        (self.control, self.protocol)
-    }
-
-    pub fn serves(&self, other: &RemoteProtocol) -> bool {
-        self.control == other.control && self.protocol == other.protocol
-    }
-
-    pub fn to_line(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
-    }
-
-    pub fn parse(stdout: &str) -> Option<RemoteProtocol> {
-        let line = stdout.lines().rev().find(|l| !l.trim().is_empty())?;
-        serde_json::from_str(line.trim()).ok()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct MismatchedRemoteDaemon {
-    pub host: String,
-    pub running_version: Option<String>,
-    pub running_exe: Option<String>,
-    pub wanted_version: String,
 }
 
 static MISMATCHED: Mutex<Vec<MismatchedRemoteDaemon>> = Mutex::new(Vec::new());

@@ -3,12 +3,13 @@ use std::rc::Rc;
 use gpui_kit::{App, AppContext as _, Context, Entity, EntityId, EventEmitter, Task, Window, px};
 
 use super::{PendingPane, PendingSpawn};
-use crate::core::session::WorkspaceId;
 use crate::daemon::protocol::NativeSshSpec;
-use crate::terminal::remote::handshake::{PaneHandshake, attach_refused};
-use crate::terminal::view::{NativeSshParts, ShellParts, TerminalView};
-use crate::terminal::{PaneRoute, SpawnCancellation, TermSize};
 use crate::ui::tab::TabSet;
+use lyrel_terminal::remote::handshake::{PaneHandshake, attach_refused};
+use lyrel_terminal::view::{NativeSshParts, ShellParts, TerminalView};
+use lyrel_terminal::{SpawnCancellation, TermSize};
+use lyrel_ui_base::route::PaneRoute;
+use lyrel_ui_base::session::WorkspaceId;
 
 /// The workbench supplies only an immutable slot/workspace lease, never itself.
 pub(super) type SlotLease = Rc<dyn Fn(EntityId, Option<WorkspaceId>, &App) -> bool>;
@@ -103,7 +104,7 @@ impl Drop for OwnedTerminal {
         self.executor
             .spawn(async move {
                 if let Some((route, pane)) = kill {
-                    crate::terminal::RemoteTerminal::kill_pane_on(&route, pane);
+                    lyrel_terminal::RemoteTerminal::kill_pane_on(&route, pane);
                 }
                 drop(parts);
             })
@@ -163,8 +164,8 @@ impl PendingSpawn {
                         .map(|pane_id| crate::daemon::protocol::RestoreFrom {
                             pane_id,
                             banner: Some(
-                                crate::ui::i18n::t(
-                                    crate::ui::i18n::L10nKey::PaneRestoredScreenBanner,
+                                lyrel_ui_base::i18n::t(
+                                    lyrel_ui_base::i18n::L10nKey::PaneRestoredScreenBanner,
                                 )
                                 .to_string(),
                             ),
@@ -230,7 +231,7 @@ impl PendingPane {
                 // GPUI's test scheduler may execute background futures on the
                 // UI thread. Socket/Host handshakes require the real I/O pool
                 // in both native execution and isolated nextest processes.
-                let Some(result) = crate::ui::host_ops::off_thread(move || {
+                let Some(result) = lyrel_ui_base::host_ops::off_thread(move || {
                     spawn
                         .create(&route, attach_only, native, &cancellation)
                         .map(|parts| OwnedTerminal {

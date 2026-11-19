@@ -13,7 +13,8 @@ use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
-use lyrel_code_editor::xml::projection;
+use lyrel_document::xml::projection;
+use lyrel_markdown_editor::Document;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -63,8 +64,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn xml_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<XmlView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .xml()
             .expect("an XML document")
@@ -96,8 +97,8 @@ fn open(
         app.editor_open_on_host(host, &at, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == path && file.input.xml().is_some())
         })
     });
@@ -230,10 +231,10 @@ fn type_source_on(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
@@ -346,7 +347,7 @@ fn cancel_panel(view: &Entity<XmlView>, cx: &mut VisualTestContext) {
 
 #[gpui_kit::test]
 fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     let remote_file = fixture(remote.path(), "document.xml", ORIGINAL);
@@ -362,16 +363,21 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
 
     let (id, view) = open_ready(&app, &mut cx, host.clone(), &path);
     app.read_with(&cx, |app, cx| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(!file.dirty, "an untouched XML opens clean");
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
         assert!(
-            app.editor.local_file(id).is_none(),
+            app.editor.read(cx).local_file(id).is_none(),
             "native XML is not a code language-service file"
         );
-        assert!(app.xml_document_active());
+        assert!(app.xml_document_active(cx));
     });
     assert_eq!(
         view.read_with(&cx, |view, _| view.mode()),
@@ -557,7 +563,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     ensure_expanded(&reopened, &mut cx, "/root/p:item[2]");
@@ -577,7 +583,7 @@ fn mapped_host_ordered_mixed_content_edits_and_exact_save(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "namespaces.xml", SIMPLE);
     let host: SharedHost = FileHost::new(HostId(2941));
@@ -680,7 +686,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &path);
     assert_eq!(
@@ -692,7 +698,7 @@ fn add_rename_remove_keep_namespace_meaning_and_source_order(tcx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn invalid_source_dtd_denial_budgets_and_late_parse_never_publish_stale(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(2942));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -719,9 +725,9 @@ fn invalid_source_dtd_denial_budgets_and_late_parse_never_publish_stale(tcx: &mu
                 .visible()
         );
     });
-    app.read_with(&cx, |app, _| {
-        assert!(app.active_buffer().unwrap().input.text().is_some());
-        assert!(!app.active_buffer().unwrap().dirty);
+    app.read_with(&cx, |app, cx| {
+        assert!(app.active_buffer(cx).unwrap().input.text().is_some());
+        assert!(!app.active_buffer(cx).unwrap().dirty);
     });
     toggle_mode(&broken_view, &mut cx);
     let text = source_text(&app, &cx);
@@ -848,7 +854,7 @@ fn invalid_source_dtd_denial_budgets_and_late_parse_never_publish_stale(tcx: &mu
 
 #[gpui_kit::test]
 fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "split-edit.xml", SIMPLE);
     let host: SharedHost = FileHost::new(HostId(2943));
@@ -870,8 +876,8 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("XML buffer");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("XML buffer");
         (
             file.presentations.xml_existing(tab, right).expect("front"),
             file.presentations.xml_existing(tab, left).expect("other"),
@@ -922,8 +928,8 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
-        Some(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::EditorXmlEditStale
+        Some(lyrel_ui_base::i18n::t(
+            lyrel_ui_base::i18n::L10nKey::EditorXmlEditStale
         ))
     );
     assert!(source_text(&app, &cx).contains("<b>TEXT</b>"));
@@ -957,8 +963,8 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
     apply_panel(&other, &mut cx);
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
-        Some(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::EditorXmlEditStale
+        Some(lyrel_ui_base::i18n::t(
+            lyrel_ui_base::i18n::L10nKey::EditorXmlEditStale
         ))
     );
     let text = source_text(&app, &cx);
@@ -1001,7 +1007,7 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
 fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.xml", SIMPLE);
     let target = dir.path().join("persisted.xml");
@@ -1010,7 +1016,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     cx.simulate_resize(size(px(1600.), px(1000.)));
     let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
 
     // A tree edit, then Save As to a new owning-Host target.
@@ -1020,12 +1026,12 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     type_edit_value(&view, &mut cx, "changed");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
         })
     });
@@ -1041,10 +1047,10 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.dirty && !file.saving)
         })
     });
@@ -1063,7 +1069,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     type_edit_value(&view, &mut cx, "paused");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |_| {
         host.entered.load(std::sync::atomic::Ordering::SeqCst)
     });
@@ -1074,16 +1080,16 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     until(&mut cx, |cx| is_ready(&view, cx));
     release.send(()).unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| !file.saving && file.dirty)
         })
     });
     assert!(source_text(&app, &cx).contains("<b>newer</b>"));
     let paused = replace_bytes(&retried, b"<b>retried</b>", b"<b>paused</b>");
     assert_eq!(std::fs::read(&target).unwrap(), paused);
-    if app.read_with(&cx, |app, _| {
-        app.active_buffer()
+    if app.read_with(&cx, |app, cx| {
+        app.active_buffer(cx)
             .is_some_and(|file| file.conflict.is_some())
     }) {
         cx.update(|window, cx| window.click("editor-conflict-keep", cx));
@@ -1101,8 +1107,8 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     until(&mut cx, |cx| is_ready(&view, cx));
     std::fs::write(&target, b"<external/>\n").unwrap();
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.conflict.is_some())
         })
     });
@@ -1126,16 +1132,16 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         "the production Apply command applies the tree edit"
     );
     assert!(source_text(&app, &cx).contains("<b>still-open</b>"));
-    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    cx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut cx);
     assert!(
         cx.has_pending_prompt(),
         "an unsaved tree edit must prompt before close"
     );
-    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    cx.simulate_prompt_answer(lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
-        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
         "cancelled close keeps the document"
     );
     assert_eq!(std::fs::read(&target).unwrap(), kept);
@@ -1148,7 +1154,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.editor_close_file(0, window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.is_empty())
     });
     let (_, reopened) = open_ready(&app, &mut cx, host, &target);
     click_row(&reopened, &mut cx, "/r/b[1]");
@@ -1164,7 +1170,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
 
 #[gpui_kit::test]
 fn long_mixed_content_displays_order_and_edits_one_occurrence(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"\xef\xbb\xbf<r xmlns:p=\"urn:part\">\r\n");
@@ -1247,7 +1253,7 @@ fn long_mixed_content_displays_order_and_edits_one_occurrence(tcx: &mut TestAppC
 fn xml_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );

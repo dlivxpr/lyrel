@@ -451,7 +451,7 @@ impl SettingsWindow {
             let text = match (used, p) {
                 (_, None) => String::new(),
                 (Some(then), _) => {
-                    crate::ui::home::relative_time(crate::core::config::unix_now(), then)
+                    crate::ui::home::relative_time(lyrel_core::core::config::unix_now(), then)
                 }
                 (None, _) => t(L10nKey::SettingsNever).to_string(),
             };

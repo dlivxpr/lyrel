@@ -1,13 +1,10 @@
-use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use gpui_kit::{App, AppContext as _, BorrowAppContext as _, Global};
+use gpui_kit::App;
 
-use crate::core::config::Config;
-use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
 use crate::daemon::control::{ControlHello, ControlRequest, ReplyOk};
 use crate::daemon::install::{
     InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
@@ -15,248 +12,22 @@ use crate::daemon::install::{
 };
 use crate::daemon::protocol::{AuthPromptKind, AuthResponse, NativeSshSpec};
 use crate::daemon::router::RouteHeader;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::desktop_lookups::HostLinks;
 use lyrel_core::host::remote::RemoteHost;
 use lyrel_core::host::{Host as _, HostId};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostChoice {
-    pub target: RemoteTarget,
-    pub label: String,
-    pub detail: String,
-}
-
-pub fn available_hosts(cx: &App) -> Vec<HostChoice> {
-    let mut out: Vec<HostChoice> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-
-    out.extend(local_stdio_host());
-
-    for profile in &cx.global::<Config>().ssh_profiles {
-        let target = RemoteTarget::Profile { id: profile.id };
-        seen.push(profile.name.clone());
-        out.push(HostChoice {
-            detail: endpoint_label(&profile.user, &profile.host, profile.port),
-            label: profile_label(profile),
-            target,
-        });
-    }
-
-    out.extend(wsl_hosts(cx));
-
-    for imported in crate::core::ssh_config::import_profiles() {
-        let alias = imported.profile.name.clone();
-        if alias.trim().is_empty() || seen.iter().any(|s| s == &alias) {
-            continue;
-        }
-        out.push(HostChoice {
-            detail: endpoint_label(
-                &imported.profile.user,
-                &imported.profile.host,
-                imported.profile.port,
-            ),
-            label: alias,
-            target: RemoteTarget::Alias {
-                alias: imported.profile.name,
-            },
-        });
-    }
-    out
-}
-
-/// A label for a bare target when no route snapshot is at hand (a pane's
-/// `PaneWorkspace` carries only the target): the live listing while it
-/// exists, the target's own spelling when that is human-readable, and the
-/// deleted-profile placeholder for the bare-UUID case (#485).
-pub fn target_label(cx: &App, target: &RemoteTarget) -> String {
-    label_from_hosts(&available_hosts(cx), target)
-}
-
-/// `target_label`'s rule applied to a listing the caller already has. The
-/// switcher builds `available_hosts` once per frame and names several targets
-/// from it; re-listing per target would re-read `~/.ssh/config` off the disk
-/// on the render path, which is the cost `route_label` goes out of its way to
-/// avoid. One rule, two entry points — so a name shown next to a pane and the
-/// same name shown in the switcher cannot drift apart (#485).
-pub fn label_from_hosts(hosts: &[HostChoice], target: &RemoteTarget) -> String {
-    if let Some(choice) = hosts.iter().find(|h| h.target == *target) {
-        return choice.label.clone();
-    }
-    match target {
-        RemoteTarget::Profile { .. } => t(L10nKey::RemoteProfileGone).to_string(),
-        other => other.to_string(),
-    }
-}
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
 /// Whether a route can still be turned into a connection: a `Profile` target
 /// dangles once the profile leaves the config, an `Alias` once the name
 /// leaves `~/.ssh/config` (#485). The route supervisor asks this four times a
 /// second; the alias half is mtime-cached in `ssh_config`.
 pub fn route_resolvable(cx: &App, target: &RemoteTarget) -> bool {
-    target.resolvable(&cx.global::<Config>().ssh_profiles, |alias| {
-        crate::core::ssh_config::alias_still_resolves(alias)
-    })
-}
-
-/// The name a route entry answers to: the live listing while the route still
-/// exists, then the remembered snapshot, and — for a profile entry saved
-/// before snapshots existed — a placeholder, but never the bare profile UUID
-/// (#485).
-pub fn route_label(cx: &App, host: &RemoteRef) -> String {
-    match live_label(cx, &host.target) {
-        Some(label) => label,
-        None => host.route_label(t(L10nKey::RemoteProfileGone)),
-    }
-}
-
-/// What the live config calls a target, reading memory only. Deliberately not
-/// `available_hosts`: `route_label` runs on the render path of every remote
-/// window (the workspace strip), and that listing re-reads `~/.ssh/config`
-/// off the disk. The two targets it answers are the two whose name lives
-/// somewhere other than the target itself; the rest spell themselves the same
-/// way the listing labels them, so falling through costs nothing.
-fn live_label(cx: &App, target: &RemoteTarget) -> Option<String> {
-    match target {
-        RemoteTarget::Profile { id } => cx
-            .global::<Config>()
-            .ssh_profiles
-            .iter()
-            .find(|p| p.id == *id)
-            .map(profile_label),
-        RemoteTarget::Wsl { .. } => wsl_hosts(cx)
-            .into_iter()
-            .find(|h| h.target == *target)
-            .map(|h| h.label),
-        RemoteTarget::Alias { .. }
-        | RemoteTarget::Direct { .. }
-        | RemoteTarget::LocalStdio { .. } => None,
-    }
-}
-
-/// What a profile calls itself in a host listing: its name, or the address
-/// when it was saved without one.
-fn profile_label(profile: &crate::core::ssh_profile::SshProfile) -> String {
-    if profile.name.trim().is_empty() {
-        profile.host.clone()
-    } else {
-        profile.name.clone()
-    }
-}
-
-pub fn filter_hosts(hosts: &[HostChoice], query: &str) -> Vec<HostChoice> {
-    let query = query.trim();
-    if query.is_empty() {
-        return hosts.to_vec();
-    }
-    let mut scored: Vec<(i32, &HostChoice)> = hosts
-        .iter()
-        .filter_map(|host| host_score(query, host).map(|score| (score, host)))
-        .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().map(|(_, host)| host.clone()).collect()
-}
-
-fn host_score(query: &str, host: &HostChoice) -> Option<i32> {
-    let label = crate::ui::search::fuzzy_score(query, &host.label);
-    let detail = crate::ui::search::fuzzy_score(query, &host.detail).map(|score| score - 3);
-    label.into_iter().chain(detail).max()
-}
-
-pub const LOCAL_STDIO_ENV: &str = "LYREL_LOCAL_STDIO_SERVER";
-
-fn local_stdio_host() -> Option<HostChoice> {
-    let program = std::env::var(LOCAL_STDIO_ENV)
-        .ok()
-        .filter(|p| !p.is_empty())?;
-    let target = RemoteTarget::LocalStdio {
-        program: program.clone(),
-        args: vec!["--stdio".to_string()],
-    };
-    Some(HostChoice {
-        label: format!("{target}"),
-        detail: format!("{program} --stdio ({})", t(L10nKey::RemoteThisComputer)),
-        target,
-    })
-}
-
-fn wsl_detail() -> String {
-    format!("WSL · {}", t(L10nKey::RemoteThisComputer))
-}
-
-fn wsl_hosts(cx: &App) -> Vec<HostChoice> {
-    let names = cx
-        .try_global::<WslDistros>()
-        .map(|state| state.names.as_slice())
-        .unwrap_or_default();
-    wsl_choices(names)
-}
-
-fn wsl_choices(names: &[String]) -> Vec<HostChoice> {
-    names
-        .iter()
-        .map(|distro| HostChoice {
-            target: RemoteTarget::Wsl {
-                distro: distro.clone(),
-            },
-            label: distro.clone(),
-            detail: wsl_detail(),
-        })
-        .collect()
-}
-
-#[derive(Default)]
-struct WslDistros {
-    names: Vec<String>,
-    probed_at: Option<Instant>,
-    in_flight: bool,
-}
-
-impl Global for WslDistros {}
-
-const WSL_TTL: Duration = Duration::from_secs(30);
-
-pub fn sweep_wsl(cx: &mut App) {
-    if !cfg!(windows) {
-        return;
-    }
-    {
-        let state = cx.default_global::<WslDistros>();
-        if state.in_flight || state.probed_at.is_some_and(|at| at.elapsed() < WSL_TTL) {
-            return;
-        }
-    }
-    cx.update_global::<WslDistros, _>(|state, _| state.in_flight = true);
-    cx.spawn(async move |cx| {
-        let probed = cx
-            .background_spawn(async { crate::core::shells::wsl_distros_probed() })
-            .await;
-        let _ = cx.update(|cx| {
-            cx.update_global::<WslDistros, _>(|state, _| adopt_probe(state, probed));
-            cx.refresh_windows();
-        });
-    })
-    .detach();
-}
-
-fn adopt_probe(state: &mut WslDistros, probed: Option<Vec<String>>) {
-    if let Some(names) = probed {
-        state.names = names;
-    }
-    state.probed_at = Some(Instant::now());
-    state.in_flight = false;
-}
-
-fn endpoint_label(user: &str, host: &str, port: u16) -> String {
-    let base = if user.is_empty() {
-        host.to_string()
-    } else {
-        format!("{user}@{host}")
-    };
-    if port == 22 {
-        base
-    } else {
-        format!("{base}:{port}")
-    }
+    target.resolvable(
+        &cx.global::<Config>().ssh_profiles,
+        lyrel_ui_base::ssh_config::alias_still_resolves,
+    )
 }
 
 pub fn spec_for(target: &RemoteTarget, cx: &App) -> Result<NativeSshSpec, String> {
@@ -291,7 +62,7 @@ fn spec_from(
             ))
         }
         RemoteTarget::Alias { alias } => {
-            let resolved = crate::core::ssh_config::resolve_alias_to_profile(alias)
+            let resolved = lyrel_ui_base::ssh_config::resolve_alias_to_profile(alias)
                 .ok_or_else(|| t_fmt(L10nKey::RemoteAliasMissing, &[("alias", alias)]))?;
             Ok(crate::ui::ssh_connect::native_spec_from_transient_profile(
                 &resolved.profile,
@@ -492,59 +263,6 @@ pub fn rows_from_machine(machine: &lyrel_core::core::machine::Machine) -> Vec<Re
     rows
 }
 
-#[derive(Default)]
-pub struct HostLinks {
-    hosts: HashMap<HostId, Arc<RemoteHost>>,
-    homes: HashMap<HostId, PathBuf>,
-}
-
-impl Global for HostLinks {}
-
-impl HostLinks {
-    pub fn get(cx: &mut App, id: HostId) -> Option<Arc<RemoteHost>> {
-        cx.default_global::<HostLinks>().hosts.get(&id).cloned()
-    }
-
-    /// The home directory the host reported when the link came up — the only
-    /// thing that can say what a `~` in one of its paths means (#580). Read
-    /// through `try_global` rather than `default_global` so a caller holding
-    /// nothing but `&App` (every renderer that draws a path) can ask; an
-    /// absent table and an empty one are the same answer here.
-    pub fn home(cx: &App, id: HostId) -> Option<PathBuf> {
-        cx.try_global::<HostLinks>()?.homes.get(&id).cloned()
-    }
-
-    /// Whether the daemon behind this host's link advertised `feature` on its
-    /// control hello — the per-host sibling of `local_daemon_supports`. `false`
-    /// while no link is up: a caller that cannot see the hello must assume
-    /// nothing of the far end, and every feature is gated so that "assume
-    /// nothing" degrades to the old behavior rather than breaking.
-    pub fn peer_supports(cx: &App, id: HostId, feature: &str) -> bool {
-        cx.try_global::<HostLinks>()
-            .and_then(|table| table.hosts.get(&id))
-            .is_some_and(|host| host.peer().has_feature(feature))
-    }
-
-    pub fn insert(cx: &mut App, host: Arc<RemoteHost>, home: PathBuf) {
-        let id = host.id();
-        crate::ui::host_registry::HostRegistry::insert(cx, Arc::clone(&host).into_shared());
-        let table = cx.default_global::<HostLinks>();
-        table.hosts.insert(id, host);
-        table.homes.insert(id, home);
-    }
-
-    pub fn remove(cx: &mut App, id: HostId) {
-        let table = cx.default_global::<HostLinks>();
-        table.hosts.remove(&id);
-        table.homes.remove(&id);
-        crate::ui::host_registry::HostRegistry::remove(cx, id);
-    }
-
-    pub fn len(cx: &mut App) -> usize {
-        cx.default_global::<HostLinks>().hosts.len()
-    }
-}
-
 pub fn install_detail(request: &InstallRequest) -> String {
     t_fmt(
         L10nKey::RemoteInstallDetail,
@@ -572,22 +290,7 @@ pub fn install_title(request: &InstallRequest) -> String {
     t_fmt(L10nKey::RemoteInstallTitle, &[("machine", &request.host)])
 }
 
-pub fn human_bytes(n: u64) -> String {
-    const KIB: f64 = 1024.0;
-    let n = n as f64;
-    if n < KIB {
-        return format!("{} {}", n as u64, t(L10nKey::RemoteInstallBytes));
-    }
-    let units = ["KiB", "MiB", "GiB"];
-    let mut value = n / KIB;
-    for (i, unit) in units.iter().enumerate() {
-        if value < KIB || i == units.len() - 1 {
-            return format!("{value:.1} {unit}");
-        }
-        value /= KIB;
-    }
-    unreachable!("the loop returns on its last iteration")
-}
+pub use lyrel_ui_base::display::human_bytes;
 
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -923,36 +626,7 @@ pub fn restart_server_blocking(header: RouteHeader, label: &str) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The one rule for "what do we call a target we cannot resolve" (#485),
-    /// pinned where both `target_label` and the switcher's group listing read
-    /// it from.
-    #[test]
-    fn an_unresolvable_profile_is_named_never_spelled_as_its_uuid() {
-        let id = uuid::Uuid::new_v4();
-        let gone = RemoteTarget::Profile { id };
-
-        let label = label_from_hosts(&[], &gone);
-        assert!(
-            !label.contains(&id.to_string()),
-            "a bare profile UUID reached the UI: {label}"
-        );
-        assert_eq!(label, t(L10nKey::RemoteProfileGone));
-
-        // While the profile is configured, its own name wins.
-        let listed = vec![HostChoice {
-            target: gone.clone(),
-            label: "lager".into(),
-            detail: "qhw@222.29.101.16".into(),
-        }];
-        assert_eq!(label_from_hosts(&listed, &gone), "lager");
-
-        // Targets that spell themselves readably never need the placeholder.
-        let alias = RemoteTarget::Alias {
-            alias: "build-box".into(),
-        };
-        assert_eq!(label_from_hosts(&[], &alias), "build-box");
-    }
+    use std::time::Instant;
 
     fn request() -> InstallRequest {
         InstallRequest {
@@ -1002,7 +676,7 @@ mod tests {
 
     #[test]
     fn the_install_prompt_states_every_field_of_the_request() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let request = request();
         let detail = install_detail(&request);
         for needle in [
@@ -1029,7 +703,7 @@ mod tests {
 
     #[test]
     fn human_bytes_reads_in_binary_units() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             human_bytes(512),
             format!("512 {}", t(L10nKey::RemoteInstallBytes))
@@ -1288,7 +962,7 @@ mod tests {
 
     #[test]
     fn the_mismatch_prompt_names_the_host_and_both_versions() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let m = MismatchedRemoteDaemon {
             host: "me@build-box:22".into(),
             running_version: Some("0.8.0".into()),
@@ -1320,7 +994,7 @@ mod tests {
 
     #[test]
     fn the_mismatch_detail_explains_every_answer_the_prompt_offers() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let detail = mismatch_detail(&MismatchedRemoteDaemon {
             host: "me@build-box:22".into(),
             running_version: Some("0.8.0".into()),
@@ -1334,13 +1008,6 @@ mod tests {
                 "{label} is unexplained: {detail}"
             );
         }
-    }
-
-    #[test]
-    fn endpoint_labels_hide_the_default_port() {
-        assert_eq!(endpoint_label("me", "box.local", 22), "me@box.local");
-        assert_eq!(endpoint_label("me", "box.local", 2222), "me@box.local:2222");
-        assert_eq!(endpoint_label("", "box.local", 22), "box.local");
     }
 
     #[test]
@@ -1382,111 +1049,5 @@ mod tests {
         );
         assert_eq!(rows[0].panes, 1);
         assert_eq!(rows[1].name, "api", "a user-set name wins");
-    }
-
-    fn host(label: &str, detail: &str) -> HostChoice {
-        HostChoice {
-            target: RemoteTarget::Alias {
-                alias: label.to_string(),
-            },
-            label: label.to_string(),
-            detail: detail.to_string(),
-        }
-    }
-
-    #[test]
-    fn an_empty_query_keeps_every_machine_in_order() {
-        let hosts = vec![
-            host("gate2jup", "root@18.143.92.244"),
-            host("aws-xy", "root@52.199.113.213"),
-        ];
-        let all = filter_hosts(&hosts, "   ");
-        assert_eq!(all, hosts);
-    }
-
-    #[test]
-    fn a_query_matches_the_name_or_the_endpoint() {
-        let hosts = vec![
-            host("gate2jup", "root@18.143.92.244"),
-            host("aws-xy", "root@52.199.113.213"),
-            host("orb", "default@127.0.0.1:32222"),
-        ];
-
-        let by_name = filter_hosts(&hosts, "jup");
-        assert_eq!(by_name.len(), 1);
-        assert_eq!(by_name[0].label, "gate2jup");
-
-        let by_address = filter_hosts(&hosts, "52.199");
-        assert_eq!(by_address.len(), 1);
-        assert_eq!(by_address[0].label, "aws-xy");
-
-        let mixed = filter_hosts(&hosts, "or");
-        assert_eq!(mixed[0].label, "orb", "a name match beats an endpoint one");
-    }
-
-    #[test]
-    fn a_query_nothing_matches_returns_nothing() {
-        let hosts = vec![host("gate2jup", "root@18.143.92.244")];
-        assert!(filter_hosts(&hosts, "zzz").is_empty());
-    }
-
-    #[test]
-    fn a_wsl_row_names_the_distro_verbatim() {
-        let rows = wsl_choices(&["Ubuntu-22.04".to_string(), "Arch".to_string()]);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].label, "Ubuntu-22.04");
-        assert_eq!(
-            rows[0].target,
-            RemoteTarget::Wsl {
-                distro: "Ubuntu-22.04".to_string()
-            }
-        );
-        assert_eq!(rows[0].target.connection_key(), "wsl:Ubuntu-22.04");
-        assert_eq!(rows[1].label, "Arch");
-    }
-
-    #[test]
-    fn no_distros_is_no_rows() {
-        assert!(wsl_choices(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_distro_is_found_by_name_or_by_wsl() {
-        let mut hosts = vec![host("gate2jup", "root@18.143.92.244")];
-        hosts.extend(wsl_choices(&["Ubuntu".to_string()]));
-
-        let by_name = filter_hosts(&hosts, "ubun");
-        assert_eq!(by_name.len(), 1);
-        assert_eq!(by_name[0].label, "Ubuntu");
-
-        let by_kind = filter_hosts(&hosts, "wsl");
-        assert_eq!(by_kind.len(), 1);
-        assert_eq!(by_kind[0].label, "Ubuntu");
-    }
-
-    #[test]
-    fn a_failed_probe_keeps_the_distros_it_already_had() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, None);
-
-        assert_eq!(state.names, vec!["Ubuntu-24.04".to_string()]);
-        assert!(state.probed_at.is_some(), "the TTL still restarts");
-        assert!(!state.in_flight, "the next sweep is allowed to run");
-    }
-
-    #[test]
-    fn an_answered_probe_replaces_the_list_even_when_it_is_empty() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, Some(Vec::new()));
-        assert!(state.names.is_empty());
-
-        adopt_probe(&mut state, Some(vec!["Arch".to_string()]));
-        assert_eq!(state.names, vec!["Arch".to_string()]);
     }
 }

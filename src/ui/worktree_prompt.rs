@@ -6,16 +6,16 @@ use gpui_kit::{
 };
 
 use crate::core::cli_agent::CLIAgent;
-use crate::core::config::Config;
 use crate::core::worktree::{NewWorktree, WorktreeDefaults, WorktreeRequest, setup};
 use crate::ui::app::LyrelApp;
 use crate::ui::dialog::{self, Tone};
-use crate::ui::host_ops::HostId;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::META_MONO;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::host_ops::HostId;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 pub(crate) struct WorktreePrompt {
-    host: crate::ui::host_ops::SharedHost,
+    host: lyrel_ui_base::host_ops::SharedHost,
     cwd: std::path::PathBuf,
     dir: std::path::PathBuf,
     name: Entity<InputState>,
@@ -48,7 +48,7 @@ struct Created {
 impl LyrelApp {
     pub(crate) fn open_worktree_prompt(
         &mut self,
-        host: crate::ui::host_ops::SharedHost,
+        host: lyrel_ui_base::host_ops::SharedHost,
         cwd: std::path::PathBuf,
         defaults: WorktreeDefaults,
         window: &mut Window,
@@ -58,7 +58,7 @@ impl LyrelApp {
         // over — not a prefix. `default_value` parked the caret in front of it,
         // so naming a worktree "login" over the suggested "feature" produced
         // "loginfeature".
-        let prefill = crate::ui::prefill::filled_box;
+        let prefill = lyrel_terminal::prefill::filled_box;
         let name = prefill(defaults.name.clone(), window, cx);
         let branch = prefill(defaults.name, window, cx);
         let base = prefill(defaults.base, window, cx);
@@ -147,7 +147,7 @@ impl LyrelApp {
         let host = p.host.clone();
         let host_id = host.id();
         cx.notify();
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -191,7 +191,7 @@ impl LyrelApp {
                         p.busy = false;
                     }
                     window.notify_app(
-                        crate::ui::host_ops::failure(
+                        lyrel_ui_base::host_ops::failure(
                             t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
                             &e,
                         ),
@@ -363,7 +363,7 @@ impl LyrelApp {
             })
             .display()
             .to_string();
-        let preview = crate::ui::path_display::readable_path(&preview).into_owned();
+        let preview = lyrel_ui_base::path_display::readable_path(&preview).into_owned();
         let mono = cx.theme().mono_font_family.clone();
         let meta = move |text: String| {
             div()
@@ -463,7 +463,7 @@ impl LyrelApp {
                 // just did not look like it did. A scrim says the app is
                 // waiting, and clicking it backs out — the same gesture the
                 // palette and the switcher already answer to.
-                .bg(crate::ui::presets::scrim_fill(cx))
+                .bg(lyrel_ui_base::presets::scrim_fill(cx))
                 .on_key_down(
                     cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
                         if ev.keystroke.key != "escape" {

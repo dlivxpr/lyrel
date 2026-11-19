@@ -24,8 +24,8 @@
 //! latest received state, which can lead a GUI frame held by synchronized output;
 //! once the update settles, equivalent content ranges agree.
 
-use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
-use lyrel_core::daemon::protocol::WinSize;
+use lyrel_protocol::core::xtgettcap::{Segment, Sniffed, Sniffer};
+use lyrel_protocol::daemon::protocol::WinSize;
 use rio_vt::ansi::CursorShape;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::Dimensions as _;
@@ -33,6 +33,33 @@ use rio_vt::crosswords::pos::{Column, Pos};
 use rio_vt::event::{VoidListener, WindowId};
 
 use crate::backend::CaptureSegment;
+
+/// A non-owning terminal mirror consumes text, never XTGETTCAP: discovery
+/// requests inside a captured stream (including legacy snapshots saved
+/// before the daemon extracted them) are stripped by the shared protocol
+/// framing filter before any byte reaches the grid. This is the thin adapter
+/// beside the CLI parser; the desktop parser keeps its twin at
+/// `lyrel_core::core::xtgettcap::MirrorProcessor`, fed by the same filter.
+#[derive(Default)]
+struct MirrorProcessor {
+    inner: rio_vt::performer::handler::Processor,
+    discovery: Sniffer,
+}
+
+impl MirrorProcessor {
+    fn advance<H: rio_vt::performer::handler::Handler>(&mut self, handler: &mut H, bytes: &[u8]) {
+        match self.discovery.sniff(bytes) {
+            Sniffed::Plain(bytes) => self.inner.advance(handler, bytes),
+            Sniffed::Segments(segments) => {
+                for segment in segments {
+                    if let Segment::Output(bytes) = segment {
+                        self.inner.advance(handler, &bytes);
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// What the emulator needs to know about the grid it is filling.
 struct GridSize {
@@ -106,7 +133,7 @@ fn render_segment(size: WinSize, bytes: &[u8]) -> String {
     // Rio applies bytes immediately, including an unfinished synchronized
     // update. Capture reads this live grid; it never waits for a GUI frame or
     // forces a presentation timeout to make received text observable.
-    let mut parser = Processor::default();
+    let mut parser = MirrorProcessor::default();
     parser.advance(&mut term, bytes);
 
     let start = Pos::new(term.topmost_line(), Column(0));

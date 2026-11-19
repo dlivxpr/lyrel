@@ -16,10 +16,7 @@ fn progress_is_ordered_retained_and_only_command_boundaries_clear_it() {
     read(&mut facts, b"\x1b]9;4;1;42\x07");
     assert_eq!(
         facts.progress,
-        Some(PaneProgress {
-            kind: ProgressKind::Running,
-            percent: Some(42)
-        })
+        Some(PaneProgress::new(ProgressKind::Running, Some(42)))
     );
     read(&mut facts, b"ordinary output: done 100%\r\n");
     assert!(
@@ -31,26 +28,17 @@ fn progress_is_ordered_retained_and_only_command_boundaries_clear_it() {
     read(&mut facts, b"\x1b]9;4;2\x07\x1b]133;D;1\x07");
     assert_eq!(
         facts.progress,
-        Some(PaneProgress {
-            kind: ProgressKind::Error,
-            percent: None
-        })
+        Some(PaneProgress::new(ProgressKind::Error, None))
     );
     read(&mut facts, b"\x1b]133;C\x07\x1b]9;4;4;61\x07");
     assert_eq!(
         facts.progress,
-        Some(PaneProgress {
-            kind: ProgressKind::Paused,
-            percent: Some(61)
-        })
+        Some(PaneProgress::new(ProgressKind::Paused, Some(61)))
     );
     read(&mut facts, b"\x1b]9;4;0\x07\x1b]9;4;3\x07");
     assert_eq!(
         facts.progress,
-        Some(PaneProgress {
-            kind: ProgressKind::Indeterminate,
-            percent: None
-        })
+        Some(PaneProgress::new(ProgressKind::Indeterminate, None))
     );
     read(&mut facts, b"\x1b]9;4;0\x07");
     assert_eq!(facts.progress, None);

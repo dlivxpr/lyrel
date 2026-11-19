@@ -7,13 +7,14 @@ use gpui_kit::{Context, PromptLevel, Window};
 use lyrel_core::host::HostId;
 use lyrel_core::host::remote::RemoteHost;
 
-use crate::core::config::Config;
-use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
 use crate::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
 use crate::daemon::install::InstallDecision;
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::desktop_lookups;
 use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
 
 pub(crate) mod connection;
 
@@ -422,19 +423,19 @@ impl LyrelApp {
     pub(crate) fn window_workspace(
         &self,
         cx: &gpui_kit::App,
-    ) -> Option<crate::terminal::PaneWorkspace> {
+    ) -> Option<lyrel_ui_base::route::PaneWorkspace> {
         pane_workspace_for(cx, self.workspace)
     }
 
     pub(crate) fn remote_machine_label(&self, cx: &gpui_kit::App) -> String {
         match WorkspaceStore::remote_ref(cx, self.workspace) {
-            Some(host) => remote_connect::route_label(cx, &host),
+            Some(host) => desktop_lookups::route_label(cx, &host),
             None => t(L10nKey::RemoteThisComputer).to_string(),
         }
     }
 
-    pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
-        self.editor_context_changed();
+    pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &mut Context<Self>) {
+        self.editor_context_changed(cx);
         let next = self.spawn_host(cx);
         self.session.host_changed(previous, next);
     }
@@ -448,12 +449,12 @@ impl LyrelApp {
     pub(crate) fn refresh_shells(&mut self, cx: &mut Context<Self>) {
         let host_id = self.spawn_host(cx);
         self.shells_host = host_id;
-        let Some(host) = crate::ui::host_registry::HostRegistry::get(cx, host_id) else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::get(cx, host_id) else {
             self.shells = Default::default();
             cx.notify();
             return;
         };
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             |h| h.shells(),
@@ -473,7 +474,7 @@ impl LyrelApp {
         );
     }
 
-    pub(crate) fn panes(&self) -> Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
+    pub(crate) fn panes(&self) -> Vec<gpui_kit::Entity<lyrel_terminal::view::TerminalView>> {
         self.tabs
             .iter()
             .flat_map(|tab| tab.pane.terminals())
@@ -1039,7 +1040,7 @@ fn resolve_status(
 pub(crate) fn pane_workspace_for(
     cx: &gpui_kit::App,
     workspace: WorkspaceId,
-) -> Option<crate::terminal::PaneWorkspace> {
+) -> Option<lyrel_ui_base::route::PaneWorkspace> {
     let host = WorkspaceStore::remote_ref(cx, workspace)?;
     let spec = remote_connect::public_spec_for(&host.target, cx)
         .ok()
@@ -1049,7 +1050,7 @@ pub(crate) fn pane_workspace_for(
     // built from this value hands the answer to `resize_echoed`. A relink
     // comes back through here too, so a reconnected (possibly upgraded)
     // server is re-asked.
-    let resize_echo = remote_connect::HostLinks::peer_supports(
+    let resize_echo = desktop_lookups::HostLinks::peer_supports(
         cx,
         host.host_id(),
         crate::daemon::protocol::FEATURE_RESIZE_ECHO,
@@ -1060,10 +1061,10 @@ pub(crate) fn pane_workspace_for(
     let label = WorkspaceStore::all(cx)
         .get(workspace)
         .and_then(|w| w.label.clone())
-        .or_else(|| Some(remote_connect::route_label(cx, &host)))
+        .or_else(|| Some(desktop_lookups::route_label(cx, &host)))
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty());
-    let pane = crate::terminal::PaneWorkspace {
+    let pane = lyrel_ui_base::route::PaneWorkspace {
         workspace,
         target: host.target,
         spec,
@@ -1079,8 +1080,8 @@ pub(crate) fn pane_workspace_for(
 pub(crate) fn pane_route_for(
     cx: &gpui_kit::App,
     workspace: WorkspaceId,
-) -> crate::terminal::PaneRoute {
-    crate::terminal::PaneRoute::for_workspace(pane_workspace_for(cx, workspace).as_ref())
+) -> lyrel_ui_base::route::PaneRoute {
+    lyrel_ui_base::route::PaneRoute::for_workspace(pane_workspace_for(cx, workspace).as_ref())
 }
 
 pub(crate) const PUMP_TICK: Duration = Duration::from_millis(250);
@@ -1373,7 +1374,7 @@ impl RemoteLinks {
             links.attaching.remove(&workspace);
             links.held_before.remove(&workspace);
         }
-        remote_connect::HostLinks::remove(cx, host);
+        desktop_lookups::HostLinks::remove(cx, host);
         cx.default_global::<RemoteLinks>().machines.remove(&host);
         log::info!("disconnected from a machine at the user's request");
         cx.refresh_windows();
@@ -1435,7 +1436,7 @@ fn pump_tick(cx: &mut gpui_kit::App) -> bool {
             continue;
         }
         let live =
-            remote_connect::HostLinks::get(cx, host).is_some_and(|h| h.client().is_connected());
+            desktop_lookups::HostLinks::get(cx, host).is_some_and(|h| h.client().is_connected());
         let attempting = cx
             .try_global::<RemoteLinks>()
             .and_then(|l| l.machines.get(&host))
@@ -1491,8 +1492,8 @@ fn pump_tick(cx: &mut gpui_kit::App) -> bool {
         // backoff, no attempt, no error. Its label comes from the route
         // snapshot, and the switcher offers to forget it.
         let resolvable = remote_connect::route_resolvable(cx, &target);
-        if remote_connect::HostLinks::get(cx, host).is_some() {
-            remote_connect::HostLinks::remove(cx, host);
+        if desktop_lookups::HostLinks::get(cx, host).is_some() {
+            desktop_lookups::HostLinks::remove(cx, host);
             if resolvable {
                 log::info!("lost the control connection to {target}; reconnecting");
             }
@@ -1647,7 +1648,7 @@ fn yield_after_reconnect(cx: &mut gpui_kit::App, host: HostId, workspace: Worksp
 }
 
 fn pump_attachments(cx: &mut gpui_kit::App, host: HostId) {
-    let Some(link) = remote_connect::HostLinks::get(cx, host) else {
+    let Some(link) = desktop_lookups::HostLinks::get(cx, host) else {
         return;
     };
     for (workspace, key) in reclaims_due(cx, host) {
@@ -1776,7 +1777,7 @@ fn prune_suspended(
 /// not a profile reference, and forgetting the entry would release the link
 /// under any window still attached to it.
 pub(crate) fn link_alive_or_connecting(cx: &mut gpui_kit::App, host: HostId) -> bool {
-    if remote_connect::HostLinks::get(cx, host).is_some() {
+    if desktop_lookups::HostLinks::get(cx, host).is_some() {
         return true;
     }
     cx.try_global::<RemoteLinks>()
@@ -1877,7 +1878,7 @@ fn reconnect_after_restart(origin: &str, cx: &mut gpui_kit::App) {
     let Some(host) = remote_connect::origin_host(origin) else {
         return;
     };
-    remote_connect::HostLinks::remove(cx, host);
+    desktop_lookups::HostLinks::remove(cx, host);
     for (workspace, _) in workspaces_on(cx, host) {
         RemoteLinks::retry_now(cx, workspace);
     }
@@ -1897,7 +1898,7 @@ fn launch_attempt(cx: &mut gpui_kit::App, host: HostId, target: RemoteTarget) {
     // UUID, and this label is what the failure the strip shows names the
     // machine (#485). The reconnect banner beside it already reads the live
     // config for the same name, so the two disagreed mid-sentence.
-    let label = remote_connect::target_label(cx, &target);
+    let label = desktop_lookups::target_label(cx, &target);
     let header = match remote_connect::control_route(&target, cx) {
         Ok(header) => header,
         Err(e) => {
@@ -1965,12 +1966,12 @@ fn finish_attempt(
     // went. Retiring it here is what lets the failure — and the button that
     // answers it — reach the screen at all.
     remote_connect::clear_install_progress(host);
-    let label = remote_connect::target_label(cx, target);
+    let label = desktop_lookups::target_label(cx, target);
     match outcome {
         Ok((connected, sent)) => {
             let restarted = server_restarted(cx, host, &connected.host);
             let rows = connected.rows.clone();
-            remote_connect::HostLinks::insert(cx, connected.host, connected.home);
+            desktop_lookups::HostLinks::insert(cx, connected.host, connected.home);
             // Every successful attach carries the machine's own workspace
             // listing, not just the switcher's explicit connect: a workspace
             // another client created on this machine only becomes visible
@@ -2088,7 +2089,7 @@ fn finish_attempt(
 
 fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
     let route = pane_route_for(cx, workspace);
-    if matches!(route, crate::terminal::PaneRoute::Local) {
+    if matches!(route, lyrel_ui_base::route::PaneRoute::Local) {
         return;
     }
     let panes = panes_of(cx, workspace);
@@ -2112,7 +2113,7 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
             let opened = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::terminal::remote::handshake::PaneHandshake::open_relink(
+                    lyrel_terminal::remote::handshake::PaneHandshake::open_relink(
                         &opening, pane_id, size, cell_w, cell_h, images,
                     )
                     .map_err(|e| e.to_string())
@@ -2207,7 +2208,7 @@ fn pump_pane_relinks(cx: &mut gpui_kit::App, host: HostId) {
 fn relink_dead_panes(
     cx: &mut gpui_kit::App,
     workspace: WorkspaceId,
-    panes: Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>>,
+    panes: Vec<gpui_kit::Entity<lyrel_terminal::view::TerminalView>>,
 ) {
     let route = pane_route_for(cx, workspace);
     if route.header().is_none() {
@@ -2249,7 +2250,7 @@ fn relink_dead_panes(
             .map(|(view, (pane_id, size, cell_w, cell_h), images)| {
                 let opening = route.clone();
                 let opened = cx.background_executor().spawn(async move {
-                    crate::terminal::remote::handshake::PaneHandshake::open_relink(
+                    lyrel_terminal::remote::handshake::PaneHandshake::open_relink(
                         &opening, pane_id, size, cell_w, cell_h, images,
                     )
                 });
@@ -2281,7 +2282,7 @@ fn relink_dead_panes(
                         }
                     }
                 }
-                Err(e) if crate::terminal::remote::handshake::attach_refused(&e) => {
+                Err(e) if lyrel_terminal::remote::handshake::attach_refused(&e) => {
                     // Only an explicit missing-pane reply is final; graphics
                     // admission refusals retain the original pane and retry.
                     view.update(cx, |view, _| view.abandon_relink());
@@ -2453,7 +2454,7 @@ fn park(pending: remote_connect::PendingAuth) {
 fn panes_of(
     cx: &mut gpui_kit::App,
     workspace: WorkspaceId,
-) -> Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
+) -> Vec<gpui_kit::Entity<lyrel_terminal::view::TerminalView>> {
     let Some(app) = crate::ui::windows::WindowRegistry::app_for(cx, workspace) else {
         return Vec::new();
     };
@@ -2484,7 +2485,7 @@ pub(crate) fn workspace_is_preempted(cx: &gpui_kit::App, workspace: WorkspaceId)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::remote_connect::HostChoice;
+    use crate::ui::desktop_lookups::HostChoice;
 
     /// The per-workspace relink clock: a miss puts the workspace on the next
     /// backoff step, panes all found their way back retires the entry — so a
@@ -2528,10 +2529,10 @@ mod tests {
     fn a_finished_attempt_retires_the_install_it_was_running(cx: &mut gpui_kit::TestAppContext) {
         use crate::daemon::install::InstallProgress as _;
         cx.update(|cx| {
-            cx.set_global(crate::core::config::Config::default());
-            crate::core::session::WorkspaceStore::install_for_test(
+            cx.set_global(lyrel_ui_base::config::Config::default());
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews::default(),
+                lyrel_ui_base::session::WindowViews::default(),
             );
             let target = RemoteTarget::Alias {
                 alias: "build-box".into(),
@@ -2567,21 +2568,21 @@ mod tests {
     #[gpui_kit::test]
     fn taking_back_marks_the_workspace_for_a_whole_rebuild(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            cx.set_global(crate::core::config::Config::default());
+            cx.set_global(lyrel_ui_base::config::Config::default());
             let host = RemoteRef::new(
                 RemoteTarget::Alias {
                     alias: "build-box".into(),
                 },
                 WorkspaceId::new(),
             );
-            let view = crate::core::session::WindowView {
+            let view = lyrel_ui_base::session::WindowView {
                 host: Some(host),
                 ..Default::default()
             };
             let id = view.id;
-            crate::core::session::WorkspaceStore::install_for_test(
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![view],
                     active: None,
                 },
@@ -2609,10 +2610,10 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         let id = cx.update(|cx| {
-            cx.set_global(crate::core::config::Config::default());
-            crate::core::session::WorkspaceStore::install_for_test(
+            cx.set_global(lyrel_ui_base::config::Config::default());
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews::default(),
+                lyrel_ui_base::session::WindowViews::default(),
             );
             RemoteLinks::ensure_running(cx);
             assert!(cx.default_global::<RemoteLinks>().pumping);
@@ -2631,10 +2632,10 @@ mod tests {
                 },
                 WorkspaceId::new(),
             );
-            crate::core::session::WorkspaceStore::install_for_test(
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
-                    views: vec![crate::core::session::WindowView {
+                lyrel_ui_base::session::WindowViews {
+                    views: vec![lyrel_ui_base::session::WindowView {
                         id,
                         host: Some(host),
                         open: true,
@@ -2655,21 +2656,21 @@ mod tests {
     #[gpui_kit::test]
     fn a_plain_reconnect_is_not_marked_for_a_rebuild(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            cx.set_global(crate::core::config::Config::default());
+            cx.set_global(lyrel_ui_base::config::Config::default());
             let host = RemoteRef::new(
                 RemoteTarget::Alias {
                     alias: "build-box".into(),
                 },
                 WorkspaceId::new(),
             );
-            let view = crate::core::session::WindowView {
+            let view = lyrel_ui_base::session::WindowView {
                 host: Some(host),
                 ..Default::default()
             };
             let id = view.id;
-            crate::core::session::WorkspaceStore::install_for_test(
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![view],
                     active: None,
                 },
@@ -2740,7 +2741,7 @@ mod tests {
             app.finish_connect(old, Ok(connected), window, cx);
             assert!(app.connect.is_connecting(current));
             assert!(app.host_snapshots.is_empty());
-            assert!(remote_connect::HostLinks::get(cx, host).is_none());
+            assert!(desktop_lookups::HostLinks::get(cx, host).is_none());
         });
     }
 
@@ -2772,9 +2773,9 @@ mod tests {
         let handle = vcx.window_handle();
         let weak = app.downgrade();
         app.update(cx, |app, cx| {
-            crate::core::session::WorkspaceStore::install_for_test(
+            lyrel_ui_base::session::WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews::default(),
+                lyrel_ui_base::session::WindowViews::default(),
             );
             crate::ui::windows::WindowRegistry::init(cx);
             crate::ui::windows::WindowRegistry::register(cx, app.workspace, handle, weak);
@@ -2946,7 +2947,7 @@ mod tests {
 
     #[test]
     fn the_status_strip_speaks_unless_everything_is_working() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(RemoteStatus::Attached.strip_message("build-box"), None);
         assert_eq!(
             RemoteStatus::Disconnected.strip_message("build-box"),
@@ -3104,7 +3105,7 @@ mod tests {
 
     #[test]
     fn every_state_says_what_it_means_for_the_keyboard() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let cases = [
             (RemoteStatus::Attached, true, None, None),
             (
@@ -3164,7 +3165,7 @@ mod tests {
 
     #[test]
     fn the_new_states_name_what_happened() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             RemoteStatus::Reconnecting {
                 attempt: 0,
@@ -3223,19 +3224,19 @@ mod tests {
     #[gpui_kit::test]
     fn scheduling_a_try_is_not_a_failed_attempt(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = resolvable_machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target.clone(),
                 WorkspaceId::new(),
             ));
             entry.open = true;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3263,12 +3264,12 @@ mod tests {
     /// A parked machine with one open workspace on it, wound forward to the
     /// moment after the refusal.
     fn parked_on_a_refusal(cx: &mut gpui_kit::App) -> (HostId, RemoteTarget, WorkspaceId) {
-        crate::core::config::pin_test_config_dir();
-        cx.set_global(crate::core::config::Config::default());
+        lyrel_ui_base::config::pin_test_config_dir();
+        cx.set_global(lyrel_ui_base::config::Config::default());
         crate::ui::windows::WindowRegistry::init(cx);
 
         let (host, target) = resolvable_machine("build-box");
-        let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+        let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
             target.clone(),
             WorkspaceId::new(),
         ));
@@ -3276,7 +3277,7 @@ mod tests {
         let id = entry.id;
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![entry],
                 active: None,
             },
@@ -3307,12 +3308,12 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = resolvable_machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target.clone(),
                 WorkspaceId::new(),
             ));
@@ -3320,7 +3321,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3442,12 +3443,12 @@ mod tests {
     #[gpui_kit::test]
     fn a_declined_password_stops_the_reconnect_clock(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = resolvable_machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target.clone(),
                 WorkspaceId::new(),
             ));
@@ -3455,7 +3456,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3570,12 +3571,12 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target,
                 WorkspaceId::new(),
             ));
@@ -3583,7 +3584,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3607,7 +3608,7 @@ mod tests {
 
     #[test]
     fn a_reconnect_says_what_went_wrong_last_time() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             RemoteStatus::Reconnecting {
                 attempt: 0,
@@ -3655,7 +3656,7 @@ mod tests {
 
     #[test]
     fn the_button_calls_a_downgrade_a_downgrade() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             t(mismatch_action_key(&a_refusal_between(5, 6))),
             "Update Server",
@@ -3693,7 +3694,7 @@ mod tests {
 
     #[test]
     fn a_server_of_another_dialect_is_named_rather_than_quoted() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let shown = RemoteStatus::ServerMismatch(a_refusal())
             .strip_message("build-box")
             .expect("a parked link still has something to say");
@@ -3821,12 +3822,12 @@ mod tests {
     #[gpui_kit::test]
     fn a_take_back_is_sent_once_and_undone_when_it_is_refused(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target,
                 WorkspaceId::new(),
             ));
@@ -3834,7 +3835,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3882,12 +3883,12 @@ mod tests {
     #[gpui_kit::test]
     fn a_reclaim_that_lands_leaves_nothing_behind(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target,
                 WorkspaceId::new(),
             ));
@@ -3895,7 +3896,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },
@@ -3935,12 +3936,12 @@ mod tests {
     #[gpui_kit::test]
     fn a_workspace_never_attached_on_this_link_is_due(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::core::config::pin_test_config_dir();
-            cx.set_global(crate::core::config::Config::default());
+            lyrel_ui_base::config::pin_test_config_dir();
+            cx.set_global(lyrel_ui_base::config::Config::default());
             crate::ui::windows::WindowRegistry::init(cx);
 
             let (host, target) = machine("build-box");
-            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            let mut entry = lyrel_ui_base::session::WindowView::on_remote(RemoteRef::new(
                 target,
                 WorkspaceId::new(),
             ));
@@ -3948,7 +3949,7 @@ mod tests {
             let id = entry.id;
             WorkspaceStore::install_for_test(
                 cx,
-                crate::core::session::WindowViews {
+                lyrel_ui_base::session::WindowViews {
                     views: vec![entry],
                     active: None,
                 },

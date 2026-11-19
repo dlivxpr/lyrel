@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use lyrel_core::core::agent_hooks::{HookAgent, HooksState};
-use lyrel_core::daemon::control::{CONTROL_VERSION, ControlRequest, ReplyOk};
-use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
+use lyrel_protocol::core::agent_hooks::{HookAgent, HooksState};
+use lyrel_protocol::daemon::control::{CONTROL_VERSION, ControlRequest, ReplyOk};
+use lyrel_protocol::daemon::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 
 use super::{Outcome, Report};

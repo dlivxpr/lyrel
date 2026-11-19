@@ -1,18 +1,16 @@
 //! Explicit-machine skill browsing and reviewed shared installation. The settings
 //! session owns target, selection and async generation independently of workspace focus.
 use super::{shell::MenuEntry, *};
-use crate::ui::{
-    host_ops::{Entry, HostOps},
-    host_registry::HostRegistry,
-};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _,
     button::{Button, ButtonVariants as _},
 };
-use lyrel_core::skills::{
+use lyrel_insights::skills::{
     self, DiscoveryState, ScanRequest, ScanSnapshot, SkillInstallation, SourceKind,
 };
+use lyrel_ui_base::host_ops::{Entry, HostOps};
+use lyrel_ui_base::host_registry::HostRegistry;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -615,8 +613,8 @@ fn safe_node(node: &gpui_kit::component::text::markdown_ast::Node) -> bool {
     use gpui_kit::component::text::markdown_ast::Node;
     let here = match node {
         Node::Image(_) | Node::ImageReference(_) | Node::Html(_) => false,
-        Node::Link(link) => lyrel_core::core::github::markdown::is_safe_target(&link.url),
-        Node::Definition(def) => lyrel_core::core::github::markdown::is_safe_target(&def.url),
+        Node::Link(link) => lyrel_insights::github::markdown::is_safe_target(&link.url),
+        Node::Definition(def) => lyrel_insights::github::markdown::is_safe_target(&def.url),
         _ => true,
     };
     here && node

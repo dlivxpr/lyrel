@@ -50,7 +50,7 @@ impl ProgressChange {
                 }
             };
             if fields.next().is_none() {
-                *self = Self::Set(Some(PaneProgress { kind, percent }));
+                *self = Self::Set(Some(PaneProgress::new(kind, percent)));
             }
         } else if payload == b"133;C" || payload.starts_with(b"133;C;") {
             *self = Self::Set(None);

@@ -6,16 +6,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
-use crate::terminal::git_data::index_of;
 use crate::ui::app::LyrelApp;
 use crate::ui::file_copy;
-use crate::ui::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, git_badge};
 use crate::ui::scm::status::{status_color, status_glyph};
+use crate::ui::scm_snapshot::index_of;
 use crate::ui::window_chrome::CONTENT_INSET;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
@@ -25,6 +21,11 @@ use gpui_kit::{
     AnyElement, App, Context, Entity, ExternalPaths, FocusHandle, KeyDownEvent, MouseButton,
     PromptLevel, SharedString, Subscription, Window, div, px,
 };
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_ui_base::file_drag::RemotePathDrag;
+use lyrel_ui_base::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 mod lifecycle;
 mod operations;
@@ -45,8 +46,6 @@ mod refresh_tests;
 pub(crate) mod read_probe;
 #[cfg(test)]
 use read_probe::{InstanceTicket, ReadKind, ReadProbe};
-
-pub(crate) use lifecycle::{IndexKey, searchable_roots};
 
 // The tree is laid out the way every other list in this panel is: the column
 // sits `CONTENT_INSET` in and each row pads itself a further `ROW_INSET`, so a
@@ -1225,10 +1224,10 @@ impl LyrelApp {
             if self.can_spawn_locally(cx) {
                 // The OS association can fail to spawn like any other opener
                 // (#542): say so with the same words a failed file link uses.
-                if let Err(e) = crate::terminal::view::open_file_path(path) {
+                if let Err(e) = lyrel_ui_base::desktop_file::open_file_path(path) {
                     log::warn!("failed to open {}: {e}", path.display());
                     window.notify_app(
-                        crate::ui::host_ops::failure(
+                        lyrel_ui_base::host_ops::failure(
                             t_fmt(
                                 L10nKey::LinkFileOpenFailed,
                                 &[
@@ -1309,8 +1308,14 @@ impl LyrelApp {
                 let Some(next) = next else { return };
                 let path = rows[next].entry.path.clone();
                 if let Some(code) = self.tab_code_mut() {
-                    code.selected
-                        .click(host, &path, false, ev.keystroke.modifiers.shift, &rows);
+                    selection::click(
+                        &mut code.selected,
+                        host,
+                        &path,
+                        false,
+                        ev.keystroke.modifiers.shift,
+                        &rows,
+                    );
                 }
                 self.right_panel.tree_reveal =
                     Some((path, crate::ui::right_panel::TREE_REVEAL_RENDERS));
@@ -1561,7 +1566,7 @@ impl LyrelApp {
                         L10nKey::FileTreeDownloaded,
                         &[(
                             "path",
-                            &crate::ui::path_display::native_separators(&local)
+                            &lyrel_ui_base::path_display::native_separators(&local)
                                 .display()
                                 .to_string(),
                         )],
@@ -1736,7 +1741,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::desktop_notification::notify_desktop(
+            lyrel_terminal::desktop_notification::notify_desktop(
                 Some("lyrel"),
                 t(L10nKey::AppNoRunningCodingAgent),
             );
@@ -1939,7 +1944,7 @@ impl LyrelApp {
                     },
                 ))
             });
-        crate::ui::scrollbar::with_vertical_scrollbar(
+        lyrel_ui_base::scrollbar::with_vertical_scrollbar(
             "right-panel-tree-scrollbar",
             column,
             &self.file_tree.list,
@@ -2040,9 +2045,9 @@ impl LyrelApp {
             ];
         }
 
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let tree_host = self.spawn_host(cx);
-        let dirty = self.editor.is_dirty(tree_host, &path);
+        let dirty = self.editor.read(cx).is_dirty(tree_host, &path);
 
         let renaming = matches!(
             &self.file_tree.editing,
@@ -2462,7 +2467,7 @@ impl LyrelApp {
                 // them this OS's separators would copy something that names
                 // nothing on either machine.
                 let text = match paths_are_local {
-                    true => crate::ui::path_display::native_separators(&p)
+                    true => lyrel_ui_base::path_display::native_separators(&p)
                         .display()
                         .to_string(),
                     false => p.display().to_string(),
@@ -2477,7 +2482,7 @@ impl LyrelApp {
                 PopupMenuItem::new(crate::ui::right_panel::reveal_label()).on_click({
                     let p = p.clone();
                     move |_, _window, cx| {
-                        cx.reveal_path(&crate::ui::path_display::native_separators(&p));
+                        cx.reveal_path(&lyrel_ui_base::path_display::native_separators(&p));
                     }
                 }),
             );
@@ -2532,13 +2537,6 @@ fn dotfiles_menu_item(show_hidden: bool, app: &gpui_kit::WeakEntity<LyrelApp>) -
 
 struct DragGhost {
     name: String,
-}
-
-/// A row dragged out of a remote Files tree: a path on that remote, which
-/// nothing on this machine can open. See the row's `on_drag`.
-#[derive(Clone)]
-pub(crate) struct RemotePathDrag {
-    pub path: PathBuf,
 }
 
 impl gpui_kit::Render for DragGhost {
@@ -3602,7 +3600,7 @@ mod render_idle_gpui_tests {
     #[gpui_kit::test]
     fn a_decorated_tree_settles_and_then_reaches_render_idle(cx: &mut TestAppContext) {
         let _serial = serial();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = scratch("decorated");
         if !git(&root, &["init", "--quiet"]) {
             return; // no git on this machine

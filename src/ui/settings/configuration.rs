@@ -1,12 +1,12 @@
 use super::*;
-use crate::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN};
-use crate::ui::i18n::set_locale;
 use crate::ui::theme::{apply_theme, set_menus};
+use lyrel_core::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN};
+use lyrel_ui_base::i18n::set_locale;
 use std::sync::Arc;
 
 impl SettingsWindow {
     fn set_ui_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
-        use crate::core::config::{UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN};
+        use lyrel_core::core::config::{UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN};
         let size = size.clamp(UI_FONT_SIZE_MIN, UI_FONT_SIZE_MAX);
         let cfg = cx.global_mut::<Config>();
         if cfg.ui_font_size == size {
@@ -34,7 +34,7 @@ impl SettingsWindow {
     }
     pub(crate) fn set_font_ligatures(&mut self, on: bool, cx: &mut Context<Self>) {
         let features = on.then(|| {
-            crate::core::config::FontFeatures(Arc::new(vec![
+            lyrel_core::core::config::FontFeatures(Arc::new(vec![
                 ("calt".to_string(), 1),
                 ("liga".to_string(), 1),
             ]))
@@ -50,7 +50,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_prompt_cursor_style(
         &mut self,
-        style: crate::core::config::PromptCursorStyle,
+        style: lyrel_core::core::config::PromptCursorStyle,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.prompt_cursor_style = style);
@@ -104,7 +104,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_link_file_open(
         &mut self,
-        mode: crate::core::config::LinkFileOpen,
+        mode: lyrel_core::core::config::LinkFileOpen,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.link_file_open = Some(mode));
@@ -166,7 +166,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_scrollback_limit(&mut self, lines: usize, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| {
-            cfg.scrollback_limit = lines.clamp(100, crate::core::config::MAX_SCROLLBACK)
+            cfg.scrollback_limit = lines.clamp(100, lyrel_core::core::config::MAX_SCROLLBACK)
         });
     }
 
@@ -176,7 +176,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_confirm_close(
         &mut self,
-        mode: crate::core::config::ConfirmClose,
+        mode: lyrel_core::core::config::ConfirmClose,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.confirm_close = mode);
@@ -187,7 +187,7 @@ impl SettingsWindow {
     }
     pub(crate) fn set_notify_mode(
         &mut self,
-        mode: crate::core::config::NotifyMode,
+        mode: lyrel_core::core::config::NotifyMode,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.notify_on_command_finish = mode);
@@ -199,7 +199,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_bell_mode(
         &mut self,
-        mode: crate::core::config::BellMode,
+        mode: lyrel_core::core::config::BellMode,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.bell = mode);
@@ -277,7 +277,7 @@ impl SettingsWindow {
     /// Hands the prompt to the shell's own line editor, or takes it back.
     ///
     /// Live panes carry a cached copy of the flag (see
-    /// [`crate::terminal::view::TerminalView::prompt_editor`]), so the switch
+    /// [`lyrel_terminal::view::TerminalView::prompt_editor`]), so the switch
     /// has to reach them: without this, only panes opened afterwards would
     /// change hands.
     pub(crate) fn set_prompt_editor(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -294,7 +294,7 @@ impl SettingsWindow {
 
     pub(crate) fn set_startup_mode(
         &mut self,
-        mode: crate::core::config::StartupMode,
+        mode: lyrel_core::core::config::StartupMode,
         cx: &mut Context<Self>,
     ) {
         self.update_config(cx, |cfg| cfg.startup_mode = mode);
@@ -520,7 +520,7 @@ impl SettingsWindow {
         cx.notify();
     }
     pub(crate) fn normalize_gui_language(code: &str) -> &'static str {
-        crate::core::config::normalize_gui_language(code)
+        lyrel_core::core::config::normalize_gui_language(code)
     }
 
     pub(crate) fn set_gui_language(

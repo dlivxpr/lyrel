@@ -2,11 +2,11 @@ use super::progress::summarize_progress;
 use super::*;
 use crate::daemon::protocol::{DaemonMsg, PaneProgress, ProgressKind};
 use crate::daemon::transport::Stream;
-use crate::terminal::view::TerminalView;
 use crate::ui::app::test_window::harness_with_tabs;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Axis, Entity, SharedString, TestAppContext};
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 fn wait_until(cx: &mut TestAppContext, mut ready: impl FnMut(&mut TestAppContext) -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -364,7 +364,7 @@ fn tab_progress_follows_park_focus_close_and_move(cx: &mut TestAppContext) {
     );
     wait_state(&a, cx, Some(progress(ProgressKind::Running, Some(15))));
     let _other_stream = app.update_in(&mut vcx, |app, window, cx| {
-        let (other, stream) = crate::terminal::view::quiet_test_pane(90, window, cx);
+        let (other, stream) = lyrel_terminal::view::quiet_test_pane(90, window, cx);
         crate::ui::app::LyrelApp::watch_terminal(&other, window, cx);
         app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(other))));
         app.tabs.select(0);

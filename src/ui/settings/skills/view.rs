@@ -115,7 +115,7 @@ impl SettingsWindow {
                     .when(!narrow || selected.is_some(), |pane| {
                         pane.child(
                             v_flex().flex_1().min_h_0().min_w_0().child(
-                                crate::ui::scrollbar::with_vertical_scrollbar(
+                                lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                                     "skills-detail-scrollbar",
                                     div()
                                         .id("skills-detail-scroll")
@@ -479,7 +479,7 @@ impl SettingsWindow {
         }
         if let Some(markdown) = skill.markdown() {
             let safe =
-                lyrel_core::core::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
+                lyrel_insights::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
             content.push(
                 div()
                     .pt_2()
@@ -880,7 +880,7 @@ impl SettingsWindow {
                             }),
                     ),
             )
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "skills-list-scrollbar",
                 div()
                     .id("skills-list-scroll")
@@ -958,7 +958,7 @@ impl SettingsWindow {
             .absolute()
             .inset_0()
             .occlude()
-            .bg(crate::ui::presets::scrim_fill(cx))
+            .bg(lyrel_ui_base::presets::scrim_fill(cx))
             .flex()
             .items_center()
             .justify_center()
@@ -978,7 +978,7 @@ impl SettingsWindow {
                     .rounded_lg()
                     .overflow_hidden()
                     .child(crate::ui::dialog::header(title, cx))
-                    .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                    .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                         "skills-modal-scrollbar",
                         div()
                             .id("skills-modal-scroll")

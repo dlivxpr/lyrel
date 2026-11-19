@@ -239,19 +239,19 @@ impl LyrelApp {
             }),
         )
         .on_action(cx.listener(|this, _: &ShowRightPanelInfo, window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, window, cx)
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Info, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ShowRightPanelChanges, window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Scm, window, cx)
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Scm, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ShowRightPanelFiles, window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx)
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Files, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ShowRightPanelSearch, window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::Search, window, cx)
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Search, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, window, cx| {
-            this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, window, cx)
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::GitHub, window, cx)
         }))
         .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(
@@ -261,14 +261,14 @@ impl LyrelApp {
             cx.listener(|this, _: &ToggleDocumentFill, _window, cx| this.toggle_document_fill(cx)),
         )
         .on_action(cx.listener(|this, _: &DocumentWidthThird, _window, cx| {
-            this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_THIRD, cx)
+            this.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_THIRD, cx)
         }))
         .on_action(cx.listener(|this, _: &DocumentWidthHalf, _window, cx| {
-            this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_HALF, cx)
+            this.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_HALF, cx)
         }))
         .on_action(
             cx.listener(|this, _: &DocumentWidthTwoThirds, _window, cx| {
-                this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
+                this.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
             }),
         )
         .on_action(cx.listener(|this, _: &ToggleDocumentPreview, window, cx| {
@@ -547,12 +547,12 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod new_window_action_tests {
-    use crate::core::actions::NewWindow;
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use crate::ui::windows::WindowRegistry;
     use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::actions::NewWindow;
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     /// `NewWindow` has to open a window, not merely exist.
     ///
@@ -565,7 +565,7 @@ mod new_window_action_tests {
     /// Window", with no workspace named.
     #[gpui_kit::test]
     fn dispatching_new_window_opens_a_second_window_beside_the_first(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -637,7 +637,7 @@ mod new_window_action_tests {
     /// when no window is active, which is where `keymap::init` puts this one.
     #[gpui_kit::test]
     fn new_window_answers_with_no_window_to_dispatch_it(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -664,14 +664,14 @@ mod new_window_action_tests {
 
 #[cfg(test)]
 mod unfocused_shortcut_tests {
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use crate::ui::windows::WindowRegistry;
     use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     fn open(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -800,8 +800,8 @@ mod unfocused_shortcut_tests {
 
     #[gpui_kit::test]
     fn separate_settings_escape_returns_focus_to_the_filled_document(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
         use gpui_kit::test::TestWindowExt as _;
+        use lyrel_ui_base::actions::{EditorNewFile, ToggleDocumentFill};
         let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
         vcx.dispatch_action(EditorNewFile);
         vcx.dispatch_action(ToggleDocumentFill);

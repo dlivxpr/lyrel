@@ -1,17 +1,25 @@
 //! #284 的生产工作台接缝：PDF 作为真实文档打开、翻页、缩放、密码、既有外观。
 //!
 //! 这些测试只走工作台入口（`open_file_in_editor`、`editor_open_on_host`、
-//! 键位、按钮与真实 gpui 测试平台窗口），夹具由 `lyrel-pdf` 的自有生成器在
+//! 键位、按钮与真实 gpui 测试平台窗口），夹具由 `lyrel-document` 的自有生成器在
 //! 测试进程内构造，不依赖协调目录或任何下载资源。它们不是原生 OS 窗口；
 //! 真实桌面、SSH、系统 IME 与性能仍由单独验收覆盖。
 
 use super::super::test_host::FileHost;
-use super::super::*;
-use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
-use lyrel_pdf::fixtures;
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+use lyrel_document::pdf::fixtures;
+use lyrel_document::pdf::{PageText, PageTextResult};
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_workbench_editor::code_editor::BufferId;
+use lyrel_workbench_editor::code_editor::TabCode;
+use lyrel_workbench_editor::code_editor::pdf_document::work_gate::{Work, pause_work};
+use lyrel_workbench_editor::code_editor::pdf_document::{
+    PdfActualSize, PdfContent, PdfCopy, PdfFitPage, PdfNextPage, PdfView, PdfZoomIn,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -24,6 +32,15 @@ fn settle(cx: &mut VisualTestContext) {
         window.render_frame(cx);
     });
     cx.run_until_parked();
+}
+
+/// Extract one page's text at the public seam, where the common token is part
+/// of the contract since #322.
+fn page_text(document: &lyrel_document::pdf::PdfDocument, page: usize) -> PageText {
+    match document.text(page, &lyrel_document::CancelToken::new()) {
+        PageTextResult::Text(text) => text,
+        other => panic!("expected page {page} text, got {other:?}"),
+    }
 }
 
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
@@ -51,8 +68,8 @@ fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, path: &Path) -> Buff
         app.open_file_in_editor(path, window, cx)
     });
     until(cx, |cx| {
-        app.read_with(cx, |app, _| {
-            app.active_buffer()
+        app.read_with(cx, |app, cx| {
+            app.active_buffer(cx)
                 .is_some_and(|file| file.path.as_path() == path)
         })
     });
@@ -68,8 +85,8 @@ fn active_id(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> BufferId {
 }
 
 fn pdf_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<PdfView> {
-    app.read_with(cx, |app, _| {
-        app.active_editor_input()
+    app.read_with(cx, |app, cx| {
+        app.active_editor_input(cx)
             .expect("a document in front")
             .pdf()
             .expect("a PDF document")
@@ -83,7 +100,7 @@ fn content(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> PdfContent {
 
 fn ready(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> bool {
     app.read_with(cx, |app, cx| {
-        app.active_buffer()
+        app.active_buffer(cx)
             .and_then(|file| file.input.pdf())
             .is_some_and(|view| {
                 matches!(
@@ -114,25 +131,33 @@ fn secondary(chord: &str) -> String {
 
 #[gpui_kit::test]
 fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "reading.pdf", &bytes);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
 
-    app.read_with(&cx, |app, _| {
-        let file = app.editor.buffers.get(id).expect("installed document");
+    app.read_with(&cx, |app, cx| {
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("installed document");
         assert!(file.input.pdf().is_some(), "a PDF document");
         assert!(!file.dirty, "a PDF is never unsaved");
         assert_eq!(file.path, path);
-        assert!(app.pdf_document_active());
+        assert!(app.pdf_document_active(cx));
         assert_eq!(
-            app.editor_active_location()
+            app.editor_active_location(cx)
                 .map(|(host, path)| (host, path.to_path_buf())),
             Some((HostId::LOCAL, path.clone()))
         );
-        assert!(app.editor.local_file(id).is_none(), "not a text file");
+        assert!(
+            app.editor.read(cx).local_file(id).is_none(),
+            "not a text file"
+        );
     });
     assert!(ready(&app, &cx));
     let view = pdf_view(&app, &cx);
@@ -173,14 +198,14 @@ fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppConte
     let document = document.expect("parsed");
     assert_eq!(document.page_size(2), Some((792.0, 612.0)));
     assert_eq!(document.page_count(), 12);
-    assert!(document.text(0).unwrap().text().contains("unique-page-01"));
+    assert!(page_text(&document, 0).text().contains("unique-page-01"));
     assert_eq!(document.outline().len(), 3);
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
 }
 
 #[gpui_kit::test]
 fn page_navigation_and_zoom_reframe_the_page_window(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -242,7 +267,7 @@ fn page_navigation_and_zoom_reframe_the_page_window(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_page_window_evicts_retired_bitmaps(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -277,7 +302,7 @@ fn the_page_window_evicts_retired_bitmaps(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -287,7 +312,7 @@ fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppConte
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(true);
     std::fs::write(&path, &replacement).unwrap();
@@ -313,7 +338,7 @@ fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -332,7 +357,7 @@ fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppCon
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(true);
     std::fs::write(&path, &replacement).unwrap();
@@ -351,7 +376,7 @@ fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::encrypted_reading_document();
     let path = fixture(dir.path(), "locked.pdf", &bytes);
@@ -401,13 +426,13 @@ fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppCon
     );
     let document = view.read_with(&cx, |view, cx| {
         assert!(
-            view.document.read(cx).bytes.is_none(),
+            !view.document().read(cx).retains_unlock_bytes(),
             "only the locked document retains retry bytes"
         );
-        view.document.read(cx).ready().expect("unlocked")
+        view.document().read(cx).ready().expect("unlocked")
     });
     assert_eq!(document.page_count(), 12);
-    assert!(document.text(0).unwrap().text().contains("unique-page-01"));
+    assert!(page_text(&document, 0).text().contains("unique-page-01"));
     assert_eq!(document.outline().len(), 3);
     until(&mut cx, |cx| status(&app, cx) == "Page 1 / 12");
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
@@ -415,7 +440,7 @@ fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -429,14 +454,20 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     until(&mut cx, |cx| ready(&app, cx));
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let document = view.document.read(cx).ready().unwrap();
+        let document = view.document().read(cx).ready().unwrap();
         let fields = document.fields();
         assert_eq!(fields.len(), 2);
         assert!(fields.iter().all(|field| field.has_appearance));
         assert!(fields.iter().all(|field| !field.needs_text_overlay()));
         assert_eq!(fields[0].value, "FILLED AP 279");
         assert_eq!(fields[1].value, "Yes");
-        assert_eq!(document.render_page(0, 1.0, &|| false).unwrap().width, 612);
+        assert_eq!(
+            document
+                .render_page(0, 1.0, &lyrel_document::CancelToken::new())
+                .unwrap()
+                .width,
+            612
+        );
     });
     cx.update(|window, _| {
         assert!(window.find("pdf-page-0").visible());
@@ -460,11 +491,14 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     });
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let fields = view.document.read(cx).ready().unwrap().fields().to_vec();
+        let fields = view.document().read(cx).ready().unwrap().fields().to_vec();
         assert_eq!(fields[0].value, "中文表单279");
         assert_eq!(fields[1].value, "第一行\n第二行");
         assert!(fields[1].multiline);
-        assert_eq!(fields[1].alignment, lyrel_pdf::FieldAlignment::Right);
+        assert_eq!(
+            fields[1].alignment,
+            lyrel_document::pdf::FieldAlignment::Right
+        );
         assert!(fields.iter().all(|field| field.needs_text_overlay()));
     });
     cx.update(|window, _| {
@@ -493,7 +527,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     });
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let fields = view.document.read(cx).ready().unwrap().fields().to_vec();
+        let fields = view.document().read(cx).ready().unwrap().fields().to_vec();
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].value, "Doc \u{02d8} \u{2022} \u{fb01} \u{20ac} é");
         assert!(fields[0].needs_text_overlay());
@@ -515,7 +549,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
 
 #[gpui_kit::test]
 fn malformed_and_oversized_pdfs_fail_visibly(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -550,7 +584,7 @@ fn malformed_and_oversized_pdfs_fail_visibly(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = fixtures::reading_document();
     let path = fixture(dir.path(), "read-only.pdf", &before);
@@ -563,8 +597,16 @@ fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        assert!(!app.editor.has_bar(), "no prompt opened over a PDF");
-        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(
+            !app.editor.read(cx).has_bar(),
+            "no prompt opened over a PDF"
+        );
+        let file = app
+            .editor
+            .read(cx)
+            .buffers
+            .get(id)
+            .expect("still installed");
         assert!(!file.dirty);
         assert_eq!(file.format(cx), None, "a PDF has no text format");
     });
@@ -575,7 +617,7 @@ fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "doc.pdf", &local_bytes);
@@ -600,8 +642,8 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
                 .is_some_and(|id| id != local)
         })
     });
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor_active_location().unwrap().0, HostId(84));
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(84));
     });
     assert_eq!(
         pdf_view(&app, &cx).read_with(&cx, |view, _| view.page_count()),
@@ -625,13 +667,13 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
         app.editor_open_on_host(mapped, Path::new("/doc.pdf"), window, cx)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             app.tab_code()
                 .and_then(TabCode::active_id)
                 .is_some_and(|id| {
                     id != local
                         && app
-                            .editor_active_location()
+                            .editor_active_location(cx)
                             .is_some_and(|(host, _)| host == HostId(85))
                 })
         })
@@ -663,7 +705,7 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "split.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -683,8 +725,8 @@ fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("PDF");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("PDF");
         (
             file.presentations
                 .pdf_existing(tab, right)
@@ -709,7 +751,7 @@ fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "watched.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -719,15 +761,15 @@ fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
         12
     );
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     let replacement = fixtures::forms_document(false);
     std::fs::write(&path, &replacement).unwrap();
     until(&mut cx, |cx| {
         ready(&app, cx) && pdf_view(&app, cx).read_with(cx, |view, _| view.page_count() == 1)
     });
-    app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("still open");
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("still open");
         assert!(file.conflict.is_none(), "a clean PDF reloads itself");
         assert!(!file.dirty);
     });
@@ -736,7 +778,7 @@ fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "late.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 2);
@@ -747,26 +789,31 @@ fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut 
         app.editor_open_on_host(shared, &path, window, cx)
     });
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
-        assert_eq!(app.editor.buffers.iter().count(), 0, "still reading");
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(
+            app.editor.read(cx).buffers.iter().count(),
+            0,
+            "still reading"
+        );
     });
     app.update_in(&mut cx, |app, window, cx| app.close_tab(0, window, cx));
     settle(&mut cx);
     let _ = gate.send(());
     settle(&mut cx);
     settle(&mut cx);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert_eq!(
-            app.editor.buffers.iter().count(),
+            app.editor.read(cx).buffers.iter().count(),
             0,
             "a late read installs no document into a closed tab"
         );
     });
 
     let id = open(&app, &mut cx, &path);
-    app.read_with(&cx, |app, _| {
+    app.read_with(&cx, |app, cx| {
         assert!(
             app.editor
+                .read(cx)
                 .buffers
                 .get(id)
                 .is_some_and(|file| file.input.pdf().is_some())
@@ -776,7 +823,7 @@ fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut 
 
 #[gpui_kit::test]
 fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "versioned.pdf", &bytes);
@@ -799,71 +846,6 @@ fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext)
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Work {
-    FirstPage,
-    Unlock,
-    /// 全文扫掠的后台解释阶段；`block` 在进入后台任务后等待，`finish`
-    /// 在收集完（或取消返回）时置位。
-    Search,
-}
-
-pub(super) struct WorkGate {
-    receiver: smol::channel::Receiver<()>,
-    entered: Arc<std::sync::atomic::AtomicBool>,
-    finished: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl WorkGate {
-    pub(super) async fn block(&self) {
-        self.entered
-            .store(true, std::sync::atomic::Ordering::Release);
-        self.receiver.recv().await.expect("release owned PDF work");
-    }
-
-    pub(super) fn finish(self) {
-        self.finished
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
-thread_local! {
-    static WORK_GATE: std::cell::RefCell<Option<(Work, WorkGate)>> = const { std::cell::RefCell::new(None) };
-}
-
-fn pause_work(
-    work: Work,
-) -> (
-    smol::channel::Sender<()>,
-    Arc<std::sync::atomic::AtomicBool>,
-    Arc<std::sync::atomic::AtomicBool>,
-) {
-    let (sender, receiver) = smol::channel::bounded(1);
-    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    WORK_GATE.with_borrow_mut(|slot| {
-        *slot = Some((
-            work,
-            WorkGate {
-                receiver,
-                entered: entered.clone(),
-                finished: finished.clone(),
-            },
-        ))
-    });
-    (sender, entered, finished)
-}
-
-pub(super) fn take_work(work: Work) -> Option<WorkGate> {
-    WORK_GATE.with_borrow_mut(|slot| {
-        if slot.as_ref().is_some_and(|(pending, _)| *pending == work) {
-            slot.take().map(|(_, gate)| gate)
-        } else {
-            None
-        }
-    })
-}
-
 // #285：大纲/链接跳转、选区复制与文档内查找的工作台行为。它们仍然只走真实
 // 键位、按钮与拖拽——不触碰内部状态去伪造一次成功。
 
@@ -879,7 +861,7 @@ fn find_count(cx: &mut VisualTestContext) -> String {
 
 #[gpui_kit::test]
 fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "outline.pdf", &bytes);
@@ -942,7 +924,7 @@ fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut Test
 
 #[gpui_kit::test]
 fn page_link_annotations_jump_to_their_destination(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "links.pdf", &fixtures::links_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -969,7 +951,7 @@ fn page_link_annotations_jump_to_their_destination(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::links_document();
     let path = fixture(dir.path(), "rotated.pdf", &bytes);
@@ -1016,7 +998,7 @@ fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "find.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1081,7 +1063,7 @@ fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "unicode-find.pdf", &bytes);
@@ -1173,7 +1155,7 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
 
 #[gpui_kit::test]
 fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "cjk.pdf", &fixtures::unicode_text_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1230,7 +1212,7 @@ fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_ligature_glyph_copies_as_its_full_unicode_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::ligature_text_document();
     let path = fixture(dir.path(), "ligature.pdf", &bytes);
@@ -1273,7 +1255,7 @@ fn a_ligature_glyph_copies_as_its_full_unicode_text(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_scan_only_pdf_says_so_instead_of_pretending_matches(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::scan_only_document();
     let path = fixture(dir.path(), "scan.pdf", &bytes);
@@ -1300,7 +1282,7 @@ fn a_scan_only_pdf_says_so_instead_of_pretending_matches(tcx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "stale.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1318,7 +1300,7 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
         entered.load(std::sync::atomic::Ordering::Acquire)
     });
     until(&mut cx, |cx| {
-        app.read_with(cx, |app, _| app.editor.buffers.watching())
+        app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::write(&path, &fixtures::forms_document(true)).unwrap();
     until(&mut cx, |cx| status(&app, cx).starts_with("Page 1 / 1"));
@@ -1340,7 +1322,7 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "split-sel.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1361,8 +1343,8 @@ fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
         };
         (tab, left, right)
     });
-    let (front, other) = app.read_with(&cx, |app, _| {
-        let file = app.active_buffer().expect("PDF");
+    let (front, other) = app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer(cx).expect("PDF");
         (
             file.presentations
                 .pdf_existing(tab, right)

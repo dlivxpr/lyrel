@@ -6304,74 +6304,56 @@ dependencies = [
 name = "lyrel"
 version = "0.3.5"
 dependencies = [
- "aes-gcm",
  "anyhow",
- "async_zip",
- "base64 0.23.1",
  "chrono",
  "core-foundation 0.10.1",
- "cursor-icon",
  "encoding_rs",
- "fs2",
  "futures-channel",
- "getrandom 0.3.4",
  "gif 0.14.2",
  "gpui-kit",
  "gpui-pre-reqwest-client",
  "image",
- "jieba-rs",
  "keyring",
  "libc",
  "log",
  "lsp-types",
- "lyrel-code-editor",
  "lyrel-core",
- "lyrel-epub",
+ "lyrel-document",
+ "lyrel-insights",
  "lyrel-markdown-editor",
- "lyrel-pdf",
- "lyrel-text",
- "memchr",
- "merman",
+ "lyrel-terminal",
+ "lyrel-test-support",
+ "lyrel-ui-base",
+ "lyrel-updater",
+ "lyrel-workbench-editor",
  "notify",
- "notify-rust",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "parking_lot 0.13.0",
  "percent-encoding",
- "plist",
  "raw-window-handle",
- "regex",
  "resvg 0.49.0",
  "rio-graphics",
- "rio-unicode",
  "rio-vt",
  "rusqlite",
- "rusty-leveldb",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "similar 3.2.1",
  "smallvec",
  "smol",
- "snap",
  "tempfile",
  "tiff",
  "tray-icon",
- "tree-sitter",
  "unicode-segmentation",
  "ureq",
  "url",
  "uuid",
- "webview2-com",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-sys 0.61.2",
  "winresource",
- "wry",
  "yaml-edit",
- "yaml_serde",
  "zeroize",
  "zip",
 ]
@@ -6384,27 +6366,12 @@ dependencies = [
  "clap",
  "libc",
  "lyrel-core",
+ "lyrel-protocol",
+ "lyrel-test-support",
  "rio-vt",
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "lyrel-code-editor"
-version = "0.3.5"
-dependencies = [
- "csv",
- "gif 0.14.2",
- "image",
- "jsonc-parser",
- "rowan",
- "roxmltree 0.21.2",
- "sha2 0.11.1",
- "tiff",
- "toml_edit 0.25.19+spec-1.1.0",
- "xmlparser",
- "yaml-edit",
 ]
 
 [[package]]
@@ -6414,28 +6381,20 @@ dependencies = [
  "anyhow",
  "async_zip",
  "base64 0.23.1",
- "chrono",
- "chrono-tz",
  "core-foundation 0.10.1",
  "getrandom 0.4.3",
- "gix-discover",
- "hmac 0.13.0",
- "http",
- "icu_collator",
- "ignore",
  "image",
  "libc",
  "libgssapi",
  "log",
  "lyrel-core",
+ "lyrel-protocol",
+ "lyrel-test-support",
  "md5",
  "memchr",
  "miniz_oxide 0.9.1",
- "notify",
- "percent-encoding",
  "png 0.18.1",
  "portable-pty",
- "regex",
  "rio-graphics",
  "rio-unicode",
  "rio-vt",
@@ -6445,43 +6404,77 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "smallvec",
  "smol",
  "sysinfo 0.40.1",
  "system-configuration 0.8.0",
  "system-configuration-sys",
  "tempfile",
  "tokio",
+ "ureq",
+ "uuid",
+ "windows-sys 0.61.2",
+ "winreg 0.56.0",
+]
+
+[[package]]
+name = "lyrel-document"
+version = "0.3.5"
+dependencies = [
+ "csv",
+ "encoding_rs",
+ "gif 0.14.2",
+ "globset",
+ "hayro",
+ "html-escape",
+ "image",
+ "jsonc-parser",
+ "log",
+ "md5",
+ "rowan",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tiff",
+ "toml_edit 0.25.19+spec-1.1.0",
+ "xmlparser",
+ "yaml-edit",
+ "zip",
+]
+
+[[package]]
+name = "lyrel-insights"
+version = "0.3.5"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
+ "chrono",
+ "chrono-tz",
+ "fs2",
+ "http",
+ "icu_collator",
+ "libc",
+ "log",
+ "lyrel-core",
+ "lyrel-protocol",
+ "percent-encoding",
+ "regex",
+ "rusqlite",
+ "rusty-leveldb",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "snap",
+ "tempfile",
  "toml_edit 0.25.19+spec-1.1.0",
  "ureq",
  "url",
  "uuid",
  "windows-sys 0.61.2",
- "winreg 0.56.0",
  "yaml_serde",
-]
-
-[[package]]
-name = "lyrel-epub"
-version = "0.3.5"
-dependencies = [
- "encoding_rs",
- "html-escape",
- "roxmltree 0.21.2",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
-]
-
-[[package]]
-name = "lyrel-graphics-fixture"
-version = "0.3.5"
-dependencies = [
- "libc",
- "lyrel-core",
- "sha2 0.11.1",
- "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -6490,7 +6483,7 @@ version = "0.3.5"
 dependencies = [
  "gpui-kit",
  "image",
- "lyrel-text",
+ "lyrel-document",
  "ratex-layout",
  "ratex-parser",
  "ratex-render",
@@ -6503,20 +6496,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "lyrel-pdf"
+name = "lyrel-protocol"
 version = "0.3.5"
 dependencies = [
- "hayro",
+ "anyhow",
+ "base64 0.23.1",
+ "getrandom 0.4.3",
+ "gix-discover",
+ "hmac 0.13.0",
+ "http",
+ "ignore",
+ "libc",
  "log",
- "md5",
+ "memchr",
+ "notify",
+ "regex",
+ "rio-grapheme-width",
+ "rio-unicode",
+ "rio-vt",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "smol",
+ "tempfile",
+ "toml_edit 0.25.19+spec-1.1.0",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "lyrel-server"
 version = "0.3.5"
 dependencies = [
+ "chrono",
  "libc",
  "lyrel-core",
+ "lyrel-insights",
+ "lyrel-test-support",
  "png 0.18.1",
  "serde",
  "serde_json",
@@ -6525,11 +6542,137 @@ dependencies = [
 ]
 
 [[package]]
-name = "lyrel-text"
+name = "lyrel-terminal"
 version = "0.3.5"
 dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "core-foundation 0.10.1",
+ "cursor-icon",
+ "fs2",
+ "gpui-kit",
+ "hex",
+ "image",
+ "jieba-rs",
+ "libc",
+ "log",
+ "lyrel-core",
+ "lyrel-protocol",
+ "lyrel-test-support",
+ "lyrel-ui-base",
+ "memchr",
+ "notify-rust",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "parking_lot 0.13.0",
+ "regex",
+ "rio-graphics",
+ "rio-unicode",
+ "rio-vt",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "smallvec",
+ "smol",
+ "tempfile",
+ "uuid",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-test-support"
+version = "0.3.5"
+dependencies = [
+ "fs2",
+ "libc",
+ "lyrel-core",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-ui-base"
+version = "0.3.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gpui-kit",
+ "log",
+ "lyrel-protocol",
+ "objc2-foundation 0.3.2",
+ "parking_lot 0.13.0",
+ "plist",
+ "serde",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+ "yaml_serde",
+]
+
+[[package]]
+name = "lyrel-updater"
+version = "0.3.5"
+dependencies = [
+ "async_zip",
+ "libc",
+ "lyrel-core",
+ "serde",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
+name = "lyrel-workbench-editor"
+version = "0.3.5"
+dependencies = [
+ "anyhow",
+ "core-foundation 0.10.1",
  "encoding_rs",
- "globset",
+ "getrandom 0.3.4",
+ "gpui-kit",
+ "image",
+ "log",
+ "lsp-types",
+ "lyrel-core",
+ "lyrel-document",
+ "lyrel-markdown-editor",
+ "lyrel-protocol",
+ "lyrel-ui-base",
+ "merman",
+ "notify",
+ "parking_lot 0.13.0",
+ "percent-encoding",
+ "raw-window-handle",
+ "regex",
+ "resvg 0.49.0",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar 3.2.1",
+ "smallvec",
+ "smol",
+ "tempfile",
+ "tree-sitter",
+ "unicode-segmentation",
+ "ureq",
+ "url",
+ "uuid",
+ "webview2-com",
+ "windows 0.62.2",
+ "windows-sys 0.61.2",
+ "wry",
+ "yaml-edit",
 ]
 
 [[package]]

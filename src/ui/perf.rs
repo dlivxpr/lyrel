@@ -1,12 +1,12 @@
 //! Per-callsite call-rate and build-time counter, printed once a second to
 //! stderr when `LYREL_PROFILE` is set. The meter itself lives in
-//! [`crate::core::rate_meter`], shared with `terminal::fps`.
+//! [`lyrel_terminal::rate_meter`], shared with `terminal::fps`.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::core::rate_meter::{Meter, Wording, flag_enables};
+use lyrel_terminal::rate_meter::{Meter, Wording, flag_enables};
 
 const WORDING: Wording = Wording {
     tag: "perf",

@@ -1,8 +1,7 @@
 # lyrel 界面设计规范
 
-本规范约束应用界面，不重写 shell、TUI、代码语法的颜色。实现入口是
-`src/ui/presets.rs` 的 `Neutrals`、`Interactions`、`Semantics`，以及
-`src/ui/theme.rs` 的组件映射。组件应引用这些角色，不在页面里另配颜色。
+本规范约束应用界面，不重写 shell、TUI、代码语法的颜色。窗口与工作台引用 `lyrel-ui-base` 的
+`Neutrals`、`Interactions`、`Semantics` 和主题组件映射，不在页面里另配颜色。
 
 ## 信息优先级
 

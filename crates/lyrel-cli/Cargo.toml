@@ -16,9 +16,8 @@ name = "lyrel"
 path = "src/main.rs"
 
 [dependencies]
-# Protocol types and the shared Rio cluster-width helper. No gssapi or
-# remote-install: this client never links krb5 or an HTTP fetcher.
-lyrel-core = { path = "../lyrel-core", features = ["terminal-width"] }
+# The synchronous wire clients, base LocalHost and shared width helpers.
+lyrel-protocol = { path = "../lyrel-protocol" }
 
 anyhow.workspace = true
 serde_json.workspace = true
@@ -39,7 +38,11 @@ rio-vt.workspace = true
 libc = "0.2.191"
 
 [dev-dependencies]
+# cli_e2e doubles as a real daemon process; this edge is never shipped.
+lyrel-core = { path = "../lyrel-core" }
 tempfile = "3"
+# Shared real-PTY producers and synchronized-capture fixture for the e2e suite.
+lyrel-test-support = { path = "../lyrel-test-support" }
 
 # The e2e harness puts its throwaway daemon in a Job Object wired to
 # KILL_ON_JOB_CLOSE, so a hard-killed test run cannot leak servers.

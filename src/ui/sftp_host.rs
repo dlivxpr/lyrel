@@ -18,8 +18,9 @@ use lyrel_core::host::ShellInventory;
 
 use crate::daemon::protocol::{SftpEntry, SftpEntryKind, SftpOp, SftpOpResult};
 use crate::daemon::ssh::sftp::remote_parent;
-use crate::ui::host_ops::{Entry, Host, HostId, MTime, Meta, Output, SearchHit, WatchSub};
-use crate::ui::sftp::SftpRoute;
+use lyrel_terminal::sftp_client::SftpClient;
+use lyrel_ui_base::host_ops::{Entry, Host, HostId, MTime, Meta, Output, SearchHit, WatchSub};
+use lyrel_ui_base::route::SftpRoute;
 
 pub(crate) struct SftpHost {
     id: HostId,
@@ -33,7 +34,7 @@ impl SftpHost {
     }
 
     fn op(&self, op: SftpOp) -> io::Result<SftpOpResult> {
-        match self.route.op(op) {
+        match SftpClient::op(&self.route, op) {
             SftpOpResult::Error(e) => Err(sftp_io(e)),
             other => Ok(other),
         }
@@ -100,7 +101,7 @@ impl Host for SftpHost {
     }
 
     fn read_dir(&self, dir: &Path, _root: Option<&Path>) -> io::Result<Vec<Entry>> {
-        let entries = self.route.list(&rpath(dir)).map_err(sftp_io)?;
+        let entries = SftpClient::list(&self.route, &rpath(dir)).map_err(sftp_io)?;
         Ok(entries
             .iter()
             .map(|e| Entry {

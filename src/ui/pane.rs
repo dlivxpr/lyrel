@@ -8,21 +8,13 @@ use gpui_kit::{
 };
 use gpui_kit::{Axis, Entity, InteractiveElement as _, prelude::*, px};
 
-use crate::terminal::view::TerminalView;
 use crate::ui::pending_pane::PendingPane;
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::pane_dim::{INACTIVE_DIM, LIFTED_DIM};
 
 const MIN_RATIO: f32 = 0.1;
 const MAX_RATIO: f32 = 0.9;
 const DIVIDER_THICKNESS: f32 = 5.;
-
-/// How opaque a dragged (lifted) pane's terminal paints, blended toward the
-/// window background. The terminal reads it through `TerminalView::dim`; kept
-/// here so that field's docs can point at the real numbers instead of
-/// duplicating them.
-pub(crate) const LIFTED_DIM: f32 = 0.45;
-/// How opaque an unfocused pane in a split paints while `dim_inactive_panes`
-/// is on.
-pub(crate) const INACTIVE_DIM: f32 = 0.55;
 
 #[derive(Clone)]
 pub enum PaneSlot {

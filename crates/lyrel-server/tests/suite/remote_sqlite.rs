@@ -5,8 +5,7 @@
 //! conformance writer 独立持有真实 SQLite 连接、检查 main/WAL 与 checkpoint。
 //! 浏览请求仍必须经过生产 RemoteHost、SSH 和远端 daemon；不是跨机器或
 //! Windows 原生窗口验收。常规套件不连接外部主机，缺少显式前提直接失败。
-#[path = "../../../../tests/support/native_ssh_graphics.rs"]
-pub mod fixture;
+use lyrel_test_support::native_ssh as fixture;
 
 use std::path::Path;
 

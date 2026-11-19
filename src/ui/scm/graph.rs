@@ -59,13 +59,13 @@ use lyrel_core::core::git::log::{
 use lyrel_core::core::git::ops::{GitOp, ResetMode};
 
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
-use crate::ui::presets::{ActiveLanes, LANE_SLOTS, Lanes};
 use crate::ui::right_panel::{META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, info_chip};
 use crate::ui::scm::panel::GROUP_CHEVRON;
 use crate::ui::scm::path::{elide_middle, relative_time};
 use crate::ui::scm::state::RepoKey;
 use crate::ui::window_chrome::CONTENT_INSET;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::presets::{ActiveLanes, LANE_SLOTS, Lanes};
 
 /// One commit per row. 24px rather than the file list's 26: a graph row has no
 /// icon column, and the vertical pitch wants to stay close to the lane pitch or
@@ -700,7 +700,9 @@ impl LyrelApp {
         height: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let panel_w = cx.global::<crate::core::config::Config>().right_panel_width;
+        let panel_w = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .right_panel_width;
         let cap = max_lanes(panel_w);
         // One string of beads needs one bead's column, not the budget for the
         // widest history this width could draw.
@@ -751,7 +753,7 @@ impl LyrelApp {
             .children(more.then(|| self.graph_load_more(gutter, cx)));
 
         if !filtering {
-            let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+            let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
             let paint = GraphPaint {
                 page: page.clone(),
                 max_lanes: cap,
@@ -795,7 +797,7 @@ impl LyrelApp {
             .overflow_y_scroll()
             .track_scroll(&self.scm.graph().scroll)
             .child(div().px(px(GRAPH_SIDE)).child(stack));
-        crate::ui::scrollbar::with_vertical_scrollbar(
+        lyrel_ui_base::scrollbar::with_vertical_scrollbar(
             "scm-graph-scrollbar",
             scroller,
             &self.scm.graph().scroll,
@@ -821,7 +823,7 @@ impl LyrelApp {
         let commit = &page.commits[i];
         let mono = cx.theme().mono_font_family.clone();
         // The sidebar's surface, because that is the fill this row sits on.
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let selected = self.scm.graph().selected.as_deref() == Some(commit.oid.as_str());
         let (prefix, subject) = split_conventional(&commit.summary);
         let deco = commit.refs.first();
@@ -1517,9 +1519,9 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::ui::app::test_window::harness;
-    use crate::ui::host_ops::HostId;
     use gpui_kit::TestAppContext;
     use lyrel_core::core::git::log::GRAPH_PAGE;
+    use lyrel_ui_base::host_ops::HostId;
     use smallvec::smallvec;
     use std::path::PathBuf;
 
@@ -1737,7 +1739,7 @@ mod tests {
     /// everything else, or the exception is not worth making.
     #[gpui_kit::test]
     fn only_a_breaking_prefix_gets_a_colour(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (_app, mut vcx) = harness(cx);
 
         vcx.update(|_, cx| {
@@ -1795,7 +1797,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn folding_the_history_section_survives_a_restart(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         // It starts shut: a panel that unfurls two hundred commits the first
@@ -1804,14 +1806,14 @@ mod tests {
         app.update(&mut vcx, |app, cx| app.scm_toggle_graph(cx));
         assert!(app.read_with(&vcx, |app, _| app.scm.graph().expanded));
         assert!(vcx.update(|_, cx| {
-            cx.global::<crate::core::config::Config>()
+            cx.global::<lyrel_ui_base::config::Config>()
                 .scm_graph_expanded
         }));
     }
 
     #[gpui_kit::test]
     fn opening_a_row_hands_that_commit_to_the_detail_view(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         // Unseeded first: a click that cannot hand a commit over still opens
@@ -1856,7 +1858,7 @@ mod tests {
     /// this is the test that the structure holds.
     #[gpui_kit::test]
     fn closing_the_filter_takes_its_query_with_it(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
 
         // At rest there is no field at all, which is what the section looks
@@ -1901,7 +1903,7 @@ mod tests {
     /// one-element history — the panic this guards against.
     #[gpui_kit::test]
     fn a_replaced_page_does_not_inherit_the_old_rows(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         let page_of = |n: usize| {
             let mut page = empty_page();
@@ -2067,7 +2069,7 @@ mod render_idle_gpui_tests {
                 }
                 let (repo, epoch, _) = graph.page_key.as_ref()?;
                 let current_epoch = cx
-                    .try_global::<crate::terminal::git_data::ScmData>()
+                    .try_global::<crate::ui::scm::data::ScmData>()
                     .map_or(0, |data| data.epoch(repo.host, &repo.root));
                 if *epoch != current_epoch {
                     return None;
@@ -2087,7 +2089,7 @@ mod render_idle_gpui_tests {
     #[gpui_kit::test]
     fn an_expanded_graph_with_history_reaches_render_idle(cx: &mut TestAppContext) {
         let _serial = serial();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = scratch("idle");
         if !git(&root, &["init", "--quiet"]) {
             return; // no git on this machine

@@ -6,14 +6,15 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
 
-use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::scrollbar::with_vertical_scrollbar;
 use crate::ui::window_chrome::{
     CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
 };
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::scrollbar::with_vertical_scrollbar;
 
 /// The tab a stored choice shows. Search was a tab of its own until the
 /// Files tab took over searching file contents; a config that still says
@@ -79,7 +80,8 @@ pub(crate) const META_MONO: f32 = META - STEP;
 pub(crate) const HEADING: f32 = 11.5 * STEP;
 
 /// The word tabs at the top of the panel, a half step under body text.
-pub(crate) const TAB_TEXT: f32 = 12.5 * STEP;
+/// Shared through `lyrel-ui-base` so the editor's overlays use the same size.
+pub(crate) use lyrel_ui_base::display::TAB_TEXT;
 
 /// How tall a Session, section-heading or search row is.
 const INFO_ROW_H: f32 = 28.;
@@ -239,9 +241,9 @@ pub(crate) struct RightPanelState {
     pub(crate) cpu: crate::ui::proc_usage::CpuTracker,
     pub(crate) procs_loading: bool,
     pub(crate) procs_gen: u64,
-    pub(crate) procs_forwards: Option<crate::ui::forwards::route::ForwardRoute>,
+    pub(crate) procs_forwards: Option<lyrel_ui_base::route::ForwardRoute>,
     /// Who to ask about `procs_pane` — `None` means this machine's daemon.
-    pub(crate) procs_host: Option<crate::ui::host_ops::SharedHost>,
+    pub(crate) procs_host: Option<lyrel_ui_base::host_ops::SharedHost>,
     /// Whether the host that owns this pane cannot describe its processes at
     /// all: an older `lyrel-server` on the far end, which does not know the
     /// request. Kept apart from an empty list, because "nothing is listening"
@@ -257,11 +259,11 @@ pub(crate) struct RightPanelState {
     /// machine keeps the number on screen: it belongs to the link the two
     /// panes share, and blanking it per pane would empty the row for as long
     /// as the next poll takes to cross the network.
-    pub(crate) link_host: Option<crate::ui::host_ops::HostId>,
+    pub(crate) link_host: Option<lyrel_ui_base::host_ops::HostId>,
     /// How `procs_pane`'s loopback ports can be reached from this machine.
     /// Read by the Ports list to decide what a click on a port does, and by
     /// the watch to decide whether it has to keep looking with the panel shut.
-    pub(crate) port_route: crate::terminal::view::PortRoute,
+    pub(crate) port_route: lyrel_terminal::view::PortRoute,
     /// The remote ports already forwarded unasked, per set of forwards.
     ///
     /// Kept so that a forward the user then deletes is not immediately rebuilt
@@ -274,7 +276,7 @@ pub(crate) struct RightPanelState {
     /// forwarded, and switching back would re-offer what was just dismissed.
     /// A few `u16` per connection is not worth reclaiming.
     pub(crate) auto_forwarded: std::collections::HashMap<
-        crate::ui::forwards::route::ForwardOwnerKey,
+        lyrel_ui_base::route::ForwardOwnerKey,
         std::collections::HashSet<u16>,
     >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
@@ -312,13 +314,13 @@ const AUTO_FORWARD_BURST: usize = 4;
 pub(crate) struct PaneForwardCtx {
     pub(crate) pane_id: u64,
     /// `Some` when the pane has somewhere to hold managed forwards.
-    pub(crate) route: Option<crate::ui::forwards::route::ForwardRoute>,
-    pub(crate) port_route: crate::terminal::view::PortRoute,
+    pub(crate) route: Option<lyrel_ui_base::route::ForwardRoute>,
+    pub(crate) port_route: lyrel_terminal::view::PortRoute,
     /// The host that owns this pane's processes, when that is not this
     /// machine. A remote workspace's panes live in the peer's registry, so the
     /// local daemon — which is what `query_procs` asks — has never heard of
     /// them and answers with an empty list.
-    pub(crate) host: Option<crate::ui::host_ops::SharedHost>,
+    pub(crate) host: Option<lyrel_ui_base::host_ops::SharedHost>,
 }
 
 /// What a session row draws in its value column.
@@ -339,7 +341,7 @@ enum InfoValue {
     Diff {
         added: u32,
         removed: u32,
-        open: Option<(crate::ui::host_ops::HostId, PathBuf)>,
+        open: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)>,
     },
 }
 
@@ -527,7 +529,7 @@ impl LyrelApp {
     ) {
         if self.tabs.is_empty()
             || self.right_panel_nav_focus.within_focused(window, cx)
-            || self.sidebar_nav_overlay_open(window)
+            || self.sidebar_nav_overlay_open(window, cx)
         {
             return;
         }
@@ -954,8 +956,8 @@ impl LyrelApp {
         let ctx = self.pane_forward_ctx(window, cx);
         let mut pane_id: Option<u64> = None;
         // Where the `changes` row's counts lead. Same source as the sidebar's.
-        let mut diff_target: Option<(crate::ui::host_ops::HostId, PathBuf)> = None;
-        let mut git: Option<crate::terminal::git_status::GitStatus> = None;
+        let mut diff_target: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)> = None;
+        let mut git: Option<crate::ui::scm::status_cache::GitStatus> = None;
 
         if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             if let Some(leaf) = tab.detail_pane(window, cx) {
@@ -978,7 +980,7 @@ impl LyrelApp {
                         // The compacted `~/…` spelling is for reading; what
                         // goes on the clipboard is the path a shell can use.
                         copy: Some(match local {
-                            true => crate::ui::path_display::native_separators(&cwd)
+                            true => lyrel_ui_base::path_display::native_separators(&cwd)
                                 .display()
                                 .to_string(),
                             false => cwd.display().to_string(),
@@ -1104,7 +1106,7 @@ impl LyrelApp {
         label_w: gpui_kit::Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
         let id = gpui_kit::SharedString::from(format!("panel-info-row-{i}"));
         let interactive = row.interactive();
@@ -1134,7 +1136,7 @@ impl LyrelApp {
             // absorb the shrinking so the leaf survives, the way a file
             // manager shows a path.
             InfoValue::Path(v) => {
-                let (head, leaf) = crate::ui::path_display::split_path_leaf(&v);
+                let (head, leaf) = lyrel_ui_base::path_display::split_path_leaf(&v);
                 h_flex()
                     .flex_1()
                     .min_w_0()
@@ -1247,7 +1249,7 @@ impl LyrelApp {
                     cx,
                 )
                 .on_click(move |_, _window, cx| {
-                    cx.reveal_path(&crate::ui::path_display::native_separators(&cwd))
+                    cx.reveal_path(&lyrel_ui_base::path_display::native_separators(&cwd))
                 }),
             );
         }
@@ -1357,7 +1359,11 @@ impl LyrelApp {
             return None;
         }
         let mono = cx.theme().mono_font_family.clone();
-        let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover);
+        let hover = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .sidebar
+                .hover,
+        );
         let mut list = v_flex().px(px(CONTENT_INSET));
         for p in procs {
             let depth = f32::from(p.depth);
@@ -1461,9 +1467,9 @@ impl LyrelApp {
             return None;
         }
 
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
-        let openable = ctx.port_route != crate::terminal::view::PortRoute::Blocked;
+        let openable = ctx.port_route != lyrel_terminal::view::PortRoute::Blocked;
         let mut list = v_flex().px(px(CONTENT_INSET)).py(px(1.));
         // Which forwards a port row has already accounted for; whatever is
         // left over gets a row of its own below.
@@ -1681,7 +1687,7 @@ impl LyrelApp {
         direct_authority: String,
         cx: &mut Context<Self>,
     ) {
-        use crate::terminal::view::PortRoute;
+        use lyrel_terminal::view::PortRoute;
         match self.right_panel.port_route {
             PortRoute::Blocked => {}
             PortRoute::Direct => cx.open_url(&format!("http://{direct_authority}")),
@@ -1702,7 +1708,13 @@ impl LyrelApp {
                 cx.spawn(async move |this, cx| {
                     let built = cx
                         .background_executor()
-                        .spawn(async move { route.ensure_loopback("127.0.0.1", port) })
+                        .spawn(async move {
+                            lyrel_terminal::forward_client::ForwardClient::ensure_loopback(
+                                &route,
+                                "127.0.0.1",
+                                port,
+                            )
+                        })
                         .await;
                     let _ = this.update_in(cx, |app, window, cx| match built {
                         Ok(f) => {
@@ -1719,7 +1731,7 @@ impl LyrelApp {
                             }
                         }
                         Err(e) => window.notify_app(
-                            crate::ui::host_ops::failure(
+                            lyrel_ui_base::host_ops::failure(
                                 t_fmt(
                                     L10nKey::LoopbackForwardFailed,
                                     &[("port", &port.to_string()), ("error", &e.to_string())],
@@ -1785,7 +1797,7 @@ impl LyrelApp {
         let ctx = self.pane_forward_ctx(window, cx);
         self.right_panel.port_route = ctx
             .as_ref()
-            .map_or(crate::terminal::view::PortRoute::Blocked, |c| c.port_route);
+            .map_or(lyrel_terminal::view::PortRoute::Blocked, |c| c.port_route);
         let pane_id = ctx.as_ref().map(|c| c.pane_id);
         let host = ctx.as_ref().and_then(|c| c.host.clone());
         let route = ctx.and_then(|c| c.route);
@@ -1802,7 +1814,7 @@ impl LyrelApp {
     /// whose ports need forwarding, noticing a new listener *is* the feature,
     /// and a shut panel is not a reason to stop looking.
     fn watching_ports(&self) -> bool {
-        self.right_panel.port_route == crate::terminal::view::PortRoute::Forward
+        self.right_panel.port_route == lyrel_terminal::view::PortRoute::Forward
             && self.right_panel.procs_forwards.is_some()
     }
 
@@ -1848,10 +1860,10 @@ impl LyrelApp {
             return;
         }
         let origin = match owner {
-            crate::ui::forwards::route::ForwardOwnerKey::Pane(pane) => {
+            lyrel_ui_base::route::ForwardOwnerKey::Pane(pane) => {
                 lyrel_core::core::pane_sidecar::ScopedPane::client_local(pane)
             }
-            crate::ui::forwards::route::ForwardOwnerKey::Workspace(_) => {
+            lyrel_ui_base::route::ForwardOwnerKey::Workspace(_) => {
                 let Some(pane) = self.right_panel.procs_pane else {
                     return;
                 };
@@ -1869,8 +1881,12 @@ impl LyrelApp {
                     fresh
                         .into_iter()
                         .map(|port| {
-                            let local = route
-                                .ensure_loopback("127.0.0.1", port)
+                            let local =
+                                lyrel_terminal::forward_client::ForwardClient::ensure_loopback(
+                                    &route,
+                                    "127.0.0.1",
+                                    port,
+                                )
                                 .map(|f| f.local_port);
                             (port, local)
                         })
@@ -1908,8 +1924,8 @@ impl LyrelApp {
     fn sync_procs(
         &mut self,
         pane_id: Option<u64>,
-        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
-        host: Option<crate::ui::host_ops::SharedHost>,
+        forwards: Option<lyrel_ui_base::route::ForwardRoute>,
+        host: Option<lyrel_ui_base::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
         let Some(pane_id) = pane_id else { return };
@@ -1952,8 +1968,8 @@ impl LyrelApp {
         &mut self,
         pane_id: u64,
         generation: u64,
-        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
-        host: Option<crate::ui::host_ops::SharedHost>,
+        forwards: Option<lyrel_ui_base::route::ForwardRoute>,
+        host: Option<lyrel_ui_base::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
@@ -1977,9 +1993,11 @@ impl LyrelApp {
                     // answer — see `Host::pane_procs`.
                     let procs = match &host {
                         Some(host) => host.pane_procs(pane_id),
-                        None => Some(crate::terminal::RemoteTerminal::query_procs(pane_id)),
+                        None => Some(lyrel_terminal::RemoteTerminal::query_procs(pane_id)),
                     };
-                    let managed = route.and_then(|r| r.list());
+                    let managed = route
+                        .as_ref()
+                        .and_then(lyrel_terminal::forward_client::ForwardClient::list);
                     let link = match (want_link, &host) {
                         (true, Some(host)) => host.link_rtt(),
                         _ => None,
@@ -2182,7 +2200,7 @@ pub fn reveal_label() -> &'static str {
 /// pane's cwd is measured against *its* host's home, never this machine's
 /// (#580) — and against nothing at all while the host has not said.
 fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
-    crate::ui::path_display::abbreviate_home(&path.to_string_lossy(), home).into_owned()
+    lyrel_ui_base::path_display::abbreviate_home(&path.to_string_lossy(), home).into_owned()
 }
 
 #[cfg(test)]
@@ -2250,7 +2268,7 @@ mod tests {
                 removed,
                 open: open.then(|| {
                     (
-                        crate::ui::host_ops::HostId::LOCAL,
+                        lyrel_ui_base::host_ops::HostId::LOCAL,
                         std::path::PathBuf::from("/w/repo"),
                     )
                 }),

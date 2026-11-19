@@ -1,8 +1,8 @@
 use super::*;
-use crate::ui::presets::Fill;
 use crate::ui::theme::apply_theme;
 use crate::ui::theme::set_menus;
 use gpui_kit::component::color_picker::ColorPickerEvent;
+use lyrel_ui_base::presets::Fill;
 
 /// One settings session's editable theme and preview. Configuration application
 /// stays on the existing window adapter; draft transitions never borrow it.
@@ -408,7 +408,7 @@ impl SettingsWindow {
     }
 
     pub(crate) fn open_themes_folder(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dir) = crate::ui::presets::themes_dir() else {
+        let Some(dir) = lyrel_ui_base::presets::themes_dir() else {
             log::warn!("no config directory, so no themes folder to open");
             return;
         };
@@ -417,7 +417,7 @@ impl SettingsWindow {
         // file manager just opens nothing.
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log::warn!("could not create {}: {e}", dir.display());
-            crate::ui::host_ops::HostOps::notify_err(
+            lyrel_ui_base::host_ops::HostOps::notify_err(
                 window,
                 cx,
                 &t_fmt(
@@ -440,7 +440,7 @@ impl SettingsWindow {
             return true;
         };
         if let Err(error) = state.theme.save() {
-            crate::ui::host_ops::HostOps::notify_err(
+            lyrel_ui_base::host_ops::HostOps::notify_err(
                 window,
                 cx,
                 t(L10nKey::ThemeSaveFailed),
@@ -457,11 +457,11 @@ impl SettingsWindow {
             .active_settings_mut()
             .and_then(|state| state.theme.discard())
         {
-            let mut themes = crate::ui::presets::all(cx);
+            let mut themes = lyrel_ui_base::presets::all(cx);
             if let Some(slot) = themes.iter_mut().find(|t| t.id == original.id) {
                 *slot = original;
             }
-            cx.set_global(crate::ui::presets::Themes(themes));
+            cx.set_global(lyrel_ui_base::presets::Themes(themes));
             apply_theme(Some(window), cx);
             self.rebuild_theme_editor(window, cx);
             cx.notify();
@@ -475,18 +475,18 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let theme = crate::ui::presets::by_id(cx, id);
+        let theme = lyrel_ui_base::presets::by_id(cx, id);
         let Some(theme) = self
             .active_settings_mut()
             .and_then(|state| state.theme.preview(theme, change))
         else {
             return;
         };
-        let mut themes = crate::ui::presets::all(cx);
+        let mut themes = lyrel_ui_base::presets::all(cx);
         if let Some(slot) = themes.iter_mut().find(|t| t.id == id) {
             *slot = theme;
         }
-        cx.set_global(crate::ui::presets::Themes(themes));
+        cx.set_global(lyrel_ui_base::presets::Themes(themes));
         apply_theme(Some(window), cx);
         cx.notify();
     }
@@ -504,7 +504,7 @@ impl SettingsWindow {
 
     pub(crate) fn effective_window_opacity(cx: &App) -> f32 {
         let config = cx.global::<Config>();
-        let theme = crate::ui::presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
+        let theme = lyrel_ui_base::presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
         let blur = config.window_blur.unwrap_or(theme.blur);
         config.window_opacity.or(theme.opacity).unwrap_or_else(|| {
             crate::ui::theme::default_window_opacity(config.window_backdrop, blur)
@@ -614,7 +614,7 @@ impl SettingsWindow {
         else {
             return;
         };
-        let theme = crate::ui::presets::by_id(cx, &id);
+        let theme = lyrel_ui_base::presets::by_id(cx, &id);
         if !theme.editable() {
             return;
         }
@@ -684,10 +684,10 @@ mod tests {
 
     #[test]
     fn non_windows_reset_preserves_the_synced_windows_backdrop() {
-        let mut config = crate::core::config::Config::default();
+        let mut config = lyrel_ui_base::config::Config::default();
         config.window_opacity = Some(0.8);
         config.window_blur = Some(true);
-        config.window_backdrop = crate::core::config::WindowBackdrop::Mica;
+        config.window_backdrop = lyrel_core::core::config::WindowBackdrop::Mica;
 
         clear_window_override_values(&mut config, false);
 
@@ -695,21 +695,21 @@ mod tests {
         assert_eq!(config.window_blur, None);
         assert_eq!(
             config.window_backdrop,
-            crate::core::config::WindowBackdrop::Mica,
+            lyrel_core::core::config::WindowBackdrop::Mica,
             "an inert synchronized backdrop is not a local override to reset"
         );
     }
 
     #[test]
     fn windows_reset_clears_the_local_backdrop_override() {
-        let mut config = crate::core::config::Config::default();
-        config.window_backdrop = crate::core::config::WindowBackdrop::Acrylic;
+        let mut config = lyrel_ui_base::config::Config::default();
+        config.window_backdrop = lyrel_core::core::config::WindowBackdrop::Acrylic;
 
         clear_window_override_values(&mut config, true);
 
         assert_eq!(
             config.window_backdrop,
-            crate::core::config::WindowBackdrop::Auto
+            lyrel_core::core::config::WindowBackdrop::Auto
         );
     }
 }

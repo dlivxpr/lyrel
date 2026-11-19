@@ -1,7 +1,7 @@
 <a id="fig-convert--fig-autocomplete-specs--lyrel-completion-signatures"></a>
 # fig-convert — Fig 自动补全规范 → lyrel 补全签名
 
-lyrel 针对各命令的补全（带描述的标志、子命令和参数）由签名数据驱动，这些数据生成自 [Fig 的自动补全规范集][fig]（采用 MIT 许可证，由社区维护，涵盖数百个命令）。这是**构建时转换器**；运行时使用这些数据的模块是 `src/terminal/signature.rs`。
+lyrel 针对各命令的补全（带描述的标志、子命令和参数）由签名数据驱动，这些数据生成自 [Fig 的自动补全规范集][fig]（采用 MIT 许可证，由社区维护，涵盖数百个命令）。这是**构建时转换器**；运行时使用这些数据的模块是 `crates/lyrel-terminal/src/signature.rs`。
 
 本次固定来源为 npm 发布包 [`@withfig/autocomplete@2.692.3`](https://registry.npmjs.org/@withfig%2fautocomplete/2.692.3)，需要 Node.js 20+。包的 SHA-512 integrity 为 `sha512-zxN7K8W+qWGc2ejWksd92xwAyCZ0faHvnk3c7jUoWkkk5e5iQf3/4mOLheFvYLoUWR5a36571VJ1DdyxmAWJZA==`。该版本是本次核对的 npm `latest`，不代表每份命令规范会随对应 CLI 实时更新。
 
@@ -46,7 +46,7 @@ lyrel 自有补充保存在 `local-overrides.json`：34 处说明文案按子命
 <a id="output-schema"></a>
 ## 输出模式
 
-与 `src/terminal/signature.rs` 中的 serde 模型一一对应：
+与 `crates/lyrel-terminal/src/signature.rs` 中的 serde 模型一一对应：
 
 - 根对象：`{ name, description, options[], args[], subcommands[] }`
 - 子命令：`{ names[], description, hidden, options[], args[], subcommands[] }`

@@ -1,0 +1,76 @@
+[package]
+name = "lyrel-document"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 AND MIT"
+publish = false
+description = "GUI-free document engines for Lyrel: text encoding/EditorConfig codec, structured projections and splice planners, CSV tables, GIF/TIFF, draw.io probing, EPUB reading with full-book search, and read-only PDF"
+
+[dependencies]
+# The default (featureless) build compiles only the lightweight text encoding,
+# BOM, per-line ending and EditorConfig policy module, so `lyrel-markdown-editor`
+# never waits on the heavy format parsers.
+encoding_rs.workspace = true
+globset = "0.4.20"
+
+# Everything below is unlocked by the `formats` feature. One `lyrel-document`
+# crate owns all GUI-free document engines; none of it depends on GPUI,
+# `lyrel-core` or a `Host`.
+jsonc-parser = { version = "=0.34.0", optional = true }
+toml_edit = { version = "0.25.19", optional = true }
+yaml-edit = { version = "=0.3.6", default-features = false, optional = true }
+rowan = { version = "0.16", optional = true }
+xmlparser = { version = "=0.13.6", optional = true }
+roxmltree = { version = "0.21.2", optional = true }
+csv = { version = "1.4.0", optional = true }
+sha2 = { version = "0.11.1", optional = true }
+image = { version = "0.25", default-features = false, optional = true }
+gif = { version = "0.14.2", optional = true }
+tiff = { version = "0.11.3", optional = true }
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"], optional = true }
+html-escape = { version = "0.3.1", optional = true }
+serde = { version = "1.0.219", features = ["derive"], optional = true }
+hayro = { version = "=0.8.0", optional = true }
+log = { version = "0.4", optional = true }
+
+# Test fixtures build their own password-protected Standard R2 PDF. Optional so
+# the released library never links a hashing implementation; the same helper is
+# available to this crate's unit tests and, through `test-fixtures`, to the
+# desktop workbench's integration tests.
+md5 = { version = "0.8", optional = true }
+
+[dev-dependencies]
+md5 = "0.8"
+serde_json = "1.0.154"
+tempfile = "3"
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+
+[features]
+default = []
+formats = [
+    "dep:jsonc-parser",
+    "dep:toml_edit",
+    "dep:yaml-edit",
+    "dep:rowan",
+    "dep:xmlparser",
+    "dep:roxmltree",
+    "dep:csv",
+    "dep:sha2",
+    "dep:image",
+    "dep:gif",
+    "dep:tiff",
+    "dep:zip",
+    "dep:html-escape",
+    "dep:serde",
+    "dep:hayro",
+    "dep:log",
+]
+test-fixtures = ["formats", "dep:md5"]
+
+[[test]]
+name = "epub"
+path = "tests/epub.rs"
+required-features = ["formats"]
+
+[lints]
+workspace = true

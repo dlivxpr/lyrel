@@ -39,10 +39,12 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 `reading_resize_` 消费者断言观察生产绘制输入中的逻辑文字和图片 bounds／资源像素，覆盖反复窄宽、Unicode／marks、相同 256 字符前缀的最近候选、空行上下文、淘汰后的估计与最老边界、等面积旧画面、等待中的滚动、请求取代和没有后续 PTY 输出的提交。真实 PTY／daemon 场景与人为分开 `Size`／`Screen` 的有序 pane stream 场景在代码中分开标记；后者仍使用真实 `RemoteTerminal` 和 rooted `TerminalView`，不是原生窗口或 SSH 证明。以下检查已在 #255 headless consumer 矩阵运行（`verify-255/logs/`；#13 `reading-consumers` 25 passed、#19 `resize-search-rescan` 1 passed、#20 `remote-raw-size` 1 passed）：
 
+在 Windows 上用 `pwsh scripts/cargo-windows.ps1 test` 替代下方的 `cargo test`、用同一 wrapper 的 `build` 替代 `cargo build`。
+
 ```powershell
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_resize_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::a_column_resize_rescans_the_open_searchs_highlights -- --exact --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_remote_raw_size_keeps_standard_pty_history_growth -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::reading_resize_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::a_column_resize_rescans_the_open_searchs_highlights -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::graphics_consumer_remote_raw_size_keeps_standard_pty_history_growth -- --exact --nocapture --test-threads=1
 ```
 
 完整 `reading_`／同步呈现回归与 build、lint、格式检查命令见下文。#255 已在 Windows 隔离本地窗口记录持续输出、静默 resize、反复窄宽、滚动与主题（L12–L17），并在 native SSH → 容器 sshd → Linux `lyrel-server` 的远程窗口记录阅读、pill、选择、搜索、主题与全屏 reflow（R2–R9）；macOS／Linux 桌面原生窗口、真实中文 IME、触控板惯性与远端带宽／帧率仍未验收。
@@ -50,7 +52,7 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 
 ### 实现职责
 
-`src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行；活动屏幕的行先记为临时快照，滚入历史后再按最终内容刷新一次，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
+`crates/lyrel-terminal/src/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行；活动屏幕的行先记为临时快照，滚入历史后再按最终内容刷新一次，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
 
 滚动条在实时边缘仅冻结供显隐判断的呈现几何，仍记录最新历史范围；目标经同一 `SelectionScroll` 路径进入阅读。每个保留行保存共享 Kitty 解码器取得的直接放置裁切和 placeholder runs，两者均沿绝对行锚点重投影，包括分数滚动的上一行。只保留最初的活动屏幕、当前视口／上一行切片、有界的换行链接上下文，以及选区跨越的必要行；已访问但不再需要的历史行及图片 lease 会释放，历史淘汰不会被缓存恢复。新增行批量捕获图片切片，不逐行扫描整个 store；图片沿用现有资源、预算和 GPU 退休路径，不钉住整个 store，也不从后台新版本解析冻结 placeholder。回到实时输出后才显示最新资源，下次阅读重新捕获。
 
@@ -61,11 +63,11 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后完整行与上一行半行切片的生产图片绘制回归；这些断言已在 #255 headless consumer 矩阵运行（#13 `reading-consumers` 25 passed、#16 `synchronized-invariants` 7 passed）。
 
 ```powershell
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::selection_scroll_consumer_tests:: -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::links::consumer_tests:: -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib ui::i18n::tests::every_key_is_translated_in_every_locale -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::selection_scroll_consumer_tests:: -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::links::consumer_tests:: -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-ui-base --lib i18n::tests::every_key_is_translated_in_every_locale -- --exact --nocapture --test-threads=1
 cargo build --locked -p lyrel
 cargo clippy --locked -p lyrel --lib --tests
 cargo fmt --check
@@ -84,12 +86,12 @@ cargo fmt --check
 `reading_lifecycle_consumer_tests.rs` 新增六项受控生产消费者：origin-sum 不变的 `3J`／`RIS`／同批备用屏往返，Snapshot／relink 基线，超过 10,000 行的容量压力与过期图片后 resize／同 image ID 新版本，隐藏输出无 window notification、应用实际收到的滚轮／箭头与 Shift 本地逃生，以及窗口关闭前后的资源归还。断言观察完整生产呈现文字、实际图片 paint claims／像素身份、独立 live 文本、PTY stdin 字节与现有分配诊断，不检查私有 pending 字段。以下检查已在 #255 运行并保存 exit code／原始日志（#14 `reading-lifecycle` 6 passed、#18 `hidden-panes` 3 passed、#21 `mouse-reporting-pty` 1 passed）：
 
 ```powershell
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_lifecycle_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_only_the_pressed_pane_owns_real_pty_reports -- --exact --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_hidden_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_real_daemon_history_expiration_clips_before_resize -- --exact --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::reading_lifecycle_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::mouse_reporting_only_the_pressed_pane_owns_real_pty_reports -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::graphics_consumer_hidden_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::graphics_consumer_real_daemon_history_expiration_clips_before_resize -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
 cargo build --locked -p lyrel
 cargo clippy --locked -p lyrel --lib --tests
 cargo fmt --check
@@ -161,18 +163,18 @@ Rio 的公开 parser 负责识别 DCS header，完整查询才交给同版 Rio �
 
 上报字节按应用协商的坐标编码写出：未扩展协商时保持 X10 字节格式（超过第 223 个可报告位置的事件不发），`?1005h` 使用 UTF-8 编码坐标（按钮位与坐标各按 `32+值` 的 UTF-8 字符写入，可报告位置上限为 2015），`?1006h` 使用 SGR 十进制格式；`?1005` 与 `?1006` 互斥，最后生效者决定编码，DECRQM（`CSI ? Ps $ p`）按当前生效状态回答。模式 1015／1016 未实现，对其 DECRQM 探测回答"不支持"，不会替代已协商编码。断开后重新附着的窗格按 daemon 折叠的生效模式恢复：若应用先开启 1005 再切到 1006（或已关闭某档上报级别），回放只恢复最终生效状态，不会把已被替换的编码重新打开。
 
-`src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。#263 新增的 `mouse_reporting_utf8_coordinates_reach_the_real_pty_consumer` 在 300 列真 PTY 窗格上断言 1005 模式下超出 X10 范围的按下／松开／修饰键与滚轮字节、Shift 本地选择覆盖、DECRQM 1005／1006／1015 回复与 1005→1006→1005→无扩展切换；`src/terminal/remote/reader/replayed_mode_tests.rs` 覆盖编码转换的重放落点，`crates/lyrel-core` 的 `term_modes` 测试固定折叠与模拟器一致。它们不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收；原生宽窗格场景可用 `tests/support/mouse_utf8_probe.mjs` 在真实窗格内运行。
+`crates/lyrel-terminal/src/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。#263 新增的 `mouse_reporting_utf8_coordinates_reach_the_real_pty_consumer` 在 300 列真 PTY 窗格上断言 1005 模式下超出 X10 范围的按下／松开／修饰键与滚轮字节、Shift 本地选择覆盖、DECRQM 1005／1006／1015 回复与 1005→1006→1005→无扩展切换；`crates/lyrel-terminal/src/remote/reader/replayed_mode_tests.rs` 覆盖编码转换的重放落点，`lyrel-protocol` 的 `term_modes` 测试固定折叠与模拟器一致。它们不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收；原生宽窗格场景可用 `crates/lyrel-test-support/support/mouse_utf8_probe.mjs` 在真实窗格内运行。
 
 ```powershell
-cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_ -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --lib terminal::remote::reader::replayed_mode -- --nocapture --test-threads=1
-cargo test --locked -p lyrel-core --lib core::term_modes -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib view::gpui_tests::mouse_reporting_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-terminal --lib remote::reader::replayed_mode -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-protocol --lib core::term_modes -- --nocapture --test-threads=1
 ```
 
 Windows 上将上述 `cargo test` 改为 `pwsh scripts/cargo-windows.ps1 test`，由 wrapper 在实际测试 executable 旁暂存固定 ConPTY。宽窗格原生验收在隔离的开发实例中进行，不接管已安装实例或用户会话：
 
 ```powershell
-node tests/support/mouse_utf8_probe.mjs
+node crates/lyrel-test-support/support/mouse_utf8_probe.mjs
 ```
 
 将终端窗格扩大至至少 241 列（探针会输出实际列数，必要时缩小终端字号）。点击第 241 列、第 11 行，1005 模式下应收到 `1b 5b 4d 20 c4 91 2b`，松开为 `1b 5b 4d 23 c4 91 2b`；按住 Ctrl 后按钮字节分别变成 `30`／`33`（十六进制），坐标不变。继续拖动、滚轮和 Alt 修饰键，检查位置与状态；按住 Shift 的本地选择不应产生应用鼠标报告。探针按 `s` 切至 1006 后，相同点击应显示 `SGR report: 0;241;11M` 和 `0;241;11m`；按 `u` 返回 1005，按 `q` 查询。每次模式切换的 DECRQM 回复都应只有当前编码为 `1`、另一编码为 `2`，1015 为 `0`。Ctrl+C 退出并关闭探针启用的鼠标模式。
@@ -189,18 +191,18 @@ WSL 或 SSH 场景在实际 lyrel 对应窗格中，用远端 Node 运行同一�
 
 客户端仍可能不发送请求：本轮核对的 [Codex `link_pointer.rs`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui/link_pointer.rs) 仅在检测结果为 Kitty／Ghostty 且未检测到 multiplexer 时启用指针请求，Kitty 清理发送空名称、其他受支持终端清理发送 `text`。因此 lyrel 支持解析不代表普通 `TERM_PROGRAM=lyrel` 的 Codex 会自动启用该行为；这里不扩展既有命令级兼容身份，也不宣称 tmux／screen 透明转发或真实 Codex 客户端已验收。原生场景直接发送请求，不能替代该客户端的检测证明。
 
-`src/terminal/pointer_consumer_tests.rs` 使用真实 PTY → 隔离 daemon → 有序 pane stream → 生产 `TerminalView`／`TerminalElement`，覆盖 set/reset、平台回退、命令清理，以及真实鼠标事件触发的选择复制和链接打开；`remote/reader/pointer_tests.rs` 补充分片、重放和断连边界。GPUI 测试平台没有原生 cursor reader，因此这些断言观察生产绘制策略与实际操作结果，不冒充操作系统指针像素证据。可在候选隔离窗口的 pane 内运行 `node tests/support/pointer_scene.mjs`，移动／拖动检查应用形状，按 `m` 关闭应用鼠标报告后检查本地选择、菜单及链接优先级，按 `0`／`f`／`r`／`d` 检查重置，再按 `q` 返回 shell。场景打印实际 `TERM`、`TERM_PROGRAM`、`TMUX` 与 `STY`；原生 Windows、macOS 和真实 SSH 的结果必须分别记录，未执行项不作为通过。
+`crates/lyrel-terminal/src/pointer_consumer_tests.rs` 使用真实 PTY → 隔离 daemon → 有序 pane stream → 生产 `TerminalView`／`TerminalElement`，覆盖 set/reset、平台回退、命令清理，以及真实鼠标事件触发的选择复制和链接打开；`remote/reader/pointer_tests.rs` 补充分片、重放和断连边界。GPUI 测试平台没有原生 cursor reader，因此这些断言观察生产绘制策略与实际操作结果，不冒充操作系统指针像素证据。可在候选隔离窗口的 pane 内运行 `node crates/lyrel-test-support/support/pointer_scene.mjs`，移动／拖动检查应用形状，按 `m` 关闭应用鼠标报告后检查本地选择、菜单及链接优先级，按 `0`／`f`／`r`／`d` 检查重置，再按 `q` 返回 shell。场景打印实际 `TERM`、`TERM_PROGRAM`、`TMUX` 与 `STY`；原生 Windows、macOS 和真实 SSH 的结果必须分别记录，未执行项不作为通过。
 
 
 ### 链接的实现职责
 
-`src/terminal/link.rs` 的 `LinkInteraction` 是链接状态的唯一所有者，持有悬停范围、修饰键状态、Host／目录上下文、探测缓存、请求 epoch 和右键按下时捕获的目标。`src/terminal/view/links.rs` 是私有 GPUI adapter：将 hover、probe、菜单和 activation 接到同一所有者，为它提供 pane 的 Host／cwd 与配置，并执行通知、剪贴板、URL 打开或 `OpenFileRequested` 导航事件。根视图继续保留终端 attachment、焦点身份和跨能力生命周期，不向链接能力暴露整个可变视图，也不新增 entity 或锁。
+`crates/lyrel-terminal/src/link.rs` 的 `LinkInteraction` 是链接状态的唯一所有者，持有悬停范围、修饰键状态、Host／目录上下文、探测缓存、请求 epoch 和右键按下时捕获的目标。`crates/lyrel-terminal/src/view/links.rs` 是私有 GPUI adapter：将 hover、probe、菜单和 activation 接到同一所有者，为它提供 pane 的 Host／cwd 与配置，并执行通知、剪贴板、URL 打开或 `OpenFileRequested` 导航事件。根视图继续保留终端 attachment、焦点身份和跨能力生命周期，不向链接能力暴露整个可变视图，也不新增 entity 或锁。
 
 右键菜单使用捕获的 Host、路径和行列位置，不在菜单绘制或激活时跟随新指针重新选择目标。远端文件始终交给内置导航；系统默认应用与显示所在文件夹只接受本地目标。终端内再次 SSH 到其他机器时，不用桌面的文件系统解释那台机器的路径。URL 与文件保留各自的打开策略，loopback URL 继续使用现有转发路由；关闭链接检测、全屏程序的修饰键要求，以及鼠标报告模式下的 Shift 覆盖规则均不变。
 
 adapter 通过 `HostOps` 在后台执行 Host 的目录根查询和远端文件探测。返回结果先同步当前上下文，再由 `LinkInteraction` 的 epoch 检查决定是否接受；Host／目录或网格变化后，已退役的结果不能替换新交互的 hover 或菜单目标。实体关闭后的回调、失败通知及后续焦点交接仍遵循原有 GPUI／工作台生命周期。
 
-消费者回归位于 `src/terminal/view/links/consumer_tests.rs`，覆盖 pane cwd、远端隔离、延迟结果、菜单捕获身份、resize、换行与宽字符命中；确定性状态规则仍位于 `src/terminal/link/tests.rs`。原生验收须使用隔离配置，在实际终端上检查 URL、含行列的本地文件、目录与远端文件的 hover、修饰键点击、右键菜单、复制路径和导航后的焦点；Windows、macOS 与真实 SSH 的结果分别记录，自动测试不替代这些运行证据。
+消费者回归位于 `crates/lyrel-terminal/src/view/links/consumer_tests.rs`，覆盖 pane cwd、远端隔离、延迟结果、菜单捕获身份、resize、换行与宽字符命中；确定性状态规则仍位于 `crates/lyrel-terminal/src/link/tests.rs`。原生验收须使用隔离配置，在实际终端上检查 URL、含行列的本地文件、目录与远端文件的 hover、修饰键点击、右键菜单、复制路径和导航后的焦点；Windows、macOS 与真实 SSH 的结果分别记录，自动测试不替代这些运行证据。
 
 ## 字号
 

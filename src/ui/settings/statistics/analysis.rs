@@ -8,7 +8,7 @@ use gpui_kit::component::{
     scroll::Scrollbar,
 };
 use gpui_kit::{FocusHandle, rems};
-use lyrel_core::statistics::analysis::{Analysis, Breakdown, Metric};
+use lyrel_insights::statistics::analysis::{Analysis, Breakdown, Metric};
 
 pub(super) struct AnalysisState {
     pub(super) agent: Option<String>,
@@ -120,7 +120,7 @@ fn breakdown_value(totals: &Totals, metric: Metric) -> Option<f64> {
         }
     }
 }
-pub(super) fn activity_hover(day: &lyrel_core::statistics::analysis::Day) -> String {
+pub(super) fn activity_hover(day: &lyrel_insights::statistics::analysis::Day) -> String {
     let value = |metric| {
         let Some(value) = day.activity_value(metric) else {
             return "—".to_owned();
@@ -1007,7 +1007,7 @@ impl SettingsWindow {
         &self,
         group: &Breakdown,
         table: bool,
-        analysis: &lyrel_core::statistics::analysis::Analysis,
+        analysis: &lyrel_insights::statistics::analysis::Analysis,
         maximum: f64,
         cx: &mut Context<Self>,
     ) -> AnyElement {

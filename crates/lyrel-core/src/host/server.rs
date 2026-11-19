@@ -143,18 +143,28 @@ impl Conn {
     }
 }
 
-pub const CONTROL_SOCK_ENV: &str = "LYREL_CONTROL_SOCK";
+/// Overrides the control socket path. Wire-side discovery lives in
+/// `lyrel-protocol`; re-exported here so existing
+/// `lyrel_core::host::server::*` paths keep working.
+#[cfg(unix)]
+pub use lyrel_protocol::daemon::control_endpoint::CONTROL_SOCK_ENV;
 
 #[cfg(all(unix, test))]
-pub(crate) use unix::socket_path_in;
+pub(crate) use lyrel_protocol::daemon::control_endpoint::socket_path_in;
+#[cfg(unix)]
+pub use lyrel_protocol::daemon::control_endpoint::{
+    connect_control, control_endpoint_answers, control_socket_path, remove_control_endpoint,
+};
 #[cfg(unix)]
 pub use unix::{
-    bind_control_socket, control_endpoint_answers, control_socket_path, serve_listener,
-    serve_listener_with, spawn_control_listener, spawn_control_listener_with,
+    bind_control_socket, serve_listener, serve_listener_with, spawn_control_listener,
+    spawn_control_listener_with,
 };
 
 #[cfg(windows)]
-pub use windows::{
+pub use lyrel_protocol::daemon::control_endpoint::{
     CONTROL_PORT_FILE, connect_control, control_endpoint_answers, control_endpoint_path,
-    remove_control_endpoint, spawn_control_listener, spawn_control_listener_with,
+    remove_control_endpoint,
 };
+#[cfg(windows)]
+pub use windows::{spawn_control_listener, spawn_control_listener_with};

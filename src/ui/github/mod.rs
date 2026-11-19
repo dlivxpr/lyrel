@@ -9,10 +9,10 @@
 //!   way the Source Control tab does (`scm_repo_root`), then its remotes read
 //!   through the `Host` — the tree can be on another machine.
 //! - **Which token.** Resolved once, on a worker, from the environment or the
-//!   GitHub CLI (`lyrel_core::core::github::token`). Refresh resolves it again,
+//!   GitHub CLI (`lyrel_insights::github::token`). Refresh resolves it again,
 //!   so a `gh auth login` in a pane takes effect without a restart. A
 //!   repository the active `gh` account cannot see is retried with the
-//!   CLI's other accounts (`lyrel_core::core::github::accounts`).
+//!   CLI's other accounts (`lyrel_insights::github::accounts`).
 //! - **The requests.** Made from *this* machine, never the remote host, on a
 //!   dedicated thread each — a slow link must never hold a UI frame.
 //!
@@ -35,19 +35,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Window};
-use lyrel_core::core::github::api::{self, ListQuery};
-use lyrel_core::core::github::stack::{StackRow, stack_order};
-use lyrel_core::core::github::{
-    ApiError, Detail, GitHubRemote, Item, Kind, RepoSlug, StateFilter, Transport,
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_insights::github::api::{self, ListQuery};
+use lyrel_insights::github::stack::{StackRow, stack_order};
+use lyrel_insights::github::{
+    ApiError, CheckState, Detail, GitHubRemote, Item, Kind, RepoSlug, StateFilter, Transport,
 };
 
-use lyrel_core::core::config::RightPanelTab;
-use lyrel_core::core::github::CheckState;
-
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::scm::panel::RepoLookup;
 use crate::ui::scm::state::RepoKey;
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
 
 /// How old a cached list or detail may get before a render revalidates it.
 pub(crate) const STALE_AFTER: Duration = Duration::from_secs(120);
@@ -262,19 +260,19 @@ where
 /// A token from `gh` comes with the CLI's other accounts behind it, listed
 /// only if the active one comes up short.
 fn system_connector(proxy: Option<String>) -> Connector {
-    use lyrel_core::core::github::accounts::{Account, FallbackTransport};
-    use lyrel_core::core::github::http::HttpTransport;
-    use lyrel_core::core::github::token::{self, TokenSource};
+    use lyrel_insights::github::accounts::{Account, FallbackTransport};
+    use lyrel_insights::github::http::HttpTransport;
+    use lyrel_insights::github::token::{self, TokenSource};
+    let proxy =
+        lyrel_core::daemon::install::proxy::resolve("https://api.github.com", proxy.as_deref());
     Arc::new(move || {
         let resolved = token::resolve_token_from_system();
         if let Some((_, source)) = &resolved {
             log::info!("github: signed in via {source:?}");
         }
         let from_gh = matches!(resolved, Some((_, TokenSource::GhCli)));
-        let first: Arc<dyn Transport> = Arc::new(HttpTransport::new(
-            resolved.map(|(t, _)| t),
-            proxy.as_deref(),
-        ));
+        let first: Arc<dyn Transport> =
+            Arc::new(HttpTransport::new(resolved.map(|(t, _)| t), proxy.clone()));
         if !from_gh {
             return Connection { transport: first };
         }
@@ -284,7 +282,7 @@ fn system_connector(proxy: Option<String>) -> Connector {
                 .into_iter()
                 .map(|(login, t)| Account {
                     login,
-                    transport: Arc::new(HttpTransport::new(Some(t), proxy.as_deref())),
+                    transport: Arc::new(HttpTransport::new(Some(t), proxy.clone())),
                 })
                 .collect()
         });
@@ -311,7 +309,7 @@ impl LyrelApp {
         let host = view.host_id();
         let cwd = view.effective_host_cwd()?;
         let root = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()?
+            .try_global::<crate::ui::scm::status_cache::GitStatusCache>()?
             .repo_root_for(host, &cwd)?;
         Some((host, root.to_path_buf()))
     }
@@ -324,7 +322,7 @@ impl LyrelApp {
         if self.github.metadata_watch.is_some() {
             return;
         }
-        self.github.metadata_watch = Some(cx.observe_global::<crate::terminal::git_data::ScmData>(
+        self.github.metadata_watch = Some(cx.observe_global::<crate::ui::scm::data::ScmData>(
             |this, cx| {
                 if !this.right_panel_visible || this.right_panel_tab != RightPanelTab::GitHub {
                     return;
@@ -332,7 +330,7 @@ impl LyrelApp {
                 let Some((repo, seen)) = this.github.metadata_seen.as_mut() else {
                     return;
                 };
-                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                let data = cx.global::<crate::ui::scm::data::ScmData>();
                 let epoch = data.epoch(repo.host, &repo.root);
                 if epoch != *seen && !data.is_change_pending(repo.host, &repo.root) {
                     *seen = epoch;
@@ -379,7 +377,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> GhTarget {
         let epoch = cx
-            .default_global::<crate::terminal::git_data::ScmData>()
+            .default_global::<crate::ui::scm::data::ScmData>()
             .epoch(repo.host, &repo.root);
         self.github_watch_metadata(&repo, epoch, cx);
         let remotes = match self.github.remotes.get(&repo) {
@@ -394,7 +392,7 @@ impl LyrelApp {
             }
         };
         let pick = self.github.remote_pick.get(&repo).map(String::as_str);
-        match lyrel_core::core::github::remote::default_remote(&remotes, pick) {
+        match lyrel_insights::github::remote::default_remote(&remotes, pick) {
             Some(chosen) => {
                 let chosen = chosen.clone();
                 GhTarget::Ready {
@@ -421,7 +419,7 @@ impl LyrelApp {
             .remotes
             .insert(repo.clone(), RemoteLookup::Loading { request });
         let root = repo.root.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| lyrel_core::core::git::git(h, &root, &["remote", "-v"]),
@@ -432,7 +430,7 @@ impl LyrelApp {
                     return;
                 }
                 if cx
-                    .global::<crate::terminal::git_data::ScmData>()
+                    .global::<crate::ui::scm::data::ScmData>()
                     .epoch(repo.host, &repo.root)
                     != epoch
                 {
@@ -441,7 +439,7 @@ impl LyrelApp {
                     return;
                 }
                 let remotes =
-                    lyrel_core::core::github::remote::github_remotes(&out.unwrap_or_default());
+                    lyrel_insights::github::remote::github_remotes(&out.unwrap_or_default());
                 this.github.remotes.insert(
                     repo,
                     RemoteLookup::Ready {
@@ -465,7 +463,7 @@ impl LyrelApp {
         self.github.connecting = true;
         let connector = self.github.connector.clone().unwrap_or_else(|| {
             system_connector(
-                cx.global::<crate::core::config::Config>()
+                cx.global::<lyrel_ui_base::config::Config>()
                     .http_proxy
                     .clone(),
             )
@@ -735,7 +733,7 @@ impl LyrelApp {
             entry.loading = true;
             let root = repo.root.clone();
             let repo = repo.clone();
-            crate::ui::host_ops::HostOps::run(
+            lyrel_ui_base::host_ops::HostOps::run(
                 host,
                 cx,
                 move |h| {

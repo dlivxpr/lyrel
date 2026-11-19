@@ -11,12 +11,13 @@ use gpui_kit::{
     MouseDownEvent, MouseMoveEvent, Pixels, SharedString, Window, div, prelude::*, px, rems,
 };
 
-use crate::core::config::{Config, DiffViewMode};
 use crate::core::git::status::DecoStatus;
-use crate::terminal::git_diff::{
-    self, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus, LineKind,
-    Truncation,
+use crate::ui::scm::diff::{
+    self as git_diff, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus,
+    LineKind, Truncation,
 };
+use lyrel_core::core::config::DiffViewMode;
+use lyrel_ui_base::config::Config;
 
 /// How much of an untracked file the preview will read. Past this the card
 /// says the read failed rather than showing a silently cut-off file — and the
@@ -28,12 +29,12 @@ use crate::ui::diff_rows::{DiffSelection, Side, SplitCell, SplitRow, UnifiedRow}
 use crate::ui::document_column::{
     DocumentChrome, glyph_split, glyph_unified, switch_cell, switch_ink, switch_track,
 };
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::right_panel::{HEADING, META, META_MONO, TEXT, TEXT_MONO, git_badge, info_chip};
-use crate::ui::rounding;
 use crate::ui::scm::path::relative_time;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::TitleStripRow as _;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::rounding;
 
 pub(crate) enum DiffLoad {
     Loading,
@@ -42,7 +43,7 @@ pub(crate) enum DiffLoad {
 }
 
 pub(crate) struct DiffOverlayState {
-    pub(crate) host_id: crate::ui::host_ops::HostId,
+    pub(crate) host_id: lyrel_ui_base::host_ops::HostId,
     pub(crate) cwd: PathBuf,
     /// Which patch this overlay is showing. Part of its identity, not a
     /// setting: two sources over one directory are two different overlays.
@@ -77,7 +78,7 @@ pub(crate) struct DiffOverlayState {
     pub(crate) rows: Rc<Vec<DiffRow>>,
     rows_key: Option<RowsKey>,
     measurement: Option<DiffMeasurement>,
-    /// The [`ScmData`](crate::terminal::git_data::ScmData) epoch this patch was
+    /// The [`ScmData`](crate::ui::scm::data::ScmData) epoch this patch was
     /// read at, for the two sources that can go stale.
     ///
     /// Recorded when a probe *starts*, so a `git add` that lands while one is
@@ -103,7 +104,7 @@ impl DiffMeasurement {
 /// The preset's solid or gradient design remains intact, but neither it nor
 /// the plain theme fallback may reveal the OS backdrop through diff text.
 fn diff_overlay_background(
-    active: Option<&crate::ui::presets::ActiveBackground>,
+    active: Option<&lyrel_ui_base::presets::ActiveBackground>,
     fallback: Hsla,
 ) -> Background {
     match active {
@@ -115,7 +116,7 @@ fn diff_overlay_background(
 impl LyrelApp {
     pub(crate) fn toggle_diff_overlay(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cwd: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -125,7 +126,7 @@ impl LyrelApp {
 
     pub(crate) fn toggle_diff_overlay_at(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cwd: PathBuf,
         focus: Option<String>,
         window: &mut Window,
@@ -138,7 +139,7 @@ impl LyrelApp {
 
     pub(crate) fn open_diff_overlay(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cwd: PathBuf,
         source: DiffSource,
         focus: Option<String>,
@@ -218,7 +219,7 @@ impl LyrelApp {
     /// here is the only one the overlay will ever have.
     pub(crate) fn open_supplied_diff(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         snapshot: Arc<DiffSnapshot>,
         focus: Option<String>,
         window: &mut Window,
@@ -245,9 +246,9 @@ impl LyrelApp {
     /// actually on screen may draw itself selected.
     pub(crate) fn diff_overlay_focus(
         &self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cwd: &std::path::Path,
-        source: &crate::terminal::git_diff::DiffSource,
+        source: &crate::ui::scm::diff::DiffSource,
     ) -> Option<&str> {
         let overlay = self
             .tabs
@@ -409,7 +410,7 @@ impl LyrelApp {
             DiffLoad::Ready(snap) => Some(scm_epoch(cx, id, &snap.root)),
             _ => None,
         };
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, id) else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, id) else {
             return;
         };
         let Some(overlay) = self
@@ -426,7 +427,7 @@ impl LyrelApp {
 
     pub(crate) fn spawn_diff_probe_for(
         &mut self,
-        host: crate::ui::host_ops::SharedHost,
+        host: lyrel_ui_base::host_ops::SharedHost,
         cwd: PathBuf,
         source: DiffSource,
         cx: &mut Context<Self>,
@@ -439,7 +440,7 @@ impl LyrelApp {
         let host_for_retry = host.clone();
         let probe_cwd = cwd.clone();
         let probe_source = source.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| {
@@ -462,7 +463,7 @@ impl LyrelApp {
 
     fn install_diff_snapshot(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cwd: &Path,
         source: &DiffSource,
         snap: Option<Arc<DiffSnapshot>>,
@@ -485,8 +486,8 @@ impl LyrelApp {
             let counts = matches!(snap.source, DiffSource::Head).then(|| snap.totals());
             let root = snap.root.clone();
             let branch = snap.branch.clone();
-            cx.default_global::<crate::terminal::git_status::GitStatusCache>();
-            cx.update_global::<crate::terminal::git_status::GitStatusCache, _>(|cache, _| {
+            cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
+            cx.update_global::<crate::ui::scm::status_cache::GitStatusCache, _>(|cache, _| {
                 cache.note_diff_read(host, &root, &branch, counts)
             })
         } else {
@@ -547,7 +548,7 @@ impl LyrelApp {
             // HEAD snapshot is comparable to them.
             DiffSource::Head => {
                 let Some(status) = cx
-                    .try_global::<crate::terminal::git_status::GitStatusCache>()
+                    .try_global::<crate::ui::scm::status_cache::GitStatusCache>()
                     .and_then(|cache| cache.status_for(overlay.host_id, &overlay.cwd))
                 else {
                     return;
@@ -622,7 +623,7 @@ impl LyrelApp {
                 // Opaque on purpose: this overlay covers the entire workspace,
                 // so window translucency and backdrop material must stop here.
                 .bg(diff_overlay_background(
-                    cx.try_global::<crate::ui::presets::ActiveBackground>(),
+                    cx.try_global::<lyrel_ui_base::presets::ActiveBackground>(),
                     cx.theme().background,
                 ))
                 // The opaque fill above covers the theme background image the
@@ -684,7 +685,7 @@ impl LyrelApp {
         let subject = source_subject(&overlay.source, branch);
         let subject_takes_the_slack =
             chrome.is_dock() && !subject.is_rev && subject.label.is_none();
-        let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.hover);
+        let hover = gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::Surfaces>().window.hover);
         let row = h_flex().id("diff-overlay-header");
         row.flex_shrink_0()
             .min_w_0()
@@ -793,7 +794,7 @@ impl LyrelApp {
             // down in the file list and the subject has none — and it shrinks
             // head-first, so the filename is the last thing to go.
             .when_some(focused_name(overlay), |bar, name| {
-                let (head, leaf) = crate::ui::path_display::split_path_leaf(&name);
+                let (head, leaf) = lyrel_ui_base::path_display::split_path_leaf(&name);
                 bar.child(
                     div().occlude().min_w_0().flex_shrink(999.).child(
                         h_flex()
@@ -995,7 +996,7 @@ impl LyrelApp {
         let Some((host_id, root, path)) = want else {
             return;
         };
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
             return;
         };
         let active = self.tabs.active_index();
@@ -1008,7 +1009,7 @@ impl LyrelApp {
         }
         let read_path = root.join(&path);
         let key_path = path.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| {
@@ -1195,7 +1196,7 @@ impl LyrelApp {
         // laid out — `ListState::measure_all` would settle it exactly, by
         // laying out every row on the first frame, which is the cost this
         // whole list exists to avoid.
-        crate::ui::scrollbar::with_vertical_scrollbar("diff-overlay-scrollbar", body, &list)
+        lyrel_ui_base::scrollbar::with_vertical_scrollbar("diff-overlay-scrollbar", body, &list)
     }
 }
 
@@ -1629,7 +1630,7 @@ fn diff_oversized_notice(snap: &DiffSnapshot, cx: &gpui_kit::App) -> AnyElement 
     );
     // The row pill at rest, filled with the hover step: a notice sits in the
     // list's own shape, one quiet rung off the window, rather than in a card.
-    let fill = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.hover);
+    let fill = gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::Surfaces>().window.hover);
     div()
         .w_full()
         .px(ROW_INSET)
@@ -1648,7 +1649,7 @@ fn diff_file_header(
     app: &gpui_kit::WeakEntity<LyrelApp>,
     cx: &gpui_kit::App,
 ) -> AnyElement {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().window;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
     let hover = gpui_kit::rgb(sf.hover);
     let deco = deco_status(head.status);
     let (glyph, glyph_color) = (status_glyph(deco), status_color(deco, cx));
@@ -1749,7 +1750,7 @@ fn diff_untracked_row(
     app: &gpui_kit::WeakEntity<LyrelApp>,
     cx: &gpui_kit::App,
 ) -> AnyElement {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().window;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
     let hover = gpui_kit::rgb(sf.hover);
     let for_focus = path.to_string();
     let app = app.clone();
@@ -1992,8 +1993,8 @@ pub(crate) fn deco_status(status: FileStatus) -> DecoStatus {
 /// The current epoch for a repository, or 0 where nothing has ever bumped one.
 /// Zero is the same value a never-touched repository reports, so an overlay
 /// that reads it before the global exists simply never looks stale.
-fn scm_epoch(cx: &gpui_kit::App, host: crate::ui::host_ops::HostId, root: &Path) -> u64 {
-    cx.try_global::<crate::terminal::git_data::ScmData>()
+fn scm_epoch(cx: &gpui_kit::App, host: lyrel_ui_base::host_ops::HostId, root: &Path) -> u64 {
+    cx.try_global::<crate::ui::scm::data::ScmData>()
         .map(|data| data.epoch(host, root))
         .unwrap_or(0)
 }
@@ -2166,10 +2167,10 @@ fn oversized_summary(snap: &DiffSnapshot, stats: &DiffStats) -> String {
 /// one patch — the same split `DiffSource`'s own `PartialEq` is written to
 /// avoid. The separator is a byte no path contains.
 fn probe_key(
-    host: crate::ui::host_ops::HostId,
+    host: lyrel_ui_base::host_ops::HostId,
     cwd: &Path,
     source: &DiffSource,
-) -> (crate::ui::host_ops::HostId, PathBuf) {
+) -> (lyrel_ui_base::host_ops::HostId, PathBuf) {
     let mut tagged = std::ffi::OsString::from(format!("{}\u{1}", source.tag()));
     tagged.push(cwd.as_os_str());
     (host, PathBuf::from(tagged))
@@ -2178,15 +2179,15 @@ fn probe_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::git_diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
     use crate::ui::diff_list::{build_rows, file_expanded};
     use crate::ui::diff_rows::split_hunk;
-    use crate::ui::i18n::set_locale;
+    use crate::ui::scm::diff::{AUTO_COLLAPSE_LINES, DiffLine, LineKind, MAX_RENDERED_FILES};
+    use lyrel_ui_base::i18n::set_locale;
 
     #[test]
     fn full_window_diff_background_is_opaque_with_or_without_a_preset() {
-        let active = crate::ui::presets::ActiveBackground {
-            fill: crate::ui::presets::Fill::Solid(0x12_34_56),
+        let active = lyrel_ui_base::presets::ActiveBackground {
+            fill: lyrel_ui_base::presets::Fill::Solid(0x12_34_56),
             opacity: Some(0.2),
             image: None,
         };
@@ -2218,7 +2219,7 @@ mod tests {
 
     #[test]
     fn the_probe_key_separates_the_sources_over_one_directory() {
-        let host = crate::ui::host_ops::HostId::LOCAL;
+        let host = lyrel_ui_base::host_ops::HostId::LOCAL;
         let cwd = Path::new("/repo");
         let worktree = probe_key(host, cwd, &DiffSource::Worktree);
         assert_ne!(worktree, probe_key(host, cwd, &DiffSource::Staged));
@@ -2961,9 +2962,9 @@ mod tests {
 mod overlay_gpui_tests {
     use super::*;
     use crate::ui::app::test_window;
-    use crate::ui::host_ops::HostId;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::host_ops::HostId;
 
     fn overlay_source_and_load(
         app: &Entity<LyrelApp>,
@@ -3035,7 +3036,7 @@ mod overlay_gpui_tests {
     }
 
     fn one_file_snapshot(source: DiffSource) -> DiffSnapshot {
-        use crate::terminal::git_diff::{DiffLine, Hunk, LineKind};
+        use crate::ui::scm::diff::{DiffLine, Hunk, LineKind};
         DiffSnapshot {
             root: std::path::PathBuf::from("/no/such/lyrel/repo"),
             source,
@@ -3095,7 +3096,7 @@ mod overlay_gpui_tests {
     fn document_geometry_diff_header_controls_preserve_the_patch_across_scales(
         cx: &mut TestAppContext,
     ) {
-        use crate::core::config::DocumentLayout;
+        use lyrel_core::core::config::DocumentLayout;
 
         let (app, mut vcx, _panes) = test_window::harness_with_tabs(cx, 1);
         let source = DiffSource::Patch {
@@ -3197,7 +3198,7 @@ mod overlay_gpui_tests {
     /// file and the view mode, and change only this tab's document layout.
     #[gpui_kit::test]
     fn the_filled_diffs_terminal_button_docks_without_losing_the_patch(cx: &mut TestAppContext) {
-        use crate::core::config::DocumentLayout;
+        use lyrel_core::core::config::DocumentLayout;
 
         let (app, mut vcx, _panes) = test_window::harness_with_tabs(cx, 2);
         vcx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
@@ -3431,10 +3432,10 @@ mod overlay_gpui_tests {
 #[cfg(all(test, unix))]
 mod render_idle_gpui_tests {
     use super::*;
-    use crate::terminal::git_status::{GitStatusCache, RepoSnapshot};
     use crate::ui::app::{render_probe, test_window};
-    use crate::ui::host_ops::HostId;
+    use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
     use gpui_kit::TestAppContext;
+    use lyrel_ui_base::host_ops::HostId;
 
     const BUDGET: u64 = 200;
 
@@ -3665,11 +3666,11 @@ mod render_idle_gpui_tests {
 #[cfg(test)]
 mod selection_gpui_tests {
     use super::*;
-    use crate::terminal::git_diff::{DiffLine, LineKind};
     use crate::ui::app::test_window;
     use crate::ui::diff_rows::RowId;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
+    use crate::ui::scm::diff::{DiffLine, LineKind};
     use gpui_kit::{Entity, MouseButton, TestAppContext, VisualTestContext};
 
     const PATH: &str = "src/a.rs";
@@ -3747,7 +3748,7 @@ mod selection_gpui_tests {
                 ))));
             app.tabs.select(0);
             app.tabs[0].diff_overlay = Some(DiffOverlayState {
-                host_id: crate::ui::host_ops::HostId::LOCAL,
+                host_id: lyrel_ui_base::host_ops::HostId::LOCAL,
                 cwd: PathBuf::from("/repo"),
                 source: DiffSource::Head,
                 focus_handle: cx.focus_handle(),
@@ -3911,7 +3912,7 @@ mod selection_gpui_tests {
 
         app.update_in(&mut vcx, |this, _, cx| {
             this.install_diff_snapshot(
-                crate::ui::host_ops::HostId::LOCAL,
+                lyrel_ui_base::host_ops::HostId::LOCAL,
                 &PathBuf::from("/repo"),
                 &DiffSource::Head,
                 Some(Arc::new(DiffSnapshot {

@@ -465,7 +465,7 @@ fn run_daemon_inner() -> anyhow::Result<()> {
         let mut services = control_services();
         services.panes = Some(registry.clone());
         match crate::host::server::spawn_control_listener_with(
-            crate::host::local::LocalHost::shared(),
+            crate::host::local::shared(),
             services,
         ) {
             Ok(path) => startup_note!("lyrel-server: control socket at {}", path.display()),
@@ -559,7 +559,7 @@ fn run_adopting(inheritance: crate::daemon::handoff::Inheritance) -> anyhow::Res
         let mut services = control_services();
         services.panes = Some(registry.clone());
         match crate::host::server::spawn_control_listener_with(
-            crate::host::local::LocalHost::shared(),
+            crate::host::local::shared(),
             services,
         ) {
             Ok(path) => startup_note!("lyrel-server: control socket at {}", path.display()),
@@ -2291,6 +2291,13 @@ mod spawn_claim_tests {
         cell_h: 17,
     };
 
+    fn pin_config_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lyrel-covtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        crate::core::config::set_config_dir(dir.clone());
+        dir
+    }
+
     fn pair() -> (Stream, Stream) {
         #[cfg(unix)]
         {
@@ -2306,7 +2313,7 @@ mod spawn_claim_tests {
     }
 
     fn pane(id: u64) -> Arc<DaemonPane> {
-        let directory = crate::core::session::test_support::pin_config_dir();
+        let directory = pin_config_dir();
         DaemonPane::spawn(
             id,
             Some(directory),
@@ -2465,7 +2472,7 @@ mod spawn_claim_tests {
 
     #[test]
     fn a_pane_that_exits_before_claim_replays_its_tail_without_being_registered() {
-        let directory = crate::core::session::test_support::pin_config_dir();
+        let directory = pin_config_dir();
         let shell = crate::daemon::protocol::ShellSpec {
             program: if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into(),
             args: if cfg!(windows) {

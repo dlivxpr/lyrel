@@ -1,10 +1,10 @@
 pub(crate) mod presentation;
 mod progress;
 
-use crate::core::session::{SessionPane, SessionTab};
-use crate::terminal::view::TerminalView;
 use crate::ui::pane::{Dir, Pane, PaneSlot};
 use gpui_kit::{App, Entity, IntoElement, TestSupportExt as _, Window, div, prelude::*};
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::session::{SessionPane, SessionTab};
 use std::rc::Rc;
 
 pub(crate) struct Tab {
@@ -22,7 +22,7 @@ pub(crate) struct Tab {
     /// while the tab is active: then the zoom lives in `LyrelApp::maximized`.
     zoomed: Option<Entity<TerminalView>>,
     pub(crate) diff_overlay: Option<crate::ui::diff_overlay::DiffOverlayState>,
-    pub(crate) code: Option<Box<crate::ui::code_editor::TabCode>>,
+    pub(crate) code: Option<Box<lyrel_workbench_editor::code_editor::TabCode>>,
     /// The pinned sidebar group this tab was put in, by id, or `None` to
     /// leave it to auto grouping. A `Cell` because the sidebar files a tab
     /// that walks into a pinned folder while it is working out where to draw
@@ -46,7 +46,7 @@ pub(crate) struct Tab {
     /// tab: reading a long file in one while an agent works in another wants
     /// the whole window here and half of it there, and a global switch made
     /// each of those flip the other.
-    document_layout: Option<crate::core::config::DocumentLayout>,
+    document_layout: Option<lyrel_core::core::config::DocumentLayout>,
     id: std::cell::Cell<lyrel_core::core::machine::TabId>,
     /// Monotonic stamp of when this tab was last activated, used to order the
     /// switcher's tab column most-recently-used first. Zero means never.
@@ -355,11 +355,14 @@ impl Tab {
         }
     }
 
-    pub(crate) fn document_layout(&self) -> Option<crate::core::config::DocumentLayout> {
+    pub(crate) fn document_layout(&self) -> Option<lyrel_core::core::config::DocumentLayout> {
         self.document_layout
     }
 
-    pub(crate) fn choose_document_layout(&mut self, layout: crate::core::config::DocumentLayout) {
+    pub(crate) fn choose_document_layout(
+        &mut self,
+        layout: lyrel_core::core::config::DocumentLayout,
+    ) {
         self.document_layout = Some(layout);
     }
 
@@ -641,7 +644,7 @@ impl Tab {
             // *other* default it was given (an SSH host, a workspace name) is a
             // name lyrel chose for it deliberately, and `stated_title` hands
             // those up as the title the pane is showing.
-            title: crate::terminal::view::DEFAULT_TITLE.to_string(),
+            title: lyrel_terminal::view::DEFAULT_TITLE.to_string(),
             osc_title: leaf.stated_title().map(str::to_string),
             cwd: leaf.cwd().map(|p| p.display().to_string()),
             agent: leaf.agent(),
@@ -656,7 +659,7 @@ impl Tab {
         &self,
         window: Option<&Window>,
         cx: &App,
-    ) -> Option<crate::terminal::git_status::GitStatus> {
+    ) -> Option<crate::ui::scm::status_cache::GitStatus> {
         let leaf = match window {
             Some(window) => self.pane.focused_or_first(window, cx),
             None => self.pane.first_leaf().and_then(|s| s.terminal().cloned()),

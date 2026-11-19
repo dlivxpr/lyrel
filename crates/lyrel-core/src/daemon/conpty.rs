@@ -1,6 +1,5 @@
 //! Refuse a silent system-ConPTY fallback when an installed pair is incomplete.
-#[path = "../../conpty_files.rs"]
-mod files;
+use crate::conpty_files;
 
 pub(crate) fn ensure_prepared() -> std::io::Result<()> {
     static VERIFIED: std::sync::LazyLock<Result<(), String>> = std::sync::LazyLock::new(|| {
@@ -8,7 +7,7 @@ pub(crate) fn ensure_prepared() -> std::io::Result<()> {
         // skipping verification is what used to let a build drift onto the
         // in-box conhost. Only the targets the release publishes are covered;
         // anything else is not a supported Windows build.
-        let arch = files::architecture(std::env::consts::ARCH).ok_or_else(|| {
+        let arch = conpty_files::architecture(std::env::consts::ARCH).ok_or_else(|| {
             format!(
                 "no pinned ConPTY package exists for this Windows architecture ({}); \
                  supported: x86_64",
@@ -19,7 +18,7 @@ pub(crate) fn ensure_prepared() -> std::io::Result<()> {
         let directory = executable
             .parent()
             .ok_or("ConPTY executable directory is unavailable")?;
-        files::read_verified(directory, arch, false).map_err(|e| e.to_string())?;
+        conpty_files::read_verified(directory, arch, false).map_err(|e| e.to_string())?;
         Ok(())
     });
     VERIFIED.as_ref().map(|_| ()).map_err(|message| {

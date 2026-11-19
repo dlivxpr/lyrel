@@ -9,8 +9,8 @@ use gpui_kit::{
 };
 
 use crate::daemon::protocol::ShellSpec;
-use crate::terminal::PaneWorkspace;
-use crate::ui::i18n::{L10nKey, t_fmt};
+use lyrel_ui_base::i18n::{L10nKey, t_fmt};
+use lyrel_ui_base::route::PaneWorkspace;
 mod creation;
 pub(crate) use creation::{PendingLaunch, SpawnFinished};
 
@@ -30,7 +30,7 @@ pub struct PendingSpawn {
     /// opened to run something (a quick-launched agent). Typed only into this
     /// pane, and only when it is a fresh shell rather than a restored one.
     pub run_on_land: Option<String>,
-    pub owner: Option<crate::core::session::WorkspaceId>,
+    pub owner: Option<lyrel_ui_base::session::WorkspaceId>,
     pub font_size: f32,
 }
 
@@ -74,7 +74,7 @@ impl EventEmitter<RetryRequested> for PendingPane {}
 impl PendingPane {
     pub(crate) fn shell(
         workspace: Option<PaneWorkspace>,
-        owner: Option<crate::core::session::WorkspaceId>,
+        owner: Option<lyrel_ui_base::session::WorkspaceId>,
         font_size: f32,
         working_directory: Option<std::path::PathBuf>,
         restore_pane: Option<u64>,
@@ -83,8 +83,8 @@ impl PendingPane {
     ) -> Self {
         let machine = workspace
             .as_ref()
-            .map(|workspace| crate::ui::remote_connect::target_label(cx, &workspace.target))
-            .unwrap_or_else(|| crate::ui::i18n::t(L10nKey::AppLocalServerName).to_string());
+            .map(|workspace| crate::ui::desktop_lookups::target_label(cx, &workspace.target))
+            .unwrap_or_else(|| lyrel_ui_base::i18n::t(L10nKey::AppLocalServerName).to_string());
         Self::new(
             machine,
             PendingSpawn {
@@ -106,7 +106,7 @@ impl PendingPane {
     }
 
     pub(crate) fn native_ssh(
-        owner: crate::core::session::WorkspaceId,
+        owner: lyrel_ui_base::session::WorkspaceId,
         font_size: f32,
         remote_start_dir: Option<std::path::PathBuf>,
         spec: Box<crate::daemon::protocol::NativeSshSpec>,
@@ -252,8 +252,8 @@ impl PendingPane {
         self.spawn.agent_title = title.filter(|title| !title.trim().is_empty());
     }
 
-    pub(crate) fn session(&self) -> crate::core::session::SessionPane {
-        crate::core::session::SessionPane::Leaf {
+    pub(crate) fn session(&self) -> lyrel_ui_base::session::SessionPane {
+        lyrel_ui_base::session::SessionPane::Leaf {
             cwd: self.spawn.working_directory.clone(),
             pane_id: self.spawn.restore_pane,
             shell: self.spawn.shell.clone(),
@@ -367,7 +367,7 @@ impl Render for PendingPane {
                 )
                 .child(
                     Button::new("pending-pane-retry")
-                        .label(crate::ui::i18n::t(if self.created_session {
+                        .label(lyrel_ui_base::i18n::t(if self.created_session {
                             L10nKey::PendingOpenSession
                         } else {
                             L10nKey::TryAgain

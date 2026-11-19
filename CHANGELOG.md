@@ -9,7 +9,8 @@
 
 ### 开发与 CI
 
-- 结构化 JSON／JSONL、TOML、YAML、XML、CSV／TSV、GIF／TIFF 与 draw.io 的纯模型迁入无 GPUI 的内部 `lyrel-code-editor`；工作台继续持有 Document、Host、history、保存与本地化，现有模型和真实消费者回归保留。
+- 四个 GUI-free 文档微 crate（`lyrel-text`、`lyrel-code-editor`、`lyrel-epub`、`lyrel-pdf`）与纯全书 EPUB 搜索引擎合并为单个 `lyrel-document`：默认 feature 只编译 text 编码/BOM/逐行行尾/EditorConfig codec，`formats` 解锁结构化投影、CSV、GIF/TIFF、draw.io、EPUB 与 PDF，取消与 revision/generation guard 统一为一个 `CancelToken`／`ProjectionState`（无 `lyrel-core` 依赖，工作台在任务派发点桥接 Host transfer 取消），`encoding_rs`／`roxmltree` 版本声明统一，Glim/Zorite 引擎级来源记录与 MIT 文本随模块迁入；`lyrel-markdown-editor` 改用 default-features-off 依赖。
+- 工作区收敛为 13 个包：CLI 经 `lyrel-protocol` 连接会话 daemon，不再链接 SSH、Tokio、SQLite 或 PTY；独立 updater 共用安装契约。终端与文档工作台分别在 `lyrel-terminal` 与 `lyrel-workbench-editor`，共同使用 `lyrel-ui-base`，根包负责窗口装配。CI 校验生产依赖图与桌面 Host 访问约束。
 - core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
 - 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
 - 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。

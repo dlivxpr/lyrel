@@ -24,7 +24,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 
 #[cfg(windows)]
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 #[cfg(any(windows, test))]
 const DIRECTORY_KEY: &str = r"Software\Classes\Directory\shell\lyrel";
@@ -360,7 +360,7 @@ mod windows {
     }
 
     pub(super) fn refresh_labels() -> Result<()> {
-        let Some(instance) = crate::core::config::config_dir_path() else {
+        let Some(instance) = lyrel_core::core::config::config_dir_path() else {
             return Ok(());
         };
         // Explorer's process-global verbs belong to the account's normal
@@ -525,12 +525,12 @@ mod windows {
             let root = PathBuf::from(std::env::var_os("LYREL_EXPLORER_NAMESPACE_ROOT").unwrap());
             let default = shell_config_dir().unwrap();
             match scenario.as_str() {
-                "cli" => crate::core::config::set_config_dir(root.join("isolated")),
-                "default-explicit" => crate::core::config::set_config_dir(default),
+                "cli" => lyrel_core::core::config::set_config_dir(root.join("isolated")),
+                "default-explicit" => lyrel_core::core::config::set_config_dir(default),
                 _ => {}
             }
             let _sandbox = RegistrySandbox::new();
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
             let previous = "installed label owned by the default instance";
             for location in [Location::Directory, Location::Background] {
                 let key = create_key(location.key()).unwrap();

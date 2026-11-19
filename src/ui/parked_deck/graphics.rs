@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{ParkedCard, ParkedDeckLabels};
-use crate::ui::presets::{Interactions, Parking};
+use lyrel_ui_base::presets::{Interactions, Parking};
 
 // 批准的原生闸门几何，以 rem=16 为设计坐标；矩阵和逆命中共享同一比例。
 #[derive(Clone, Copy, Debug, PartialEq)]
