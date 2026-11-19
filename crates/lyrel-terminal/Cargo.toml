@@ -113,6 +113,8 @@ core-foundation = "0.10.1"
 # NSUserNotification is the click-to-reveal notification path — see
 # `remote::macos_notify` for why it is driven directly.
 objc2 = "0.6.5"
+# The terminal bell plays the system alert sound via NSBeep.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSGraphics"] }
 objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserNotification"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]

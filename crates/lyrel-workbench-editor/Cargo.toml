@@ -84,6 +84,8 @@ windows-sys = { version = "0.61", features = [
 # engine, with the same strict resource filter as the Windows WebView2 host.
 wry = { version = "=0.57.2", default-features = false }
 raw-window-handle = "0.6"
+# Core Foundation strings for the LaunchServices default-browser lookup.
+core-foundation = "0.10.1"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
