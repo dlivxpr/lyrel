@@ -6462,6 +6462,7 @@ dependencies = [
  "fs2",
  "http",
  "icu_collator",
+ "libc",
  "log",
  "lyrel-core",
  "lyrel-protocol",

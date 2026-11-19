@@ -31,7 +31,7 @@ use gpui_kit::{App, AppContext as _, BorrowAppContext as _, Global};
 use crate::config::Config;
 use crate::i18n::{L10nKey, t};
 use crate::route::PaneRoute;
-use crate::session::{RemoteRef, RemoteTarget, WorkspaceId};
+use crate::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
 use lyrel_protocol::host::HostId;
 
 #[derive(Default)]
@@ -461,14 +461,19 @@ pub fn install_accepts_input(rule: fn(&App, WorkspaceId) -> bool) {
     }
 }
 
-/// Whether `workspace` takes keystrokes. Before the workbench installs its
-/// rule (a headless test, an early pane) every workspace is its own: `true`.
+/// Whether `workspace` takes keystrokes. Without a shell rule, a known remote
+/// workspace has no supervisor that could have attached it. Local workspaces
+/// still accept input in standalone consumers.
 pub fn accepts_input(cx: &App, workspace: WorkspaceId) -> bool {
     ACCEPTS_INPUT
         .lock()
         .ok()
         .and_then(|rule| rule.map(|rule| rule(cx, workspace)))
-        .unwrap_or(true)
+        .unwrap_or_else(|| {
+            WorkspaceStore::all(cx)
+                .get(workspace)
+                .is_none_or(|view| view.host.is_none())
+        })
 }
 
 #[cfg(test)]
