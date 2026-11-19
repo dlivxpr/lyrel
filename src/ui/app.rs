@@ -261,10 +261,11 @@ pub struct LyrelApp {
     pub(crate) right_panel: crate::ui::right_panel::RightPanelState,
     pub(crate) scm: crate::ui::scm::ScmPanelState,
     pub(crate) github: crate::ui::github::GitHubPanelState,
-    pub(crate) diff_probes_inflight:
-        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
-    pub(crate) diff_probes_restale:
-        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
+    /// In-flight diff probes and their coalesced follow-up refreshes, keyed
+    /// by `(host, cwd, source)`. The tracker owns the policy — what may
+    /// spawn, what coalesces, what landing is allowed to install — so the app
+    /// only supplies the registry lookup and the spawn itself.
+    pub(crate) diff_probes: crate::ui::diff_probe::DiffProbeTracker,
     pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
