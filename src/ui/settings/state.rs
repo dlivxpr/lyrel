@@ -51,6 +51,10 @@ impl SettingsWindow {
                     if let Some(s) = this.active_settings_mut().filter(|_| typed) {
                         s.menu_hi = 0;
                     }
+                    // The filtered list is different now, so the theme the
+                    // arrow keys were previewing is no longer the highlighted
+                    // one; put the original slots back.
+                    this.cancel_preset_preview(cx);
                     cx.notify();
                 }
             }),
@@ -86,7 +90,13 @@ impl SettingsWindow {
 
         let navigation =
             navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
-        let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
+        let usage = cx.new(|cx| {
+            crate::ui::settings::usage::UsagePage::new(
+                window,
+                cx,
+                self.workspace.usage_vault.clone(),
+            )
+        });
         // Account forms render above the whole settings shell, outside UsagePage.
         subs.push(cx.observe(&usage, |_, _, cx| cx.notify()));
         if self.last_settings_location.0 == SettingsSection::Usage {
@@ -105,7 +115,8 @@ impl SettingsWindow {
             wd_path_input,
             link_file_command_input,
             http_proxy_input,
-            theme: theme_edit::ThemeEditing::default(),
+            theme: sections::theme_edit::ThemeEditing::default(),
+            preset_preview: None,
             save_error: None,
             saved_config: cx.global::<Config>().clone(),
             menu: None,
@@ -113,7 +124,7 @@ impl SettingsWindow {
             menu_hi: 0,
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
-            ssh: ssh::SshSettings::new(window, cx),
+            ssh: ssh::SshSettings::new(window, cx, self.workspace.credentials.clone()),
             agent_hooks_host: lyrel_ui_base::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,

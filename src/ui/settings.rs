@@ -26,26 +26,23 @@ use lyrel_ui_base::host_ops::HostId;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 use lyrel_ui_base::presets;
 #[cfg(target_os = "windows")]
-pub(crate) use theme_edit::window_backdrop_label_key;
+pub(crate) use sections::theme_edit::window_backdrop_label_key;
 
 mod agents;
 pub(crate) mod arguments;
 mod catalog;
 use catalog::*;
 mod configuration;
-mod editor;
 mod inputs;
 pub(crate) mod kit;
 mod navigation;
-mod pages;
+mod sections;
 mod shell;
 mod shortcuts;
 pub(crate) mod skills;
 mod ssh;
 mod state;
 pub(crate) mod statistics;
-mod theme_edit;
-mod theme_picker;
 pub(crate) mod usage;
 
 #[cfg(test)]
@@ -353,7 +350,10 @@ pub(crate) struct SettingsState {
     pub(crate) wd_path_input: Entity<InputState>,
     pub(crate) link_file_command_input: Entity<InputState>,
     pub(crate) http_proxy_input: Entity<InputState>,
-    pub(crate) theme: theme_edit::ThemeEditing,
+    pub(crate) theme: sections::theme_edit::ThemeEditing,
+    /// The slot values live before a theme-preset preview began, put back
+    /// when the picker closes without a confirmed pick.
+    pub(crate) preset_preview: Option<sections::theme_picker::PresetPreview>,
     /// The one popover open on the page — a dropdown, a theme list, a row's
     /// menu — by the id its trigger was drawn with.
     pub(crate) menu: Option<SharedString>,

@@ -1,11 +1,25 @@
 //! Appearance's Theme group: the Light / Dark / System cards, one dropdown
 //! per theme slot with a live preview of the theme under the pointer, and the
 //! editor a duplicated theme opens.
+//!
+//! Arrowing through a slot's menu live-previews the highlighted preset: the
+//! in-memory `Config` moves at once and a non-persisting
+//! [`SettingsEvent::ApplyTheme`] repaints theme and menus, so `config.json`
+//! is written only when the pick is confirmed. The values the slots held
+//! before the first preview are kept here and restored on cancel.
 
 use std::rc::Rc;
 
 use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
+
+/// The slot values a live preset preview must put back when the picker
+/// closes without a confirmed pick.
+pub(crate) struct PresetPreview {
+    theme_preset: String,
+    theme_preset_light: String,
+    theme_preset_dark: String,
+}
 
 fn rgb_of((r, g, b): (u8, u8, u8)) -> gpui_kit::Rgba {
     rgb((r as u32) << 16 | (g as u32) << 8 | b as u32)
@@ -202,6 +216,127 @@ impl SettingsWindow {
         self.settings_group(Some(t(L10nKey::SettingsThemeIntroTitle)), None, rows, cx)
     }
 
+    /// Every preset a slot's menu lists, in display order: the slot's own
+    /// mode first, the current pick kept even when it belongs to the other
+    /// mode, then the file-backed ones.
+    fn slot_themes(dark_slot: bool, current_id: &str, cx: &App) -> Vec<presets::Theme> {
+        let mut themes: Vec<presets::Theme> = presets::all(cx)
+            .into_iter()
+            .filter(|p| p.dark == dark_slot || p.id == current_id)
+            .collect();
+        themes.sort_by_key(|p| p.path.is_some());
+        themes
+    }
+
+    /// The entries the open slot menu shows once the query box's filter
+    /// applies — the same list the popover renders, so the highlighted row
+    /// names the preset the arrow keys would preview.
+    fn theme_menu_visible_themes(&self, dark_slot: bool, cx: &App) -> Vec<presets::Theme> {
+        let cfg = cx.global::<Config>();
+        let current_id = match (cfg.theme_follow_system, dark_slot) {
+            (false, _) => cfg.theme_preset.clone(),
+            (true, true) => cfg.theme_preset_dark.clone(),
+            (true, false) => cfg.theme_preset_light.clone(),
+        };
+        let query = self
+            .active_settings()
+            .map(|s| s.menu_query.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default();
+        Self::slot_themes(dark_slot, &current_id, cx)
+            .into_iter()
+            .filter(|p| query.is_empty() || p.name.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// Live-previews the preset the open slot menu has highlighted. The first
+    /// preview remembers the slot values it replaces; each move only rewrites
+    /// the in-memory `Config` and emits a non-persisting `ApplyTheme`, so the
+    /// visual theme and menus follow the highlight without touching
+    /// `config.json`.
+    fn preview_theme_menu_selection(&mut self, dark_slot: bool, cx: &mut Context<Self>) {
+        if self.theme_draft_dirty() {
+            return;
+        }
+        let Some(highlight) = self.active_settings().map(|s| s.menu_hi) else {
+            return;
+        };
+        let Some(pick) = self
+            .theme_menu_visible_themes(dark_slot, cx)
+            .get(highlight)
+            .map(|theme| theme.id.clone())
+        else {
+            return;
+        };
+        let state = self
+            .active_settings_mut()
+            .expect("settings present: checked above");
+        if state.preset_preview.is_none() {
+            let cfg = cx.global::<Config>();
+            state.preset_preview = Some(PresetPreview {
+                theme_preset: cfg.theme_preset.clone(),
+                theme_preset_light: cfg.theme_preset_light.clone(),
+                theme_preset_dark: cfg.theme_preset_dark.clone(),
+            });
+        }
+        let dark_now = crate::ui::theme::system_dark(cx);
+        theme_edit::ThemeEditing::select_preset(cx.global_mut::<Config>(), &pick, dark_now);
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+        });
+        cx.notify();
+    }
+
+    /// Moves the open theme menu's highlight one row, live-previewing the
+    /// newly highlighted preset as it goes. A no-op at the list's edge, where
+    /// the previewed theme is already the applied one.
+    pub(crate) fn move_theme_menu_highlight(
+        &mut self,
+        downwards: bool,
+        dark_slot: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let len = self.theme_menu_visible_themes(dark_slot, cx).len();
+        let mut moved = false;
+        if let Some(s) = self.active_settings_mut() {
+            let hi = s.menu_hi.min(len.saturating_sub(1));
+            let next = if downwards {
+                (hi + 1).min(len.saturating_sub(1))
+            } else {
+                hi.saturating_sub(1)
+            };
+            moved = next != hi;
+            s.menu_hi = next;
+            s.menu_scroll.scroll_to_item(s.menu_hi);
+        }
+        if moved {
+            // Show the highlighted preset live, in memory only;
+            // `config.json` waits for the confirming pick.
+            self.preview_theme_menu_selection(dark_slot, cx);
+        }
+    }
+
+    /// Puts the slot values back the way they were before the first live
+    /// preview and asks the shell to repaint. A no-op unless a preview is
+    /// live, so every menu-dismissal path can call it unconditionally.
+    pub(crate) fn cancel_preset_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.active_settings_mut() else {
+            return;
+        };
+        let Some(preview) = state.preset_preview.take() else {
+            return;
+        };
+        let cfg = cx.global_mut::<Config>();
+        cfg.theme_preset = preview.theme_preset;
+        cfg.theme_preset_light = preview.theme_preset_light;
+        cfg.theme_preset_dark = preview.theme_preset_dark;
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+        });
+        cx.notify();
+    }
+
     fn theme_slot_dropdown(&self, dark_slot: bool, cx: &mut Context<Self>) -> AnyElement {
         let tk = Tk::of(cx);
         let cfg = cx.global::<Config>();
@@ -219,11 +354,7 @@ impl SettingsWindow {
         .into();
         let open = self.settings_menu_open(&id);
 
-        let mut themes: Vec<presets::Theme> = presets::all(cx)
-            .into_iter()
-            .filter(|p| p.dark == dark_slot || p.id == current_id)
-            .collect();
-        themes.sort_by_key(|p| p.path.is_some());
+        let themes = Self::slot_themes(dark_slot, &current_id, cx);
         let start = themes.iter().position(|p| p.id == current_id).unwrap_or(0);
 
         let sw = Swatch::of(&current);
@@ -438,15 +569,7 @@ impl SettingsWindow {
                 let len = key_picks.len();
                 match key {
                     "down" | "up" => {
-                        if let Some(s) = this.active_settings_mut() {
-                            let hi = s.menu_hi.min(len.saturating_sub(1));
-                            s.menu_hi = if key == "down" {
-                                (hi + 1).min(len.saturating_sub(1))
-                            } else {
-                                hi.saturating_sub(1)
-                            };
-                            s.menu_scroll.scroll_to_item(s.menu_hi);
-                        }
+                        this.move_theme_menu_highlight(key == "down", dark_slot, cx);
                         cx.stop_propagation();
                         cx.notify();
                     }

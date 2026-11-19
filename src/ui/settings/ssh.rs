@@ -1,7 +1,8 @@
 //! SSH 设置的草稿、校验与局部展示状态；窗口只适配 GPUI 与跨页协调。
+//!
+//! 凭据读写全部走构造时注入的 [`CredentialStore`]（生产是 OS keychain，
+//! 测试是内存实现），这里不出现任何具体存储类型。
 use super::*;
-#[cfg(not(test))]
-use crate::core::keychain::OsCredentialStore;
 use crate::core::keychain::{CredentialRef, CredentialStore, key_account_from_contents};
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
@@ -31,18 +32,17 @@ pub(crate) struct SshSettings {
 }
 
 impl SshSettings {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
+    pub(crate) fn new(
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+        credentials: std::sync::Arc<dyn CredentialStore>,
+    ) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::FilterHosts)));
         let subscription = cx.subscribe_in(&filter, window, |_, _, ev, _, cx| {
             if matches!(ev, InputEvent::Change) {
                 cx.notify();
             }
         });
-        #[cfg(not(test))]
-        let credentials = std::sync::Arc::new(OsCredentialStore);
-        #[cfg(test)]
-        let credentials =
-            std::sync::Arc::new(crate::core::keychain::InMemoryCredentialStore::new());
         Self {
             form: None,
             open: None,

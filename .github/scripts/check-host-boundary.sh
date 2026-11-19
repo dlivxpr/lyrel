@@ -45,7 +45,7 @@ crates/lyrel-ui-base/src/host_ops.rs|*
 # the user's color schemes with it.
 crates/lyrel-ui-base/src/presets.rs|std::fs::
 crates/lyrel-ui-base/src/presets.rs|.is_absolute()
-src/ui/settings/theme_edit.rs|std::fs::create_dir_all
+src/ui/settings/sections/theme_edit.rs|std::fs::create_dir_all
 
 # The editor's record of which files each tab had open is app state under the
 # local config dir, like the themes above — not a file in any workspace.

@@ -413,7 +413,9 @@ impl SettingsWindow {
     fn apply_shortcut_change(&mut self, edit: Option<ShortcutChange>, cx: &mut Context<Self>) {
         if let Some(edit) = edit {
             self.update_config(cx, |cfg| edit.apply(cfg));
-            crate::ui::keymap::rebind(cx);
+            // The shell owns the app-wide keymap: settings only announces the
+            // binding changed, and the bridge rebinds.
+            cx.emit(SettingsEvent::RebindKeymap);
         }
         cx.notify();
     }

@@ -1,5 +1,5 @@
 use super::kit::BtnKind;
-use crate::{core::keychain::OsCredentialStore, ui::settings_window::SettingsWindow};
+use crate::ui::settings_window::SettingsWindow;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -10,7 +10,7 @@ use gpui_kit::{
 #[cfg(test)]
 use lyrel_insights::usage::accounts;
 use lyrel_insights::usage::accounts::{
-    Account, Accounts, Authentication, Balance, Snapshot, StoredAccounts, UsageError,
+    Account, Accounts, Authentication, Balance, SecretVault, Snapshot, StoredAccounts, UsageError,
     VerifiedSource,
 };
 use lyrel_insights::usage::{
@@ -412,7 +412,13 @@ pub(crate) struct UsagePage {
     _subs: Vec<Subscription>,
 }
 impl UsagePage {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `vault` persists the account secrets; production injects the OS
+    /// keychain through the settings context, tests an in-memory store.
+    pub(crate) fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        vault: Arc<dyn SecretVault>,
+    ) -> Self {
         let data = if let Some(global) = cx.try_global::<UsageGlobal>() {
             global.0.clone()
         } else {
@@ -435,7 +441,7 @@ impl UsagePage {
                 let result = worker(move || {
                     let result = path
                         .ok_or(UsageError::Persistence)
-                        .and_then(|p| Accounts::load(p, Arc::new(OsCredentialStore)));
+                        .and_then(|p| Accounts::load(p, vault));
                     let presentation = result.as_ref().map(|a| a.stored.clone()).map_err(|e| *e);
                     *shared.accounts.lock().unwrap() = result;
                     presentation
