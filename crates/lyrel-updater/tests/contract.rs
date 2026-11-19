@@ -31,7 +31,7 @@ mod macos_contract {
         let plan = install_plan().verify_plan();
         let argv = plan.argv();
         assert_eq!(argv[0], OsString::from("verify"));
-        let parsed = VerifyPlan::parse("verify", &mut argv.into_iter().skip(1)).unwrap();
+        let parsed = VerifyPlan::parse(&mut argv.into_iter().skip(1)).unwrap();
         assert_eq!(parsed, plan);
     }
 
