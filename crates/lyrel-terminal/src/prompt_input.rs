@@ -260,11 +260,7 @@ impl PromptInput {
             || (Self::shell_vi(terminal, false) && !Self::alt(terminal))
             || self.handoff_active(terminal)
     }
-    pub fn shell_owns_prompt_on_screen(
-        &self,
-        terminal: &RemoteTerminal,
-        alt_screen: bool,
-    ) -> bool {
+    pub fn shell_owns_prompt_on_screen(&self, terminal: &RemoteTerminal, alt_screen: bool) -> bool {
         !self.enabled
             || Self::shell_vi(terminal, alt_screen)
             || self.handoff_active_on_screen(terminal, alt_screen)
@@ -467,12 +463,7 @@ impl PromptInput {
         self.observe_gap_text(terminal, text, pasted);
         None
     }
-    pub fn timeout(
-        &mut self,
-        terminal: &RemoteTerminal,
-        epoch: u64,
-        accepts_input: bool,
-    ) -> bool {
+    pub fn timeout(&mut self, terminal: &RemoteTerminal, epoch: u64, accepts_input: bool) -> bool {
         let pasted = self.hold.pasted();
         let expired = self.hold.timeout(epoch);
         if accepts_input && let Some((net, bytes)) = expired {
@@ -944,14 +935,7 @@ impl PromptInput {
         true
     }
 
-    pub fn click(
-        &mut self,
-        idx: usize,
-        clicks: usize,
-        shift: bool,
-        separators: &str,
-        smart: bool,
-    ) {
+    pub fn click(&mut self, idx: usize, clicks: usize, shift: bool, separators: &str, smart: bool) {
         match clicks {
             1 if shift => {
                 self.cmd.extend_to(idx);
@@ -995,11 +979,11 @@ impl PromptInput {
         self.drag_word = None;
         gesture
     }
-    #[cfg(all(test, target_os = "windows"))]
+    #[cfg(all(any(test, feature = "test-support"), target_os = "windows"))]
     pub fn reset_handoff(&mut self) {
         self.handoff = None;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn has_handoff(&self) -> bool {
         self.handoff.is_some()
     }
@@ -1032,11 +1016,7 @@ impl PromptInput {
         self.goal_col = None;
         completion.close();
     }
-    pub fn newline(
-        &mut self,
-        history: &mut TerminalHistory,
-        completion: &mut TerminalCompletion,
-    ) {
+    pub fn newline(&mut self, history: &mut TerminalHistory, completion: &mut TerminalCompletion) {
         completion.close();
         self.cmd.insert_str("\n");
         history.reset_navigation();

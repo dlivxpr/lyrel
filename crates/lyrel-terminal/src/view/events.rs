@@ -75,9 +75,7 @@ impl TerminalView {
                 }
             }
             PaneEvent::ColorRequest(idx, fmt) => {
-                use crate::palette::{
-                    ActivePalette, effective, hsla_to_rgb, query_color,
-                };
+                use crate::palette::{ActivePalette, effective, hsla_to_rgb, query_color};
                 let overrides = *self
                     .terminal
                     .color_overrides
@@ -129,8 +127,7 @@ impl TerminalView {
                 // The system bit is this pane's real shaping/fallback answer,
                 // measured on the UI thread. The daemon owns the reply and the
                 // glossary bit it captured when the query was read.
-                let system =
-                    crate::glyph::font_covers(cx, &self.font, self.font_size, cp);
+                let system = crate::glyph::font_covers(cx, &self.font, self.font_size, cp);
                 self.terminal.answer_glyph_query(token, cp, system);
             }
             PaneEvent::GlyphUnsupported => cx.emit(GlyphUnsupported),

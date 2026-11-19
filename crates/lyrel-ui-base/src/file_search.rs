@@ -11,8 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::host_ops::Host;
 use crate::fuzzy::fuzzy_score;
+use crate::host_ops::Host;
 
 /// How many entries one walk may return, directories included. A project
 /// past this is mostly generated or vendored files, and a list the size of

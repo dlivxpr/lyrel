@@ -45,10 +45,7 @@ impl PowerlineShape {
     }
 }
 
-pub fn powerline_path(
-    bounds: Bounds<Pixels>,
-    shape: PowerlineShape,
-) -> gpui_kit::Path<Pixels> {
+pub fn powerline_path(bounds: Bounds<Pixels>, shape: PowerlineShape) -> gpui_kit::Path<Pixels> {
     let (x0, y0) = (bounds.origin.x, bounds.origin.y);
     let (x1, y1) = (x0 + bounds.size.width, y0 + bounds.size.height);
     let ymid = y0 + bounds.size.height / 2.;

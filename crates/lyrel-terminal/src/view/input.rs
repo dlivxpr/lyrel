@@ -15,12 +15,7 @@ impl TerminalView {
         }
     }
 
-    pub fn on_key_down(
-        &mut self,
-        ev: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.input.begin_key(&ev.keystroke.key, ev.is_held);
         // A child Button owns its keyboard activation. Never encode its Enter
         // as PTY input while the event bubbles through the terminal surface.
@@ -131,9 +126,7 @@ impl TerminalView {
         }
 
         #[cfg(target_os = "macos")]
-        if !window.has_pending_keystrokes()
-            && crate::input::defer_to_ime(ks, self.key_flags())
-        {
+        if !window.has_pending_keystrokes() && crate::input::defer_to_ime(ks, self.key_flags()) {
             return;
         }
 
@@ -406,10 +399,7 @@ impl TerminalView {
     /// caret on its own — every redraw, every keystroke it echoes — so without
     /// a push the candidate window stayed wherever the last composition or
     /// the focus-in left it, or at the window's corner (#1131).
-    pub fn ime_anchor_moved(
-        &mut self,
-        anchor: Option<gpui_kit::Bounds<Pixels>>,
-    ) -> bool {
+    pub fn ime_anchor_moved(&mut self, anchor: Option<gpui_kit::Bounds<Pixels>>) -> bool {
         self.input.anchor_moved(anchor)
     }
 
@@ -702,18 +692,14 @@ impl TerminalView {
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use lyrel_core::daemon::protocol::DaemonMsg;
-    use crate::remote::PtySource;
     use crate::view::test_support::*;
     use gpui_kit::TestAppContext;
+    use lyrel_core::daemon::protocol::DaemonMsg;
     mod ime_consumer_tests {
         include!("../prompt_input/ime_consumer_tests.rs");
     }
     mod routing_consumer_tests {
         include!("../prompt_input/routing_consumer_tests.rs");
-    }
-    mod key_consumer_tests {
-        include!("../prompt_input/key_consumer_tests.rs");
     }
     /// `Ctrl-^`, which used to die in a hardcoded block that swallowed every
     /// Ctrl+digit off macOS — nothing has claimed those chords since tabs

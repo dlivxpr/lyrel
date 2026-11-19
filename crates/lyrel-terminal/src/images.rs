@@ -76,12 +76,7 @@ impl CommittedImages {
         Self(images)
     }
 
-    pub fn append_reading(
-        &self,
-        images: &mut Vec<RenderPlacement>,
-        row: i32,
-        history_delta: i64,
-    ) {
+    pub fn append_reading(&self, images: &mut Vec<RenderPlacement>, row: i32, history_delta: i64) {
         images.extend(self.0.iter().cloned().map(|mut image| {
             if let Some((viewport_row, _)) = &mut image.placeholder {
                 *viewport_row = row;
@@ -293,11 +288,7 @@ pub fn with_test_cache_limits<T>(pane: usize, aggregate: usize, f: impl FnOnce()
 }
 
 #[cfg(test)]
-pub fn with_test_metadata_limits<T>(
-    pane: usize,
-    aggregate: usize,
-    f: impl FnOnce() -> T,
-) -> T {
+pub fn with_test_metadata_limits<T>(pane: usize, aggregate: usize, f: impl FnOnce() -> T) -> T {
     struct Reset(Option<(usize, Arc<Budget>)>);
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -629,13 +620,13 @@ impl ImageStore {
         Self::default()
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn release_probe(&self) -> impl Fn() -> bool + use<> {
         let store = Arc::downgrade(&self.0);
         move || store.upgrade().is_none()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn allocation_observation(&self) -> serde_json::Value {
         let inner = self.0.state.lock().unwrap();
         serde_json::json!({
@@ -651,7 +642,7 @@ impl ImageStore {
         })
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
         let resources: Vec<_> = inner
@@ -1114,12 +1105,12 @@ impl ImageStore {
             .min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn snapshot(&self) -> Vec<RenderPlacement> {
         self.snapshot_with_placeholders(&[])
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     /// Runs are derived from the same locked grid snapshot as terminal text.
     /// A prototype itself never appears in the display list.
     pub fn snapshot_with_placeholders(
@@ -1433,11 +1424,7 @@ impl ImageStore {
 
     /// A closed window cannot run release_all, but its derived images and
     /// reservations must not wait for the retained view's last owner to drop.
-    pub fn release_after_window_close(
-        &self,
-        window: gpui_kit::WindowId,
-        cx: &mut gpui_kit::App,
-    ) {
+    pub fn release_after_window_close(&self, window: gpui_kit::WindowId, cx: &mut gpui_kit::App) {
         self.clear();
         WINDOW_IMAGES.with(|windows| {
             let images = windows.borrow_mut().remove(&window);

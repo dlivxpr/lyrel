@@ -52,12 +52,10 @@ impl TerminalView {
                 for pending in scripts {
                     let cwd = cwd.clone();
                     cx.spawn(async move |this, cx| {
-                        let results =
-                            cx.background_executor()
-                                .spawn(async move {
-                                    crate::generator::run(&pending.script, &cwd)
-                                })
-                                .await;
+                        let results = cx
+                            .background_executor()
+                            .spawn(async move { crate::generator::run(&pending.script, &cwd) })
+                            .await;
                         let _ = this.update(cx, |view, cx| {
                             let context = view.completion_context();
                             if view.completion.merge(
@@ -74,7 +72,8 @@ impl TerminalView {
                 }
             }
             CompletionWork::Remote(request) => {
-                let route = lyrel_ui_base::route::SftpRoute::new(self.pane_id, self.workspace.clone());
+                let route =
+                    lyrel_ui_base::route::SftpRoute::new(self.pane_id, self.workspace.clone());
                 let dir = request.directory().to_string();
                 cx.spawn(async move |this, cx| {
                     let listed = cx
@@ -311,9 +310,9 @@ impl TerminalView {
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use lyrel_core::daemon::protocol::DaemonMsg;
     use crate::view::test_support::*;
     use gpui_kit::TestAppContext;
+    use lyrel_core::daemon::protocol::DaemonMsg;
     mod completion_consumer_fixture {
         include!("../completion_consumer_fixture.rs");
     }

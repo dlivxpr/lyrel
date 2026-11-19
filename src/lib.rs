@@ -26,26 +26,13 @@ pub fn run_native_markdown_tests() -> std::process::ExitCode {
 /// ordinary application library does not link the dev-dependency.
 #[cfg(feature = "native-markdown-tests")]
 pub struct NativeTerminalFixtureSupport {
-    source_identity: fn(&std::path::Path) -> std::io::Result<String>,
-    hex: fn(&[u8]) -> String,
-    unhex: fn(&str) -> Vec<u8>,
     pty_sender: fn(),
 }
 
 #[cfg(feature = "native-markdown-tests")]
 impl NativeTerminalFixtureSupport {
-    pub fn new(
-        source_identity: fn(&std::path::Path) -> std::io::Result<String>,
-        hex: fn(&[u8]) -> String,
-        unhex: fn(&str) -> Vec<u8>,
-        pty_sender: fn(),
-    ) -> Self {
-        Self {
-            source_identity,
-            hex,
-            unhex,
-            pty_sender,
-        }
+    pub fn new(pty_sender: fn()) -> Self {
+        Self { pty_sender }
     }
 }
 
@@ -56,7 +43,6 @@ pub fn run_native_terminal_tests(fixture: NativeTerminalFixtureSupport) -> std::
     if let Some(result) = suite::run_fixture(fixture.pty_sender) {
         return result;
     }
-    suite::set_fixture_support(fixture);
     native_markdown::main(suite::native_cases().collect(), "native_terminal")
 }
 

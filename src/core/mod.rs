@@ -4,7 +4,7 @@
 
 pub use lyrel_core::core::{
     agent_history, agent_hooks, agent_prompt, cli_agent, crash, git, group_key, logfile, machine,
-    osc, proc, shell_quote, shells, ssh_profile, threads, worktree,
+    osc, proc, shell_quote, shells, ssh_profile, worktree,
 };
 
 pub mod actions;

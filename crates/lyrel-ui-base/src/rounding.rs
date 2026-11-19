@@ -23,12 +23,7 @@ pub fn inner_radius(outer: Pixels, border: Pixels) -> Pixels {
     if inset > px(0.) { inset } else { px(0.) }
 }
 
-pub fn segment_corners(
-    i: usize,
-    count: usize,
-    outer: Pixels,
-    border: Pixels,
-) -> Corners<Pixels> {
+pub fn segment_corners(i: usize, count: usize, outer: Pixels, border: Pixels) -> Corners<Pixels> {
     let r = inner_radius(outer, border);
     let zero = px(0.);
     let first = i < count && i == 0;

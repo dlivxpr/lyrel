@@ -167,12 +167,7 @@ impl TerminalView {
     ///
     /// At most a few per pane every few seconds reach the desktop (pane output
     /// is untrusted), with one note saying the rest were not shown.
-    pub fn show_program_notes(
-        &self,
-        hooks_notify: bool,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn show_program_notes(&self, hooks_notify: bool, window: &Window, cx: &mut Context<Self>) {
         let notes = self.terminal.take_osc_notes();
         let watched = window.is_window_active() && self.focus_handle.is_focused(window);
         let hooked = self.terminal.agent_session().is_some_and(|s| s.rich);

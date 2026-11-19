@@ -4,15 +4,14 @@ mod history_adapter;
 pub mod input;
 mod links;
 pub mod menus;
-mod notices;
+pub mod notices;
 mod presentation;
 mod prompt;
 
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 use super::remote::PaneEvent;
-use lyrel_ui_base::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
@@ -20,6 +19,7 @@ use gpui_kit::{
     Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollEvent, WeakEntity, Window, actions, div,
     prelude::*, px,
 };
+use lyrel_ui_base::notification_history::NotificationWindowExt as _;
 use rio_vt::crosswords::Mode;
 use rio_vt::crosswords::grid::Dimensions;
 #[cfg(test)]
@@ -40,15 +40,15 @@ use super::scrollbar::{GridScroll, TerminalScrollHandle};
 use super::search::SearchState;
 #[cfg(test)]
 use super::typeahead::RawInput;
+use lyrel_core::core::config::BellMode;
+use lyrel_core::daemon::protocol::{RemoteContext, ShellSpec};
 use lyrel_ui_base::actions::{
     CloseActiveTab, CopyLinkPathUnderPointer, DecreaseFontSize, ForkAgentSessionDown,
     ForkAgentSessionLeft, ForkAgentSessionRight, ForkAgentSessionUp, IncreaseFontSize, NewTab,
     OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs,
     SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
 };
-use lyrel_core::core::config::BellMode;
 use lyrel_ui_base::config::Config;
-use lyrel_core::daemon::protocol::{RemoteContext, ShellSpec};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 mod clipboard;
@@ -91,9 +91,7 @@ pub struct ProgressChanged;
 impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
 
 /// Ordered authoritative baseline/live frames, broadcast to independent windows.
-pub struct ProgramStatusChanged(
-    pub Vec<lyrel_core::core::program_status::ProgramStatusFrame>,
-);
+pub struct ProgramStatusChanged(pub Vec<lyrel_core::core::program_status::ProgramStatusFrame>);
 impl gpui_kit::EventEmitter<ProgramStatusChanged> for TerminalView {}
 
 /// A coding agent started running in this pane: its foreground went from no
@@ -255,7 +253,8 @@ pub struct TerminalView {
     host_id: lyrel_ui_base::host_ops::HostId,
     workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
     pub pane_id: u64,
-    shell_spec: Option<ShellSpec>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub shell_spec: Option<ShellSpec>,
     owner_workspace: Option<lyrel_ui_base::session::WorkspaceId>,
     ssh_spec: Option<Box<lyrel_core::daemon::protocol::NativeSshSpec>>,
     remote_paste: super::paste::RemotePaste,
@@ -361,14 +360,18 @@ pub struct TerminalView {
     /// Command completion can fall entirely between foreground polls.
     git_prompt_cycle: u64,
     pub input: super::prompt_input::PromptInput,
-    history: TerminalHistory,
+    #[cfg(any(test, feature = "test-support"))]
+    pub history: TerminalHistory,
     /// Native shell-channel history waits for this pane's SSH connection.
     native_history_seed_pending: bool,
     pane_history_seed: Option<(lyrel_ui_base::host_ops::HostId, u64)>,
-    completion: TerminalCompletion,
-    integration_notice: Option<String>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub completion: TerminalCompletion,
+    #[cfg(any(test, feature = "test-support"))]
+    pub integration_notice: Option<String>,
     integration_notice_shown: bool,
-    created_at: std::time::Instant,
+    #[cfg(any(test, feature = "test-support"))]
+    pub created_at: std::time::Instant,
     /// How opaque the pane wants this terminal painted this frame: 1.0 at
     /// rest, [`lyrel_ui_base::pane_dim::INACTIVE_DIM`] for an unfocused pane in a
     /// split, [`lyrel_ui_base::pane_dim::LIFTED_DIM`] while the pane is being
@@ -579,7 +582,8 @@ fn wsl_share_distro(
     host_is_local: bool,
 ) -> Option<String> {
     match remote {
-        Some(remote) => (remote.kind == lyrel_core::daemon::protocol::RemoteKind::Wsl && host_is_local)
+        Some(remote) => (remote.kind == lyrel_core::daemon::protocol::RemoteKind::Wsl
+            && host_is_local)
             .then(|| remote.target.clone()),
         None => match &workspace?.target {
             lyrel_ui_base::session::RemoteTarget::Wsl { distro } => Some(distro.clone()),
@@ -690,7 +694,7 @@ impl TerminalView {
         view
     }
 
-    fn with_terminal(
+    pub fn with_terminal(
         terminal: RemoteTerminal,
         pane_id: u64,
         window: &mut Window,
@@ -994,7 +998,9 @@ impl TerminalView {
     pub fn set_workspace(&mut self, workspace: Option<lyrel_ui_base::route::PaneWorkspace>) {
         self.host_id = workspace
             .as_ref()
-            .map_or(lyrel_ui_base::host_ops::HostId::LOCAL, |w| w.target.host_id());
+            .map_or(lyrel_ui_base::host_ops::HostId::LOCAL, |w| {
+                w.target.host_id()
+            });
         // The pane answers to its workspace's name from here on: untitled tabs
         // show it, and a dead link's "— disconnected" suffix hangs off it
         // instead of the bare app name.
@@ -1034,7 +1040,7 @@ impl TerminalView {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn adopt_relink(
         &mut self,
         stream: lyrel_core::daemon::transport::Stream,
@@ -1216,7 +1222,7 @@ impl TerminalView {
     /// need a pane to look like it is sitting somewhere known — a real poll
     /// needs a live shell reporting a directory, which a quiet test pane has
     /// no way to do.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_git_status_cwd_for_test(&mut self, cwd: Option<std::path::PathBuf>) {
         if self.git_status_cwd != cwd {
             self.links.invalidate_geometry();
@@ -2079,7 +2085,7 @@ impl TerminalView {
     }
 
     /// Apply a direct viewport movement and report only an actual visual change.
-    fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
+    pub fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
         let moved = self
             .selection_scroll
@@ -2386,9 +2392,9 @@ mod tests {
     use rio_vt::crosswords::Mode;
     use std::path::PathBuf;
 
-    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
     use lyrel_core::daemon::protocol::RemoteKind;
     use lyrel_ui_base::route::PaneWorkspace;
+    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -2908,8 +2914,8 @@ mod tests {
 
     #[test]
     fn a_panes_host_is_its_workspaces_machine() {
-        use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
         use lyrel_ui_base::host_ops::HostId;
+        use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
         let target = RemoteTarget::Alias {
             alias: "build-box".into(),
@@ -2971,7 +2977,7 @@ pub fn test_stream_pair() -> (
     }
 }
 
-#[cfg(any(test, feature = "native-markdown-tests"))]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn quiet_test_pane(
     pane_id: u64,
     window: &mut Window,
@@ -2987,7 +2993,7 @@ pub fn quiet_test_pane(
     (view, daemon_side)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn quiet_test_shell_parts(
     pane_id: u64,
     owner: Option<lyrel_ui_base::session::WorkspaceId>,
@@ -3032,7 +3038,7 @@ pub fn quiet_reattached_test_pane(
 /// Ungated on purpose: the transport this hands back is already
 /// platform-neutral, and gating it left every test that wanted an SSH pane
 /// silently skipped on Windows.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn quiet_test_ssh_pane(
     pane_id: u64,
     window: &mut Window,
@@ -3046,7 +3052,7 @@ pub fn quiet_test_ssh_pane(
 
 /// The same, for a pane opened from a saved host — `profile_id` is what tells
 /// the two apart everywhere the connection is offered back to the user.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn quiet_test_ssh_pane_of(
     pane_id: u64,
     profile_id: Option<uuid::Uuid>,
@@ -3065,7 +3071,7 @@ pub fn quiet_test_ssh_pane_of(
 
 /// The same again, over a spec the caller shaped — for everything a live
 /// connection carries beyond its address.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn quiet_test_ssh_pane_with(
     pane_id: u64,
     spec: lyrel_core::daemon::protocol::NativeSshSpec,
@@ -3086,10 +3092,6 @@ pub fn quiet_test_ssh_pane_with(
 #[path = "agent_activity_tests.rs"]
 mod agent_activity_tests;
 
-#[cfg(feature = "native-markdown-tests")]
-#[path = "native_terminal_tests.rs"]
-pub mod native_terminal_tests;
-
 #[cfg(test)]
 mod gpui_tests {
     use super::test_support::*;
@@ -3101,11 +3103,11 @@ mod gpui_tests {
     mod selection_scroll_consumer_tests {
         include!("selection_scroll_consumer_tests.rs");
     }
-    use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
-    use lyrel_core::daemon::transport::Stream;
     use crate::lifecycle::declare_displayed;
     use crate::remote::PtySource;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
+    use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
+    use lyrel_core::daemon::transport::Stream;
 
     #[gpui_kit::test]
     fn an_agent_that_has_finished_its_turn_is_not_busy(cx: &mut TestAppContext) {
@@ -5037,9 +5039,9 @@ mod gpui_tests {
     fn composer_textarea_handles_grapheme_paste_composition_and_secondary_enter(
         cx: &mut TestAppContext,
     ) {
-        use lyrel_core::core::cli_agent::CLIAgent;
         use gpui_kit::EntityInputHandler as _;
         use gpui_kit::component::input;
+        use lyrel_core::core::cli_agent::CLIAgent;
 
         let (window, view, mut daemon) = rooted_harness(cx);
         let draw = |cx: &mut TestAppContext| {

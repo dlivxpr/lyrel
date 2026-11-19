@@ -10,9 +10,9 @@
 pub mod fixture_identity;
 // The graphics-fixture process plumbing is consumed by desktop GUI consumer
 // tests only; keep it (and its fs2 build lock) out of headless Linux builds.
+pub mod glyph_pty;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod graphics_fixture;
-pub mod glyph_pty;
 pub mod hex;
 pub mod kitty_media;
 pub mod mouse_pty;

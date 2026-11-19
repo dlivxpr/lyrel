@@ -497,11 +497,7 @@ fn cancellable_spawn_reply(
     stream: &mut Stream,
     cancellation: &SpawnCancellation,
 ) -> anyhow::Result<DaemonMsg> {
-    cancellable_spawn_reply_with_images(
-        stream,
-        cancellation,
-        &crate::images::ImageStore::new(),
-    )
+    cancellable_spawn_reply_with_images(stream, cancellation, &crate::images::ImageStore::new())
 }
 
 /// Polling only bounds cancellation latency, not pane creation. Read's caller
@@ -660,12 +656,7 @@ pub fn attach_reply_prefix(
     pane_id: u64,
     wait: std::time::Duration,
 ) -> anyhow::Result<Vec<u8>> {
-    attach_reply_prefix_with_images(
-        stream,
-        pane_id,
-        wait,
-        &crate::images::ImageStore::new(),
-    )
+    attach_reply_prefix_with_images(stream, pane_id, wait, &crate::images::ImageStore::new())
 }
 
 fn attach_reply_prefix_with_images(
@@ -713,7 +704,8 @@ fn attach_reply_prefix_inner(
         }
         kind = lyrel_core::daemon::protocol::peek_frame_kind(&buffered);
         while kind.is_some_and(lyrel_core::daemon::protocol::is_graphics_admission_kind) {
-            let Some((frame_kind, payload)) = lyrel_core::daemon::protocol::take_frame(&mut buffered)?
+            let Some((frame_kind, payload)) =
+                lyrel_core::daemon::protocol::take_frame(&mut buffered)?
             else {
                 kind = None;
                 break;

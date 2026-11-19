@@ -243,11 +243,7 @@ impl TerminalView {
         }
     }
 
-    pub fn drop_files(
-        &mut self,
-        paths: &ExternalPaths,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn drop_files(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
         self.paste_local_paths(paths.paths().to_vec(), cx);
     }
 
@@ -278,11 +274,7 @@ impl TerminalView {
     /// Paste files that live on this machine so the pane's program can open
     /// them: uploaded first when the pane runs on an SSH host, renamed for a
     /// WSL pane, and pasted as they are everywhere else.
-    pub fn paste_local_paths(
-        &mut self,
-        paths: Vec<std::path::PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn paste_local_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         if paths.is_empty() {
             return;
         }

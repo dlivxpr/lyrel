@@ -13,23 +13,32 @@ pub(crate) mod native_terminal_tests;
 #[cfg(test)]
 mod whole_window {
     // The terminal-client surface these suites were written against: the
-    // view and its events, the remote connection, and the rooted-consumer
+    // view and its events, the remote connection, the view-level test
+    // harness (panes, keystrokes, daemon fixtures), and the rooted-consumer
     // graphics helpers.
+    use lyrel_terminal::element::{
+        PaintColors, RenderCell, SnapshotUnavailable, TerminalElement, UnderlineKind, is_blank,
+    };
+    use lyrel_terminal::history_session::TerminalHistory;
+    use lyrel_terminal::lifecycle::declare_displayed;
+    use lyrel_terminal::remote::PtySource;
     use lyrel_terminal::test_support::*;
+    use lyrel_terminal::view::test_support;
+    use lyrel_terminal::view::test_support::*;
     use lyrel_terminal::view::*;
     use lyrel_terminal::{RemoteTerminal, TermSize};
-    use lyrel_terminal::remote::PtySource;
     // The workbench fixtures they additionally need.
-    use crate::ui::app::LyrelApp;
-    use crate::ui::app::test_window;
-    use crate::ui::keymap;
-    use crate::ui::pane::{self, Pane, PaneSlot};
-    use crate::ui::tab::Tab;
-    use gpui_kit::{ClipboardItem, TestAppContext, VisualTestContext};
-    use lyrel_core::core::config::Config;
-    use lyrel_ui_base::config as ui_config;
-    use lyrel_ui_base::i18n;
-    use lyrel_ui_base::notification_history;
+    use crate::core::config::unix_now;
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{
+        AppContext, ClipboardItem, Entity, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
+        Rgba, TestAppContext, point, px,
+    };
+    use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
+    use lyrel_core::daemon::transport::Stream;
+    use lyrel_test_support::hex::hex;
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
     include!("whole_window/command_notification_consumer_tests.rs");
     include!("whole_window/program_status_consumer_tests.rs");

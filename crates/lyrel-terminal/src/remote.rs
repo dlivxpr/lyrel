@@ -19,6 +19,7 @@ use std::collections::VecDeque;
 use lyrel_core::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use lyrel_core::core::config::CursorStyle as ConfigCursorStyle;
 use lyrel_core::core::osc::{Note, NoteBudget};
+use lyrel_core::core::program_status::{ProgramStatusClient, ProgramStatusFrame};
 use lyrel_core::daemon::protocol::{
     AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, DaemonVersion, LoopbackForward,
     LoopbackForwardRequest, ManagedForward, PaneProcs, RemoteContext, RestoreFrom, SftpEntry,
@@ -29,7 +30,6 @@ use lyrel_core::daemon::transport::Stream;
 use lyrel_ui_base::route::PaneRoute;
 #[cfg(all(test, unix))]
 use lyrel_ui_base::route::PaneWorkspace;
-use lyrel_core::core::program_status::{ProgramStatusClient, ProgramStatusFrame};
 
 use super::size::TermSize;
 
@@ -255,7 +255,7 @@ struct ShellState {
 ///
 /// A reattach — the app restarting onto panes the daemon kept alive, or a
 /// dropped link coming back — has the daemon replay the pane's *stored* status
-/// as an ordinary `AgentStatus` frame ([`crate::daemon`]'s `replay_state`).
+/// as an ordinary `AgentStatus` frame (`lyrel_core::daemon`'s `replay_state`).
 /// Nothing on the wire distinguishes it from a live transition, and a client
 /// that reads it as one concludes that every restored agent finished its turn
 /// in the instant the window opened. `replayed` is that distinction, kept in
@@ -581,17 +581,17 @@ impl RemoteTerminal {
     /// whose facts were produced under its own title rules. `None` is a
     /// stream that never negotiated (test or embedded): no claim either way.
     pub fn endpoint_validated_titles(&self) -> Option<bool> {
-        self.pane_version
-            .as_ref()
-            .map(|version| version.has_feature(lyrel_core::daemon::protocol::FEATURE_VALIDATED_TITLES))
+        self.pane_version.as_ref().map(|version| {
+            version.has_feature(lyrel_core::daemon::protocol::FEATURE_VALIDATED_TITLES)
+        })
     }
 
     /// Whether the endpoint that owns this pane can project OSC 7501 program
     /// status. `None` is a stream that never negotiated: no claim either way.
     pub fn endpoint_program_status(&self) -> Option<bool> {
-        self.pane_version
-            .as_ref()
-            .map(|version| version.has_feature(lyrel_core::daemon::protocol::FEATURE_PROGRAM_STATUS))
+        self.pane_version.as_ref().map(|version| {
+            version.has_feature(lyrel_core::daemon::protocol::FEATURE_PROGRAM_STATUS)
+        })
     }
 
     /// Read the live projection under its existing lock. The closure must not
@@ -784,7 +784,7 @@ impl RemoteTerminal {
     /// answer that connection actually received; the production handshake
     /// passes it so DA1 describes the real endpoint, and `None` models an
     /// endpoint that never negotiated static Sixel.
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn from_stream_with_endpoint(
         stream: Stream,
         size: TermSize,
@@ -1561,8 +1561,8 @@ fn win_size(size: TermSize, cell_w: u16, cell_h: u16) -> WinSize {
 /// on every platform, and so is the name the refusal carries.
 #[cfg(test)]
 mod route_header_tests {
-    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
     use lyrel_ui_base::route::PaneWorkspace;
+    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
     fn unroutable(target: RemoteTarget, label: Option<&str>) -> PaneWorkspace {
         PaneWorkspace {
@@ -1667,7 +1667,10 @@ mod tests {
         let route = PaneRoute::for_workspace(Some(&ws));
         let header = route.header().expect("WSL is routed");
         assert_eq!(header.describe(), "wsl Ubuntu-22.04");
-        assert_eq!(header.channel, lyrel_core::daemon::router::RouteChannel::Pane);
+        assert_eq!(
+            header.channel,
+            lyrel_core::daemon::router::RouteChannel::Pane
+        );
     }
 
     #[test]
@@ -1684,7 +1687,10 @@ mod tests {
         };
         let route = PaneRoute::for_workspace(Some(&ws));
         let header = route.header().expect("a local child is routable");
-        assert_eq!(header.channel, lyrel_core::daemon::router::RouteChannel::Pane);
+        assert_eq!(
+            header.channel,
+            lyrel_core::daemon::router::RouteChannel::Pane
+        );
         match &header.target {
             lyrel_core::daemon::router::RouteTarget::LocalStdio { program, args } => {
                 assert_eq!(program, "/tmp/lyrel-server");

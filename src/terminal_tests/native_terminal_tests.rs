@@ -1,43 +1,10 @@
 // Real font ink requires the OS-main-thread runner, not NoopTextSystem.
-use lyrel_terminal::remote::PtySource;
+use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+use gpui_kit::{Bounds, Entity, MouseButton, TestAppContext, point};
 use lyrel_terminal::test_support::*;
 use lyrel_terminal::view::*;
-use lyrel_terminal::{RemoteTerminal, TermSize};
-use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
-use lyrel_core::daemon::transport::Stream;
+use lyrel_ui_base::config::Config;
 use lyrel_ui_base::desktop_file::OpenFileRequested;
-use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-use gpui_kit::{Bounds, Entity, TestAppContext, point};
-
-use crate::NativeTerminalFixtureSupport;
-
-static FIXTURE_SUPPORT: std::sync::OnceLock<NativeTerminalFixtureSupport> =
-    std::sync::OnceLock::new();
-
-pub(crate) fn set_fixture_support(fixture: NativeTerminalFixtureSupport) {
-    assert!(
-        FIXTURE_SUPPORT.set(fixture).is_ok(),
-        "native terminal suite already started"
-    );
-}
-
-fn fixture_support() -> &'static NativeTerminalFixtureSupport {
-    FIXTURE_SUPPORT
-        .get()
-        .expect("native terminal test binary supplies fixture support")
-}
-
-fn hex(bytes: &[u8]) -> String {
-    (fixture_support().hex)(bytes)
-}
-
-fn unhex(text: &str) -> Vec<u8> {
-    (fixture_support().unhex)(text)
-}
-
-fn fixture_source_identity(root: &std::path::Path) -> std::io::Result<String> {
-    (fixture_support().source_identity)(root)
-}
 
 // Manual escape hatch only: normal consumer tests spawn the lightweight
 // `lyrel-graphics-fixture` process. Running this binary directly with one of

@@ -567,8 +567,8 @@ fn a_dropped_link_does_not_claim_the_process_exited(cx: &mut TestAppContext) {
 /// which read "lyrel — disconnected" no matter whose link died.
 #[gpui_kit::test]
 fn a_workspace_pane_answers_to_its_workspaces_name(cx: &mut TestAppContext) {
-    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
     use lyrel_ui_base::route::PaneWorkspace;
+    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {

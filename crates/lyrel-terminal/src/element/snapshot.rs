@@ -219,10 +219,7 @@ impl TerminalElement {
     /// line handed back to ZLE/readline. Shell integration has no mark for "a
     /// prompt plugin set this shape", so the one it does report, vi mode, keeps
     /// the shell's own insert/normal shapes.
-    pub fn prompt_cursor_shape(
-        &self,
-        cx: &App,
-    ) -> Option<lyrel_core::core::config::CursorStyle> {
+    pub fn prompt_cursor_shape(&self, cx: &App) -> Option<lyrel_core::core::config::CursorStyle> {
         let shape = cx.global::<Config>().prompt_cursor_style.shape()?;
         let terminal = &self.view.read(cx).terminal;
         (terminal.at_prompt() && !terminal.shell_vi_mode()).then_some(shape)
@@ -624,10 +621,8 @@ impl TerminalElement {
 
 #[cfg(test)]
 mod tests {
-    use super::super::is_blank;
     use super::super::test_support::{painted_term, test_colors};
     use super::*;
-    use gpui_kit::component::ActiveTheme as _;
 
     #[test]
     fn selected_cells_keep_their_own_colors_for_the_translucent_wash() {
@@ -909,6 +904,16 @@ mod tests {
         );
         assert!(indexed.draw_bg && rgb.draw_bg);
         assert_eq!(painter.at(first).fg, to_hsla(palette[1]));
+    }
+
+    fn glyph_test_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
+        rio_graphics::glyph::glyf_decode::Outline {
+            contours: Vec::new(),
+            x_min: 0,
+            y_min: 0,
+            x_max: i32::from(side),
+            y_max: i32::from(side),
+        }
     }
 
     #[test]

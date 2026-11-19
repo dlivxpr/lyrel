@@ -152,10 +152,7 @@ pub fn key_event_to_bytes(
 }
 
 /// Called only after the input owner has consumed a matching delivered press.
-pub fn key_release_to_bytes(
-    ks: &gpui_kit::Keystroke,
-    mut flags: KeyFlags,
-) -> Option<Vec<u8>> {
+pub fn key_release_to_bytes(ks: &gpui_kit::Keystroke, mut flags: KeyFlags) -> Option<Vec<u8>> {
     if !flags.report_events
         || (!flags.report_all_keys && matches!(ks.key.as_str(), "enter" | "tab" | "backspace"))
     {

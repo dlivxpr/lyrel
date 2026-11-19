@@ -10,8 +10,8 @@
 //! protocol framing filter).
 
 pub mod agent_history;
-pub mod agent_prompt;
 pub mod agent_hooks;
+pub mod agent_prompt;
 pub use lyrel_protocol::core::cli_agent;
 pub mod clipboard;
 pub use lyrel_protocol::core::codename;

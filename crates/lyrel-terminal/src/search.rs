@@ -1381,11 +1381,7 @@ fn file_candidate_at(text: &str, col: usize) -> Option<FileCandidate> {
 /// pointing at rather than the `--flag=` or `label:` wrapped around it. A
 /// token that is not written like a path at all still comes back, so the
 /// caller can decide to say nothing at all about it.
-pub fn unresolved_candidate(
-    text: &str,
-    col: usize,
-    style: PathStyle,
-) -> Option<FileCandidate> {
+pub fn unresolved_candidate(text: &str, col: usize, style: PathStyle) -> Option<FileCandidate> {
     let candidates = file_candidates_at(text, col);
     candidates
         .iter()

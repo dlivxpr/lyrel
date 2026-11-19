@@ -1,10 +1,10 @@
 //! General terminal commands, composed after the Host-aware link section.
 
 use super::*;
-use lyrel_ui_base::actions::FindInTerminal;
 use gpui_kit::Entity;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use lyrel_ui_base::actions::FindInTerminal;
 
 pub fn append_terminal_menu(
     view: &Entity<TerminalView>,

@@ -483,7 +483,7 @@ impl ReadingView {
         self.cols
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn allocation_observation(&self) -> serde_json::Value {
         serde_json::json!({
             "rows": self.rows.len(),
@@ -659,10 +659,7 @@ mod tests {
         }
     }
 
-    fn captured_definition(
-        reading: &ReadingView,
-        cp: char,
-    ) -> Arc<crate::glyph::GlyphView> {
+    fn captured_definition(reading: &ReadingView, cp: char) -> Arc<crate::glyph::GlyphView> {
         reading
             .rows()
             .flat_map(|(_, row)| row.iter())

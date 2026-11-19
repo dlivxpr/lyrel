@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::daemon::protocol::WinSize;
 use crate::remote::test_support::ssh_workspace;
+use lyrel_core::daemon::protocol::WinSize;
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 

@@ -11,8 +11,11 @@ publish = false
 # Cross-crate test surface: the rooted-consumer graphics helpers, quiet test
 # panes and fixture hooks the root package's whole-window and native consumer
 # suites build on. Enabled by the root package's desktop dev-dependencies and
-# by this crate's own tests; production builds never see it.
-test-support = ["lyrel-core/test-support", "gpui-kit/test-support"]
+# by this crate's own tests; production builds never see it. Pulls the
+# GUI-free fixture process plumbing in as an optional dependency because the
+# feature-gated `test_support` module is part of the library build whenever
+# the feature is on, and dev-dependencies do not exist for library targets.
+test-support = ["dep:lyrel-test-support", "lyrel-core/test-support", "gpui-kit/test-support"]
 # The root package's native test binaries enable this name across the graph;
 # here it only keeps the cfg-gated test fixtures (quiet panes, test stream
 # pairs) compiling in feature-enabled builds, mirroring the root package.
@@ -65,6 +68,11 @@ cursor-icon = "=1.2.0"
 # Desktop notification fallback on Windows. On macOS only its
 # `set_application` is used — never `show`; see `remote::macos_notify`.
 notify-rust = "4.18.2"
+# Optional: the GUI-free graphics-fixture process plumbing the `test-support`
+# feature re-exports. Inert in production builds (the feature is never
+# enabled there); the same crate is a dev-dependency for this crate's own
+# unit tests, where it is always linked.
+lyrel-test-support = { path = "../lyrel-test-support", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # The bell in `view::notices` is a user32 `MessageBeep`, and `aumid` reads the
@@ -117,6 +125,10 @@ objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserN
 # The shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
 # plumbing (`graphics_fixture`), consumed via the terminal-side helpers.
 lyrel-test-support = { path = "../lyrel-test-support" }
+# The desktop foundation's scratch-config guards (`pin_test_config_dir`, the
+# `WorkspaceStore` test install) for this crate's own consumer suites; the
+# root package enables the same feature from its desktop dev-dependencies.
+lyrel-ui-base = { path = "../lyrel-ui-base", features = ["test-guards"] }
 # GPUI test harness for the view/element consumer suites.
 gpui-kit = { workspace = true, features = ["test-support"] }
 # Cross-process locking for the graphics fixture build, also built by the

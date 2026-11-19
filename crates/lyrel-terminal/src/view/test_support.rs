@@ -1,10 +1,11 @@
 //! Shared socket-backed terminal consumer setup; no capability assertions here.
 
 use super::*;
-use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
-use lyrel_core::daemon::transport::Stream;
 use crate::remote::PtySource;
 use gpui_kit::{Entity, TestAppContext};
+use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
+use lyrel_core::daemon::transport::Stream;
+use rio_vt::crosswords::grid::Scroll;
 
 pub fn history_fixture(entries: Vec<String>) -> crate::history::History {
     crate::history::History {
@@ -185,11 +186,7 @@ pub fn next_input_until_timeout(daemon: &mut Stream) -> Option<Vec<u8>> {
 
 /// `next_input_until_timeout` with the executor run between reads: a reply
 /// crosses the reader thread and the view before it is written.
-pub fn pumped_input(
-    cx: &mut TestAppContext,
-    daemon: &mut Stream,
-    tries: usize,
-) -> Option<String> {
+pub fn pumped_input(cx: &mut TestAppContext, daemon: &mut Stream, tries: usize) -> Option<String> {
     (0..tries)
         .find_map(|_| {
             cx.run_until_parked();
@@ -237,8 +234,10 @@ pub fn bind_to_a_disconnected_remote_workspace(
     view: &mut TerminalView,
     cx: &mut Context<TerminalView>,
 ) -> lyrel_ui_base::session::WorkspaceId {
-    use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore};
     use lyrel_ui_base::route::PaneWorkspace;
+    use lyrel_ui_base::session::{
+        RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore,
+    };
     let host = RemoteRef::new(
         RemoteTarget::direct("me", "build-box", 22),
         WorkspaceId::new(),

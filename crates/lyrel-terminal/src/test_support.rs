@@ -4,7 +4,7 @@
 //! crate's consumer suites and, through the `test-support` feature, by the
 //! root package's whole-window and native consumer suites.
 
-use gpui_kit::{App, Entity, TestAppContext, px};
+use gpui_kit::{App, AppContext, Bounds, Entity, Pixels, TestAppContext, point, px};
 use lyrel_core::daemon::transport::Stream;
 use lyrel_test_support::hex::{hex, unhex};
 
@@ -13,6 +13,7 @@ use crate::size::TermSize;
 use crate::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView};
 
 pub use lyrel_test_support::graphics_fixture::GraphicsDaemonProcess;
+pub use lyrel_test_support::graphics_fixture::graphics_fixture_shell;
 
 /// Install the configured preset as the live theme exactly the way the
 /// shell's `apply_theme` does for a headless test (no window): resolve the
@@ -491,10 +492,7 @@ pub fn graphics_recovery_destroy(
     }
     #[cfg(test)]
     cx.update(|cx| {
-        assert_eq!(
-            crate::lifecycle::displayed_for_test(cx, entity_id),
-            None
-        );
+        assert_eq!(crate::lifecycle::displayed_for_test(cx, entity_id), None);
     });
 }
 

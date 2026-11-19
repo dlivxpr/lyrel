@@ -1,7 +1,7 @@
 use super::super::test_support::socket_pair;
 use super::*;
-use lyrel_core::daemon::protocol::DaemonMsg;
 use gpui_kit::CursorStyle;
+use lyrel_core::daemon::protocol::DaemonMsg;
 
 fn terminal() -> (RemoteTerminal, Stream) {
     lyrel_ui_base::config::pin_test_config_dir();

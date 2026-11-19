@@ -15,8 +15,8 @@ use crate::config::Config;
 use crate::presets;
 
 #[derive(Clone, Copy)]
-pub(crate) struct SystemAppearance {
-    pub(crate) dark: bool,
+pub struct SystemAppearance {
+    pub dark: bool,
 }
 
 impl gpui_kit::Global for SystemAppearance {}
@@ -84,7 +84,11 @@ pub fn install_preset_theme(
     let fill_opacity = config
         .window_opacity
         .or(theme.opacity)
-        .unwrap_or(if material_active { material_opacity } else { 1.0 });
+        .unwrap_or(if material_active {
+            material_opacity
+        } else {
+            1.0
+        });
     let opacity = (fill_opacity < 1.0).then_some(fill_opacity);
     let ui_font_family = config.ui_font_family.clone();
     let ui_font_size = px(config.ui_font_size);

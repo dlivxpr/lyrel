@@ -2,10 +2,10 @@
 //! Detailed frame painting remains TerminalElement's responsibility.
 
 use super::*;
-use lyrel_ui_base::actions::{FindInTerminal, FindNext, FindPrevious};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::menu::ContextMenuExt;
+use lyrel_ui_base::actions::{FindInTerminal, FindNext, FindPrevious};
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;

@@ -151,7 +151,10 @@ struct RunningPaneCallback {
 }
 
 impl RunningPaneCallback {
-    fn new(instance: uuid::Uuid, actions: smol::channel::Sender<TerminalHostEvent>) -> Result<Self> {
+    fn new(
+        instance: uuid::Uuid,
+        actions: smol::channel::Sender<TerminalHostEvent>,
+    ) -> Result<Self> {
         let callback: INotificationActivationCallback = Callback {
             destination: Destination::Live { instance, actions },
         }

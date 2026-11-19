@@ -12,9 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use lyrel_core::client::PaneClient;
-use lyrel_core::daemon::control::{ControlClientMsg, ControlHello, ControlServerMsg};
 use lyrel_core::daemon::protocol::{
-    ClientMsg, DaemonMsg, DaemonVersion, ShellSpec, WinSize, negotiate_pane_rendering,
+    ClientMsg, DaemonMsg, ShellSpec, WinSize, negotiate_pane_rendering,
 };
 use lyrel_core::daemon::transport::{Stream, connect_endpoint_at};
 
@@ -31,10 +30,9 @@ fn workspace_root() -> PathBuf {
         .parent()
         .and_then(|parent| parent.parent())
         .map(Path::to_path_buf);
-    if let Some(workspace) = workspace.filter(|root| {
-        root.join("crates/lyrel-test-support/Cargo.toml")
-            .is_file()
-    }) {
+    if let Some(workspace) =
+        workspace.filter(|root| root.join("crates/lyrel-test-support/Cargo.toml").is_file())
+    {
         return workspace;
     }
     let current = std::env::current_dir().expect("test process working directory");
@@ -60,7 +58,7 @@ static GRAPHICS_FIXTURE_EXPECTED_IDENTITY: std::sync::LazyLock<String> =
                 "cannot identify the graphics fixture sources under {}: {error}",
                 root.display()
             )
-        )
+        })
     });
 
 fn graphics_fixture_reported_identity(path: &Path) -> Option<String> {
@@ -74,7 +72,9 @@ fn graphics_fixture_reported_identity(path: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8(output.stdout).ok().map(|text| text.trim().to_owned())
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|text| text.trim().to_owned())
 }
 
 fn graphics_fixture_verify(path: &Path) {
@@ -284,7 +284,7 @@ pub fn bin() -> &'static Path {
 /// A `ShellSpec` that runs the verified fixture in `mode` — one of the
 /// producer modes the fixture binary dispatches (`kitty`, `theme`, `mouse`,
 /// `mouse-utf8`, `glyph`).
-pub fn shell_spec(mode: &str) -> ShellSpec {
+pub fn graphics_fixture_shell(mode: &str) -> ShellSpec {
     ShellSpec {
         program: bin().to_string_lossy().into_owned(),
         args: vec![mode.to_owned()],
@@ -472,7 +472,7 @@ impl GraphicsDaemonProcess {
     }
 
     pub fn spawn_with_cwd(&self, cwd: Option<PathBuf>) -> u64 {
-        let shell = shell_spec("kitty");
+        let shell = graphics_fixture_shell("kitty");
         let mut session = self
             .panes()
             .spawn(
@@ -515,7 +515,12 @@ impl GraphicsDaemonProcess {
         self.stream_with_capacity(pane, 64 << 20, 128 << 20)
     }
 
-    pub fn stream_with_capacity(&self, pane: u64, encoded_bytes: u64, decoded_bytes: u64) -> Stream {
+    pub fn stream_with_capacity(
+        &self,
+        pane: u64,
+        encoded_bytes: u64,
+        decoded_bytes: u64,
+    ) -> Stream {
         self.stream_with_capacity_at(
             pane,
             encoded_bytes,
@@ -560,6 +565,91 @@ impl GraphicsDaemonProcess {
         .encode(&mut stream)
         .unwrap();
         stream
+    }
+
+    /// Spawn a fixture pane that records the mouse reports dispatched to it,
+    /// returning the pane id and the recorder's directory. The pane is a real
+    /// raw-mode PTY child; asserted reports are read from its stdin file.
+    pub fn spawn_mouse_recorder(&self, name: &str) -> (u64, PathBuf) {
+        let dir = self.dir.path().join(name);
+        std::fs::create_dir(&dir).unwrap();
+        let shell = graphics_fixture_shell("mouse");
+        let mut session = self
+            .panes()
+            .spawn(
+                Some(dir.clone()),
+                WinSize {
+                    cols: 80,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+                Some(shell),
+                None,
+                None,
+            )
+            .unwrap();
+        session
+            .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+            .unwrap();
+        let mut text = Vec::new();
+        while !text
+            .windows(b"MOUSE_READY".len())
+            .any(|part| part == b"MOUSE_READY")
+        {
+            match session.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("mouse PTY fixture failed: {error}"),
+                DaemonMsg::Exited { code } => panic!("mouse PTY fixture exited: {code:?}"),
+                _ => {}
+            }
+        }
+        let pane = session.pane_id();
+        session.detach().unwrap();
+        (pane, dir)
+    }
+
+    /// The UTF-8 (mode 1005) mouse recorder on a deliberately wide pane:
+    /// clicks past column 222 are what that encoding exists to carry.
+    pub fn spawn_utf8_mouse_recorder(&self, name: &str) -> (u64, PathBuf) {
+        let dir = self.dir.path().join(name);
+        std::fs::create_dir(&dir).unwrap();
+        let shell = graphics_fixture_shell("mouse-utf8");
+        let mut session = self
+            .panes()
+            .spawn(
+                Some(dir.clone()),
+                WinSize {
+                    cols: 300,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+                Some(shell),
+                None,
+                None,
+            )
+            .unwrap();
+        session
+            .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+            .unwrap();
+        let mut text = Vec::new();
+        while !text
+            .windows(b"UTF8_MOUSE_READY".len())
+            .any(|part| part == b"UTF8_MOUSE_READY")
+        {
+            match session.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("UTF-8 mouse PTY fixture failed: {error}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("UTF-8 mouse PTY fixture exited: {code:?}")
+                }
+                _ => {}
+            }
+        }
+        let pane = session.pane_id();
+        session.detach().unwrap();
+        (pane, dir)
     }
 }
 

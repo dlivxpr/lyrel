@@ -81,9 +81,9 @@ impl CommandCursorStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyrel_core::core::osc::OscTokenizer;
     use crate::bridge::ParseBridge;
     use crate::size::TermSize;
+    use lyrel_core::core::osc::OscTokenizer;
     use rio_vt::crosswords::Crosswords;
     use rio_vt::event::{VoidListener, WindowId};
     use rio_vt::performer::handler::Processor;

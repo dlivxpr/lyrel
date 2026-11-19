@@ -30,7 +30,7 @@ pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bo
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
     cx.try_global::<DisplayedRegistry>()?
         .0

@@ -565,25 +565,19 @@ pub fn paint_glyphs(
                             let path = powerline_path(cell_bounds, shape);
                             window.paint_path(path, fg);
                             true
-                        } else if let Some(ink) = crate::boxdraw::glyph(
-                            cell.c,
-                            cell_bounds,
-                            window.scale_factor(),
-                        ) {
+                        } else if let Some(ink) =
+                            crate::boxdraw::glyph(cell.c, cell_bounds, window.scale_factor())
+                        {
                             let fg = style.fg;
                             for piece in ink {
                                 match piece {
-                                    crate::boxdraw::Ink::Rect(r) => {
-                                        window.paint_quad(fill(r, fg))
-                                    }
+                                    crate::boxdraw::Ink::Rect(r) => window.paint_quad(fill(r, fg)),
                                     crate::boxdraw::Ink::Shade(r, alpha) => {
                                         let mut c = fg;
                                         c.a *= alpha;
                                         window.paint_quad(fill(r, c));
                                     }
-                                    crate::boxdraw::Ink::Path(p) => {
-                                        window.paint_path(p, fg)
-                                    }
+                                    crate::boxdraw::Ink::Path(p) => window.paint_path(p, fg),
                                 }
                             }
                             true

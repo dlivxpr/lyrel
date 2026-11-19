@@ -1,4 +1,3 @@
-use lyrel_test_support::fixture_identity::fixture_source_identity;
 use lyrel_test_support::hex::{hex, unhex};
 use lyrel_test_support::synchronized_capture::{
     SYNC_CAPTURE_TEXT, SYNC_NEXT_TEXT, synchronized_capture_frame,

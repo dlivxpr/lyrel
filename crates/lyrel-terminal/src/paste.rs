@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{AppContext as _, AsyncApp, ClipboardEntry, ClipboardItem, Task};
 
-use lyrel_core::core::shell_quote::quote_for_shell;
 use crate::sftp_client::SftpClient;
+use lyrel_core::core::shell_quote::quote_for_shell;
 use lyrel_ui_base::route::SftpRoute;
 
 /// Paths as one line of shell words, trailing space included so whatever is
@@ -29,11 +29,7 @@ pub struct RemotePaste {
 
 impl RemotePaste {
     /// 阻塞的目录准备与首次过期清理始终在后台执行。
-    pub fn prepare(
-        &self,
-        route: &SftpRoute,
-        cx: &mut AsyncApp,
-    ) -> Task<Result<String, String>> {
+    pub fn prepare(&self, route: &SftpRoute, cx: &mut AsyncApp) -> Task<Result<String, String>> {
         if let Some(dir) = &self.directory {
             return Task::ready(Ok(dir.clone()));
         }
@@ -532,9 +528,9 @@ mod tests {
             "'/Users/me/My File.txt' /tmp/b.log "
         );
     }
-    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
-    use lyrel_ui_base::route::PaneWorkspace;
     use gpui_kit::ExternalPaths;
+    use lyrel_ui_base::route::PaneWorkspace;
+    use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -678,8 +674,8 @@ mod tests {
 
     #[test]
     fn the_pasted_image_name_stands_alone_as_a_remote_path_component() {
-        use lyrel_core::daemon::ssh::sftp::safe_local_name;
         use gpui_kit::{Image, ImageFormat};
+        use lyrel_core::daemon::ssh::sftp::safe_local_name;
 
         let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
         let mut png = Vec::new();

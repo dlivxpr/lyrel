@@ -3,10 +3,10 @@
 //! Read marks belong to the app lifetime and are keyed by Host and daemon pane;
 //! delivery still targets the retained GPUI entity, never that daemon id.
 
+use gpui_kit::{App, Task};
 use lyrel_core::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use lyrel_ui_base::host_ops::HostId;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
-use gpui_kit::{App, Task};
 use std::time::{Duration, Instant};
 
 type PaneKey = (HostId, u64);

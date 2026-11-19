@@ -3,7 +3,7 @@
 // claims and geometry. They do not certify native-window/GPU output on any OS.
 use lyrel_test_support::native_ssh;
 
-fn native_ssh_consumer_fixture() -> native_ssh_graphics_fixture::NativeSshFixture {
+fn native_ssh_consumer_fixture() -> native_ssh::NativeSshFixture {
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH GPUI prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop lyrel-server binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint, key, fixed host pin, remote home and Linux Node",
     );
@@ -12,7 +12,7 @@ fn native_ssh_consumer_fixture() -> native_ssh_graphics_fixture::NativeSshFixtur
         binary.is_file(),
         "LYREL_TEST_SSH_LOCAL_SERVER must be an existing server binary"
     );
-    native_ssh_graphics_fixture::NativeSshFixture::start(&binary)
+    native_ssh::NativeSshFixture::start(&binary)
 }
 
 fn native_ssh_consumer_init(cx: &mut TestAppContext) {
@@ -25,13 +25,13 @@ fn native_ssh_consumer_init(cx: &mut TestAppContext) {
 }
 
 fn native_ssh_consumer_spawn(
-    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    fixture: &native_ssh::NativeSshFixture,
     shell: lyrel_core::daemon::protocol::ShellSpec,
 ) -> u64 {
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Spawn {
         cwd: None,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         shell: Some(shell),
         owner: None,
         workspace: None,
@@ -63,7 +63,7 @@ fn native_ssh_consumer_spawn(
 }
 
 fn native_ssh_consumer_fresh(
-    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    fixture: &native_ssh::NativeSshFixture,
     pane: u64,
     cx: &mut TestAppContext,
     serial: usize,
@@ -72,7 +72,7 @@ fn native_ssh_consumer_fresh(
     let (mut stream, _) = fixture.connect_pane_with_capacity(64 << 20, decoded_bytes);
     ClientMsg::Attach {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         allow_remote_clipboard_write: false,
     }
     .encode(&mut stream)
@@ -90,7 +90,7 @@ fn native_ssh_consumer_fresh(
 }
 
 fn native_ssh_consumer_observe_ack(
-    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    fixture: &native_ssh::NativeSshFixture,
     pane: u64,
     serial: usize,
 ) -> std::thread::JoinHandle<Vec<u8>> {
@@ -107,7 +107,7 @@ fn native_ssh_consumer_observe_ack(
     .unwrap();
     ClientMsg::Observe {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
     }
     .encode(&mut stream)
     .unwrap();
@@ -120,7 +120,7 @@ fn native_ssh_consumer_observe_ack(
         "real ACK observer could not subscribe: {first:?}"
     );
     std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + native_ssh_graphics_fixture::STREAM_WITHIN;
+        let deadline = std::time::Instant::now() + native_ssh::STREAM_WITHIN;
         let done = format!("KITTY_DONE_{serial};");
         let mut first = Some(first);
         let mut text = Vec::new();
@@ -156,7 +156,7 @@ fn native_ssh_consumer_observe_ack(
 }
 
 fn native_ssh_consumer_send(
-    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    fixture: &native_ssh::NativeSshFixture,
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
     serial: usize,
@@ -174,7 +174,7 @@ fn native_ssh_consumer_send(
     let request = format!(
         "SEND {serial} {} {} 7\n",
         expected_replies.len(),
-        native_ssh_graphics_fixture::hex(bytes)
+        native_ssh::hex(bytes)
     );
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let done = format!("KITTY_DONE_{serial};");
@@ -194,7 +194,7 @@ fn native_ssh_consumer_send(
         for reply in expected_replies {
             let marker = format!(
                 "KITTY_REPLY {serial} {}",
-                native_ssh_graphics_fixture::hex(reply)
+                native_ssh::hex(reply)
             );
             assert!(
                 text.contains(&marker),
@@ -205,7 +205,7 @@ fn native_ssh_consumer_send(
 }
 
 fn native_ssh_consumer_identity(
-    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    fixture: &native_ssh::NativeSshFixture,
     pane: u64,
 ) -> (String, String, u32, String) {
     use lyrel_core::host::Host;
@@ -220,7 +220,7 @@ fn native_ssh_consumer_identity(
         "remote daemon must identify its living instance"
     );
     assert_eq!(host.home().to_string_lossy(), fixture.remote_home());
-    let status = native_ssh_graphics_fixture::status(&host);
+    let status = native_ssh::status(&host);
     assert_eq!(status.protocol_version, peer.protocol_version);
     assert!(status.pid > 0 && !status.socket.is_empty());
     let procs = host
@@ -307,7 +307,7 @@ fn native_ssh_xtgettcap_runs_the_checked_in_terminal_producer(cx: &mut TestAppCo
     .to_vec();
     producer.extend_from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/scripts/terminal-capabilities.mjs"
+        "/../../scripts/terminal-capabilities.mjs"
     )));
     let shell = fixture.install_script(&host, "terminal-capabilities.mjs", &producer, Vec::new());
     let pane = native_ssh_consumer_spawn(&fixture, shell);
@@ -316,7 +316,7 @@ fn native_ssh_xtgettcap_runs_the_checked_in_terminal_producer(cx: &mut TestAppCo
     eprintln!("ACTUAL_CAPABILITIES_SSH_ENDPOINT {endpoint:?}");
     ClientMsg::Attach {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         allow_remote_clipboard_write: false,
     }
     .encode(&mut stream)
@@ -335,13 +335,13 @@ fn native_ssh_xtgettcap_runs_the_checked_in_terminal_producer(cx: &mut TestAppCo
     .unwrap();
     ClientMsg::Observe {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
     }
     .encode(&mut observer)
     .unwrap();
     let first = DaemonMsg::read(&mut observer).unwrap();
     let capture = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + native_ssh_graphics_fixture::STREAM_WITHIN;
+        let deadline = std::time::Instant::now() + native_ssh::STREAM_WITHIN;
         let mut first = Some(first);
         let mut output = Vec::new();
         loop {
@@ -503,7 +503,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Attach {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         allow_remote_clipboard_write: false,
     }
     .encode(&mut stream)
@@ -532,8 +532,8 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     let done = fixture.remote_path("consumer-live-gate.done");
     let request = format!(
         "WAIT 4610 0 {} 7 {}\n",
-        native_ssh_graphics_fixture::hex(live),
-        native_ssh_graphics_fixture::hex(gate.to_str().unwrap().as_bytes())
+        native_ssh::hex(live),
+        native_ssh::hex(gate.to_str().unwrap().as_bytes())
     );
     let (mut input, _) = fixture.connect_pane();
     ClientMsg::SendInput {
@@ -826,7 +826,7 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Observe {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
     }
     .encode(&mut stream)
     .unwrap();
@@ -984,7 +984,7 @@ fn native_ssh_consumer_linux_file_temp_shm_pixels_and_silent_recovery(cx: &mut T
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Attach {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         allow_remote_clipboard_write: false,
     }
     .encode(&mut stream)
@@ -1018,7 +1018,7 @@ fn native_ssh_consumer_linux_file_temp_shm_pixels_and_silent_recovery(cx: &mut T
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Attach {
         pane_id: pane,
-        size: native_ssh_graphics_fixture::win_size(),
+        size: native_ssh::win_size(),
         allow_remote_clipboard_write: false,
     }
     .encode(&mut stream)

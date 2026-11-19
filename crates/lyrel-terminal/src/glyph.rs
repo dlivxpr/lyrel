@@ -82,14 +82,7 @@ impl GlyphStore {
     /// Apply an accepted registration. A replacement keeps the codepoint's
     /// FIFO position and takes a new revision; a new codepoint at capacity
     /// evicts the oldest entry exactly as the daemon's registry does.
-    pub fn apply(
-        &self,
-        cp: u32,
-        outline: Outline,
-        upm: u16,
-        width: u8,
-        layout: GlyphLayout,
-    ) {
+    pub fn apply(&self, cp: u32, outline: Outline, upm: u16, width: u8, layout: GlyphLayout) {
         let mut inner = self.inner.write();
         let revision = inner.next_revision;
         inner.next_revision = inner.next_revision.wrapping_add(1);

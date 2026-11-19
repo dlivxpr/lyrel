@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use lyrel_core::core::osc::Note;
-use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg, RemoteKind};
-use lyrel_core::daemon::transport::Stream;
 use crate::bridge::ParseBridge;
+use lyrel_core::core::osc::Note;
 use lyrel_core::core::program_status::ProgramStatusFrame;
 use lyrel_core::core::term_modes::KeyboardStacks;
+use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg, RemoteKind};
+use lyrel_core::daemon::transport::Stream;
 use parking_lot::FairMutex;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::Mode;
@@ -27,14 +27,14 @@ use rio_vt::event::EventListener;
 use super::handshake::attach_reply_prefix;
 #[cfg(test)]
 use super::{PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, test_term};
-use lyrel_core::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
-#[cfg(test)]
-use lyrel_core::daemon::protocol::NativeSshSpec;
 use crate::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::prompt_reflow::{PromptBreak, PromptMark};
+use lyrel_core::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
 use lyrel_core::core::term_modes::{COLOR_SCHEME_UPDATES, TerminalModes};
 use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
+#[cfg(test)]
+use lyrel_core::daemon::protocol::NativeSshSpec;
 use rio_vt::performer::handler::Handler as _;
 
 /// One reader lifetime, retired without joining a potentially silent socket.
@@ -577,11 +577,7 @@ impl FrameReader {
                         // A replayed `?996n` was answered long ago,
                         // but the theme may have flipped while the pane
                         // was detached, so say what it is now.
-                        crate::color_scheme::fold(
-                            &mut modes,
-                            &bytes,
-                            &color_scheme_updates,
-                        );
+                        crate::color_scheme::fold(&mut modes, &bytes, &color_scheme_updates);
                         modes.take_color_scheme_queries();
                         report_scheme = true;
                         proxy.send(PaneEvent::Wakeup);
@@ -697,11 +693,7 @@ impl FrameReader {
                         // time, and that report would be discounted.
                         awaiting_replay = false;
                         replaying_state = false;
-                        crate::color_scheme::fold(
-                            &mut modes,
-                            &bytes,
-                            &color_scheme_updates,
-                        );
+                        crate::color_scheme::fold(&mut modes, &bytes, &color_scheme_updates);
                         if std::mem::take(&mut report_scheme) && modes.is_on(COLOR_SCHEME_UPDATES) {
                             proxy.send(crate::color_scheme::query_reply());
                         }

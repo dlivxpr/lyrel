@@ -39,7 +39,7 @@ const DIM_OPACITY: f32 = 0.66;
 const HELD_BACK_LINK_ALPHA: f32 = 0.45;
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
-enum UnderlineKind {
+pub enum UnderlineKind {
     #[default]
     None,
     Single,
@@ -59,7 +59,8 @@ pub struct RenderCell {
     bold: bool,
     italic: bool,
     strikeout: bool,
-    underline: UnderlineKind,
+    #[cfg(any(test, feature = "test-support"))]
+    pub underline: UnderlineKind,
     underline_color: Option<Hsla>,
     pub spacer: bool,
     kitty_placeholder: bool,
@@ -72,9 +73,12 @@ pub struct RenderCell {
     /// resolve it while a snapshot is acquired; a held frame and a reading row
     /// keep the captured version until their buffer retires.
     pub glyph: Option<std::sync::Arc<crate::glyph::GlyphView>>,
-    match_hit: bool,
-    match_current: bool,
-    link_hover: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub match_hit: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub match_current: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub link_hover: bool,
     osc8_dots: bool,
 }
 
@@ -192,7 +196,7 @@ impl GlyphStyle {
     }
 }
 
-fn is_blank(cell: &RenderCell) -> bool {
+pub fn is_blank(cell: &RenderCell) -> bool {
     (cell.c == '\0' || cell.c == ' ') && cell.marks.is_none()
 }
 
@@ -216,7 +220,8 @@ pub enum SnapshotUnavailable {
 
 #[derive(Default)]
 pub struct GridSnapshot {
-    cursor: Option<GridCursor>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub cursor: Option<GridCursor>,
     // None preserves the window material; an OSC 11 override belongs to the
     // committed picture, so synchronized/contended repaints cannot leak it.
     background_override: Option<Hsla>,
@@ -240,9 +245,7 @@ impl GridSnapshot {
     /// has the cursor hidden: the emulator reports a DECTCEM-reset cursor
     /// (`?25l`) as `CursorShape::Hidden`, and a TUI that hides it is usually
     /// drawing a caret of its own that ours must not cover (#844).
-    pub fn painted_cursor(
-        &self,
-    ) -> Option<(usize, usize, lyrel_core::core::config::CursorStyle)> {
+    pub fn painted_cursor(&self) -> Option<(usize, usize, lyrel_core::core::config::CursorStyle)> {
         self.cursor
             .filter(|c| !c.hidden)
             .map(|c| (c.row, c.col, c.style))

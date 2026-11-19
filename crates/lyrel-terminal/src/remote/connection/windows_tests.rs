@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::daemon::protocol::DaemonMsg;
 use crate::remote::RemoteTerminal;
+use lyrel_core::daemon::protocol::DaemonMsg;
 
 use super::super::test_support::socket_pair as tcp_pair;
 

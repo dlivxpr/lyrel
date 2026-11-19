@@ -343,10 +343,7 @@ mod tokenizer {
     }
 }
 
-pub fn hyperlink_run<T: EventListener>(
-    term: &Crosswords<T>,
-    click: Pos,
-) -> Option<(Pos, Pos)> {
+pub fn hyperlink_run<T: EventListener>(term: &Crosswords<T>, click: Pos) -> Option<(Pos, Pos)> {
     let grid = &term.grid;
     let cols = term.columns();
     if click.col.0 >= cols {
@@ -758,12 +755,7 @@ pub fn smart_range(
     ((ws, we) != (pws, pwe)).then_some((ws, we))
 }
 
-pub fn narrow_to_script(
-    chars: &[char],
-    click: usize,
-    lo: usize,
-    hi: usize,
-) -> (usize, usize) {
+pub fn narrow_to_script(chars: &[char], click: usize, lo: usize, hi: usize) -> (usize, usize) {
     let class = is_cjk(chars[click]);
     let mut s = click;
     while s > lo && is_cjk(chars[s - 1]) == class {
@@ -794,8 +786,7 @@ mod tests {
     }
 
     fn term_with(cols: usize, rows: usize, input: &str) -> Crosswords<VoidListener> {
-        let mut term =
-            crate::remote::test_term(crate::size::TermSize::new(cols, rows));
+        let mut term = crate::remote::test_term(crate::size::TermSize::new(cols, rows));
         rio_vt::performer::handler::Processor::default().advance(&mut term, input.as_bytes());
         term
     }
@@ -962,13 +953,8 @@ mod tests {
             let term = term_with(20, 5, input);
             let click = Pos::new(Line(line), Column(col));
             let (text, _points, idx) = logical_line_at(&term, click, true)?;
-            let link = crate::search::link_at(
-                &text,
-                idx,
-                &roots,
-                true,
-                &mut crate::search::local_probe,
-            )?;
+            let link =
+                crate::search::link_at(&text, idx, &roots, true, &mut crate::search::local_probe)?;
             match link.target {
                 crate::search::LinkTarget::File { path, .. } => Some(path),
                 crate::search::LinkTarget::Url(_) => None,
@@ -1018,14 +1004,9 @@ mod tests {
         let term = term_with(20, 5, "see a/bb/ccc/dddd/\r\nnotes.md here");
         let click = Pos::new(Line(0), Column(6));
         let (text, _points, idx) = logical_line_at(&term, click, true).expect("logical line");
-        let link = crate::search::link_at(
-            &text,
-            idx,
-            &roots,
-            true,
-            &mut crate::search::local_probe,
-        )
-        .expect("the directory on the first row still resolves");
+        let link =
+            crate::search::link_at(&text, idx, &roots, true, &mut crate::search::local_probe)
+                .expect("the directory on the first row still resolves");
         match link.target {
             crate::search::LinkTarget::File { path, is_dir, .. } => {
                 assert_eq!(path, dir.join("a/bb/ccc/dddd"));
@@ -1076,8 +1057,7 @@ mod tests {
             !text.contains("evil"),
             "a hard break before `@` must not bridge: {text:?}"
         );
-        let (_s, _e, url) =
-            crate::search::url_span_at(&text, idx).expect("url span under click");
+        let (_s, _e, url) = crate::search::url_span_at(&text, idx).expect("url span under click");
         assert_eq!(url, "https://good.com");
     }
 
@@ -1092,8 +1072,7 @@ mod tests {
         let click = Pos::new(Line(0), Column(10));
         let (text, _points, idx) =
             logical_line_at(&term, click, true).expect("logical line under click");
-        let (_s, _e, url) =
-            crate::search::url_span_at(&text, idx).expect("url span under click");
+        let (_s, _e, url) = crate::search::url_span_at(&text, idx).expect("url span under click");
         assert_eq!(url, "https://user1234@ex.com/z");
     }
 

@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use gpui_kit::{App, AppContext as _, BorrowAppContext as _};
 
 use crate::core::session::{WindowView, WorkspaceId, WorkspaceStore};
-use lyrel_terminal::RemoteTerminal;
 use crate::ui::host_ops::{HostId, InFlight};
 use crate::ui::route::PaneRoute;
+use lyrel_terminal::RemoteTerminal;
 
 const LOCAL_TTL: Duration = Duration::from_millis(2_000);
 

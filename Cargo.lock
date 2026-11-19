@@ -6337,6 +6337,7 @@ dependencies = [
  "raw-window-handle",
  "regex",
  "resvg 0.49.0",
+ "rio-graphics",
  "rio-vt",
  "rusqlite",
  "semver",

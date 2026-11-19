@@ -139,47 +139,6 @@ fn glyph_test_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
     }
 }
 
-#[test]
-fn glyph_captured_cell_keeps_its_definition_after_a_replacement() {
-    use rio_graphics::glyph_layout::GlyphLayout;
-    let cp = 0x100000u32;
-    let ch = char::from_u32(cp).unwrap();
-    let store = crate::terminal::glyph::GlyphStore::new();
-    store.apply(cp, glyph_test_outline(10), 1000, 1, GlyphLayout::default());
-    let term = painted_term(&ch.to_string());
-    let colors = test_colors();
-    let palette = [ColorRgb { r: 0, g: 0, b: 0 }; 256];
-    let point = Pos::new(Line(0), Column(0));
-
-    let mut painter = CellPainter::new(&term, &palette, &colors, None).with_glyphs(&store);
-    let captured = painter.at(point);
-    let revision = captured
-        .glyph
-        .as_ref()
-        .expect("the cell captured its registration")
-        .revision;
-    assert_eq!(captured.glyph.as_ref().unwrap().outline.x_max, 10);
-
-    store.apply(cp, glyph_test_outline(20), 1000, 1, GlyphLayout::default());
-    assert_eq!(
-        captured.glyph.as_ref().unwrap().revision,
-        revision,
-        "a replacement does not rewrite the captured cell"
-    );
-    assert_eq!(
-        captured.glyph.as_ref().unwrap().outline.x_max,
-        10,
-        "the captured outline is the version the cell displayed"
-    );
-
-    let mut fresh = CellPainter::new(&term, &palette, &colors, None).with_glyphs(&store);
-    let next = fresh.at(point);
-    assert_ne!(
-        next.glyph.as_ref().unwrap().revision,
-        revision,
-        "a new snapshot resolves the replacement"
-    );
-    assert_eq!(next.glyph.as_ref().unwrap().outline.x_max, 20);
 #[gpui_kit::test]
 fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
     cx: &mut gpui_kit::TestAppContext,
@@ -295,3 +254,4 @@ fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
         "the next successful snapshot adopts the replacement"
     );
     assert_eq!(buf[0].glyph.as_ref().unwrap().outline.x_max, 20);
+}

@@ -12,8 +12,8 @@ fn scan(chunks: &[&[u8]]) -> Vec<Note> {
 /// A burst of notifications shows only its newest few, once.
 #[test]
 fn a_burst_of_notes_is_handed_over_as_its_newest_few() {
-    use lyrel_core::daemon::protocol::DaemonMsg;
     use crate::size::TermSize;
+    use lyrel_core::daemon::protocol::DaemonMsg;
 
     lyrel_ui_base::config::pin_test_config_dir();
     let (client, mut daemon) = crate::view::test_stream_pair();

@@ -1,7 +1,7 @@
 use super::MAX_BACKLOG;
-use lyrel_core::daemon::protocol::ClientMsg;
 use crate::remote::{PaneEvent, RemoteTerminal};
 use crate::size::TermSize;
+use lyrel_core::daemon::protocol::ClientMsg;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::Ordering;
 

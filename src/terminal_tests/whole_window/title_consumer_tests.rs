@@ -7,7 +7,8 @@ use lyrel_core::client::ControlClient;
 use lyrel_core::daemon::control::{ControlHello, ControlRequest, ReplyOk};
 use lyrel_core::daemon::protocol::{DaemonVersion, PROTOCOL_VERSION};
 
-use super::notices::TITLE_SETTLE;
+use lyrel_terminal::view::DEFAULT_TITLE;
+use lyrel_terminal::view::notices::TITLE_SETTLE;
 
 fn title_control(daemon: &GraphicsDaemonProcess) -> ControlClient {
     ControlClient::connect_at(
@@ -192,7 +193,7 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut
 
     // A valid empty payload is the reset, not an ignored report.
     send_title_fixture(&view, cx, 7, b"\x1b]2;\x07");
-    settle_window_title(&view, cx, super::DEFAULT_TITLE);
+    settle_window_title(&view, cx, DEFAULT_TITLE);
     wait_daemon_title(&control, pane, None);
 
     // An accepted command title retires at its `D` on both sides.
@@ -202,7 +203,7 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut
         8,
         b"\x1b]133;C;ls\x07\x1b]2;ls -la\x07\x1b]133;D;0\x07",
     );
-    settle_window_title(&view, cx, super::DEFAULT_TITLE);
+    settle_window_title(&view, cx, DEFAULT_TITLE);
     wait_daemon_title(&control, pane, None);
 
     // Prompt title -> command start -> rejected title -> command finish: the

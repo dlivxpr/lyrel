@@ -291,7 +291,7 @@ impl TerminalHistory {
         self.last_word = None;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn is_navigating(&self) -> bool {
         self.nav.is_some()
     }

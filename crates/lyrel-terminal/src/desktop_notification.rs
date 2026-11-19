@@ -70,7 +70,7 @@ fn show_plain_notification(summary: String, body: String) {
 }
 
 /// The sanitized payload handed to the OS delivery boundary.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DeliveredNotification {
@@ -79,17 +79,17 @@ pub struct DeliveredNotification {
     pub body: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static TEST_NOTIFICATIONS: std::cell::RefCell<Option<Vec<DeliveredNotification>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// Scoped to one test thread; dropping it restores any previous capture.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub struct TestNotificationCapture(Option<Vec<DeliveredNotification>>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestNotificationCapture {
     fn drop(&mut self) {
         TEST_NOTIFICATIONS.with(|slot| {
@@ -98,12 +98,12 @@ impl Drop for TestNotificationCapture {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn capture_test_notifications() -> TestNotificationCapture {
     TestNotificationCapture(TEST_NOTIFICATIONS.with(|slot| slot.replace(Some(Vec::new()))))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn take_test_notifications() -> Vec<DeliveredNotification> {
     TEST_NOTIFICATIONS.with(|slot| {
         slot.borrow_mut()
@@ -306,7 +306,8 @@ fn try_clickable_notification(title: &str, body: &str, leaf_id: u64) -> bool {
 #[cfg(target_os = "macos")]
 fn reveal_pane(leaf_id: u64) {
     if let Some(tx) = lyrel_ui_base::notification_bridge::sender() {
-        let _ = tx.try_send(lyrel_ui_base::notification_bridge::TerminalHostEvent::Reveal { leaf_id });
+        let _ =
+            tx.try_send(lyrel_ui_base::notification_bridge::TerminalHostEvent::Reveal { leaf_id });
     }
 }
 

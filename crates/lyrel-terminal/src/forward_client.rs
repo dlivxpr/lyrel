@@ -4,8 +4,8 @@
 //! the "workspace request when there is a workspace, pane request otherwise"
 //! fallback and the reply interpretation in one terminal-side place.
 
-use lyrel_core::daemon::protocol::{DaemonMsg, LoopbackForward, ManagedForward, SshForwardRule};
 use crate::RemoteTerminal;
+use lyrel_core::daemon::protocol::{DaemonMsg, LoopbackForward, ManagedForward, SshForwardRule};
 use lyrel_ui_base::route::ForwardRoute;
 
 /// Submit forward-registry requests for a route. Every method keeps the
@@ -16,7 +16,8 @@ pub struct ForwardClient;
 
 impl ForwardClient {
     pub fn list(route: &ForwardRoute) -> Option<Vec<ManagedForward>> {
-        let Some(req) = route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::ListForwards)
+        let Some(req) =
+            route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::ListForwards)
         else {
             return RemoteTerminal::list_forwards(route.pane_id());
         };
@@ -24,9 +25,11 @@ impl ForwardClient {
     }
 
     pub fn add(route: &ForwardRoute, rule: SshForwardRule) -> Option<Vec<ManagedForward>> {
-        let Some(req) = route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::AddForward {
-            rule: rule.clone(),
-        }) else {
+        let Some(req) =
+            route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::AddForward {
+                rule: rule.clone(),
+            })
+        else {
             return RemoteTerminal::add_forward(route.pane_id(), rule);
         };
         Self::forwards(RemoteTerminal::on_workspace(req))
@@ -72,12 +75,12 @@ impl ForwardClient {
         forward_id: u64,
         enabled: bool,
     ) -> anyhow::Result<Vec<ManagedForward>> {
-        let Some(req) =
-            route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::SetForwardEnabled {
+        let Some(req) = route.workspace_request(
+            lyrel_core::daemon::protocol::WorkspaceOp::SetForwardEnabled {
                 forward_id,
                 enabled,
-            })
-        else {
+            },
+        ) else {
             return RemoteTerminal::set_forward_enabled(route.pane_id(), forward_id, enabled);
         };
         match RemoteTerminal::on_workspace(req)? {
@@ -89,8 +92,10 @@ impl ForwardClient {
     }
 
     pub fn remove(route: &ForwardRoute, forward_id: u64) -> Option<Vec<ManagedForward>> {
-        let Some(req) = route
-            .workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::RemoveForward { forward_id })
+        let Some(req) =
+            route.workspace_request(lyrel_core::daemon::protocol::WorkspaceOp::RemoveForward {
+                forward_id,
+            })
         else {
             return RemoteTerminal::remove_forward(route.pane_id(), forward_id);
         };

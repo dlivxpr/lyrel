@@ -1,7 +1,7 @@
 use super::*;
-use lyrel_core::daemon::protocol::DaemonMsg;
 use crate::view::test_support::*;
 use gpui_kit::TestAppContext;
+use lyrel_core::daemon::protocol::DaemonMsg;
 use rio_vt::crosswords::pos::{Column, Line};
 
 #[gpui_kit::test]

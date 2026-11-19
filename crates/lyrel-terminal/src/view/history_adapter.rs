@@ -15,10 +15,7 @@ impl TerminalView {
             return crate::history::Scope::remote(&ctx.target);
         }
         if !self.host_id.is_local() {
-            return crate::history::Scope::remote(&format!(
-                "host-{:016x}",
-                self.host_id.0
-            ));
+            return crate::history::Scope::remote(&format!("host-{:016x}", self.host_id.0));
         }
         crate::history::Scope::Local
     }
@@ -329,9 +326,7 @@ impl TerminalView {
 
 // 0ef08cf: a native shell channel owns its SSH/SFTP connection even while
 // its desktop HostId is local. Never substitute the workspace Host here.
-fn native_shell_history_seed(
-    route: &lyrel_ui_base::route::SftpRoute,
-) -> crate::history::History {
+fn native_shell_history_seed(route: &lyrel_ui_base::route::SftpRoute) -> crate::history::History {
     use lyrel_core::daemon::protocol::{SftpOp, SftpOpResult};
     let home = match SftpClient::op(route, SftpOp::Realpath { path: ".".into() }) {
         SftpOpResult::Link(home) => home,
@@ -359,14 +354,11 @@ fn native_shell_history_seed(
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use lyrel_core::daemon::protocol::DaemonMsg;
     use crate::view::test_support::*;
-    use gpui_kit::{TestAppContext, point};
+    use gpui_kit::TestAppContext;
+    use lyrel_core::daemon::protocol::DaemonMsg;
     mod history_scope_consumer_tests {
         include!("../history_scope_consumer_tests.rs");
-    }
-    mod history_search_consumer_tests {
-        include!("../history_search_consumer_tests.rs");
     }
     mod history_navigation_consumer_tests {
         include!("../history_navigation_consumer_tests.rs");

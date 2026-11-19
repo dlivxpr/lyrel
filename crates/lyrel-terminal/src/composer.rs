@@ -1525,7 +1525,8 @@ impl TerminalView {
                 let Some(cwd) = cwd.filter(|_| stale) else {
                     return;
                 };
-                let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+                let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id)
+                else {
                     return;
                 };
                 if !matches!(c.files, Files::Ready(..)) {

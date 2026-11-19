@@ -2,9 +2,9 @@
 
 use super::test_support::harness;
 use super::*;
+use gpui_kit::{Entity, TestAppContext};
 use lyrel_core::daemon::protocol::DaemonMsg;
 use lyrel_core::daemon::transport::Stream;
-use gpui_kit::{Entity, TestAppContext};
 
 #[gpui_kit::test]
 fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {

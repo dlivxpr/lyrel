@@ -367,7 +367,8 @@ mod tests {
     fn caret_ink_takes_whichever_of_the_two_reads_on_the_caret() {
         let colors = caret_colors();
         // A pale caret on a white background: the foreground wins.
-        let ink = lyrel_ui_base::presets::caret_ink(colors.caret, colors.default_bg, colors.default_fg);
+        let ink =
+            lyrel_ui_base::presets::caret_ink(colors.caret, colors.default_bg, colors.default_fg);
         assert_eq!(ink, colors.default_fg);
 
         // A caret far from the background: the background wins, which is the

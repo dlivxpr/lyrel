@@ -132,8 +132,8 @@ fn ctrl_c_and_ctrl_d_discard_foreground_typeahead() {
 fn assert_alt_screen_ownership_without_candidates_does_not_wait_for_grid(
     ownership: fn(&PromptInput, &RemoteTerminal) -> bool,
 ) {
-    use lyrel_core::daemon::protocol::DaemonMsg;
     use crate::{TermSize, view::test_stream_pair};
+    use lyrel_core::daemon::protocol::DaemonMsg;
     use std::sync::mpsc;
     use std::time::Duration;
 

@@ -24,12 +24,7 @@ impl TerminalView {
     /// when the bar is beside the prompt, or not up at all — the prompt's own
     /// cursor cell is right then. Takes the cursor as the frame snapshot saw
     /// it rather than locking the terminal again mid-paint.
-    pub fn input_ime_cell(
-        &self,
-        row: usize,
-        col: usize,
-        cols: usize,
-    ) -> Option<(usize, usize)> {
+    pub fn input_ime_cell(&self, row: usize, col: usize, cols: usize) -> Option<(usize, usize)> {
         if !self.frame_input_active() || self.history.search().is_some() {
             return None;
         }

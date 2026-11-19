@@ -6,10 +6,10 @@ use super::{
     EventProxy, GraphicsViewportReporter, PaneEvent, PaneRoute, ReaderSignals, ShellState,
     TermSize, win_size,
 };
-use lyrel_core::daemon::protocol::{ClientMsg, WinSize};
-use lyrel_core::daemon::transport::Stream;
 use crate::bridge::ParseBridge;
 use lyrel_core::core::term_modes::KeyboardStacks;
+use lyrel_core::daemon::protocol::{ClientMsg, WinSize};
+use lyrel_core::daemon::transport::Stream;
 use parking_lot::FairMutex;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::performer::handler::Handler as _;

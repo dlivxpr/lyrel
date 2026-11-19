@@ -1,5 +1,3 @@
-use super::*;
-
 // Command bytes captured from zsh 5.9 using EXTENDED_HISTORY and fc -W;
 // only the timestamp is fixed. Do not synthesize the escapes under test.
 const METAFIED_ZSH_HISTORY: &[u8] = b": 1700000000:0;echo '\xe8\xaf\xbb\xe5\x83\xaf\x83\xb6\xe4\xbb\xa4\xe7\x83\xa9\x83\xac\xe5\xa4\xb1\xe8\xb4\xa5\xe3\x83\xa3\xbc\xf0\x83\xbf\x83\xb9\x82'\n";

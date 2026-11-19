@@ -1,10 +1,10 @@
 use super::*;
-use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
-use lyrel_core::daemon::transport::Stream;
 use crate::view::input::HOLD_WINDOW;
 use crate::view::notices::TITLE_SETTLE;
 use crate::view::test_support::seed_history;
 use gpui_kit::TestAppContext;
+use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
+use lyrel_core::daemon::transport::Stream;
 
 fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
     lyrel_ui_base::config::pin_test_config_dir();

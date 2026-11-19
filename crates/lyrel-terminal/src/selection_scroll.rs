@@ -404,10 +404,7 @@ impl SelectionScroll {
         selection.apply_from(cells, origin)
     }
 
-    pub fn select_all_presented(
-        &mut self,
-        cells: &mut [super::element::RenderCell],
-    ) -> bool {
+    pub fn select_all_presented(&mut self, cells: &mut [super::element::RenderCell]) -> bool {
         let cols = self.reading.as_ref().map_or(1, |reading| reading.columns());
         let origin = self.selection_origin(cols);
         let selection =

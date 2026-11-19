@@ -1,8 +1,7 @@
-use gpui_kit::component::scroll::ScrollbarMode;
-use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
-    App, Background, Hsla, Menu, MenuItem, OsAction, Pixels, Styled, SystemMenuType, Window,
-    WindowBackgroundAppearance, linear_color_stop, linear_gradient, px, rgb,
+    App, Background, Hsla, Menu, MenuItem, OsAction, SystemMenuType, Window,
+    WindowBackgroundAppearance, linear_color_stop, linear_gradient, rgb,
 };
 
 use crate::core::actions::*;
@@ -993,8 +992,11 @@ fn sync_native_appearance(_dark: Option<bool>) {}
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
+    use gpui_kit::component::Theme;
     #[cfg(target_os = "windows")]
     use gpui_kit::point;
+    use gpui_kit::{Styled, px};
+    use lyrel_ui_base::presentation::SystemAppearance;
 
     #[gpui_kit::test]
     fn effective_preset_follows_the_cached_system_appearance(cx: &mut TestAppContext) {

@@ -1,6 +1,6 @@
 use super::*;
-use lyrel_core::daemon::protocol::DaemonMsg;
 use crate::remote::RemoteTerminal;
+use lyrel_core::daemon::protocol::DaemonMsg;
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 

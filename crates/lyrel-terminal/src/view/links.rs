@@ -3,19 +3,19 @@
 //! context, schedules HostOps work and delivers navigation/clipboard effects.
 use super::menus::menu_row_with_hint;
 use super::{LoopbackPlan, TerminalView};
+use crate::link::{LinkAt, LinkInteraction};
+use crate::search::LinkTarget;
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::{App, ClipboardItem, Context, Window, prelude::*, px};
+use lyrel_core::core::config::LinkFileOpen;
 use lyrel_ui_base::actions::{
     CopyLinkPathUnderPointer, OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer,
 };
-use lyrel_core::core::config::LinkFileOpen;
 use lyrel_ui_base::config::Config;
-use crate::link::{LinkAt, LinkInteraction};
-use crate::search::LinkTarget;
 use lyrel_ui_base::desktop_file::{OpenFileRequested, open_file_path, reveal_file_path};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use lyrel_ui_base::notification_history::NotificationWindowExt as _;
 use lyrel_ui_base::scm_snapshot;
-use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{App, ClipboardItem, Context, Window, prelude::*, px};
 
 enum LoopbackOpen {
     Forwarded(String),
@@ -130,11 +130,7 @@ impl TerminalView {
 
     /// "Open with Default App": the file link under the menu, handed to the
     /// OS association whatever `link_file_open` says "Open" does.
-    pub fn open_menu_link_with_default_app(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open_menu_link_with_default_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The menu only offers this for a local pane; a key binding could
         // still fire it on a remote one, where the path means nothing here.
         if !self.links.menu().is_some_and(|link| link.host().is_local()) {

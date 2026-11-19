@@ -295,6 +295,10 @@ lyrel-terminal = { path = "crates/lyrel-terminal", features = ["test-support"] }
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
 # Workbench fixtures encode images and inspect the lossless YAML tree.
 gif = "0.14.2"
+# Whole-window snapshot-harness tests build glyph outlines for the production
+# TerminalElement paint path (the terminal crate re-exports the paint side
+# only in its own tests).
+rio-graphics.workspace = true
 tiff = "0.11.3"
 yaml-edit = { version = "=0.3.6", default-features = false }
 # Self-made PDF fixtures for the production workbench seam; never linked into
@@ -319,7 +323,11 @@ test-support = [
 # `lyrel-ui-base`; the feature keeps the foundation's guards available in
 # exactly the builds that can call it (test builds get them from the
 # dev-dependency instead).
-native-markdown-tests = ["test-support", "lyrel-ui-base/test-guards"]
+native-markdown-tests = [
+    "test-support",
+    "lyrel-ui-base/test-guards",
+    "lyrel-terminal/native-markdown-tests",
+]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]

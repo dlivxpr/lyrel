@@ -4,10 +4,10 @@
 //! connection details, pane request otherwise — and the wire-error wording
 //! the SFTP panel surfaces unchanged.
 
+use crate::RemoteTerminal;
 use lyrel_core::daemon::protocol::{
     DaemonMsg, SftpEntry, SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, WorkspaceOp,
 };
-use crate::RemoteTerminal;
 use lyrel_ui_base::i18n::{L10nKey, t_fmt};
 use lyrel_ui_base::route::SftpRoute;
 

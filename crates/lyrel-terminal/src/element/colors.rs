@@ -70,10 +70,7 @@ pub fn dim_fg(fg: Hsla, under: ColorRgb, legible: bool) -> Hsla {
         static LAST: std::cell::Cell<Option<(u32, u32, Option<u32>)>> =
             const { std::cell::Cell::new(None) };
     }
-    let (ink, bg) = (
-        pack_rgb(crate::palette::hsla_to_rgb(fg)),
-        pack_rgb(under),
-    );
+    let (ink, bg) = (pack_rgb(crate::palette::hsla_to_rgb(fg)), pack_rgb(under));
     let solved = LAST.with(|last| match last.get() {
         Some((i, b, s)) if i == ink && b == bg => s,
         _ => {
@@ -232,11 +229,8 @@ fn blend_toward(c: Hsla, dim: f32, under: Rgba) -> Hsla {
 }
 
 impl PaintColors {
-    #[cfg(test)]
-    pub fn resolve(
-        theme: &gpui_kit::component::Theme,
-        cx: &gpui_kit::App,
-    ) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn resolve(theme: &gpui_kit::component::Theme, cx: &gpui_kit::App) -> Self {
         Self::resolve_with(
             theme,
             lyrel_core::core::pane_colors::PaneColors::default(),
