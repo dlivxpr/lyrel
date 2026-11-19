@@ -1,0 +1,60 @@
+[package]
+name = "lyrel-ui-base"
+version.workspace = true
+edition = "2024"
+description = "Shared GPUI desktop foundation for Lyrel's desktop UI crates: config global, keybinding actions, workspace store, host off-thread execution, theme presets, i18n, bounded notification history, routes and read-only snapshots."
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# Cross-crate test guards: the GUI wrapper's scratch-config write lock and
+# pin_test_config_dir must also exist when this crate is compiled as a
+# dependency of the root package's test builds (the root crate enables this
+# feature from its desktop dev-dependencies). Production builds never enable
+# it, keeping the guards out of released code.
+test-guards = ["dep:tempfile"]
+
+[dependencies]
+# Desktop-only foundation, mirroring the root package: everything below the
+# line compiles only on Windows/macOS. On Linux this crate is an empty rlib so
+# headless workspace builds are unaffected.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+lyrel-core = { path = "../lyrel-core" }
+gpui-kit = { workspace = true }
+anyhow.workspace = true
+log.workspace = true
+chrono = "0.4.45"
+# The shared desktop palette reads Rio's color cell type; the same pinned
+# parser the terminal grid uses, parser only.
+rio-vt = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+yaml_serde.workspace = true
+parking_lot = "0.13"
+tempfile = { version = "3", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The OS GUI-language preference read (`i18n::system`), the same pinned
+# windows-sys the GUI already links.
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS GUI-language preference read (`i18n::system`): the user's ordered
+# `preferredLanguages`, never the PTY locale.
+objc2-foundation = { version = "0.3", features = ["NSLocale"] }
+
+[dev-dependencies]
+# The unit tests exercise the test guards behind plain `cfg(test)`; the
+# optional production dependency above only exists for the `test-guards`
+# feature, so the dev-dependency carries the plain `cargo test` build.
+tempfile = "3"
+# GPUI test harness for the store/off-thread unit tests, and the same
+# test-support clock/graph features those tests had in the root package.
+gpui-kit = { workspace = true, features = ["test-support"] }
+lyrel-core = { path = "../lyrel-core", features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -5282,6 +5282,13 @@ pub(crate) mod test_window {
             cx.set_global(Config::default());
             crate::ui::keymap::init(cx);
             crate::ui::windows::WindowRegistry::init(cx);
+            crate::ui::notification_history::install_source_resolver(cx);
+            crate::ui::scm_snapshot::install_scm_snapshot_source(cx);
+            lyrel_ui_base::session::install_workspace_store_hooks(
+                cx,
+                lyrel_ui_base::session::WorkspaceStoreHooks::new()
+                    .display_hint(crate::ui::machine_mirror::display_hint),
+            );
         });
         let window = cx.add_window(|window, cx| {
             let app =
@@ -5577,7 +5584,7 @@ mod restart_server_gpui_tests {
     /// because the crash is in the part that runs either way, not in the
     /// restart itself.
     #[gpui_kit::test]
-    async fn settling_after_a_restart_does_not_lease_the_window_twice(cx: &mut TestAppContext) {
+    async fn settling_after_a_restart_does_not_lease_the_window_twice(cx: &mut …
         crate::core::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
@@ -5585,6 +5592,7 @@ mod restart_server_gpui_tests {
             cx.set_global(Config::default());
             crate::ui::keymap::init(cx);
             crate::ui::windows::WindowRegistry::init(cx);
+            crate::ui::notification_history::install_source_resolver(cx);
         });
         let window = cx.add_window(|window, cx| {
             let app =
@@ -5636,6 +5644,7 @@ mod shell_menu_gpui_tests {
             cx.set_global(Config::default());
             crate::ui::keymap::init(cx);
             crate::ui::windows::WindowRegistry::init(cx);
+            crate::ui::notification_history::install_source_resolver(cx);
         });
         let window = cx.add_window(|window, cx| {
             let app =

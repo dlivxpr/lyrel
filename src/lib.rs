@@ -849,6 +849,12 @@ pub fn run() {
         crate::ui::motion::apply(cx);
         crate::ui::theme::refresh_system_appearance(cx);
         crate::core::session::WorkspaceStore::init(cx);
+        lyrel_ui_base::session::install_workspace_store_hooks(
+            cx,
+            lyrel_ui_base::session::WorkspaceStoreHooks::new()
+                .display_hint(crate::ui::machine_mirror::display_hint),
+        );
+        crate::ui::notification_history::install_source_resolver(cx);
         crate::ui::windows::WindowRegistry::init(cx);
         crate::ui::presets::load_registry(cx);
         crate::ui::theme::apply_cursor_hide_mode(cx);

@@ -197,6 +197,7 @@ impl LyrelApp {
             this.reload_from_config(window, cx)
         });
         cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
+        crate::ui::scm_snapshot::install_scm_snapshot_source(cx);
         let git_status_watch =
             cx.observe_global::<crate::ui::scm::status_cache::GitStatusCache>(|this, cx| {
                 this.maybe_refresh_diff_overlay(cx);
@@ -245,6 +246,9 @@ impl LyrelApp {
             if window.is_window_active() {
                 crate::ui::motion::refresh_system(cx);
                 WorkspaceStore::focus(cx, this.workspace);
+                crate::ui::tree_sync::fire_workspace_op(cx, this.workspace, |ws| {
+                    lyrel_core::daemon::control::ControlRequest::WorkspaceTouch { workspace: ws }
+                });
                 this.refresh_git_status_all(cx);
             }
         });

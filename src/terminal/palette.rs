@@ -1,22 +1,9 @@
-use gpui_kit::Global;
 use rio_vt::config::colors::ColorRgb;
 
-#[derive(Debug, Clone)]
-pub struct ActivePalette {
-    pub ansi16: [ColorRgb; 16],
-    pub sel_bg: ColorRgb,
-}
-
-impl Global for ActivePalette {}
-
-pub fn hsla_to_rgb(c: gpui_kit::Hsla) -> ColorRgb {
-    let rgba = gpui_kit::Rgba::from(c);
-    ColorRgb {
-        r: (rgba.r * 255.0).round().clamp(0.0, 255.0) as u8,
-        g: (rgba.g * 255.0).round().clamp(0.0, 255.0) as u8,
-        b: (rgba.b * 255.0).round().clamp(0.0, 255.0) as u8,
-    }
-}
+// The active palette and the shared HSL→RGB conversion live in the desktop
+// foundation now (`lyrel-ui-base`), between the workbench and the terminal, so
+// the theme presets can build ANSI tables without importing the terminal.
+pub use lyrel_ui_base::palette::{ActivePalette, hsla_to_rgb};
 
 const DARK_ANSI16: [(u8, u8, u8); 16] = [
     (0x2c, 0x2a, 0x26),
@@ -133,16 +120,6 @@ pub fn query_color(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hsla_to_rgb_round_trips_a_known_color() {
-        let rgb = hsla_to_rgb(gpui_kit::rgb(0x123456).into());
-        assert_eq!((rgb.r, rgb.g, rgb.b), (0x12, 0x34, 0x56));
-        let black = hsla_to_rgb(gpui_kit::rgb(0x000000).into());
-        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
-        let white = hsla_to_rgb(gpui_kit::rgb(0xffffff).into());
-        assert_eq!((white.r, white.g, white.b), (255, 255, 255));
-    }
 
     #[test]
     fn build_lays_out_the_256_color_cube_and_ramp() {

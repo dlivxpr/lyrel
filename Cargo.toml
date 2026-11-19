@@ -45,6 +45,13 @@ lyrel-updater = { path = "crates/lyrel-updater" }
 # never take that path; the GUI, which is the client that pushes it, can.
 lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install"] }
 
+# The shared GPUI desktop foundation: the config global wrapper, keybinding
+# actions, workspace store, off-thread Host execution, theme presets, i18n,
+# bounded notification history, routes and read-only snapshots. Desktop-only
+# like the GUI itself; on Linux this is an empty rlib so headless workspace
+# builds are unaffected.
+lyrel-ui-base = { path = "crates/lyrel-ui-base" }
+
 # GUI-free insights above the `lyrel-protocol` Host seam: the right panel's GitHub
 # tab, Settings' skills/statistics/usage backends and their browser session
 # readers. The GUI is this crate's only production consumer — the headless
@@ -295,6 +302,9 @@ futures-channel = "0.3"
 gpui-kit = { workspace = true, features = ["test-support"] }
 lyrel-core = { path = "crates/lyrel-core", features = ["test-support"] }
 lyrel-insights = { path = "crates/lyrel-insights", features = ["test-support"] }
+# Test builds turn the foundation's scratch-config guards on (the
+# cross-crate `test-guards` feature); release builds never see them.
+lyrel-ui-base = { path = "crates/lyrel-ui-base", features = ["test-guards"] }
 # Shared PTY/graphics/native-SSH fixtures and the graphics-fixture process
 # (the `lyrel-graphics-fixture` binary target of this package).
 lyrel-test-support = { path = "crates/lyrel-test-support" }
@@ -317,13 +327,17 @@ workspace = true
 [features]
 default = []
 test-support = ["lyrel-core/test-support", "gpui-kit/test-support"]
-native-markdown-tests = ["test-support"]
+# The native test binaries call `pin_test_config_dir`, which now lives in
+# `lyrel-ui-base`; the feature keeps the foundation's guards available in
+# exactly the builds that can call it (test builds get them from the
+# dev-dependency instead).
+native-markdown-tests = ["test-support", "lyrel-ui-base/test-guards"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
 members = ["crates/*"]
 # Windows/macOS 默认包含 editor 与 updater helper；Linux 排除桌面包。
-default-members = [".", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
+default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"

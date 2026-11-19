@@ -43,8 +43,8 @@ pub fn language_mode_label(mode: &str) -> L10nKey {
     }
 }
 
-pub(crate) fn agent_result_text(result: &crate::core::cli_agent::AgentResult) -> String {
-    use crate::core::cli_agent::AgentOutcome;
+pub fn agent_result_text(result: &lyrel_core::core::cli_agent::AgentResult) -> String {
+    use lyrel_core::core::cli_agent::AgentOutcome;
     let outcome = t(match result.outcome {
         AgentOutcome::Succeeded => L10nKey::AgentOutcomeSucceeded,
         AgentOutcome::Failed => L10nKey::AgentOutcomeFailed,
@@ -66,7 +66,7 @@ pub fn current_language_code() -> &'static str {
     SUPPORTED_LANGUAGES[current_locale_index()].code
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-guards"))]
 thread_local! {
     static TEST_LOCALE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
 }
@@ -2761,14 +2761,14 @@ pub fn set_locale(mode: &str) {
     let system = (mode == "system")
         .then(system::preferred_ui_language)
         .flatten();
-    let code = crate::core::config::resolve_gui_language(mode, system.as_deref());
+    let code = lyrel_core::core::config::resolve_gui_language(mode, system.as_deref());
     let index = SUPPORTED_LANGUAGES
         .iter()
         .position(|lang| lang.code == code)
         .unwrap_or(0) as u8;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-guards"))]
     TEST_LOCALE.with(|slot| slot.set(Some(index)));
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-guards")))]
     CURRENT.store(index, Ordering::Relaxed);
 }
 
@@ -2846,7 +2846,7 @@ fn apply_template(template: &'static str, args: &[(&str, &str)], count: Option<u
 }
 
 fn current_locale_index() -> usize {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-guards"))]
     if let Some(idx) = TEST_LOCALE.with(|slot| slot.get()) {
         return idx as usize;
     }
