@@ -486,5 +486,4 @@ impl SettingsWindow {
             cx,
         )
     }
-
 }

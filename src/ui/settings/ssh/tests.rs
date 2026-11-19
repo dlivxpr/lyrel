@@ -793,9 +793,7 @@ fn ssh_form_round_trip_preserves_windows_paths_and_raw_command_spelling(cx: &mut
 /// land in the injected in-memory store, load back into the form from it, and
 /// leave it when the profile is deleted. The OS keychain is never involved.
 #[gpui_kit::test]
-fn standalone_window_round_trips_credentials_through_the_injected_store(
-    cx: &mut TestAppContext,
-) {
+fn standalone_window_round_trips_credentials_through_the_injected_store(cx: &mut TestAppContext) {
     use crate::ui::settings::test_window::harness_standalone;
     let (view, store, mut vcx) = harness_standalone(cx);
     let dir = tempfile::tempdir().unwrap();
@@ -813,9 +811,7 @@ fn standalone_window_round_trips_credentials_through_the_injected_store(
         profile.host = "standalone.invalid".to_string();
         profile.port = 22;
         profile.identity_files = vec![key.to_string_lossy().into_owned()];
-        cx.global_mut::<Config>()
-            .ssh_profiles
-            .push(profile.clone());
+        cx.global_mut::<Config>().ssh_profiles.push(profile.clone());
         view.ssh_form_load(&profile, window, cx);
 
         // Load: the form reads the stored secret through the injected store.
@@ -869,7 +865,9 @@ fn standalone_window_round_trips_credentials_through_the_injected_store(
         view.delete_profile_confirmed(profile_id, cx);
     });
     assert_eq!(
-        store.password_for("tester", "standalone.invalid", 22).unwrap(),
+        store
+            .password_for("tester", "standalone.invalid", 22)
+            .unwrap(),
         None,
         "the password is forgotten with the profile"
     );

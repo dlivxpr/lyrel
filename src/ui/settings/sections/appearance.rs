@@ -528,5 +528,4 @@ impl SettingsWindow {
         );
         self.settings_group(Some(t(L10nKey::SettingsTransparency)), None, rows, cx)
     }
-
 }

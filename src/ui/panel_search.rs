@@ -227,10 +227,9 @@ impl LyrelApp {
                     },
                     move |app, outcome, cx| {
                         #[cfg(test)]
-                        app.file_tree
-                            .update(cx, |tree, _| {
-                                tree.read_probe.record(ReadKind::Contents, landing_host);
-                            });
+                        app.file_tree.update(cx, |tree, _| {
+                            tree.read_probe.record(ReadKind::Contents, landing_host);
+                        });
                         let tree = app.file_tree.read(cx);
                         if !authority.is_current(tree, cx) {
                             return;

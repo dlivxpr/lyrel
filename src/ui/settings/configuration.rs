@@ -73,7 +73,11 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    pub(crate) fn discard_unsaved_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn discard_unsaved_settings(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let snapshot = self
             .active_settings()
             .filter(|s| s.save_error.is_some())

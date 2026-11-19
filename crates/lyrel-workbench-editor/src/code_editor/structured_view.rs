@@ -970,7 +970,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let identity = document
             .format()
             .node_identity(projection, self.selected?)?;
-        identity.has_detail.then(|| identity.detail)
+        identity.has_detail.then_some(identity.detail)
     }
 
     fn sync_structure(&mut self, cx: &mut Context<Self>) {

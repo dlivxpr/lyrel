@@ -231,6 +231,7 @@ impl LyrelApp {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn file_tree_toggle_expand(&mut self, dir: &Path, cx: &mut Context<Self>) {
         self.file_tree
             .update(cx, |tree, cx| tree.toggle_expand(dir, cx));
@@ -336,6 +337,7 @@ impl LyrelApp {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn file_tree_drop_paths(
         &mut self,
         sources: Vec<PathBuf>,

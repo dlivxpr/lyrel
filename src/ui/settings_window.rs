@@ -38,7 +38,9 @@ pub(crate) enum SettingsEvent {
     OpenFile(lyrel_ui_base::host_ops::SharedHost, std::path::PathBuf),
     RestartDaemon,
     RefreshShells,
-    TerminalCursorChanged { force_visible: bool },
+    TerminalCursorChanged {
+        force_visible: bool,
+    },
     EditorGitGutter(bool),
     LocaleChanged,
     /// A keybinding edit was persisted; the shell rebinds the app-wide keymap.

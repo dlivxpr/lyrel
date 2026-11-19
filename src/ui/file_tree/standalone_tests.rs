@@ -473,8 +473,10 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
     let new_dir = temp();
     std::fs::write(old_dir.path().join("old.txt"), "o").unwrap();
     std::fs::write(new_dir.path().join("new.txt"), "n").unwrap();
-    let old_ns = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let new_ns = NamespaceHost::new(HostId::LOCAL, new_dir.path());
+    // Keep this read/write authority test independent of real OS watcher
+    // events. The watcher debounce test uses the real LocalHost separately.
+    let old_ns = NamespaceHost::new_unwatched(HostId::LOCAL, old_dir.path());
+    let new_ns = NamespaceHost::new_unwatched(HostId::LOCAL, new_dir.path());
     let old: SharedHost = old_ns.clone();
     let new: SharedHost = new_ns.clone();
     let (tree, mut vcx) = setup(cx, old.clone());

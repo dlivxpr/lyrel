@@ -206,18 +206,16 @@ impl LyrelApp {
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
                 #[cfg(test)]
-                app.file_tree
-                    .update(cx, |tree, _| {
-                        tree.read_probe.record(ReadKind::Index, landing_host);
-                    });
+                app.file_tree.update(cx, |tree, _| {
+                    tree.read_probe.record(ReadKind::Index, landing_host);
+                });
                 let tree = app.file_tree.read(cx);
                 if !authority.is_current(tree, cx) {
                     return;
                 }
-                if !app
-                    .file_tree
-                    .update(cx, |tree, _| tree.finish_file_index(generation, key.clone(), list))
-                {
+                if !app.file_tree.update(cx, |tree, _| {
+                    tree.finish_file_index(generation, key.clone(), list)
+                }) {
                     return;
                 }
                 if app.file_index_key(cx) != key {

@@ -186,5 +186,4 @@ impl SettingsWindow {
         );
         Self::settings_page(groups)
     }
-
 }

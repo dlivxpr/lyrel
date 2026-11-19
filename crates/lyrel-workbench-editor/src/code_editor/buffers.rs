@@ -976,7 +976,8 @@ impl EditorBuffers {
                     edited(view, id, cx);
                 },
             );
-            let json_document = cx.new(|cx| JsonDocument::new(document, JsonShell::new(json_format), cx));
+            let json_document =
+                cx.new(|cx| JsonDocument::new(document, JsonShell::new(json_format), cx));
             let presentation = cx.new(|cx| {
                 JsonView::new(
                     json_document,

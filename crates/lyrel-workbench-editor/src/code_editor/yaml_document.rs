@@ -18,8 +18,7 @@ use lyrel_document::tree::Treelike;
 use lyrel_document::yaml::mutation::{self, Mutation, MutationError, NodeTarget, UnsupportedEdit};
 use lyrel_document::yaml::projection::{
     self, ContainerKind, ProjectionFailure, STRUCTURE_DEPTH, STRUCTURE_INPUT_BYTES,
-    STRUCTURE_NODES, STRUCTURE_PATH_BYTES, YamlNode, YamlNodeKind, YamlProjection,
-    YamlScalarKind,
+    STRUCTURE_NODES, STRUCTURE_PATH_BYTES, YamlNode, YamlNodeKind, YamlProjection, YamlScalarKind,
 };
 
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
@@ -106,9 +105,8 @@ impl StructuredViewFormat for YamlShell {
     }
 
     fn count_notice(&self, projection: &Self::Projection) -> Option<SharedString> {
-        self.display_node_count(projection).map(|count| {
-            t_fmt(L10nKey::EditorYamlNodes, &[("count", &count.to_string())]).into()
-        })
+        self.display_node_count(projection)
+            .map(|count| t_fmt(L10nKey::EditorYamlNodes, &[("count", &count.to_string())]).into())
     }
 
     /// 预算失败或整份 YAML 无法解析时的可见说明。
@@ -242,8 +240,8 @@ impl StructuredViewFormat for YamlShell {
         let mut caps_remove = false;
         if let Some(node) = selected.and_then(|index| projection.nodes().get(index)) {
             caps_value = node.value_editable() || node.block_scalar;
-            caps_key = node.rename_key_editable()
-                || (node.entry && node.key_detail_range.is_some());
+            caps_key =
+                node.rename_key_editable() || (node.entry && node.key_detail_range.is_some());
             caps_add = node.can_add();
             caps_add_is_sequence = node.container == Some(ContainerKind::Sequence);
             caps_remove = node.can_remove();
@@ -304,8 +302,7 @@ impl StructuredViewFormat for YamlShell {
                     _ => return None,
                 };
                 Some(EditPlan::Panel(EditPanelDesc {
-                    title: t_fmt(L10nKey::EditorYamlEditValueTitle, &[("path", &node.path)])
-                        .into(),
+                    title: t_fmt(L10nKey::EditorYamlEditValueTitle, &[("path", &node.path)]).into(),
                     key: None,
                     value: EditField::new(
                         t(L10nKey::EditorYamlValueName),

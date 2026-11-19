@@ -21,8 +21,7 @@ use lyrel_document::state::CancelToken;
 use lyrel_document::tree::{self, Treelike};
 use lyrel_document::xml::mutation::{self, Mutation, MutationError, NodeTarget};
 use lyrel_document::xml::projection::{
-    self, ProjectionFailure, XML_INPUT_BYTES, XML_NODES, XML_PATH_BYTES, XmlNodeKind,
-    XmlProjection,
+    self, ProjectionFailure, XML_INPUT_BYTES, XML_NODES, XML_PATH_BYTES, XmlNodeKind, XmlProjection,
 };
 
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};

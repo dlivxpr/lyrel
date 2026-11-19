@@ -156,8 +156,7 @@ impl<F: StructuredDocumentFormat> StructuredDocument<F> {
                 let keep_going = this
                     .update(cx, |this, cx| {
                         let current = this.document.read(cx).revision();
-                        let keep_going =
-                            this.state.install(generation, revision, current, result);
+                        let keep_going = this.state.install(generation, revision, current, result);
                         cx.notify();
                         keep_going
                     })

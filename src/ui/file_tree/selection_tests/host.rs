@@ -42,16 +42,26 @@ pub(crate) struct NamespaceHost {
     id: HostId,
     root: PathBuf,
     local: SharedHost,
+    watch: bool,
     paused: Mutex<Vec<PausedRead>>,
     reads: Mutex<HashMap<ReadKind, usize>>,
 }
 
 impl NamespaceHost {
     pub(crate) fn new(id: HostId, root: &Path) -> Arc<Self> {
+        Self::with_watch(id, root, true)
+    }
+
+    pub(crate) fn new_unwatched(id: HostId, root: &Path) -> Arc<Self> {
+        Self::with_watch(id, root, false)
+    }
+
+    fn with_watch(id: HostId, root: &Path, watch: bool) -> Arc<Self> {
         Arc::new(Self {
             id,
             root: lyrel_core::core::path_spelling::local_spelling_buf(root.to_path_buf()),
             local: lyrel_core::host::local::LocalHost::new(),
+            watch,
             paused: Mutex::new(Vec::new()),
             reads: Mutex::new(HashMap::new()),
         })
@@ -225,6 +235,9 @@ impl Host for NamespaceHost {
         self.local.shells()
     }
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
+        if !self.watch {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
         self.local
             .watch(&dirs.iter().map(|path| self.path(path)).collect::<Vec<_>>())
     }

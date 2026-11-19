@@ -384,8 +384,7 @@ mod tests {
                 );
                 assert!(landed.superseded);
                 assert!(tree.loads.is_pending(&local));
-                let rows =
-                    tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
+                let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
                 assert_eq!(rows[1].entry.name, "old.rs");
                 tree.invalidate_dir(remote.0, &dir);
                 let landed = tree.finish_listing(
@@ -404,8 +403,7 @@ mod tests {
                     vec![entry("new.rs")],
                     Some(local.0),
                 );
-                let rows =
-                    tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
+                let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
                 assert_eq!(rows[1].entry.name, "new.rs");
                 let rows = tree.visible_rows(remote.0, &[dir], &HashSet::new());
                 assert_eq!(rows[1].entry.name, "remote.rs");
@@ -430,13 +428,11 @@ mod tests {
                     tree.finish_write::<()>(key.0, &dir, Err(denied), before)
                         .is_err()
                 );
-                let rows =
-                    tree.visible_rows(key.0, std::slice::from_ref(&dir), &HashSet::new());
+                let rows = tree.visible_rows(key.0, std::slice::from_ref(&dir), &HashSet::new());
                 assert_eq!(rows[1].note, Some(TreeNote::Loading));
                 tree.children
                     .insert(key.0, dir.clone(), vec![entry("external.rs")]);
-                let before =
-                    tree.optimistic(key.0, &dir, &TreeWrite::NewFolder, &entry("created"));
+                let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFolder, &entry("created"));
                 tree.finish_write(key.0, &dir, Ok(()), before).unwrap();
                 assert!(tree.stale.contains(&key));
                 let rows = tree.visible_rows(key.0, &[dir], &HashSet::new());
@@ -467,8 +463,7 @@ mod tests {
                     FileList::Ready(index.clone())
                 ));
                 assert!(matches!(tree.file_list(&local), FileList::Indexing));
-                tree.quick_open.last.as_mut().unwrap().at =
-                    Instant::now() - Duration::from_secs(6);
+                tree.quick_open.last.as_mut().unwrap().at = Instant::now() - Duration::from_secs(6);
                 let refresh = tree.begin_file_index(&remote).unwrap();
                 assert!(tree.finish_file_index(refresh, remote.clone(), FileList::Failed));
                 let FileList::Ready(kept) = tree.file_list(&remote) else {
