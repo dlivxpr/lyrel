@@ -1,4 +1,4 @@
-//! GUI-free insights above the `lyrel-core` Host seam.
+//! GUI-free insights above the `lyrel-protocol` Host seam.
 //!
 //! This crate owns the non-daemon analytics and read-only integrations the
 //! workbench surfaces: Host-bound skill discovery/catalog/install/maintenance
@@ -8,8 +8,6 @@
 //!
 //! Everything here drives real `LocalHost`/`RemoteHost` work through
 //! `&dyn lyrel_protocol::host::Host`; nothing touches PTY, SSH setup, or GPUI.
-//! #326 later cuts the lower dependency from `lyrel-core` to
-//! `lyrel-protocol`.
 
 pub mod github;
 pub mod skills;

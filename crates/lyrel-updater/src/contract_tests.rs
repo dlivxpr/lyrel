@@ -1,13 +1,11 @@
-//! Contract tests at the shared public seam: everything here drives only
-//! `lyrel_updater`'s public interface — the same surface the GUI update
-//! coordinator builds plans through and the `lyrel-updater` executable
-//! parses them with. Round trips go through `argv()` in one direction and
-//! `parse()` in the other, so the two sides of the wire protocol cannot
-//! drift apart.
+//! The contract tests themselves; why they live in the library target is
+//! documented beside the module declaration in `lib.rs`. Round trips go
+//! through `argv()` in one direction and `parse()` in the other, so the two
+//! sides of the wire protocol cannot drift apart.
 
 #[cfg(target_os = "macos")]
 mod macos_contract {
-    use lyrel_updater::macos::{InstallPlan, VerifyPlan};
+    use crate::macos::{InstallPlan, VerifyPlan};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -67,7 +65,7 @@ mod macos_contract {
 
 #[cfg(target_os = "windows")]
 mod windows_contract {
-    use lyrel_updater::windows::{
+    use crate::windows::{
         ElevatedStagePlan, InstallPlan, PortableInstallPlan, TailOptions, VerifyPlan, WatcherPlan,
     };
     use std::ffi::OsString;
@@ -184,9 +182,43 @@ mod windows_contract {
             log: PathBuf::from(r"C:\cfg\update.log"),
             version: "27.1.0".to_string(),
             gui_pid: Some(99),
+            config_dir: Some(PathBuf::from(r"C:\cfg")),
         };
         let argv = plan.argv();
         assert_eq!(argv[0], OsString::from("relaunch-watcher"));
+        // The GUI no longer appends --config-dir by hand: the flag must
+        // appear exactly where the plan's own argv puts it.
+        let config_at = argv
+            .iter()
+            .position(|arg| arg == &OsString::from("--config-dir"))
+            .expect("the plan encodes --config-dir");
+        assert_eq!(
+            argv[config_at + 1],
+            OsString::from(r"C:\cfg"),
+            "the value rides the plan's own argv slot"
+        );
+        let parsed = WatcherPlan::parse(argv.into_iter().skip(1)).unwrap();
+        assert_eq!(parsed, plan);
+    }
+
+    #[test]
+    fn watcher_plan_round_trip_keeps_config_dir_absent_when_unset() {
+        let plan = WatcherPlan {
+            status_file: PathBuf::from(r"C:\cfg\update-elevation.status"),
+            result_file: PathBuf::from(r"C:\cfg\update-outcome.json"),
+            app: PathBuf::from(r"C:\Users\someone\lyrel\lyrel-app.exe"),
+            log: PathBuf::from(r"C:\cfg\update.log"),
+            version: "27.1.0".to_string(),
+            gui_pid: None,
+            config_dir: None,
+        };
+        let argv = plan.argv();
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg == &OsString::from("--config-dir")),
+            "no flag at all when the GUI staged no override"
+        );
         let parsed = WatcherPlan::parse(argv.into_iter().skip(1)).unwrap();
         assert_eq!(parsed, plan);
     }
@@ -324,21 +356,19 @@ mod windows_contract {
 
     #[test]
     fn capabilities_cover_elevation_matches_what_the_helper_prints() {
-        let answer = lyrel_updater::ELEVATION_CAPABILITIES.join("\n");
-        assert!(lyrel_updater::capabilities_cover_elevation(
-            answer.as_bytes()
-        ));
+        let answer = crate::ELEVATION_CAPABILITIES.join("\n");
+        assert!(crate::capabilities_cover_elevation(answer.as_bytes()));
         // Order and unrelated tokens are the helper's business.
-        assert!(lyrel_updater::capabilities_cover_elevation(
+        assert!(crate::capabilities_cover_elevation(
             b"install\nrelaunch-watcher\nelevated-stage\ninstall-elevated\n"
         ));
         // An old updater exits with a usage error: no tokens, no chain.
-        assert!(!lyrel_updater::capabilities_cover_elevation(
+        assert!(!crate::capabilities_cover_elevation(
             b"usage: lyrel-updater <command> [args]"
         ));
-        assert!(!lyrel_updater::capabilities_cover_elevation(b""));
+        assert!(!crate::capabilities_cover_elevation(b""));
         // Two of the three verbs is not the chain.
-        assert!(!lyrel_updater::capabilities_cover_elevation(
+        assert!(!crate::capabilities_cover_elevation(
             b"elevated-stage\ninstall-elevated\n"
         ));
     }
@@ -384,7 +414,7 @@ mod conpty_contract {
     fn accepts_the_unchanged_pinned_manifest() {
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), PINNED_MANIFEST);
-        lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap();
+        crate::windows::verify_portable_conpty(root.path()).unwrap();
     }
 
     #[test]
@@ -402,7 +432,7 @@ mod conpty_contract {
             staged("LICENSE-ConPTY.txt"),
         )
         .unwrap();
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("ConPTY-manifest.json"), "{error}");
     }
 
@@ -410,7 +440,7 @@ mod conpty_contract {
     fn rejects_a_corrupt_target_manifest() {
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), b"not json");
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("invalid target ConPTY manifest"), "{error}");
     }
 
@@ -420,7 +450,7 @@ mod conpty_contract {
         manifest["schemaVersion"] = 2.into();
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), &serde_json::to_vec(&manifest).unwrap());
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(
             error.contains("unsupported target ConPTY manifest schema"),
             "{error}"
@@ -436,7 +466,7 @@ mod conpty_contract {
         manifest["files"]["x64"]["conpty.dll"] = tampered.into();
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), &serde_json::to_vec(&manifest).unwrap());
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("SHA-256 mismatch"), "{error}");
     }
 
@@ -445,7 +475,7 @@ mod conpty_contract {
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), PINNED_MANIFEST);
         fs::remove_file(root.path().join("OpenConsole.exe")).unwrap();
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("OpenConsole.exe"), "{error}");
     }
 
@@ -457,7 +487,7 @@ mod conpty_contract {
         let last = damaged.len() - 1;
         damaged[last] ^= 0xff;
         fs::write(root.path().join("conpty.dll"), damaged).unwrap();
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("SHA-256 mismatch"), "{error}");
     }
 
@@ -467,7 +497,7 @@ mod conpty_contract {
         manifest["files"]["x64"]["conpty.dll"] = serde_json::Value::Null;
         let root = tempfile::tempdir().unwrap();
         payload(root.path(), &serde_json::to_vec(&manifest).unwrap());
-        let error = lyrel_updater::windows::verify_portable_conpty(root.path()).unwrap_err();
+        let error = crate::windows::verify_portable_conpty(root.path()).unwrap_err();
         assert!(error.contains("missing a digest"), "{error}");
     }
 }

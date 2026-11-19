@@ -190,9 +190,20 @@ pub enum DiskConflict {
 
 /// How long a deferred diagram save waits for the engine to confirm its
 /// current model. A test deadline stays short so a stalled flush is proven
-/// without sleeping the production three seconds.
-const DRAWIO_FLUSH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(if cfg!(test) { 60 } else { 3_000 });
+/// without sleeping the production three seconds. The same gate covers the
+/// crate compiled as a dependency of the root whole-window and native test
+/// harnesses (`cfg(test)` is false there).
+const DRAWIO_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(
+    if cfg!(any(
+        test,
+        feature = "test-support",
+        feature = "native-markdown-tests"
+    )) {
+        60
+    } else {
+        3_000
+    },
+);
 
 /// A save that must not capture bytes older than the engines' live models.
 /// It records one ticket per presentation that accepted its own sync command
@@ -254,8 +265,10 @@ pub struct OpenFile {
     /// Git change markers — see `gutter`.
     pub gutter: gutter::BufferGutter,
     pub popups: Option<Entity<crate::lsp::popups::EditorPopups>>,
-    pub _sub: Subscription,
-    pub _observe: Subscription,
+    // Held so the subscriptions outlive the file; constructed only by the
+    // crate's own buffer factories (`code_editor::buffers`).
+    _sub: Subscription,
+    _observe: Subscription,
 }
 
 impl OpenFile {

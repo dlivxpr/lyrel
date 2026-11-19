@@ -18,6 +18,14 @@ pub mod markers;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+/// Contract tests at the shared public seam, run by the library test target
+/// so `cargo test -p lyrel-updater --lib` alone exercises the whole contract
+/// (see #324's acceptance). Everything inside drives only this crate's public
+/// interface — the same surface the GUI update coordinator builds plans
+/// through and the `lyrel-updater` executable parses them with.
+#[cfg(test)]
+mod contract_tests;
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::ffi::OsString;
 #[cfg(any(target_os = "macos", target_os = "windows"))]

@@ -994,7 +994,7 @@ impl UsagePage {
                                 }
                                 (Provider::Kimi, Source::Session) => Material::ProviderSession(
                                     provider,
-                                    zeroize::Zeroizing::new(providers::kimi::session(&secret)?),
+                                    providers::kimi::session(&secret)?,
                                 ),
                                 (Provider::CommandCode, _) => {
                                     return Err(UsageError::Authentication);
@@ -1021,9 +1021,7 @@ impl UsagePage {
                                 }
                                 (_, Source::Session) => Material::ProviderSession(
                                     provider,
-                                    zeroize::Zeroizing::new(providers::parse_manual(
-                                        provider, &secret,
-                                    )?),
+                                    providers::parse_manual(provider, &secret)?,
                                 ),
                                 (_, Source::Browser) => {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
@@ -1041,10 +1039,7 @@ impl UsagePage {
                                     Material::Cookies(
                                         provider,
                                         selection,
-                                        zeroize::Zeroizing::new(providers::parse_session(
-                                            provider,
-                                            material.secret(),
-                                        )?),
+                                        providers::parse_session(provider, material.secret())?,
                                     )
                                 }
                                 (_, Source::ApiKey) => return Err(UsageError::Authentication),

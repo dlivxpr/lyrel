@@ -41,7 +41,7 @@ description: >-
 | core / CLI E2E | `cargo test --locked -p lyrel-core` / `cargo test --locked -p lyrel-cli --test cli_e2e` |
 | 文本 codec / 文档格式引擎 | `cargo test --locked -p lyrel-document --no-default-features` / `cargo test --locked -p lyrel-document --all-features` |
 | 桌面 library 测试 | `cargo test --locked -p lyrel -p lyrel-ui-base -p lyrel-terminal -p lyrel-workbench-editor --lib` |
-| 桌面 updater 测试 | `cargo test --locked -p lyrel-updater --lib` |
+| 桌面 updater 测试 | `cargo test --locked -p lyrel-updater` |
 | native Markdown / 终端 | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` / `cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal` |
 | 格式检查 / 写回 | `cargo fmt --check` / `cargo fmt` |
 | Host 边界 | `bash .github/scripts/check-host-boundary.sh` |

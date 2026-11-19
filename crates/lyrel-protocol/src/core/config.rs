@@ -1310,10 +1310,12 @@ fn env_config_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The marker the Windows portable ZIP ships beside its executables. The
-/// updater reads it as "this is a portable install" (see `update.rs` and
-/// `lyrel-updater`); here it is half of the opt-in to keeping data beside the
-/// executables too.
+/// The marker the Windows portable ZIP ships beside its executables. This is
+/// the single definition of the name: `lyrel-updater` re-exports it from its
+/// layout contract rather than redefining it (an updater -> protocol edge is
+/// fine; the reverse would be cyclic). The updater reads it as "this is a
+/// portable install" (see `update.rs`); here it is half of the opt-in to
+/// keeping data beside the executables too.
 pub const PORTABLE_MARKER: &str = ".lyrel-portable";
 
 /// The folder, beside the executables, a portable install keeps its whole

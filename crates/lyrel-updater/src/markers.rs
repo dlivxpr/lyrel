@@ -12,8 +12,13 @@ pub const INNO_INSTALL_MARKER: &str = ".lyrel-inno-install";
 /// Frozen marker bytes; a mismatch refuses the layout rather than guessing.
 pub const INNO_INSTALL_MARKER_CONTENT: &[u8] = b"inno-v1";
 
-/// Marks a portable ZIP installation. Content is `portable-v1`.
-pub const PORTABLE_MARKER: &str = ".lyrel-portable";
+/// Marks a portable ZIP installation. The name has a single definition in
+/// `lyrel-protocol` — the lowest tier that needs it, because the CLI and the
+/// server resolve a portable install's data folder by it (`portable_data_dir`)
+/// and a `protocol -> updater` edge would be cyclic — and this crate
+/// re-exports it so the layout contract stays one name on both sides of an
+/// update. The frozen content below stays updater-owned.
+pub use lyrel_core::lyrel_protocol::core::config::PORTABLE_MARKER;
 /// Frozen marker bytes; a mismatch refuses the layout rather than guessing.
 pub const PORTABLE_MARKER_CONTENT: &[u8] = b"portable-v1";
 

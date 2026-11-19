@@ -881,24 +881,22 @@ impl PdfView {
                     let mut text_pages = 0usize;
                     let mut failed_pages = 0usize;
                     let mut truncated = false;
+                    let mut cancelled_mid_pass = false;
                     for page in 0..pages {
                         if cancelled.is_cancelled() {
-                            #[cfg(any(test, feature = "test-support"))]
-                            if let Some(gate) = gate {
-                                gate.finish();
-                            }
-                            return SweepResult {
-                                matches,
-                                texts,
-                                text_pages,
-                                failed_pages,
-                                truncated,
-                                cancelled: true,
-                            };
+                            cancelled_mid_pass = true;
+                            break;
                         }
-                        match document.text(page) {
-                            Some(text) if text.is_empty() => {}
-                            Some(text) => {
+                        match document.text(page, &cancelled) {
+                            // Cancellation is its own answer: the sweep
+                            // retires with the token, and the partial page is
+                            // never counted as a failure.
+                            lyrel_document::pdf::PageTextResult::Cancelled => {
+                                cancelled_mid_pass = true;
+                                break;
+                            }
+                            lyrel_document::pdf::PageTextResult::Text(text) if text.is_empty() => {}
+                            lyrel_document::pdf::PageTextResult::Text(text) => {
                                 text_pages += 1;
                                 for rects in text.find_matches(&query) {
                                     if rects.is_empty() {
@@ -914,7 +912,7 @@ impl PdfView {
                                     texts.push((page, Arc::new(text)));
                                 }
                             }
-                            None => failed_pages += 1,
+                            lyrel_document::pdf::PageTextResult::NoPage(_) => failed_pages += 1,
                         }
                         if truncated {
                             break;
@@ -930,7 +928,7 @@ impl PdfView {
                         text_pages,
                         failed_pages,
                         truncated,
-                        cancelled: false,
+                        cancelled: cancelled_mid_pass,
                     }
                 })
                 .await;
@@ -1091,10 +1089,11 @@ impl PdfView {
             self.text_jobs += 1;
             let document_id = self.document.entity_id();
             let revision = self.document.read(cx).revision();
+            let cancel = self.cancel.clone();
             cx.spawn(async move |view, cx| {
                 let extracted = cx
                     .background_executor()
-                    .spawn(async move { document.text(page) })
+                    .spawn(async move { document.text(page, &cancel) })
                     .await;
                 let _ = view.update(cx, |view, cx| {
                     view.land_text(page, document_id, revision, extracted, cx);
@@ -1105,13 +1104,14 @@ impl PdfView {
     }
 
     /// 页文本落地：只有仍占着 Loading 位、同一文档与修订的结果生效；
-    /// 其它视为迟到结果丢弃，然后继续补满并发。
+    /// 其它视为迟到结果丢弃，然后继续补满并发。取消不是失败：清掉
+    /// Loading 占位让该页可被重新请求，而不是留下 Failed。
     fn land_text(
         &mut self,
         page: usize,
         document_id: gpui_kit::EntityId,
         revision: u64,
-        extracted: Option<lyrel_document::pdf::PageText>,
+        extracted: lyrel_document::pdf::PageTextResult,
         cx: &mut Context<Self>,
     ) {
         self.text_jobs = self.text_jobs.saturating_sub(1);
@@ -1119,14 +1119,17 @@ impl PdfView {
             && self.document.read(cx).revision() == revision;
         if current && matches!(self.page_text.get(&page), Some(TextSlot::Loading)) {
             match extracted {
-                Some(text) if text.is_empty() => {
+                lyrel_document::pdf::PageTextResult::Text(text) if text.is_empty() => {
                     self.page_text.insert(page, TextSlot::Empty);
                 }
-                Some(text) => {
+                lyrel_document::pdf::PageTextResult::Text(text) => {
                     self.install_page_text(page, TextSlot::Ready(Arc::new(text)));
                 }
-                None => {
+                lyrel_document::pdf::PageTextResult::NoPage(_) => {
                     self.page_text.insert(page, TextSlot::Failed);
+                }
+                lyrel_document::pdf::PageTextResult::Cancelled => {
+                    self.page_text.remove(&page);
                 }
             }
         }
@@ -1348,7 +1351,7 @@ impl PdfView {
                         if let Some(gate) = gate.as_ref() {
                             gate.block().await;
                         }
-                        let result = document.render_page(index, scale, &|| cancel.is_cancelled());
+                        let result = document.render_page(index, scale, &cancel);
                         #[cfg(any(test, feature = "test-support"))]
                         if let Some(gate) = gate {
                             gate.finish();

@@ -116,7 +116,7 @@ pub fn query(
 }
 
 /// 手工明确选择单个会话 Cookie；不猜 cookie 名，不保存浏览器整段 Cookie。
-pub fn session(input: &str) -> Result<String, UsageError> {
+pub fn session(input: &str) -> Result<Zeroizing<String>, UsageError> {
     let value = input
         .trim()
         .strip_prefix("Cookie:")
@@ -135,7 +135,7 @@ pub fn session(input: &str) -> Result<String, UsageError> {
     {
         return Err(UsageError::Authentication);
     }
-    Ok(value.to_owned())
+    Ok(Zeroizing::new(value.to_owned()))
 }
 /// #17 可以消费相同 HTTP/解析 Interface；浏览器材料不得调用长期 save_enhancement。
 /// 身份由第一方 better-auth /auth/get-session 核对，不臆造 subscription.userId。

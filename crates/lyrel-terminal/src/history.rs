@@ -347,7 +347,14 @@ fn normalize(raw: Vec<Raw>) -> History {
 
 fn load_shell_history() -> Vec<Raw> {
     // A developer's real history would push a test's entries past MAX_ENTRIES.
-    if cfg!(test) {
+    // The gate matches `quiet_test_pane`'s: this crate is compiled as a
+    // dependency of the root whole-window and native harnesses, where
+    // `cfg(test)` is false but the test features are on.
+    if cfg!(any(
+        test,
+        feature = "test-support",
+        feature = "native-markdown-tests"
+    )) {
         return Vec::new();
     }
     let mut files: Vec<PathBuf> = Vec::new();

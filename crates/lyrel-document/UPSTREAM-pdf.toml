@@ -15,9 +15,9 @@ backend = "hayro =0.8.0 (registry, Apache-2.0 OR MIT)"
 # outline 补齐 named destination（Names/Dests 与旧式 Dests）和目的地坐标，旋转页链接按
 # 页面初始变换归一化；无 /AP 表单只输出解密后的字段值与几何，由 Lyrel 叠加只读文本，
 # 不再把 WinAnsi 合成外观写回字节。
-# src/lib.rs、src/fixtures.rs 为 Lyrel 原创适配/测试夹具；未修改 hayro 或 Cargo 缓存。
+# src/pdf.rs、src/pdf/fixtures.rs 为 Lyrel 原创适配/测试夹具；未修改 hayro 或 Cargo 缓存。
 # #285：上游 GPUI 侧的选择/搜索/大纲交互未导入，Lyrel `PdfView` 以归一化几何重实现；
-# src/text.rs 的选择矩形/选字/`find_matches`/阅读顺序、`src/outline.rs` 的大纲/目的地/
+# src/pdf/text.rs 的选择矩形/选字/`find_matches`/阅读顺序、`src/pdf/outline.rs` 的大纲/目的地/
 # 链接由本票直接消费；`ligature_text_document` 夹具为 Lyrel 原创（Type3 多码点 glyph）。
 # 原生阅读修复：端点先用与文本重建一致的阅读行分组，再匹配横向最近字形，
 # 避免低于同行其它字形的 descender 抢占行尾后的释放点；旋转坐标只对端点逆变换一次。

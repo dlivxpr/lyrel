@@ -64,17 +64,10 @@ lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor", optional = true
 # Independent desktop clients; the window shell owns their composition.
 lyrel-terminal = { path = "crates/lyrel-terminal" }
 lyrel-workbench-editor = { path = "crates/lyrel-workbench-editor" }
-# Session and shell tokens are 128-bit OS entropy, never a timestamp or a
-# hash of the document. `getrandom` is already in the tree.
-getrandom = "0.3.4"
 
 anyhow.workspace = true
 log.workspace = true
 chrono = "0.4.45"
-# Smart double-click selection patterns (URL/email/path). Already in the tree
-# transitively, so pinning it here adds no new native code.
-regex = "1"
-# Reuse the locked parser for stable release precedence and strict tag validation.
 semver = "=1.0.28"
 # Grapheme-cluster boundaries for the sidebar's label elision
 # (`ui::tab_strip`). Cutting a label by `char` tears emoji apart: a ZWJ
@@ -82,8 +75,6 @@ semver = "=1.0.28"
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
-# Fair reader/painter locking without maintaining an emulator-specific lock.
-parking_lot = "0.13"
 smol.workspace = true
 smallvec.workspace = true
 serde = { workspace = true }
@@ -99,8 +90,6 @@ percent-encoding = "2"
 # Clear transient form credentials when they leave scope.
 zeroize = "1"
 sha2 = "0.11.1"
-# Cross-process locking for graphics fixtures, also built by the native test feature.
-fs2 = "0.4"
 
 
 # SSH profile ids in the connection manager UI (`ui::ssh_connect`,
@@ -118,9 +107,6 @@ uuid = { version = "1.28.0", features = ["v4", "serde"] }
 # for code it can never reach. Only the secret-free naming half (`CredentialRef`,
 # the account scheme) stays in core, where `config.json` parsing needs it.
 keyring = "4"
-
-# YAML for desktop settings that remain in the window shell.
-yaml_serde.workspace = true
 
 # Clipboard-image paste (`terminal::view`). When the clipboard holds a screenshot
 # and a coding-agent TUI (Claude Code &co.) is in the pane, off macOS we stage the

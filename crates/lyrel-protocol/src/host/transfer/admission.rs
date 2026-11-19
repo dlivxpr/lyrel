@@ -8,7 +8,7 @@
 //! Lyrel 适配：去掉了缓存/回收、UI 资源类目和 macOS 内存余量回调，因为传输
 //! 预算是一本独立、固定上界的账；图片解码后的像素缓存仍由现成的
 //! `markdown::images` lease 记账，两者不混用。原始摘要与保留范围见
-//! `crates/lyrel-core/UPSTREAM.toml`。
+//! `crates/lyrel-protocol/UPSTREAM.toml`。
 
 use std::fmt;
 use std::sync::{Arc, LazyLock, Mutex};

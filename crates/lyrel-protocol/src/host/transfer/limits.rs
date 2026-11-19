@@ -8,7 +8,7 @@
 //! Glim 的 `assets/reader-limits.json` → Rust 生成管线不导入（Lyrel 没有
 //! build-time 生成需求）；本模块的数值来自 Lyrel 自己的消费者设计，不复制
 //! Glim 以 macOS ImageIO 为前提的常量。原始摘要见
-//! `crates/lyrel-core/UPSTREAM.toml`。
+//! `crates/lyrel-protocol/UPSTREAM.toml`。
 
 use std::fmt;
 

@@ -531,7 +531,10 @@ impl Accounts {
         }
         Ok(id)
     }
-    pub fn enhancement_secret(&self, id: Uuid) -> Result<Option<String>, UsageError> {
+    pub fn enhancement_secret(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, UsageError> {
         let account = self.account(id).ok_or(UsageError::Stale)?;
         account
             .enhancement_slot
@@ -539,6 +542,7 @@ impl Accounts {
                 self.vault
                     .secret(SERVICE, &slot.to_string())
                     .map_err(|_| UsageError::Credentials)?
+                    .map(zeroize::Zeroizing::new)
                     .ok_or(UsageError::Credentials)
             })
             .transpose()

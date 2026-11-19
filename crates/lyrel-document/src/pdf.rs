@@ -142,7 +142,7 @@ impl PdfDocument {
     /// Rasterize one page (0-based) at `scale` PDF-points-to-pixels, composited
     /// onto white as opaque RGBA. The caller turns this into its own texture.
     ///
-    /// `cancelled` is checked before and after the interpret pass. hayro's
+    /// `cancel` is checked before and after the interpret pass. hayro's
     /// rasterizer cannot be interrupted mid-page, so cancellation retires the
     /// result and the scheduling generation rather than aborting the CPU pass;
     /// callers must not treat a completed result as current after cancelling.
@@ -150,12 +150,12 @@ impl PdfDocument {
         &self,
         index: usize,
         scale: f32,
-        cancelled: &(dyn Fn() -> bool + Send + Sync),
+        cancel: &crate::state::CancelToken,
     ) -> Result<RenderedPage, RenderError> {
         if index >= self.dims.len() {
             return Err(RenderError::NoPage(index));
         }
-        if cancelled() {
+        if cancel.is_cancelled() {
             return Err(RenderError::Cancelled);
         }
         let scale = bounded_scale(self.dims[index], scale);
@@ -166,14 +166,14 @@ impl PdfDocument {
             Some(index..=index),
         )
         .ok_or(RenderError::Failed(index))?;
-        if cancelled() {
+        if cancel.is_cancelled() {
             return Err(RenderError::Cancelled);
         }
         let pixmap = pixmaps
             .into_iter()
             .next()
             .ok_or(RenderError::Failed(index))?;
-        if cancelled() {
+        if cancel.is_cancelled() {
             return Err(RenderError::Cancelled);
         }
         let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
@@ -198,8 +198,26 @@ impl PdfDocument {
     /// Extract one page's text layer. Runs a non-rasterizing interpret pass, so
     /// callers cache the result per page and never extract the whole document
     /// just to show a page.
-    pub fn text(&self, index: usize) -> Option<PageText> {
-        text::extract_page_text(&self.pdf, index)
+    ///
+    /// `cancel` is checked before and after the interpret pass; like the
+    /// rasterizer, the text pass cannot be interrupted mid-page. Cancellation
+    /// is its own answer — a cancelled extraction is never reported as a
+    /// failed page, and a failed page is never reported as cancellation.
+    pub fn text(&self, index: usize, cancel: &crate::state::CancelToken) -> PageTextResult {
+        if index >= self.dims.len() {
+            return PageTextResult::NoPage(index);
+        }
+        if cancel.is_cancelled() {
+            return PageTextResult::Cancelled;
+        }
+        let extracted = text::extract_page_text(&self.pdf, index);
+        if cancel.is_cancelled() {
+            return PageTextResult::Cancelled;
+        }
+        match extracted {
+            Some(text) => PageTextResult::Text(text),
+            None => PageTextResult::NoPage(index),
+        }
     }
 }
 
@@ -262,6 +280,33 @@ impl fmt::Display for RenderError {
 }
 
 impl std::error::Error for RenderError {}
+
+/// What extracting one page's text produced. The three answers are kept
+/// apart so a caller can retire a cancelled attempt without counting it as a
+/// page failure, and report a genuinely missing page without conflating it
+/// with either.
+pub enum PageTextResult {
+    /// The page's text layer in reading order; empty for scan-only pages.
+    Text(PageText),
+    /// The page does not exist.
+    NoPage(usize),
+    /// The token cancelled before or after the interpret pass; the attempt
+    /// retires with its scheduling generation and installs nothing.
+    Cancelled,
+}
+
+impl fmt::Debug for PageTextResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(text) => formatter
+                .debug_tuple("Text")
+                .field(&text.is_empty())
+                .finish(),
+            Self::NoPage(index) => formatter.debug_tuple("NoPage").field(index).finish(),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+        }
+    }
+}
 
 fn map_load_error(error: LoadPdfError) -> LoadError {
     match error {
@@ -526,8 +571,15 @@ mod tests {
 
     use crate::pdf::fixtures;
 
-    fn never_cancelled() -> bool {
-        false
+    fn fresh_token() -> crate::state::CancelToken {
+        crate::state::CancelToken::new()
+    }
+
+    fn expect_text(result: PageTextResult) -> PageText {
+        match result {
+            PageTextResult::Text(text) => text,
+            other => panic!("expected page text, got {other:?}"),
+        }
     }
 
     fn load_reading() -> PdfDocument {
@@ -553,7 +605,7 @@ mod tests {
     fn reading_fixture_renders_a_page_and_keeps_blue_pixels() {
         let document = load_reading();
         let page = document
-            .render_page(0, 1.0, &never_cancelled)
+            .render_page(0, 1.0, &fresh_token())
             .expect("renders page");
         assert_eq!((page.width, page.height), (612, 792));
         assert_eq!(page.rgba.len(), 612 * 792 * 4);
@@ -569,14 +621,39 @@ mod tests {
     #[test]
     fn cancellation_retires_a_page_render() {
         let document = load_reading();
+        let cancelled = fresh_token();
+        cancelled.cancel();
         assert_eq!(
-            document.render_page(0, 1.0, &|| true).unwrap_err(),
+            document.render_page(0, 1.0, &cancelled).unwrap_err(),
             RenderError::Cancelled
         );
         assert_eq!(
-            document.render_page(99, 1.0, &never_cancelled).unwrap_err(),
+            document.render_page(99, 1.0, &fresh_token()).unwrap_err(),
             RenderError::NoPage(99)
         );
+    }
+
+    /// Text cancellation is its own answer: a cancelled extraction retires
+    /// with the scheduling generation instead of counting the page as
+    /// failed, and a page that does not exist names itself instead of
+    /// masquerading as either.
+    #[test]
+    fn text_cancellation_is_not_a_failed_page_and_a_missing_page_names_itself() {
+        let document = load_reading();
+        let cancelled = fresh_token();
+        cancelled.cancel();
+        assert!(matches!(
+            document.text(0, &cancelled),
+            PageTextResult::Cancelled
+        ));
+        assert!(matches!(
+            document.text(99, &fresh_token()),
+            PageTextResult::NoPage(99)
+        ));
+        assert!(matches!(
+            document.text(0, &fresh_token()),
+            PageTextResult::Text(_)
+        ));
     }
 
     #[test]
@@ -593,7 +670,11 @@ mod tests {
         let document =
             PdfDocument::load(Arc::new(bytes), fixtures::TEST_PASSWORD).expect("unlocked");
         assert_eq!(document.page_count(), 12);
-        assert!(document.text(0).unwrap().text().contains("unique-page-01"));
+        assert!(
+            expect_text(document.text(0, &fresh_token()))
+                .text()
+                .contains("unique-page-01")
+        );
         assert_eq!(document.outline().len(), 3);
     }
 
@@ -601,7 +682,7 @@ mod tests {
     fn unicode_text_extracts_matches_and_locates_repeated_multibyte_text() {
         let document =
             PdfDocument::load(Arc::new(fixtures::unicode_text_document()), "").expect("unicode");
-        let text = document.text(0).expect("text page");
+        let text = expect_text(document.text(0, &fresh_token()));
         assert_eq!(text.text(), "中文 中文\n中文");
         assert_eq!(text.find_matches("中文").len(), 3);
         assert_eq!(text.locate("中文", 1).len(), 1);
@@ -621,7 +702,7 @@ mod tests {
     fn clipped_text_omits_the_fully_clipped_run() {
         let document =
             PdfDocument::load(Arc::new(fixtures::clipped_text_document()), "").expect("clipped");
-        let text = document.text(0).expect("text page").text();
+        let text = expect_text(document.text(0, &fresh_token())).text();
         assert!(text.contains("inside clip"), "got {text:?}");
         assert!(!text.contains("outside clip"), "got {text:?}");
     }
@@ -630,7 +711,7 @@ mod tests {
     fn draw_order_is_replaced_by_visual_reading_order() {
         let document =
             PdfDocument::load(Arc::new(fixtures::drawing_order_document()), "").expect("order");
-        let text = document.text(0).expect("text page").text();
+        let text = expect_text(document.text(0, &fresh_token())).text();
         assert!(text.starts_with("Hello World"), "got {text:?}");
     }
 
@@ -638,9 +719,9 @@ mod tests {
     fn scan_only_pages_have_no_invented_text() {
         let document =
             PdfDocument::load(Arc::new(fixtures::scan_only_document()), "").expect("scan");
-        assert!(document.text(0).expect("page").is_empty());
+        assert!(expect_text(document.text(0, &fresh_token())).is_empty());
         let page = document
-            .render_page(0, 1.0, &never_cancelled)
+            .render_page(0, 1.0, &fresh_token())
             .expect("renders the image page");
         assert_eq!((page.width, page.height), (612, 792));
     }
@@ -656,7 +737,7 @@ mod tests {
         assert_eq!(fields[0].value, "FILLED AP 279");
         assert_eq!(fields[1].value, "Yes");
         let page = document
-            .render_page(0, 1.0, &never_cancelled)
+            .render_page(0, 1.0, &fresh_token())
             .expect("renders appearance page");
         let pixel = |x: usize, y: usize| {
             let offset = (y * 612 + x) * 4;
@@ -697,7 +778,7 @@ mod tests {
             assert!(field.rect.y + field.rect.h <= 1.0);
         }
         let page = document
-            .render_page(0, 1.0, &never_cancelled)
+            .render_page(0, 1.0, &fresh_token())
             .expect("renders page body");
         assert!(!page.rgba.is_empty());
     }
@@ -736,7 +817,7 @@ mod tests {
     #[test]
     fn page_dimensions_and_text_use_the_same_rotated_page() {
         let document = load_reading();
-        let rotated = document.text(2).expect("rotated page text");
+        let rotated = expect_text(document.text(2, &fresh_token()));
         assert!(rotated.text().contains("unique-page-03"));
         let rects = rotated.locate("unique-page-03", 0);
         assert_eq!(rects.len(), 1);
@@ -762,7 +843,7 @@ mod tests {
             Some("unique-page-03")
         );
         let page = document
-            .render_page(2, 1.0, &never_cancelled)
+            .render_page(2, 1.0, &fresh_token())
             .expect("rotated render");
         assert_eq!((page.width, page.height), (792, 612));
     }
@@ -771,7 +852,7 @@ mod tests {
     fn ligature_glyph_expands_to_its_full_unicode_string() {
         let document =
             PdfDocument::load(Arc::new(fixtures::ligature_text_document()), "").expect("ligature");
-        let text = document.text(0).expect("text page");
+        let text = expect_text(document.text(0, &fresh_token()));
         // One Type3 glyph maps to the three-letter "ffi" ligature, so the
         // extracted line reads as the word, not the raw code points.
         assert_eq!(text.text(), "office");

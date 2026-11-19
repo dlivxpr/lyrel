@@ -3,6 +3,7 @@ use super::{
     accounts::{Balance, UsageError},
 };
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub mod command_code;
 pub mod kimi;
@@ -184,14 +185,14 @@ pub fn query(
     }
     .map(Balance::Provider)
 }
-pub fn parse_manual(provider: Provider, input: &str) -> Result<String, UsageError> {
+pub fn parse_manual(provider: Provider, input: &str) -> Result<Zeroizing<String>, UsageError> {
     let material = parse_session(provider, input)?;
     if material.len() > 2560 {
         return Err(UsageError::Credentials);
     }
     Ok(material)
 }
-pub fn parse_session(provider: Provider, input: &str) -> Result<String, UsageError> {
+pub fn parse_session(provider: Provider, input: &str) -> Result<Zeroizing<String>, UsageError> {
     if input.len() > 64 * 1024 || input.chars().any(char::is_control) {
         return Err(UsageError::Authentication);
     }
@@ -251,7 +252,7 @@ pub fn parse_session(provider: Provider, input: &str) -> Result<String, UsageErr
         }
         _ => return Err(UsageError::Authentication),
     };
-    Ok(value)
+    Ok(Zeroizing::new(value))
 }
 #[cfg(test)]
 mod tests {

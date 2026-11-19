@@ -3,11 +3,12 @@
 //!
 //! Structured projections ([`crate::json`], [`crate::yaml`], [`crate::toml`],
 //! [`crate::xml`], [`crate::csv`]), the EPUB chapter/index tasks and the PDF
-//! render/text passes all share [`CancelToken`] and [`ProjectionState`]: no
-//! engine keeps a private cancellation flag, and a cancelled or stale result
-//! is never installed. The desktop workbench bridges the Host transfer
-//! cancellation onto this token at task spawn points; nothing here knows a
-//! `Host`.
+//! render/text passes all share [`CancelToken`]: no engine keeps a private
+//! cancellation flag, and a cancelled or stale result is never installed.
+//! [`ProjectionState`] layers the revision/generation lifecycle for documents
+//! that parse a whole source on the same primitive. The desktop workbench
+//! bridges the Host transfer cancellation onto this token at task spawn
+//! points; nothing here knows a `Host`.
 
 use std::sync::{
     Arc,

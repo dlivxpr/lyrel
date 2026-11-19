@@ -6,7 +6,7 @@
 //! 让所有持有者看到取消；`CancelOnDrop` 在作用域退出时置位。Lyrel 适配去掉
 //! `anyhow`，改为本 crate 的 [`Cancelled`]，并增加显式 [`CancelToken::cancel`]
 //! 供关闭/替换目标的消费者调用。原始摘要与保留范围见
-//! `crates/lyrel-core/UPSTREAM.toml`。
+//! `crates/lyrel-protocol/UPSTREAM.toml`。
 
 use std::fmt;
 use std::io;

@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use smol::io::AsyncReadExt as _;
 
-use crate::markers::{PORTABLE_BACKUP_INCOMPLETE, PORTABLE_MARKER, PORTABLE_MARKER_CONTENT};
+use crate::markers::{
+    PORTABLE_BACKUP_INCOMPLETE, PORTABLE_BACKUP_PREFIX, PORTABLE_MARKER, PORTABLE_MARKER_CONTENT,
+};
 use crate::outcome::UpdateOutcome;
 use crate::{log_line, next_path, next_pid, next_string, reject_extra, report_outcome};
 use windows_sys::Win32::Foundation::{
@@ -126,7 +128,11 @@ pub fn run() -> Result<(), String> {
             }
             install_elevated(plan)
         }
-        "relaunch-watcher" => watch(&WatcherPlan::parse(args)?),
+        "relaunch-watcher" => {
+            let plan = WatcherPlan::parse(args)?;
+            plan.apply();
+            watch(&plan)
+        }
         _ => Err(usage()),
     }
 }
@@ -726,6 +732,10 @@ pub struct WatcherPlan {
     pub log: PathBuf,
     pub version: String,
     pub gui_pid: Option<u32>,
+    /// The config directory the relaunched app must answer for. The GUI
+    /// that staged the update resolved it; the watcher re-exports it to
+    /// the app it relaunches (#504).
+    pub config_dir: Option<PathBuf>,
 }
 
 impl WatcherPlan {
@@ -742,7 +752,7 @@ impl WatcherPlan {
                 log: Some(self.log.clone()),
                 expected_version: Some(self.version.clone()),
                 gui_pid: self.gui_pid,
-                config_dir: None,
+                config_dir: self.config_dir.clone(),
                 ..TailOptions::default()
             }
             .argv(),
@@ -750,9 +760,13 @@ impl WatcherPlan {
         argv
     }
 
+    /// Parses only: unlike the install plans, applying the config-directory
+    /// override is a separate step ([`WatcherPlan::apply`]) the executable's
+    /// dispatch runs once, after parsing and before any thread or child
+    /// exists. Keeping parse side-effect free lets the argv round-trip
+    /// contract tests run it without touching process-global state.
     pub fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, String> {
         let options = TailOptions::parse(&mut args)?;
-        options.apply();
         Ok(Self {
             status_file: options.status_file.ok_or_else(usage)?,
             result_file: options.result_file.ok_or_else(usage)?,
@@ -760,7 +774,17 @@ impl WatcherPlan {
             log: options.log.ok_or_else(usage)?,
             version: options.expected_version.ok_or_else(usage)?,
             gui_pid: options.gui_pid,
+            config_dir: options.config_dir,
         })
+    }
+
+    /// Applies the `--config-dir` override this plan carries to this
+    /// process and re-exports it for the children it spawns. Invoked only
+    /// by the executable's dispatch, before any thread exists.
+    pub fn apply(&self) {
+        if let Some(dir) = &self.config_dir {
+            crate::apply_config_dir(dir);
+        }
     }
 }
 
@@ -2184,7 +2208,7 @@ fn replace_portable_and_relaunch(
     // previous app: the relaunched GUI merges the outcome at startup, and
     // a write afterward races that merge (#540).
     let backup = match tempfile::Builder::new()
-        .prefix(".lyrel-update-backup-")
+        .prefix(PORTABLE_BACKUP_PREFIX)
         .tempdir_in(install_dir)
     {
         Ok(backup) => backup.keep(),
@@ -3802,7 +3826,7 @@ mod tests {
                     .filter(|path| {
                         path.file_name()
                             .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.starts_with(".lyrel-update-backup-"))
+                            .is_some_and(|name| name.starts_with(PORTABLE_BACKUP_PREFIX))
                     })
                     .collect();
                 assert_eq!(backups.len(), 1, "one backup during the replacement");

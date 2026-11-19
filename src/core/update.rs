@@ -1363,12 +1363,13 @@ impl PendingUpdate {
             // the relaunch it would otherwise perform on its own timeout
             // would put a second window beside it.
             gui_pid: Some(std::process::id()),
+            // The watcher's whole reason to exist is the relaunch; the
+            // relaunched app must answer for the same config directory
+            // this process staged the update against (#504).
+            config_dir: self.config_dir.clone(),
         };
         let mut watcher = Command::new(&self.updater);
         watcher.args(watcher_plan.argv());
-        if let Some(dir) = &self.config_dir {
-            watcher.arg("--config-dir").arg(dir);
-        }
         let mut watcher = lyrel_core::core::proc::hide_console(&mut watcher)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

@@ -11,6 +11,7 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_document::pdf::fixtures;
+use lyrel_document::pdf::{PageText, PageTextResult};
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
 use lyrel_ui_base::i18n::{L10nKey, t};
 use lyrel_workbench_editor::code_editor::BufferId;
@@ -31,6 +32,15 @@ fn settle(cx: &mut VisualTestContext) {
         window.render_frame(cx);
     });
     cx.run_until_parked();
+}
+
+/// Extract one page's text at the public seam, where the common token is part
+/// of the contract since #322.
+fn page_text(document: &lyrel_document::pdf::PdfDocument, page: usize) -> PageText {
+    match document.text(page, &lyrel_document::CancelToken::new()) {
+        PageTextResult::Text(text) => text,
+        other => panic!("expected page {page} text, got {other:?}"),
+    }
 }
 
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
@@ -188,7 +198,7 @@ fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppConte
     let document = document.expect("parsed");
     assert_eq!(document.page_size(2), Some((792.0, 612.0)));
     assert_eq!(document.page_count(), 12);
-    assert!(document.text(0).unwrap().text().contains("unique-page-01"));
+    assert!(page_text(&document, 0).text().contains("unique-page-01"));
     assert_eq!(document.outline().len(), 3);
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
 }
@@ -422,7 +432,7 @@ fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppCon
         view.document().read(cx).ready().expect("unlocked")
     });
     assert_eq!(document.page_count(), 12);
-    assert!(document.text(0).unwrap().text().contains("unique-page-01"));
+    assert!(page_text(&document, 0).text().contains("unique-page-01"));
     assert_eq!(document.outline().len(), 3);
     until(&mut cx, |cx| status(&app, cx) == "Page 1 / 12");
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "original untouched");
@@ -451,7 +461,13 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
         assert!(fields.iter().all(|field| !field.needs_text_overlay()));
         assert_eq!(fields[0].value, "FILLED AP 279");
         assert_eq!(fields[1].value, "Yes");
-        assert_eq!(document.render_page(0, 1.0, &|| false).unwrap().width, 612);
+        assert_eq!(
+            document
+                .render_page(0, 1.0, &lyrel_document::CancelToken::new())
+                .unwrap()
+                .width,
+            612
+        );
     });
     cx.update(|window, _| {
         assert!(window.find("pdf-page-0").visible());

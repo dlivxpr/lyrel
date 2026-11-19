@@ -7,7 +7,7 @@
 //! https://statics.moonshot.cn/kimi-web-seo/assets/framework-CDjk3_xN.js
 use super::*;
 
-pub fn session(input: &str) -> Result<String, UsageError> {
+pub fn session(input: &str) -> Result<Zeroizing<String>, UsageError> {
     let input = input.trim();
     if input.len() > 16 * 1024 {
         return Err(UsageError::Authentication);
@@ -41,7 +41,7 @@ pub fn session(input: &str) -> Result<String, UsageError> {
     {
         return Err(UsageError::Authentication);
     }
-    Ok(token.to_owned())
+    Ok(Zeroizing::new(token.to_owned()))
 }
 fn percent(number: f64) -> String {
     let value = format!("{number:.6}");

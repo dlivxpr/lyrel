@@ -549,3 +549,75 @@ impl EditorPanelState {
         self.strip_picker.as_ref().is_some_and(|p| p.over_button)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(n: u64) -> Vec<BufferId> {
+        (0..n).map(|_| BufferId::new()).collect()
+    }
+
+    fn code(files: &[BufferId], active: usize) -> TabCode {
+        let mut code = TabCode::new();
+        code.files = files.to_vec();
+        code.active = active;
+        code
+    }
+
+    #[test]
+    fn the_strip_keeps_the_files_last_in_front_in_their_strip_order() {
+        let ids = ids(5);
+        let mut code = code(&ids, 0);
+        for front in [3, 1, 4] {
+            code.active = front;
+            code.note_front();
+        }
+        let (shown, hidden) = code.strip_split(3);
+        // 4, 1 and 3 were in front last; they keep their strip positions.
+        assert_eq!(shown, vec![(1, ids[1]), (3, ids[3]), (4, ids[4])]);
+        // The rest by recency: 0 was in front before any of them, 2 never.
+        assert_eq!(hidden, vec![ids[0], ids[2]]);
+    }
+
+    #[test]
+    fn the_file_in_front_always_has_a_place() {
+        let ids = ids(4);
+        let mut code = code(&ids, 0);
+        code.note_front();
+        // Brought forward from outside the strip's view (a link, the list)
+        // without a frame drawn in between.
+        code.active = 3;
+        let (shown, _) = code.strip_split(1);
+        assert_eq!(shown, vec![(3, ids[3])]);
+    }
+
+    #[test]
+    fn a_split_keeps_the_other_groups_order() {
+        let ids = ids(4);
+        let mut code = code(&ids[..2], 1);
+        code.split = Some(super::super::split::OtherGroup {
+            id: super::super::split::GroupId::default(),
+            files: ids[2..].to_vec(),
+            active: 0,
+            focus_left: true,
+        });
+        code.note_front();
+        code.swap_focus();
+        code.note_front();
+        code.swap_focus();
+        code.note_front();
+        assert_eq!(code.recent, vec![ids[1], ids[0], ids[2], ids[3]]);
+    }
+
+    #[test]
+    fn closed_files_leave_the_order() {
+        let ids = ids(3);
+        let mut code = code(&ids, 2);
+        code.note_front();
+        code.files.remove(1);
+        code.active = 1;
+        code.note_front();
+        assert_eq!(code.recent, vec![ids[2], ids[0]]);
+    }
+}
