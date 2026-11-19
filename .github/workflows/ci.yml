@@ -300,9 +300,14 @@ jobs:
         timeout-minutes: 15
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --workspace --features native-markdown-tests,test-support --bin lyrel-graphics-fixture --target ${{ matrix.target }}
 
-      # PR / scope=ci 没有生产 cargo build；测试图为四个 bin 生成的真实
-      # 可执行文件仍必须通过 CRT 门禁，不能因事件不是 PR 就漏掉它。
-      - name: Assert the test-built binaries need no VC++ redistributable
+      # cargo test 生成 updater 的测试 harness，不生成无集成测试消费者的普通 bin。
+      # PR / scope=ci 不做完整生产构建，单独生成 updater 供同一个 CRT 门禁检查。
+      - name: Build the standalone updater for CRT verification
+        if: runner.os == 'Windows' && needs.preflight.outputs.production != 'true' && needs.preflight.outputs.reuse != 'true'
+        timeout-minutes: 15
+        run: pwsh -NoProfile -File scripts/cargo-windows.ps1 build --locked -p lyrel-updater --bin lyrel-updater --target ${{ matrix.target }}
+
+      - name: Assert the PR binaries need no VC++ redistributable
         if: runner.os == 'Windows' && needs.preflight.outputs.production != 'true' && needs.preflight.outputs.reuse != 'true'
         shell: pwsh
         run: |

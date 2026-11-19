@@ -183,9 +183,9 @@ Windows wrapper 实时显示 Cargo 的诊断与非 JSON 输出。普通 `test` �
 替代原生 OS 主线程初始化，也不把重试后的通过回填为第一次运行成功。
 
 CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready PR 或带 `ci:full`
-标签时恢复完整平台门禁。手动 CI 的默认 `scope=ci` 与 PR 一样检查生产图、构建并执行完整测试图，
-不额外构建生产二进制或打包；`scope=full` 才选择生产构建和发行验证。
-主线保留生产构建与静态 CRT 门禁；PR／`scope=ci` 检查测试图生成的真实 bin。
+标签时恢复完整平台门禁。手动 CI 的默认 `scope=ci` 与 PR 一样检查生产图、构建并执行完整测试图；
+只有 `scope=full` 才额外执行完整生产构建和发行验证。Windows PR／`scope=ci` 的静态 CRT 门禁检查
+测试图生成的 GUI、CLI、server 可执行文件，并单独构建普通 `lyrel-updater.exe`，而不是检查其测试 harness。
 相同 tree 的测试晋升只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即全量测试。
 冷缓存的生产构建、desktop library 单测编译各保留 45 分钟上限，job 为 120 分钟；
 这是依据实际冷编译超时调整的运行预算，不是性能提升声明，逐例测试超时与失败不写缓存策略不变。
