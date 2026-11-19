@@ -71,6 +71,11 @@ rusty-leveldb = "4.0.2"
 snap = "1"
 fs2 = "0.4"
 zeroize = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Chromium uses POSIX record locks in addition to the fs2 file lock.
+libc = "0.2.191"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows Chromium cookie decryption: same-user DPAPI unwrap plus AES-GCM,
 # the exact pinned line the GUI used. Never calls ABE or interactive APIs.
