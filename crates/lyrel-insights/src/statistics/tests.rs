@@ -829,14 +829,14 @@ fn statistics_pi_forks_preserve_new_usage_and_missing_parents_are_restricted() {
     let host = LocalHost::new();
     let source = Source::pi(root.into(), "pi-scope");
     let mut cache = StatisticsCache::default();
-    let snapshot = scan(&*host, &[source.clone()], &mut cache).unwrap();
+    let snapshot = scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
     assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).calls(), 2);
     assert_eq!(
         snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(),
         Some(1.0)
     );
     for _ in 0..2 {
-        let warm = scan(&*host, &[source.clone()], &mut cache).unwrap();
+        let warm = scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
         assert!(warm.is_complete(), "{:?}", warm.issues());
         assert_eq!(warm.aggregate(&DateWindow::all("UTC")).calls(), 2);
         assert_eq!(

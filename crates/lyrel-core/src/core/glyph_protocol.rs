@@ -355,7 +355,7 @@ impl GlyphSession {
 
     pub(crate) fn clear_all(&mut self) {
         if let Some(registry) = &self.registry
-            && registry.len() > 0
+            && !registry.is_empty()
         {
             registry.clear_all();
             self.generation = self.generation.wrapping_add(1);

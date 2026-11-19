@@ -418,12 +418,11 @@ fn collect_header_renames(
     repr: &str,
     replacements: &mut Vec<(Range<usize>, String)>,
 ) {
-    if let Some(header) = node.header.as_ref() {
-        if let Some(segment) = header.segments.get(index)
-            && segment.key == old_key
-        {
-            replacements.push((segment.raw.clone(), repr.to_owned()));
-        }
+    if let Some(header) = node.header.as_ref()
+        && let Some(segment) = header.segments.get(index)
+        && segment.key == old_key
+    {
+        replacements.push((segment.raw.clone(), repr.to_owned()));
     }
     for child in &node.children {
         if let Some(child) = projection.nodes().get(*child) {
@@ -461,10 +460,10 @@ fn collect_removal_ranges(
         ranges.push(header.line.clone());
     }
     if node.kind.is_value() {
-        if !node.inline_context {
-            if let Some(statement) = node.statement.clone() {
-                ranges.push(statement);
-            }
+        if !node.inline_context
+            && let Some(statement) = node.statement.clone()
+        {
+            ranges.push(statement);
         }
         // inline members are inside their container's statement; never remove
         // them again through a descendant walk.

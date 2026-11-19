@@ -1310,7 +1310,7 @@ impl Presentations {
         self.drawios
             .borrow()
             .iter()
-            .map(|(tab, group, view, _)| (tab.clone(), *group, view.clone()))
+            .map(|(tab, group, view, _)| (*tab, *group, view.clone()))
             .collect()
     }
 

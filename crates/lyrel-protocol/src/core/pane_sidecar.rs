@@ -182,8 +182,8 @@ impl ForeignWorkspace {
                         .iter_mut()
                         .find(|candidate| candidate.id == desired.id)
                     {
-                        Some(current) => merge_tab(current, base.as_ref(), desired),
-                        None => self.tabs.push(desired.clone()),
+                        Some(current) => merge_tab(current, base.as_deref(), desired),
+                        None => self.tabs.push(desired.as_ref().clone()),
                     }
                 }
             }
@@ -229,8 +229,8 @@ pub struct SidecarUpdate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum SidecarChange {
     Reconcile {
-        base: Option<Tab<ScopedPane>>,
-        desired: Tab<ScopedPane>,
+        base: Option<Box<Tab<ScopedPane>>>,
+        desired: Box<Tab<ScopedPane>>,
         transfer: bool,
     },
     CloseTab {
@@ -243,8 +243,8 @@ impl SidecarUpdate {
         Self {
             id: uuid::Uuid::new_v4(),
             change: SidecarChange::Reconcile {
-                base,
-                desired,
+                base: base.map(Box::new),
+                desired: Box::new(desired),
                 transfer: false,
             },
         }

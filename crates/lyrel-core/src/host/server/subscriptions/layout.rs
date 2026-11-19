@@ -57,7 +57,10 @@ fn spawn_layout_forwarder(
                     }
                     continue;
                 }
-                let event = ControlEvent::Layout { workspace, delta };
+                let event = ControlEvent::Layout {
+                    workspace,
+                    delta: Box::new(delta),
+                };
                 if sink.send(&ControlServerMsg::Event(event)).is_err() {
                     return;
                 }

@@ -103,7 +103,7 @@ CLI 的 `-m` 复用本地 daemon 已连接的机器路由，不自行建立新�
 | Markdown／MDX 原文与撤销 | `lyrel_markdown_editor::Document` | 每文档 | 一份 LF 原文、格式、history、revision 和唯一有效 IME lease；每个 `EditorState` 独立持有选择、光标 affinity、滚动、帧布局缓存、命中几何和互斥菜单 |
 | 终端客户端与绘制 | `RemoteTerminal`、`PaneConnection`、`TerminalView`、`TerminalElement` | 每客户端 pane | 按连接、流消费、实体适配与逐帧绘制分工，桌面缓存不是会话权威 |
 | 终端交互 | `PromptInput`、`Composer`、`AgentActivity`、`TerminalSearch` 和滚动状态 | 每客户端 pane | `TerminalSearch` 管理搜索栏状态、匹配和防抖代次；不改变隐藏 pane 重绘门控或输入读取实时模式的规则 |
-| 设置 | `SettingsWindow`、`SettingsContext`、`SettingsEvent` | 每设置窗口 | 设置页按节组织；通过注入的凭据适配器读写凭据，通过事件交接快捷键重绑、主题与菜单刷新。主题即时预览不写盘，确认后才持久化 |
+| 设置 | `SettingsWindow`、`SettingsContext`、`SettingsEvent` | 每设置窗口 | 设置页按节组织；注入的凭据适配器负责凭据读写，事件交接快捷键重绑、主题与菜单刷新。即时预览仅覆盖当前呈现，不修改 `Config`；同时保存其他设置也不会写入未确认的预览 |
 | 应用通知历史 | `InboxGlobal` 内的 `Inbox` | 进程共享；每窗一个 `NotificationBell` | 本机有界持久化，与 daemon 和系统通知中心解耦 |
 
 逻辑 pane 不等于当前可见的分屏叶。PiP 和停放改变 `Tab.presentation` 的可见投影，不删除完整逻辑树中的会话，也不能被同步差分解释成 `PaneClose`。休眠与会话恢复使用各自的生命周期规则，不能仅凭视图未挂载就销毁 PTY。

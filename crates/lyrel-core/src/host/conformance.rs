@@ -548,7 +548,7 @@ pub fn open_read_rejects_missing_paths_and_directories(h: &dyn Host, sb: &dyn Sa
 
 pub fn open_read_refuses_an_oversized_segment(h: &dyn Host, sb: &dyn Sandbox) {
     let f = h.join(sb.path(), "segments.bin");
-    put(h, &f, &vec![b'x'; 64]);
+    put(h, &f, &[b'x'; 64]);
     let mut reader = h.open_read(&f).unwrap();
     let error = reader
         .read_segment(crate::host::transfer::SEGMENT_BYTES_MAX + 1)
@@ -1426,10 +1426,10 @@ pub fn watch_set_dirs_adds_and_drops(h: &dyn Host, sb: &dyn Sandbox) {
     mkdir(h, &a);
     mkdir(h, &b);
 
-    let sub = h.watch(&[a.clone()]).unwrap();
+    let sub = h.watch(std::slice::from_ref(&a)).unwrap();
     drain(&sub);
 
-    sub.set_dirs(&[b.clone()]).unwrap();
+    sub.set_dirs(std::slice::from_ref(&b)).unwrap();
     drain(&sub);
 
     write(h, &h.join(&b, "in-b.txt"), "x");
@@ -1800,7 +1800,7 @@ pub fn sqlite_validates_identifiers_against_the_open_view(h: &dyn Host, sb: &dyn
 /// page path uses — so a remote Host answers them with the same bounded,
 /// validated SQL the local one does.
 pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb: &dyn Sandbox) {
-    use crate::host::sqlite::{SqliteCancel, SqliteValue, VALUE_CHUNK_BYTES};
+    use crate::host::sqlite::{SqliteCancel, SqliteCellRead, SqliteValue, VALUE_CHUNK_BYTES};
     let path = h.join(sb.path(), "query.sqlite");
     {
         let connection = rusqlite::Connection::open(&path).unwrap();
@@ -1856,7 +1856,17 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
     // A value larger than one chunk is read by exact byte offset; the chunks
     // reassemble the stored value and `total` never lies about its length.
     let big = h
-        .sqlite_value(opened.view, &query, 4, 2, 0, VALUE_CHUNK_BYTES, &cancel)
+        .sqlite_value(
+            opened.view,
+            &query,
+            SqliteCellRead {
+                row: 4,
+                column: 2,
+                offset: 0,
+                max_bytes: VALUE_CHUNK_BYTES,
+            },
+            &cancel,
+        )
         .unwrap();
     let SqliteValue::Text { preview, total } = &big else {
         panic!("a TEXT value stayed TEXT: {big:?}");
@@ -1867,10 +1877,12 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
         .sqlite_value(
             opened.view,
             &query,
-            4,
-            2,
-            VALUE_CHUNK_BYTES,
-            VALUE_CHUNK_BYTES,
+            SqliteCellRead {
+                row: 4,
+                column: 2,
+                offset: VALUE_CHUNK_BYTES,
+                max_bytes: VALUE_CHUNK_BYTES,
+            },
             &cancel,
         )
         .unwrap();
@@ -1888,10 +1900,12 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
         .sqlite_value(
             opened.view,
             &query,
-            4,
-            2,
-            last_offset,
-            VALUE_CHUNK_BYTES,
+            SqliteCellRead {
+                row: 4,
+                column: 2,
+                offset: last_offset,
+                max_bytes: VALUE_CHUNK_BYTES,
+            },
             &cancel,
         )
         .unwrap();
@@ -1910,7 +1924,17 @@ pub fn sqlite_filters_sorts_and_reads_values_in_bounded_chunks(h: &dyn Host, sb:
 
     // Integers come back whole in one call, whatever the chunk bound says.
     let id = h
-        .sqlite_value(opened.view, &query, 0, 0, 0, 4, &cancel)
+        .sqlite_value(
+            opened.view,
+            &query,
+            SqliteCellRead {
+                row: 0,
+                column: 0,
+                offset: 0,
+                max_bytes: 4,
+            },
+            &cancel,
+        )
         .unwrap();
     assert!(matches!(id, SqliteValue::Integer { .. }), "{id:?}");
     h.sqlite_close(opened.view);

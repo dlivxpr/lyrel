@@ -140,13 +140,13 @@ pub fn key_event_to_bytes(
     flags: KeyFlags,
     event: KeyEventType,
 ) -> Option<(Vec<u8>, bool)> {
-    if flags.kitty_active() && !ks.modifiers.platform {
-        if let Some(bytes) = encode_kitty(ks, flags, event) {
-            let release = flags.report_events
-                && (flags.report_all_keys
-                    || !matches!(ks.key.as_str(), "enter" | "tab" | "backspace"));
-            return Some((bytes, release));
-        }
+    if flags.kitty_active()
+        && !ks.modifiers.platform
+        && let Some(bytes) = encode_kitty(ks, flags, event)
+    {
+        let release = flags.report_events
+            && (flags.report_all_keys || !matches!(ks.key.as_str(), "enter" | "tab" | "backspace"));
+        return Some((bytes, release));
     }
     legacy_keystroke_to_bytes(ks, flags).map(|bytes| (bytes, false))
 }
@@ -236,13 +236,13 @@ fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags, kind: KeyEventType) -
     }
 
     let modified = m.control || m.alt;
-    if modified || kitty.report_all_keys {
-        if let Some(code) = text_key_code(ks) {
-            let text = (kitty.report_text && kind != KeyEventType::Release)
-                .then(|| associated_text(ks))
-                .flatten();
-            return Some(csi_u(code, mods, event, text.as_deref()));
-        }
+    if (modified || kitty.report_all_keys)
+        && let Some(code) = text_key_code(ks)
+    {
+        let text = (kitty.report_text && kind != KeyEventType::Release)
+            .then(|| associated_text(ks))
+            .flatten();
+        return Some(csi_u(code, mods, event, text.as_deref()));
     }
 
     None
@@ -458,16 +458,17 @@ fn legacy_keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Optio
     let m = &ks.modifiers;
     let key = ks.key.as_str();
 
-    if m.control && !m.platform {
-        if let Some(b) = ctrl_c0(key) {
-            if b == b'\n' && !m.alt && !m.shift {
-                return Some(flags.legacy_newline_bytes().to_vec());
-            }
-            if m.alt {
-                return Some(vec![0x1b, b]);
-            }
-            return Some(vec![b]);
+    if m.control
+        && !m.platform
+        && let Some(b) = ctrl_c0(key)
+    {
+        if b == b'\n' && !m.alt && !m.shift {
+            return Some(flags.legacy_newline_bytes().to_vec());
         }
+        if m.alt {
+            return Some(vec![0x1b, b]);
+        }
+        return Some(vec![b]);
     }
 
     if let Some(seq) = functional_key(key, xterm_mods(m), flags.app_cursor(), None) {
@@ -493,15 +494,15 @@ fn legacy_keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Optio
     if m.platform {
         return None;
     }
-    if let Some(ch) = &ks.key_char {
-        if !ch.is_empty() {
-            let mut v = Vec::new();
-            if m.alt {
-                v.push(0x1b);
-            }
-            v.extend_from_slice(ch.as_bytes());
-            return Some(v);
+    if let Some(ch) = &ks.key_char
+        && !ch.is_empty()
+    {
+        let mut v = Vec::new();
+        if m.alt {
+            v.push(0x1b);
         }
+        v.extend_from_slice(ch.as_bytes());
+        return Some(v);
     }
     None
 }

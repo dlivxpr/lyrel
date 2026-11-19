@@ -138,7 +138,17 @@ impl FileTree {
                 None => return,
             },
         };
-        self.copy_between(source, destination, sources, dir, false, window, cx);
+        self.copy_between(
+            crate::ui::file_tree::CopyEnds {
+                from: source,
+                to: destination,
+            },
+            sources,
+            dir,
+            false,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn command_key(
@@ -253,6 +263,14 @@ impl FileTree {
                     let Some(parent) = path.parent().map(Path::to_path_buf) else {
                         continue;
                     };
+                    // The prompt can outlive the adapter it named. Check the
+                    // saved authority before the optimistic row leaves the
+                    // cache and before the remove is dispatched: either one
+                    // alone still mutates the connection that replaced the
+                    // one the user confirmed the delete on.
+                    if !authority.is_current(tree, cx) {
+                        continue;
+                    }
                     let authority = authority.clone();
                     let row = TreeEntry {
                         name: path
@@ -282,7 +300,10 @@ impl FileTree {
                             let meta = host.stat(&target)?;
                             host.remove(&target, meta.is_dir).map(|()| canonical)
                         },
-                        move |tree: &mut FileTree, result: std::io::Result<PathBuf>, window, cx| {
+                        move |tree: &mut FileTree,
+                              result: std::io::Result<PathBuf>,
+                              _window,
+                              cx| {
                             if !authority.is_current(tree, cx) {
                                 return;
                             }
@@ -295,15 +316,13 @@ impl FileTree {
                                         path: removed,
                                     });
                                 }
-                                Err(error) => HostOps::notify_err(
-                                    window,
-                                    cx,
-                                    &t_fmt(
+                                Err(error) => cx.emit(FileTreeEvent::OperationFailed {
+                                    title: t_fmt(
                                         L10nKey::FileTreeDeleteFailed,
                                         &[("name", &path.display().to_string())],
                                     ),
-                                    &error,
-                                ),
+                                    error,
+                                }),
                             }
                             cx.notify();
                         },

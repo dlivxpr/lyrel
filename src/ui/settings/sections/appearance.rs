@@ -405,6 +405,7 @@ impl SettingsWindow {
                     cx.emit(SettingsEvent::ApplyTheme {
                         persist: false,
                         refresh_windows: false,
+                        rebuild_editor: true,
                     });
                     cx.notify();
                 });

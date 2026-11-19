@@ -343,6 +343,7 @@ fn open_exclusive(path: &std::path::Path) -> std::io::Result<Option<File>> {
     // closed — by `drop`, or by Windows when the process ends.
     match File::options()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .share_mode(0)

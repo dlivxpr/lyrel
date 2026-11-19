@@ -101,7 +101,17 @@ impl LyrelApp {
             return;
         };
         let dir = PathBuf::from(into.unwrap_or_else(|| self.sftp_panel.cwd.clone()));
-        self.file_tree_copy_between(source, destination, paths, dir, false, window, cx);
+        self.file_tree_copy_between(
+            crate::ui::file_tree::CopyEnds {
+                from: source,
+                to: destination,
+            },
+            paths,
+            dir,
+            false,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn sftp_selection_key(

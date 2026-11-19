@@ -9,6 +9,21 @@ enum Attached {
     Controller(u64),
     Observer(u64),
 }
+
+/// Everything a graphics session negotiates before its streams start: the
+/// observer/controller role, clipboard permission, the readiness message and
+/// spawn claim to deliver, and the negotiated projection capabilities.
+pub(super) struct SessionParams {
+    pub observer: bool,
+    pub allow_clipboard: bool,
+    pub ready: Option<DaemonMsg>,
+    pub claim: Option<UnclaimedSpawn>,
+    pub pane_colors: bool,
+    pub glyph_state: bool,
+    pub glyph_render: bool,
+    pub program_status: bool,
+}
+
 struct Session {
     pane: Arc<DaemonPane>,
     broker: Arc<GraphicsAdmissionBroker>,
@@ -49,21 +64,14 @@ pub(super) fn run(
     write_stream: Stream,
     registry: Arc<Registry>,
     endpoint: u64,
-    observer: bool,
-    allow_clipboard: bool,
-    mut ready: Option<DaemonMsg>,
-    mut claim: Option<UnclaimedSpawn>,
-    pane_colors: bool,
-    glyph_state: bool,
-    glyph_render: bool,
-    program_status: bool,
+    mut params: SessionParams,
 ) -> anyhow::Result<()> {
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     let broker = pane.graphics_admission_broker();
     let (tx, output) = mpsc::channel();
     let sender = Arc::new(tx);
     broker.register(endpoint, &sender);
-    let gate = if observer {
+    let gate = if params.observer {
         Arc::new(OutputGate::new())
     } else {
         pane.gate()
@@ -116,7 +124,7 @@ pub(super) fn run(
         reader: Some(reader),
         attached: None,
     };
-    if claim.is_some() && pane.alive() {
+    if params.claim.is_some() && pane.alive() {
         registry.insert(pane.clone());
     }
     // A pending desktop must not stop the PTY. If retained identities change
@@ -126,28 +134,30 @@ pub(super) fn run(
     let admitted = (|| -> Result<Attached, String> {
         loop {
             let attached = if let Some(admission) = pane.prepare_graphics_replay(endpoint)? {
-                if let Some(ready) = ready.take() {
+                if let Some(ready) = params.ready.take() {
                     let _ = session.sender.as_ref().unwrap().send(ready);
                 }
-                if observer {
+                if params.observer {
                     pane.observe_admitted_with_colors_glyphs_and_program(
                         session.sender.as_ref().unwrap().clone(),
                         gate.clone(),
                         admission,
-                        pane_colors,
-                        glyph_state,
-                        program_status,
+                        params.pane_colors,
+                        params.glyph_state,
+                        params.program_status,
                     )?
                     .map(Attached::Observer)
                 } else {
                     pane.attach_admitted_with_colors_glyphs_and_program(
                         session.sender.as_ref().unwrap().clone(),
-                        allow_clipboard,
                         admission,
-                        pane_colors,
-                        glyph_state,
-                        glyph_render,
-                        program_status,
+                        crate::daemon::pane::AttachFeatures {
+                            allow_remote_clipboard_write: params.allow_clipboard,
+                            pane_colors: params.pane_colors,
+                            glyph_state: params.glyph_state,
+                            glyph_render: params.glyph_render,
+                            program_status: params.program_status,
+                        },
                     )?
                     .map(Attached::Controller)
                 }
@@ -175,7 +185,7 @@ pub(super) fn run(
             return Ok(());
         }
     };
-    if let Some(claim) = &mut claim {
+    if let Some(claim) = &mut params.claim {
         claim.claimed = true;
     }
     session.attached = Some(attached);
@@ -188,15 +198,15 @@ pub(super) fn run(
                 ClientMsg::Detach => break,
                 ClientMsg::Input(_)
                 | ClientMsg::Resize(_)
-                | ClientMsg::ClearPresentation { .. } => {
+                | ClientMsg::ClearPresentation { .. }
                     if !pane.tell_observer(
                         *id,
                         DaemonMsg::Error(
                             "this connection is a read-only observer; attach to write".into(),
                         ),
-                    ) {
-                        break;
-                    }
+                    ) =>
+                {
+                    break;
                 }
                 _ => {}
             },

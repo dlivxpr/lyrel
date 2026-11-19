@@ -104,9 +104,7 @@ fn attach_replays_initial_cwd_even_before_shell_reports_osc7() {
 
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(_))));
-    assert!(
-        matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/clone/lyrel"))
-    );
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == *"/Users/alice/clone/lyrel"));
 }
 
 /// Issue #774: `btop` sends its alternate-screen and mouse-reporting
@@ -298,7 +296,7 @@ fn observe_replays_state_without_displacing_the_controller() {
 
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"screen"));
-    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/work")));
+    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == *"/work"));
     assert!(matches!(
         observer_rx.try_recv(),
         Ok(DaemonMsg::Progress(None))

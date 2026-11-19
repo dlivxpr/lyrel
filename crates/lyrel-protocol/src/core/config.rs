@@ -1024,8 +1024,10 @@ impl Config {
                     "failed to read config at {}: {e}; using defaults, writes suppressed",
                     path.display()
                 );
-                let mut cfg = Config::default();
-                cfg.quarantined = true;
+                let cfg = Config {
+                    quarantined: true,
+                    ..Default::default()
+                };
                 return (cfg, LoadOutcome::Unreadable, None);
             }
         };
@@ -1046,8 +1048,10 @@ impl Config {
                     path.display()
                 );
                 quarantine(path);
-                let mut cfg = Config::default();
-                cfg.quarantined = true;
+                let cfg = Config {
+                    quarantined: true,
+                    ..Default::default()
+                };
                 (cfg, LoadOutcome::Quarantined, None)
             }
         }
@@ -2041,10 +2045,12 @@ mod tests {
         // The palette rescue defaults on, and survives a round trip either way.
         assert!(cfg.theme_legible_palette);
 
-        let mut cfg = Config::default();
-        cfg.theme_follow_system = true;
-        cfg.theme_preset_light = "one_light".to_string();
-        cfg.theme_preset_dark = "dracula".to_string();
+        let cfg = Config {
+            theme_follow_system: true,
+            theme_preset_light: "one_light".to_string(),
+            theme_preset_dark: "dracula".to_string(),
+            ..Config::default()
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
         assert!(back.theme_follow_system);
@@ -2215,7 +2221,7 @@ mod tests {
         // Both are inside the range the steppers clamp to, which is the whole
         // point: `50 + 1` and `3.0 - 0.05` are legal, so neither click can be
         // turned around by a clamp.
-        assert!(50.0 + 1.0 <= FONT_SIZE_MAX && 3.0 - 0.05 >= LINE_HEIGHT_MIN);
+        const _: () = assert!(50.0 + 1.0 <= FONT_SIZE_MAX && 3.0 - 0.05 >= LINE_HEIGHT_MIN);
     }
 
     #[test]

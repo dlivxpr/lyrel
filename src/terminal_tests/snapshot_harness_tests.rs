@@ -1,3 +1,5 @@
+use lyrel_terminal::element::GridPaint;
+
 #[gpui_kit::test]
 fn reused_viewport_discards_erased_text_and_outside_grid_padding(
     cx: &mut gpui_kit::TestAppContext,
@@ -24,16 +26,18 @@ fn reused_viewport_discards_erased_text_and_outside_grid_padding(
             assert!(
                 element
                     .build_grid(
-                        &colors,
-                        buf,
-                        rows + 1,
-                        cols + 1,
-                        false,
                         cx,
-                        1.,
-                        Rgba::default(),
-                        true,
-                        false,
+                        GridPaint {
+                            colors: &colors,
+                            buf,
+                            rows: rows + 1,
+                            cols: cols + 1,
+                            want_sliver: false,
+                            dim: 1.,
+                            under: Rgba::default(),
+                            must_block: true,
+                            has_previous: false
+                        },
                     )
                     .is_ok()
             );
@@ -85,16 +89,18 @@ fn first_snapshot_never_overrides_an_open_presentation_hold(cx: &mut gpui_kit::T
         let colors = PaintColors::resolve(cx.theme(), cx);
         assert!(matches!(
             element.build_grid(
-                &colors,
-                &mut cells,
-                rows,
-                cols,
-                false,
                 cx,
-                1.,
-                Rgba::default(),
-                true,
-                false,
+                GridPaint {
+                    colors: &colors,
+                    buf: &mut cells,
+                    rows,
+                    cols,
+                    want_sliver: false,
+                    dim: 1.,
+                    under: Rgba::default(),
+                    must_block: true,
+                    has_previous: false
+                },
             ),
             Err(SnapshotUnavailable::Synchronized)
         ));
@@ -105,16 +111,18 @@ fn first_snapshot_never_overrides_an_open_presentation_hold(cx: &mut gpui_kit::T
         terminal.lock().end_sync_update();
         let frame = element
             .build_grid(
-                &colors,
-                &mut cells,
-                rows,
-                cols,
-                false,
                 cx,
-                1.,
-                Rgba::default(),
-                true,
-                false,
+                GridPaint {
+                    colors: &colors,
+                    buf: &mut cells,
+                    rows,
+                    cols,
+                    want_sliver: false,
+                    dim: 1.,
+                    under: Rgba::default(),
+                    must_block: true,
+                    has_previous: false,
+                },
             )
             .unwrap();
         assert!(
@@ -140,9 +148,7 @@ fn glyph_test_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
 }
 
 #[gpui_kit::test]
-fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
-    cx: &mut gpui_kit::TestAppContext,
-) {
+fn glyph_contended_snapshot_never_rewrites_the_captured_picture(cx: &mut gpui_kit::TestAppContext) {
     use rio_graphics::glyph_layout::GlyphLayout;
     let cp = 0x100000u32;
     let ch = char::from_u32(cp).unwrap();
@@ -174,16 +180,18 @@ fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
         assert!(
             element
                 .build_grid(
-                    &colors,
-                    &mut buf,
-                    rows,
-                    cols,
-                    false,
                     cx,
-                    1.,
-                    Rgba::default(),
-                    true,
-                    false,
+                    GridPaint {
+                        colors: &colors,
+                        buf: &mut buf,
+                        rows,
+                        cols,
+                        want_sliver: false,
+                        dim: 1.,
+                        under: Rgba::default(),
+                        must_block: true,
+                        has_previous: false
+                    },
                 )
                 .is_ok()
         );
@@ -208,16 +216,18 @@ fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
     cx.update(|cx| {
         assert!(matches!(
             element.build_grid(
-                &colors,
-                &mut buf,
-                rows,
-                cols,
-                false,
                 cx,
-                1.,
-                Rgba::default(),
-                false,
-                true,
+                GridPaint {
+                    colors: &colors,
+                    buf: &mut buf,
+                    rows,
+                    cols,
+                    want_sliver: false,
+                    dim: 1.,
+                    under: Rgba::default(),
+                    must_block: false,
+                    has_previous: true
+                },
             ),
             Err(SnapshotUnavailable::Contended)
         ));
@@ -234,16 +244,18 @@ fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
         assert!(
             element
                 .build_grid(
-                    &colors,
-                    &mut buf,
-                    rows,
-                    cols,
-                    false,
                     cx,
-                    1.,
-                    Rgba::default(),
-                    true,
-                    true,
+                    GridPaint {
+                        colors: &colors,
+                        buf: &mut buf,
+                        rows,
+                        cols,
+                        want_sliver: false,
+                        dim: 1.,
+                        under: Rgba::default(),
+                        must_block: true,
+                        has_previous: true
+                    },
                 )
                 .is_ok()
         );

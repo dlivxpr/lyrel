@@ -1877,12 +1877,12 @@ fn package_for_current_install(version: &str) -> Result<PackageOffer, UpdateInst
         if needs_elevation && !updater_speaks_elevation(layout.directory()) {
             return Err(UpdateInstallHint::WindowsAllUsersInstall);
         }
-        return windows_package_for_layout(version, &layout)
+        windows_package_for_layout(version, &layout)
             .map(|name| PackageOffer {
                 name,
                 needs_elevation,
             })
-            .ok_or(UpdateInstallHint::UnsupportedWindows);
+            .ok_or(UpdateInstallHint::UnsupportedWindows)
     }
 }
 
@@ -1930,7 +1930,7 @@ fn prepare_update(
     }
     #[cfg(target_os = "windows")]
     {
-        return prepare_windows_update(version, &asset.name, &archive, &checksums);
+        prepare_windows_update(version, &asset.name, &archive, &checksums)
     }
 }
 

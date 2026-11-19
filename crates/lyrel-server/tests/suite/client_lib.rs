@@ -670,7 +670,7 @@ fn control_requests_build_the_tree_and_events_reach_the_other_client() {
         );
         match watcher.next_event(remaining) {
             Some(ControlEvent::Layout { workspace, delta })
-                if workspace == key && matches!(delta, LayoutDelta::WorkspaceCreated { .. }) =>
+                if workspace == key && matches!(*delta, LayoutDelta::WorkspaceCreated { .. }) =>
             {
                 break;
             }
@@ -874,8 +874,12 @@ fn pip_keeps_the_live_shell_across_replacement_fallback_and_reconnect() {
         let event = watcher
             .next_event(deadline.saturating_duration_since(Instant::now()))
             .expect("PiP delta");
-        if matches!(event, ControlEvent::Layout { delta: LayoutDelta::TabRestructured { tab, pane: None }, .. }
-            if tab.presentation.pip().is_some_and(|pip| pip.pane() == original))
+        if let ControlEvent::Layout { delta, .. } = event
+            && let LayoutDelta::TabRestructured { tab, pane: None } = *delta
+            && tab
+                .presentation
+                .pip()
+                .is_some_and(|pip| pip.pane() == original)
         {
             break;
         }
@@ -1033,9 +1037,10 @@ fn pip_keeps_the_live_shell_across_replacement_fallback_and_reconnect() {
         let event = watcher
             .next_event(deadline.saturating_duration_since(Instant::now()))
             .expect("metadata-only delta");
-        if matches!(event, ControlEvent::Layout { delta: LayoutDelta::TabRestructured { tab, pane: None }, .. }
-            if tab.root.pane_ids() == vec![fallback, other, replacement]
-                && tab.presentation.pip() == original_relationship.as_ref())
+        if let ControlEvent::Layout { delta, .. } = event
+            && let LayoutDelta::TabRestructured { tab, pane: None } = *delta
+            && tab.root.pane_ids() == vec![fallback, other, replacement]
+            && tab.presentation.pip() == original_relationship.as_ref()
         {
             break;
         }
@@ -2147,8 +2152,9 @@ fn parking_wait_for_deck(
         assert!(!remaining.is_zero(), "parking change was not broadcast");
         if let Some(ControlEvent::Layout {
             workspace: changed,
-            delta: LayoutDelta::TabRestructured { tab, pane: None },
+            delta,
         }) = watcher.next_event(remaining)
+            && let LayoutDelta::TabRestructured { tab, pane: None } = *delta
         {
             let mut parked = tab
                 .presentation
@@ -2660,7 +2666,7 @@ fn a_rebuilt_tree_preserves_the_original_parked_relationship_on_the_wire() {
         .unwrap();
     assert_ne!(
         parking_tree(&writer, ws).tabs[0].presentation.parked(),
-        &[original.clone()]
+        std::slice::from_ref(&original)
     );
     writer
         .request(ControlRequest::PanePark {
@@ -2676,20 +2682,18 @@ fn a_rebuilt_tree_preserves_the_original_parked_relationship_on_the_wire() {
             !remaining.is_zero(),
             "metadata-only parking change was not broadcast"
         );
-        if let Some(ControlEvent::Layout {
-            workspace,
-            delta: LayoutDelta::TabRestructured { tab, pane: None },
-        }) = watcher.next_event(remaining)
+        if let Some(ControlEvent::Layout { workspace, delta }) = watcher.next_event(remaining)
+            && let LayoutDelta::TabRestructured { tab, pane: None } = *delta
+            && workspace == ws.to_string()
+            && tab.presentation.parked() == [original.clone()]
         {
-            if workspace == ws.to_string() && tab.presentation.parked() == [original.clone()] {
-                break;
-            }
+            break;
         }
     }
     let persisted = MachineStore::open(daemon.dir.path().join(MACHINE_FILE)).machine();
     assert_eq!(
         persisted.workspaces[0].tabs[0].presentation.parked(),
-        &[original.clone()]
+        std::slice::from_ref(&original)
     );
     let mismatch = writer
         .request(ControlRequest::PanePark {
@@ -4446,7 +4450,7 @@ mod kitty_graphics {
         pane.command("a=d,d=A");
         assert_eq!(
             pane.placements.values().cloned().collect::<Vec<_>>(),
-            [prototype.clone()]
+            std::slice::from_ref(&prototype)
         );
         assert_eq!(pane.pixel(&prototype), [255, 0, 0, 255]);
         pane.send(
@@ -4629,7 +4633,7 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-layout-deccolm");
         let mut pane = Consumer::spawn(&daemon);
-        for mode in [b'h', b'l'] {
+        for mode in *b"hl" {
             for (operation, expected_row) in [
                 ("\x1b[10;1H\n", 5),
                 ("\x1b[3;1H\x1bM", 5),

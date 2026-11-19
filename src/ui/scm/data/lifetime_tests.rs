@@ -554,8 +554,10 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
         WindowView::on_remote(RemoteRef::new(target.clone(), WorkspaceId::new()));
     let remote_workspace_id = remote_workspace.id;
     app.update_in(&mut vcx, |app, _, cx| {
-        let mut local_workspace = WindowView::default();
-        local_workspace.id = app.workspace;
+        let local_workspace = WindowView {
+            id: app.workspace,
+            ..Default::default()
+        };
         WorkspaceStore::install_for_test(
             cx,
             WindowViews {

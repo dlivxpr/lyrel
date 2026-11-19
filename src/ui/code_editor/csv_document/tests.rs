@@ -121,7 +121,7 @@ fn mapped_csv_sort_filter_full_value_and_source_save_preserve_original_bytes(
     let host = FileHost::mapped(HostId(287101), remote.path());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1800.), px(1000.)));
-    open(&app, &mut cx, host, &path);
+    open(&app, &mut cx, host, path);
     ready(&app, &mut cx, 3);
     let csv = view(&app, &cx);
     let id = csv.entity_id();
@@ -205,7 +205,7 @@ fn mapped_csv_sort_filter_full_value_and_source_save_preserve_original_bytes(
         &app,
         &mut cx,
         FileHost::mapped(HostId(287101), remote.path()),
-        &path,
+        path,
     );
     ready(&app, &mut cx, 3);
     assert_eq!(
@@ -411,7 +411,7 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
     let host = FileHost::mapped(HostId(288101), remote.path());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1800.), px(1000.)));
-    open(&app, &mut cx, host, &path);
+    open(&app, &mut cx, host, path);
     ready(&app, &mut cx, 4);
     let csv = view(&app, &cx);
     let id = csv.entity_id();
@@ -462,7 +462,7 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
         &app,
         &mut cx,
         FileHost::mapped(HostId(288101), remote.path()),
-        &path,
+        path,
     );
     ready(&app, &mut cx, 4);
     assert_eq!(value(&app, &cx, 1, 1).as_deref(), Some("更新"));
@@ -782,13 +782,7 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut T
     cx.update(|window, cx| window.press(&chord("z"), cx));
     until(&mut cx, |cx| {
         front.read_with(cx, |view, cx| {
-            view.document()
-                .read(cx)
-                .document()
-                .read(cx)
-                .source()
-                .to_owned()
-                == "a,b\nc,d\n"
+            view.document().read(cx).document().read(cx).source() == "a,b\nc,d\n"
         })
     });
     assert_eq!(
@@ -798,13 +792,7 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut T
     cx.update(|window, cx| window.press(&chord("shift-z"), cx));
     until(&mut cx, |cx| {
         front.read_with(cx, |view, cx| {
-            view.document()
-                .read(cx)
-                .document()
-                .read(cx)
-                .source()
-                .to_owned()
-                == "a,b\nc,X\n"
+            view.document().read(cx).document().read(cx).source() == "a,b\nc,X\n"
         })
     });
     assert_eq!(
@@ -877,7 +865,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
     let host = FileHost::mapped(HostId(288106), remote.path());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     cx.simulate_resize(size(px(1600.), px(1000.)));
-    open(&app, &mut cx, host.clone(), &path);
+    open(&app, &mut cx, host.clone(), path);
     ready(&app, &mut cx, 2);
     let csv = view(&app, &cx);
     let id = csv.entity_id();

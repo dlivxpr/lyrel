@@ -849,34 +849,34 @@ impl LyrelApp {
     pub(crate) fn lsp_go_to_definition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_go_to_definition(&code, window, cx)
+            editor.lsp_go_to_definition(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_find_references(&code, window, cx)
+            editor.lsp_find_references(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_format_document(&code, window, cx)
+            editor.lsp_format_document(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_rename_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor
-            .update(cx, |editor, cx| editor.lsp_rename_start(&code, window, cx));
+            .update(cx, |editor, cx| editor.lsp_rename_start(code, window, cx));
     }
 
     pub(crate) fn lsp_code_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor
-            .update(cx, |editor, cx| editor.lsp_code_actions(&code, window, cx));
+            .update(cx, |editor, cx| editor.lsp_code_actions(code, window, cx));
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1645,12 +1645,14 @@ impl LyrelApp {
                 anchor,
                 revision,
             } => self.editor_follow_link(
-                *buffer,
-                *source,
-                host.clone(),
-                path,
-                anchor.clone(),
-                *revision,
+                super::editor_links::FollowedLink {
+                    buffer: *buffer,
+                    source: *source,
+                    host: host.clone(),
+                    path: path.to_path_buf(),
+                    anchor: anchor.clone(),
+                    revision: *revision,
+                },
                 window,
                 cx,
             ),

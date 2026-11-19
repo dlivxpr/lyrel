@@ -382,7 +382,7 @@ fn unreadable_skill_preserves_other_results_and_reports_actual_permission_denial
     let file = blocked.join("SKILL.md");
     let before = fs::read(&file).unwrap();
     let permissions = fs::metadata(&file).unwrap().permissions();
-    fs::set_permissions(&file, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
     let host = LocalHost::new();
     let result = scan(&*host, &fixture(&home, &project));
     fs::set_permissions(&file, permissions).unwrap();

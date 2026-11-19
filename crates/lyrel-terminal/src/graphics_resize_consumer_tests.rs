@@ -114,7 +114,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
     view.read_with(cx, |view, _| {
         graphics_resize_assert_geometry(view, image_id, label, anchor - 1)
     });
-    graphics_assert_production_paint(_window.into(), &view, cx);
+    graphics_assert_production_paint(_window, &view, cx);
     graphics_send_fixture(&view, cx, 424, b"\x1b[0m");
     if !grow {
         graphics_recovery_wait(cx, "shrink setup cursor restore was not consumed", |cx| {
@@ -135,13 +135,8 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
             assert_eq!(graphics_resize_text_row(view, "LAST_WRITTEN"), Some(23));
         }
     });
-    let target_window_size = graphics_window_geometry(
-        _window.into(),
-        &view,
-        cx,
-        TermSize::new(80, usize::from(rows)),
-    )
-    .0;
+    let target_window_size =
+        graphics_window_geometry(_window, &view, cx, TermSize::new(80, usize::from(rows))).0;
     // Observe the reader's grid without pumping the old 24-row surface while
     // the daemon Size is in flight; it must not send a competing resize back.
     let authoritative_term = view.read_with(cx, |view, _| view.terminal.term.clone());
@@ -165,7 +160,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    cx.simulate_window_resize(_window.into(), target_window_size);
+    cx.simulate_window_resize(_window, target_window_size);
     // The sender's APC round-trip is also an ordered graphics/layout barrier.
     graphics_send_fixture(&view, cx, 422, b"\x1b[0m");
     view.read_with(cx, |view, _| {
@@ -174,7 +169,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
             assert_eq!(graphics_resize_text_row(view, "LAST_WRITTEN"), Some(17));
         }
     });
-    graphics_assert_production_paint(_window.into(), &view, cx);
+    graphics_assert_production_paint(_window, &view, cx);
     if grow {
         // A newly placed image must agree too: an origin mismatch affects both
         // retained and subsequent placements, not just the original anchor.
@@ -202,7 +197,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
         view.read_with(cx, |view, _| {
             graphics_resize_assert_geometry(view, 423, "NEW_ANCHOR", 7)
         });
-        graphics_assert_production_paint(_window.into(), &view, cx);
+        graphics_assert_production_paint(_window, &view, cx);
     }
     daemon.panes().kill(pane).unwrap();
 }

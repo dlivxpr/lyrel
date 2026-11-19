@@ -689,7 +689,7 @@ impl LyrelApp {
         // store); the document row itself renders on the editor entity.
         let lsp = self
             .editor
-            .update(cx, |editor, cx| editor.render_lsp_status(&code, cx))
+            .update(cx, |editor, cx| editor.render_lsp_status(code, cx))
             .map(|(element, _)| element);
         self.editor
             .update(cx, |editor, cx| editor.render_status(tab, code, lsp, cx))

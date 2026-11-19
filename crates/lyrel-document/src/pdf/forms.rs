@@ -116,7 +116,7 @@ pub fn form_fields(doc: &Pdf) -> Vec<FormField> {
             if hidden(&annot) {
                 continue;
             }
-            if let Some(field) = describe(&annot, &page, page_index, default_da.as_deref()) {
+            if let Some(field) = describe(&annot, page, page_index, default_da.as_deref()) {
                 out.push(field);
             }
         }
@@ -168,12 +168,12 @@ fn describe(
             })
             .unwrap_or_else(|| "Off".to_string()),
     };
-    if kind == FieldKind::Choice && value.is_empty() {
-        if let Some(index) = selected_choice_index(widget)
-            && let Some(option) = options.get(index)
-        {
-            value = option.clone();
-        }
+    if kind == FieldKind::Choice
+        && value.is_empty()
+        && let Some(index) = selected_choice_index(widget)
+        && let Some(option) = options.get(index)
+    {
+        value = option.clone();
     }
     if password && !value.is_empty() {
         value = "•".repeat(value.chars().count());

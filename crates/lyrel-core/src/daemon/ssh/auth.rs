@@ -666,7 +666,7 @@ impl KeyRound {
 /// reopens the prompt but here would mean a sheet per stale `~/.ssh` entry on
 /// every connection.
 enum IdentityLoad {
-    Ready(russh::keys::PrivateKey),
+    Ready(Box<russh::keys::PrivateKey>),
     /// Not worth an offer: a `.pub`, an undecodable file, or a discovered
     /// candidate that is encrypted with no cached passphrase.
     Skip,
@@ -698,10 +698,10 @@ fn load_identity(
         return IdentityLoad::Skip;
     }
     match russh::keys::decode_secret_key(contents, None) {
-        Ok(key) => IdentityLoad::Ready(key),
+        Ok(key) => IdentityLoad::Ready(Box::new(key)),
         Err(russh::keys::Error::KeyIsEncrypted) => match cached {
             Some(passphrase) => match russh::keys::decode_secret_key(contents, Some(passphrase)) {
-                Ok(key) => IdentityLoad::Ready(key),
+                Ok(key) => IdentityLoad::Ready(Box::new(key)),
                 Err(e) => {
                     log::warn!("the stored passphrase did not decrypt {raw_path}: {e}");
                     match source {
@@ -837,7 +837,7 @@ async fn try_identity_file(
             // state to heal — it is the answer being wrong, and saying so
             // beats asking again forever.
             match russh::keys::decode_secret_key(&contents, Some(&passphrase)) {
-                Ok(k) => k,
+                Ok(k) => Box::new(k),
                 Err(e) => {
                     log::warn!("could not decrypt identity file {path}: {e}");
                     round
@@ -854,7 +854,7 @@ async fn try_identity_file(
 
     round.offered_files.push(raw_path.to_string());
     let hash_alg = rsa_hash_alg(&key.algorithm());
-    let pk = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
+    let pk = PrivateKeyWithHashAlg::new(Arc::new(*key), hash_alg);
     match handle.authenticate_publickey(&spec.user, pk).await {
         Ok(AuthResult::Success) => Outcome::Authenticated,
         Ok(AuthResult::Failure {
@@ -1163,13 +1163,14 @@ async fn collect_ki_answers(
     let all_password_type = prompts
         .iter()
         .all(|p| !p.echo && p.prompt.to_lowercase().contains("password"));
-    if all_password_type && allow_stored {
-        if let Some(pw) = &spec.password {
-            return Some(KiRound {
-                answers: prompts.iter().map(|_| pw.clone()).collect(),
-                source: KiAnswerSource::Stored,
-            });
-        }
+    if all_password_type
+        && allow_stored
+        && let Some(pw) = &spec.password
+    {
+        return Some(KiRound {
+            answers: prompts.iter().map(|_| pw.clone()).collect(),
+            source: KiAnswerSource::Stored,
+        });
     }
 
     let ki_prompts: Vec<KiPrompt> = prompts
@@ -1731,8 +1732,10 @@ mod tests {
 
         // An agent that answered but held nothing is "checked", not
         // "unavailable".
-        let mut round = KeyRound::default();
-        round.agent_available = true;
+        let round = KeyRound {
+            agent_available: true,
+            ..Default::default()
+        };
         let msg = round.reason(SshAuthMode::Auto, false);
         assert!(msg.contains("the SSH agent"), "{msg}");
         assert!(!msg.contains("unavailable"), "{msg}");
@@ -1759,8 +1762,10 @@ mod tests {
 
     #[test]
     fn reason_falls_back_to_the_transport_error_after_an_offer() {
-        let mut round = KeyRound::default();
-        round.offered_files = vec!["/home/me/.ssh/id_ed25519".to_string()];
+        let mut round = KeyRound {
+            offered_files: vec!["/home/me/.ssh/id_ed25519".to_string()],
+            ..Default::default()
+        };
         round.errors.push(
             "public-key auth error with /home/me/.ssh/id_ed25519: connection lost".to_string(),
         );

@@ -31,7 +31,7 @@ pub(crate) struct Section {
 
 #[derive(Clone)]
 pub(crate) enum Row {
-    Item(Item),
+    Item(Box<Item>),
     /// The All tab's way into a tab it only showed the top of.
     More {
         tab: SearchTab,
@@ -42,7 +42,7 @@ pub(crate) enum Row {
 impl Row {
     pub(crate) fn item(&self) -> Option<&Item> {
         match self {
-            Row::Item(item) => Some(item),
+            Row::Item(item) => Some(&**item),
             Row::More { .. } => None,
         }
     }
@@ -168,7 +168,9 @@ impl Catalog {
     /// the project's — each under a heading only when both have rows.
     fn symbols_here_and_in_the_project(&self, query: &str, cx: &App) -> Vec<Section> {
         let rows = |hits: Vec<(i32, Item)>| -> Vec<Row> {
-            hits.into_iter().map(|(_, item)| Row::Item(item)).collect()
+            hits.into_iter()
+                .map(|(_, item)| Row::Item(Box::new(item)))
+                .collect()
         };
         let here = rows(Symbols(&self.symbols).search(query, cx));
         let everywhere = rows(rank(&self.project_symbols, query, |_| 0));
@@ -219,7 +221,7 @@ impl Catalog {
                 let mut rows: Vec<Row> = hits
                     .into_iter()
                     .take(ALL_TAB_ROWS)
-                    .map(|(_, item)| Row::Item(item))
+                    .map(|(_, item)| Row::Item(Box::new(item)))
                     .collect();
                 if hidden > 0 {
                     rows.push(Row::More {
@@ -274,7 +276,7 @@ fn recent_then_rest(source: &dyn Source, cx: &App) -> Vec<Row> {
         .into_iter()
         .flat_map(|section| section.rows)
         .filter_map(|row| match row {
-            Row::Item(item) => Some(item),
+            Row::Item(item) => Some(*item),
             Row::More { .. } => None,
         })
         .collect();
@@ -291,7 +293,10 @@ fn recent_then_rest(source: &dyn Source, cx: &App) -> Vec<Row> {
             false => hidden += 1,
         }
     }
-    let mut rows: Vec<Row> = shown.into_iter().map(Row::Item).collect();
+    let mut rows: Vec<Row> = shown
+        .into_iter()
+        .map(|item| Row::Item(Box::new(item)))
+        .collect();
     if hidden > 0 {
         rows.push(Row::More {
             tab: source.tab(),
@@ -308,7 +313,10 @@ fn untitled(hits: Vec<(i32, Item)>) -> Vec<Section> {
     }
     vec![Section {
         title: None,
-        rows: hits.into_iter().map(|(_, item)| Row::Item(item)).collect(),
+        rows: hits
+            .into_iter()
+            .map(|(_, item)| Row::Item(Box::new(item)))
+            .collect(),
     }]
 }
 
@@ -317,10 +325,12 @@ fn by_section<'a>(items: impl IntoIterator<Item = &'a Item>) -> Vec<Section> {
     let mut out: Vec<Section> = Vec::new();
     for item in items {
         match out.last_mut() {
-            Some(last) if last.title == item.section => last.rows.push(Row::Item(item.clone())),
+            Some(last) if last.title == item.section => {
+                last.rows.push(Row::Item(Box::new(item.clone())));
+            }
             _ => out.push(Section {
                 title: item.section.clone(),
-                rows: vec![Row::Item(item.clone())],
+                rows: vec![Row::Item(Box::new(item.clone()))],
             }),
         }
     }
@@ -376,7 +386,7 @@ impl Source for Actions<'_> {
                 title: Some(t(L10nKey::CmdRecent).into()),
                 rows: recent
                     .iter()
-                    .map(|item| Row::Item((*item).clone()))
+                    .map(|item| Row::Item(Box::new((*item).clone())))
                     .collect(),
             });
         }
@@ -495,7 +505,7 @@ impl Source for Symbols<'_> {
                     let mut item = item.clone();
                     item.title = format!("{}{}", SYMBOL_INDENT.repeat(*depth), item.title);
                     item.subtitle = None;
-                    Row::Item(item)
+                    Row::Item(Box::new(item))
                 })
                 .collect(),
         }]
@@ -529,7 +539,12 @@ impl Source for Locations<'_> {
         }
         vec![Section {
             title: None,
-            rows: self.0.iter().cloned().map(Row::Item).collect(),
+            rows: self
+                .0
+                .iter()
+                .cloned()
+                .map(|item| Row::Item(Box::new(item)))
+                .collect(),
         }]
     }
 

@@ -450,7 +450,7 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
             context.update(|window, cx| window.input("界", cx));
             settle(&mut context);
             let mut expected = original.clone();
-            expected.insert_str(at, "界");
+            expected.insert(at, '界');
             assert_eq!(bytes(&view, &context), expected.as_bytes());
             save(&app, &mut context);
             assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());

@@ -39,7 +39,10 @@ pub(crate) use lyrel_protocol::daemon::LYREL_PANE_ENV;
 use replay::RING_CAP;
 use replay::ReplayRing;
 pub(crate) use replay::has_restorable_output;
-use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
+use subscriptions::{
+    ControllerAttach, GraphicsReplayAdmission, ObserverAttach, OutputGate, ReplayState,
+    SubscriberCaps, Subscriptions,
+};
 
 struct PaneState {
     id: u64,
@@ -204,6 +207,34 @@ pub struct DaemonPane {
     state: Arc<Mutex<PaneState>>,
     reader: Mutex<Option<JoinHandle<()>>>,
     broker: Option<Arc<crate::daemon::ssh::PromptBroker>>,
+}
+
+/// The projection features one subscriber connection negotiates in its
+/// hello. Bundled so the attach entry points stay within the argument lint;
+/// every flag is still answered independently.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AttachFeatures {
+    pub allow_remote_clipboard_write: bool,
+    pub pane_colors: bool,
+    pub glyph_state: bool,
+    pub glyph_render: bool,
+    pub program_status: bool,
+}
+
+/// The launch half of [`DaemonPane::spawn`]: working directory, pty size and
+/// shell selection. Provenance (`owner`, `workspace`) and replay seeding
+/// (`restore`) stay separate spawn parameters.
+pub struct PaneSpawnSpec {
+    pub cwd: Option<PathBuf>,
+    pub size: WinSize,
+    pub shell: Option<ShellSpec>,
+}
+
+/// The PTY halves one pane reader thread owns: bytes arriving from the pane,
+/// and the shared writer query replies go back out on.
+struct ReaderEnds {
+    reader: Box<dyn Read + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 /// Out-of-band frames remain interleaved with plain output so placements
@@ -527,24 +558,22 @@ impl DaemonPane {
     ) -> Result<Option<u64>, String> {
         self.attach_admitted_with_colors_glyphs_and_program(
             subscriber,
-            allow_clipboard,
             admission,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            false,
+            AttachFeatures {
+                allow_remote_clipboard_write: allow_clipboard,
+                pane_colors,
+                glyph_state,
+                glyph_render,
+                program_status: false,
+            },
         )
     }
 
     pub fn attach_admitted_with_colors_glyphs_and_program(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,
-        allow_clipboard: bool,
         admission: GraphicsReplayAdmission,
-        pane_colors: bool,
-        glyph_state: bool,
-        glyph_render: bool,
-        program_status: bool,
+        features: AttachFeatures,
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
@@ -555,15 +584,19 @@ impl DaemonPane {
         subscriptions.attach_admitted(
             replay,
             graphics,
-            subscriber,
-            &self.gate,
-            allow_clipboard,
+            ControllerAttach {
+                subscriber,
+                gate: &self.gate,
+                allow_clipboard: features.allow_remote_clipboard_write,
+            },
             admission,
-            foreground,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
+            SubscriberCaps {
+                foreground,
+                colors: features.pane_colors,
+                glyphs: features.glyph_state,
+                glyph_render: features.glyph_render,
+                program: features.program_status,
+            },
         )
     }
 
@@ -603,43 +636,43 @@ impl DaemonPane {
         subscriptions.observe_admitted(
             replay,
             graphics,
-            subscriber,
-            gate,
+            ObserverAttach { subscriber, gate },
             &self.gate,
             admission,
-            foreground,
-            pane_colors,
-            glyph_state,
-            program_status,
+            SubscriberCaps {
+                foreground,
+                colors: pane_colors,
+                glyphs: glyph_state,
+                glyph_render: false,
+                program: program_status,
+            },
         )
     }
 
     pub fn spawn(
         id: u64,
-        cwd: Option<PathBuf>,
-        size: WinSize,
-        shell: Option<ShellSpec>,
+        spec: PaneSpawnSpec,
         owner: Option<String>,
         workspace: Option<String>,
         restore: Option<Restore>,
         allow_remote_clipboard_write: bool,
         on_dead: impl FnOnce() + Send + 'static,
     ) -> anyhow::Result<Arc<Self>> {
-        let pty = PtyLaunch::open(size)?;
-        let spawn = build_spawn_config(id, cwd, shell, workspace.as_deref())?;
+        let pty = PtyLaunch::open(spec.size)?;
+        let spawn = build_spawn_config(id, spec.cwd, spec.shell, workspace.as_deref())?;
 
         let parts = pty.spawn(id, spawn.cmd, spawn.integration_dir)?;
 
         let (ring, restored_title) = match restore {
             Some(restore) => {
-                let mut ring = ReplayRing::seeded(restore.segments, size);
+                let mut ring = ReplayRing::seeded(restore.segments, spec.size);
                 if let Some(title) = restore.title.as_deref() {
                     ring.append(&retitle(title));
                 }
                 ring.append(&restore_preamble(restore.banner.as_deref()));
                 (ring, restore.title)
             }
-            None => (ReplayRing::new(size), None),
+            None => (ReplayRing::new(spec.size), None),
         };
 
         Ok(Self::over_pty(
@@ -649,7 +682,7 @@ impl DaemonPane {
                 ring,
                 graphics: Some(
                     GraphicsState::with_resize_mode(
-                        size,
+                        spec.size,
                         if cfg!(windows) {
                             crate::core::terminal_resize::ResizeMode::LocalConpty
                         } else {
@@ -721,8 +754,10 @@ impl DaemonPane {
             state,
             shutting_down,
             gate,
-            reader_handle,
-            writer.clone(),
+            ReaderEnds {
+                reader: reader_handle,
+                writer: writer.clone(),
+            },
             foreground_running,
             probes,
             death,
@@ -932,8 +967,10 @@ impl DaemonPane {
             state,
             shutting_down,
             gate,
-            reader_handle,
-            writer.clone(),
+            ReaderEnds {
+                reader: reader_handle,
+                writer: writer.clone(),
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(|| None),
@@ -974,15 +1011,12 @@ impl DaemonPane {
         state: Arc<Mutex<PaneState>>,
         shutting_down: Arc<AtomicBool>,
         gate: Arc<OutputGate>,
-        mut reader: Box<dyn Read + Send>,
-        // The pane's input side, shared so the reader can write kitty-graphics
-        // query replies (`\x1b_G…;OK\x1b\\`) straight back to the PTY — see the
-        // graphics sniff in the loop below.
-        writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        ends: ReaderEnds,
         foreground_running: impl Fn() -> bool + Send + 'static,
         probes: ForegroundProbes,
         death: Arc<DeathReporter>,
     ) -> JoinHandle<()> {
+        let ReaderEnds { mut reader, writer } = ends;
         let (eviction_tx, eviction_rx) = std::sync::mpsc::sync_channel(1);
         let owner = {
             let mut state = state.lock().unwrap();
@@ -1240,12 +1274,14 @@ impl DaemonPane {
             &mut st,
             subscriber,
             &self.gate,
-            allow_remote_clipboard_write,
             foreground_command,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
+            AttachFeatures {
+                allow_remote_clipboard_write,
+                pane_colors,
+                glyph_state,
+                glyph_render,
+                program_status,
+            },
         );
         st.glyph_queries.clear();
         let nudge = redraw_nudge(
@@ -1820,12 +1856,14 @@ fn attach_subscriber_with_permissions(
         st,
         subscriber,
         gate,
-        allow_remote_clipboard_write,
         foreground_command,
-        pane_colors,
-        false,
-        false,
-        false,
+        AttachFeatures {
+            allow_remote_clipboard_write,
+            pane_colors,
+            glyph_state: false,
+            glyph_render: false,
+            program_status: false,
+        },
     )
 }
 
@@ -1833,25 +1871,25 @@ fn attach_subscriber_with_features(
     st: &mut PaneState,
     subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: &OutputGate,
-    allow_remote_clipboard_write: bool,
     foreground_command: bool,
-    pane_colors: bool,
-    glyph_state: bool,
-    glyph_render: bool,
-    program_status: bool,
+    features: AttachFeatures,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.attach(
         replay,
         graphics,
-        subscriber,
-        gate,
-        allow_remote_clipboard_write,
-        foreground_command,
-        pane_colors,
-        glyph_state,
-        glyph_render,
-        program_status,
+        ControllerAttach {
+            subscriber: subscriber.into(),
+            gate,
+            allow_clipboard: features.allow_remote_clipboard_write,
+        },
+        SubscriberCaps {
+            foreground: foreground_command,
+            colors: features.pane_colors,
+            glyphs: features.glyph_state,
+            glyph_render: features.glyph_render,
+            program: features.program_status,
+        },
     )
 }
 
@@ -1889,10 +1927,13 @@ fn observe_subscriber_with_features(
         graphics,
         observer,
         gate,
-        foreground_command,
-        pane_colors,
-        glyph_state,
-        program_status,
+        SubscriberCaps {
+            foreground: foreground_command,
+            colors: pane_colors,
+            glyphs: glyph_state,
+            glyph_render: false,
+            program: program_status,
+        },
     )
 }
 
@@ -2270,8 +2311,10 @@ mod tests {
             state.clone(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(stream.into_bytes())),
-            null_writer(),
+            ReaderEnds {
+                reader: Box::new(std::io::Cursor::new(stream.into_bytes())),
+                writer: null_writer(),
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(|| None),
@@ -2353,8 +2396,10 @@ mod tests {
             state.clone(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(stream.into_bytes())),
-            writer,
+            ReaderEnds {
+                reader: Box::new(std::io::Cursor::new(stream.into_bytes())),
+                writer,
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(|| None),
@@ -2433,14 +2478,16 @@ mod tests {
                 state,
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(OutputGate::new()),
-                // Plain output, no prompt marks: only the interval or the
-                // group can trigger a probe.
-                Box::new(Chunks(
-                    [b"$ ".to_vec(), b"agent screen".to_vec()]
-                        .into_iter()
-                        .collect(),
-                )),
-                null_writer(),
+                ReaderEnds {
+                    // Plain output, no prompt marks: only the interval or the
+                    // group can trigger a probe.
+                    reader: Box::new(Chunks(
+                        [b"$ ".to_vec(), b"agent screen".to_vec()]
+                            .into_iter()
+                            .collect(),
+                    )),
+                    writer: null_writer(),
+                },
                 || false,
                 ForegroundProbes {
                     group: Box::new(move || groups.lock().unwrap().next()),

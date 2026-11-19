@@ -550,6 +550,17 @@ pub fn glyph_register(cp: u32, glyf: &[u8], reply: u8) -> Vec<u8> {
     glyph_register_with(cp, glyf, 1000, "", reply)
 }
 
+/// One glyph registration's content: the codepoint, the outline bytes, the
+/// units-per-em, and the §8.5 control keys written verbatim (`params` is a
+/// semicolon-separated list without a trailing separator).
+#[allow(dead_code)]
+pub struct GlyphRegistration<'a> {
+    pub cp: u32,
+    pub glyf: &'a [u8],
+    pub upm: u16,
+    pub params: &'a str,
+}
+
 /// A registration with the §8.5 control keys the caller writes verbatim.
 /// `params` is a semicolon-separated list without a trailing separator.
 #[allow(dead_code)]
@@ -572,11 +583,14 @@ pub fn glyph_register_ok(
     cx: &mut TestAppContext,
     serial: usize,
     reply_path: &std::path::Path,
-    cp: u32,
-    glyf: &[u8],
-    upm: u16,
-    params: &str,
+    registration: &GlyphRegistration<'_>,
 ) {
+    let GlyphRegistration {
+        cp,
+        glyf,
+        upm,
+        params,
+    } = *registration;
     let reply = glyph_send(
         view,
         cx,

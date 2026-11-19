@@ -185,7 +185,7 @@ mod tests {
         let path = directory.path().join("a folder");
         std::fs::create_dir(&path).unwrap();
         assert_eq!(
-            parse_open_url(&url::Url::from_file_path(&path).unwrap().to_string()).unwrap(),
+            parse_open_url(url::Url::from_file_path(&path).unwrap().as_ref()).unwrap(),
             ExternalOpen::Folder(path)
         );
     }

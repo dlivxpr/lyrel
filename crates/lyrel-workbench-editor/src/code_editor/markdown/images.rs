@@ -1108,7 +1108,7 @@ fn rasterize_svg(
     );
     let mut rgba = pixmap.take();
     // tiny-skia stores premultiplied RGBA; GPUI consumes straight BGRA.
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         if pixel[3] > 0 {
             for channel in 0..3 {
                 pixel[channel] = ((pixel[channel] as u32 * 255 + pixel[3] as u32 / 2)

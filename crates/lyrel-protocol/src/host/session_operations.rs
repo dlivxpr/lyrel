@@ -1656,15 +1656,20 @@ mod tests {
 
     #[test]
     fn persisted_omp_launch_keeps_the_effective_store_and_profile() {
-        let mut state = crate::core::cli_agent::AgentSessionState::default();
-        state.launch_argv = Some(vec!["omp".into(), "--profile".into(), "old".into()]);
-        state.readout.session_scope = Some(SessionScope {
-            profile: Some("work".into()),
-            session_dir: Some(PathBuf::from("/actual/store")),
-            session_file: Some(PathBuf::from("/actual/store/target.jsonl")),
-            environment: BTreeMap::from([("HOME".into(), "/actual/home".into())]),
+        let state = crate::core::cli_agent::AgentSessionState {
+            launch_argv: Some(vec!["omp".into(), "--profile".into(), "old".into()]),
+            readout: crate::core::cli_agent::AgentReadout {
+                session_scope: Some(SessionScope {
+                    profile: Some("work".into()),
+                    session_dir: Some(PathBuf::from("/actual/store")),
+                    session_file: Some(PathBuf::from("/actual/store/target.jsonl")),
+                    environment: BTreeMap::from([("HOME".into(), "/actual/home".into())]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             ..Default::default()
-        });
+        };
         let context = launch_context(CLIAgent::OhMyPi, &state).unwrap();
         assert_eq!(
             context,

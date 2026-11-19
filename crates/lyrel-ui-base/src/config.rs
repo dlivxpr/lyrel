@@ -27,7 +27,7 @@ impl Config {
             assert_scratch_config_dir("Config::load_with_outcome");
             let _guard = Self::lock_config_file();
             let (core, outcome) = CoreConfig::load_with_outcome();
-            return (Self(core), outcome);
+            (Self(core), outcome)
         }
         #[cfg(not(any(test, feature = "test-guards")))]
         {

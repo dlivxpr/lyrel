@@ -949,10 +949,10 @@ impl LyrelApp {
             {
                 group.error = Some(error.clone());
             }
-            if group.error.is_none() {
-                if let Some(error) = self.remote_host_errors.get(&target.to_string()) {
-                    group.error = Some(error.clone());
-                }
+            if group.error.is_none()
+                && let Some(error) = self.remote_host_errors.get(&target.to_string())
+            {
+                group.error = Some(error.clone());
             }
             // The supervisor's own attempts never touch this window's `connect`,
             // so without this last fallback the route it could not build, and
@@ -3067,10 +3067,12 @@ impl LyrelApp {
                     .hover(move |r| r.bg(if picked { picked_bg } else { hover }))
                     .child(self.tab_avatar(
                         ("switcher-avatar", index),
-                        tab.agent,
-                        tab.status,
-                        tab.unread,
-                        tab.ssh,
+                        crate::ui::search::Avatar {
+                            agent: tab.agent,
+                            status: tab.status,
+                            unread: tab.unread,
+                            ssh: tab.ssh,
+                        },
                         TAB_AVATAR,
                         cx,
                     ))

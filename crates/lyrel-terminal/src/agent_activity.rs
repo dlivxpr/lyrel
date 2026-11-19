@@ -48,6 +48,15 @@ pub struct AgentNotice {
     pub delayed: bool,
 }
 
+/// What the terminal reports about the pane's agent right now: the detected
+/// CLI agent, its live session state, and the status a relink replayed when
+/// this attach is replaying one.
+pub struct AgentObservation<'a> {
+    pub agent: Option<CLIAgent>,
+    pub session: Option<&'a AgentSessionState>,
+    pub replayed: Option<Option<AgentStatus>>,
+}
+
 #[derive(Default)]
 #[non_exhaustive]
 pub struct AgentUpdate {
@@ -156,13 +165,16 @@ impl AgentActivity {
     pub fn observe(
         &mut self,
         key: PaneKey,
-        agent: Option<CLIAgent>,
-        session: Option<&AgentSessionState>,
-        replayed: Option<Option<AgentStatus>>,
+        observation: AgentObservation<'_>,
         focused: bool,
         notify_allowed: bool,
         cx: &mut App,
     ) -> AgentUpdate {
+        let AgentObservation {
+            agent,
+            session,
+            replayed,
+        } = observation;
         // A cold attach adopts stored work as its baseline. A mark from an
         // earlier view takes precedence; relink's reader does not offer replay.
         let adopted_baseline = match replayed {

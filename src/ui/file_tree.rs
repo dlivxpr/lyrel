@@ -281,6 +281,18 @@ pub(crate) enum FileTreeEvent {
     /// `roots`, `expanded` or `selected` changed inside the tree; the app
     /// mirrors the view state into the active tab's code record.
     ViewStateChanged,
+    /// A quick-open index walk the tree scheduled and landed is ready for the
+    /// key it walked. The app repaints its open search when the key still
+    /// names the folders the panes are in now.
+    FileIndexLanded {
+        key: lyrel_ui_base::file_search::IndexKey,
+    },
+    /// An inline operation failed on its host; the tree cannot raise the
+    /// toast itself, so the shell turns the pair into the notification.
+    OperationFailed {
+        title: String,
+        error: std::io::Error,
+    },
 }
 
 /// The per-frame presentation the app hands the tree before mounting it.
@@ -318,6 +330,36 @@ impl Default for FileTreeView {
             contents: Rc::new(Vec::new()),
             render_content_row: Rc::new(|_, _| div().into_any_element()),
         }
+    }
+}
+
+impl FileTreeView {
+    /// Whether two frames carry the same render inputs. The app rebuilds this
+    /// struct on every render, so repeats are detected by identity — the
+    /// decoration `Arc`s and the contents `Rc` come out of caches and keep
+    /// their addresses while nothing changed. `render_content_row` is rebuilt
+    /// every render too and only captures the app handle, so it never decides
+    /// sameness.
+    fn same_frame(&self, other: &FileTreeView) -> bool {
+        self.host == other.host
+            && self
+                .active_host
+                .as_ref()
+                .map(|host| (host.id(), Arc::as_ptr(host)))
+                == other
+                    .active_host
+                    .as_ref()
+                    .map(|host| (host.id(), Arc::as_ptr(host)))
+            && self.query == other.query
+            && self.searching == other.searching
+            && self.machine_label == other.machine_label
+            && self.decor.len() == other.decor.len()
+            && self.decor.iter().zip(other.decor.iter()).all(
+                |((path, index), (other_path, other_index))| {
+                    path == other_path && Arc::ptr_eq(index, other_index)
+                },
+            )
+            && Rc::ptr_eq(&self.contents, &other.contents)
     }
 }
 
@@ -389,6 +431,16 @@ pub(crate) struct FileTree {
 }
 
 impl gpui_kit::EventEmitter<FileTreeEvent> for FileTree {}
+
+/// The two Hosts a cross-tree copy runs between: where the entries are read
+/// from and where they are written. Both ends are the same type, so the pair
+/// travels as one named value — a swapped call site is a reversed copy, and
+/// with two bare `SharedHost` arguments nothing stops it compiling.
+#[derive(Clone)]
+pub(crate) struct CopyEnds {
+    pub(crate) from: SharedHost,
+    pub(crate) to: SharedHost,
+}
 
 impl Focusable for FileTree {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -493,10 +545,15 @@ impl FileTree {
     }
 
     /// The frame's presentation inputs. Called by the app each render, before
-    /// the tree element is mounted.
+    /// the tree element is mounted. This runs inside the app's render: a
+    /// notify here is only owed when the inputs actually changed — an
+    /// unconditional one feeds the app observer and repaints forever.
     pub(crate) fn sync_view(&mut self, view: FileTreeView, cx: &mut Context<Self>) {
+        let changed = !self.view.same_frame(&view);
         self.view = view;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     pub(crate) fn roots(&self) -> &[PathBuf] {
@@ -1561,8 +1618,10 @@ impl FileTree {
             return;
         };
         self.copy_between(
-            HostRegistry::local(cx),
-            host,
+            CopyEnds {
+                from: HostRegistry::local(cx),
+                to: host,
+            },
             sources,
             dir,
             overwrite,
@@ -1571,23 +1630,28 @@ impl FileTree {
         );
     }
 
-    /// Copy `sources` from `source` into `dir` on `host`, asking before
+    /// Copy `sources` from `ends.from` into `dir` on `ends.to`, asking before
     /// replacing anything that is already there.
     pub(crate) fn copy_between(
         &mut self,
-        source: SharedHost,
-        host: SharedHost,
+        ends: CopyEnds,
         sources: Vec<PathBuf>,
         dir: PathBuf,
         overwrite: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let CopyEnds {
+            from: source,
+            to: host,
+        } = ends;
         let id = host.id();
         let asked_for = sources.clone();
         let target = dir.clone();
-        let destination = host.clone();
-        let source_again = source.clone();
+        let replace_ends = CopyEnds {
+            from: source.clone(),
+            to: host.clone(),
+        };
         // A copy that outlived its connection must not land its invalidation,
         // its replace prompt or its error toast on the adapter that replaced
         // the one it was sent to.
@@ -1610,8 +1674,7 @@ impl FileTree {
                 tree.copied_into(id, &dir, &report);
                 if !report.conflicts.is_empty() {
                     tree.confirm_replace(
-                        source_again,
-                        destination,
+                        replace_ends,
                         asked_for,
                         dir,
                         report.conflicts,
@@ -1638,8 +1701,7 @@ impl FileTree {
 
     fn confirm_replace(
         &mut self,
-        source: SharedHost,
-        destination: SharedHost,
+        ends: CopyEnds,
         sources: Vec<PathBuf>,
         dir: PathBuf,
         conflicts: Vec<String>,
@@ -1663,7 +1725,7 @@ impl FileTree {
         cx.spawn_in(window, async move |tree, cx| {
             let Ok(0) = answer.await else { return };
             let _ = tree.update_in(cx, |tree, window, cx| {
-                tree.copy_between(source, destination, sources, dir, true, window, cx);
+                tree.copy_between(ends, sources, dir, true, window, cx);
             });
         })
         .detach();
@@ -1823,6 +1885,22 @@ impl gpui_kit::Render for FileTree {
             &self.list,
         )
     }
+}
+
+/// The row facts a context menu branches on: which path the menu is for,
+/// what kind of entry that path is, and which local-only actions apply.
+/// Everything the menu shows is derived from these five values at build time.
+struct RowMenuContext<'a> {
+    path: &'a Path,
+    is_dir: bool,
+    is_root: bool,
+    show_hidden: bool,
+    // The tree lists whatever host the workspace spawns on. Everything in the
+    // menu goes through that host except the file-manager action, which only
+    // knows this machine: over SSH it would hand Finder a path that is not
+    // here — silently opening nothing, or the wrong thing if a local path
+    // happens to collide.
+    paths_are_local: bool,
 }
 
 impl FileTree {
@@ -2119,11 +2197,13 @@ impl FileTree {
                 move |menu, _window, cx| {
                     Self::row_context_menu(
                         menu,
-                        &path,
-                        is_dir,
-                        is_root,
-                        show_hidden,
-                        paths_are_local,
+                        RowMenuContext {
+                            path: &path,
+                            is_dir,
+                            is_root,
+                            show_hidden,
+                            paths_are_local,
+                        },
                         &tree,
                         cx,
                     )
@@ -2156,19 +2236,17 @@ impl FileTree {
 
     fn row_context_menu(
         menu: PopupMenu,
-        path: &Path,
-        is_dir: bool,
-        is_root: bool,
-        show_hidden: bool,
-        // The tree lists whatever host the workspace spawns on. Everything else
-        // in this menu goes through that host; the file manager only knows this
-        // machine, so over SSH the item would hand Finder a path that is not
-        // here — silently opening nothing, or the wrong thing if a local path
-        // happens to collide.
-        paths_are_local: bool,
+        row: RowMenuContext,
         tree: &gpui_kit::WeakEntity<Self>,
         cx: &App,
     ) -> PopupMenu {
+        let RowMenuContext {
+            path,
+            is_dir,
+            is_root,
+            show_hidden,
+            paths_are_local,
+        } = row;
         let danger = cx.theme().danger;
         let mut menu = menu.min_w(px(200.));
         let p = path.to_path_buf();

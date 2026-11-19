@@ -220,10 +220,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        },
     );
     glyph_at(cx, &mut serial, 2, 4, cp);
     let cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
@@ -248,10 +250,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_rect(500, 500),
-        1000,
-        "aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_rect(500, 500),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        },
     );
     glyph_wait(cx, "declared quarter repainted", |cx| {
         let painted = glyph_painted(window, &view, cx, cell);
@@ -285,10 +289,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_polygon(&[(0, -200), (1000, -200), (1000, 800), (0, 800)]),
-        1000,
-        "aw=1000;lh=1000;ymin=-200;size=stretch;align=center,baseline;pad=0,0,0,0",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_polygon(&[(0, -200), (1000, -200), (1000, 800), (0, 800)]),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=-200;size=stretch;align=center,baseline;pad=0,0,0,0",
+        },
     );
     glyph_at(cx, &mut serial, 20, 4, cp);
     let baseline_cell = glyph_region_bounds(window, &view, cx, 20, 4, 1);
@@ -348,10 +354,14 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
             cx,
             serial,
             &reply_path(serial),
-            mode_cp,
-            &glyph_square(1000),
-            1000,
-            &format!("aw=1000;lh=1000;ymin=0;size={mode};align=start,start;pad=0,0,0,0"),
+            &GlyphRegistration {
+                cp: mode_cp,
+                glyf: &glyph_square(1000),
+                upm: 1000,
+                params: &format!(
+                    "aw=1000;lh=1000;ymin=0;size={mode};align=start,start;pad=0,0,0,0"
+                ),
+            },
         );
         let text = char::from_u32(mode_cp).unwrap().to_string();
         serial += 1;
@@ -427,10 +437,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp + 20,
-        &glyph_square(1000),
-        1000,
-        "aw=1000;lh=1000;ymin=0;size=stretch;align=end,start;pad=0.1,0.2,0,0.3",
+        &GlyphRegistration {
+            cp: cp + 20,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=0;size=stretch;align=end,start;pad=0.1,0.2,0,0.3",
+        },
     );
     glyph_at(cx, &mut serial, 12, 4, cp + 20);
     let padded = glyph_region_bounds(window, &view, cx, 12, 4, 1);
@@ -458,10 +470,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp + 21,
-        &glyph_square(1000),
-        1000,
-        "aw=1000;lh=1000;ymin=0;size=stretch;align=center,center;pad=0.2,0.2,0.2,0.2",
+        &GlyphRegistration {
+            cp: cp + 21,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=0;size=stretch;align=center,center;pad=0.2,0.2,0.2,0.2",
+        },
     );
     glyph_at(cx, &mut serial, 13, 4, cp + 21);
     let centred = glyph_region_bounds(window, &view, cx, 13, 4, 1);
@@ -504,10 +518,12 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
             cx,
             serial,
             &reply_path(serial),
-            degenerate_cp,
-            &glyph_square(1000),
-            1000,
-            params,
+            &GlyphRegistration {
+                cp: degenerate_cp,
+                glyf: &glyph_square(1000),
+                upm: 1000,
+                params,
+            },
         );
         let text = char::from_u32(degenerate_cp).unwrap().to_string();
         serial += 1;
@@ -570,10 +586,12 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "width=2;aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "width=2;aw=1000;lh=1000;ymin=0;size=stretch;align=start,start;pad=0,0,0,0",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 2, 4, &format!("{glyph} "));
@@ -695,10 +713,12 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "width=2;aw=2000;lh=200;ymin=0;size=cover;align=start,start;pad=0,0,0,0",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "width=2;aw=2000;lh=200;ymin=0;size=cover;align=start,start;pad=0,0,0,0",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 7, 4, &format!("{glyph} "));
@@ -734,10 +754,12 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 8, 4, &glyph.to_string());
@@ -800,9 +822,7 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
     serial += 1;
     glyph_show(&view, cx, serial, 9, 79, &format!("\x1b[?7h{glyph}Z"));
     glyph_wait(cx, "wide-glyph wrap", |cx| {
-        view.read_with(cx, |view, _| {
-            glyph_presented_row(view, 10).chars().next() == Some('Z')
-        })
+        view.read_with(cx, |view, _| glyph_presented_row(view, 10).starts_with('Z'))
     });
     let last_row = view.read_with(cx, |view, _| glyph_presented_row(view, 9));
     assert_eq!(last_row.chars().nth(79), Some(glyph));
@@ -837,10 +857,12 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "aw=1000;lh=1000;ymin=0;size=advance;align=center,baseline",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=0;size=advance;align=center,baseline",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 2, 4, &glyph.to_string());
@@ -877,10 +899,12 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
             cx,
             serial,
             &reply_path(serial),
-            cp,
-            &glyph_square(side),
-            1000,
-            params,
+            &GlyphRegistration {
+                cp,
+                glyf: &glyph_square(side),
+                upm: 1000,
+                params,
+            },
         );
     }
     glyph_wait(cx, "final replacement repainted", |cx| {
@@ -907,7 +931,7 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
     // A font-size change reflows the cell: the same registration must paint
     // at the new metrics without re-registering.
     let old_cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
-    view.update(cx, |view, _| view.font_size = view.font_size * 2.);
+    view.update(cx, |view, _| view.font_size *= 2.);
     let _ = glyph_painted(window, &view, cx, old_cell);
     // The grid can reflow at the new size; place the same raw codepoint back
     // under the cursor so the assertion reads the new cell geometry. This is
@@ -955,10 +979,12 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
         cx,
         serial,
         &reply_path(serial),
-        span_cp,
-        &glyph_square(1000),
-        1000,
-        "width=2;aw=1000;lh=1000;ymin=0;size=stretch;align=start,start",
+        &GlyphRegistration {
+            cp: span_cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "width=2;aw=1000;lh=1000;ymin=0;size=stretch;align=start,start",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 3, 4, &format!("{span_char} "));

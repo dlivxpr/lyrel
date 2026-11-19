@@ -470,10 +470,12 @@ fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
         cx,
         serial,
         &reply_path(serial),
-        cp,
-        &glyph_square(1000),
-        1000,
-        "aw=1000;lh=1000;ymin=-200;size=advance;align=center,baseline;pad=0.1,0.05,0,0.05",
+        &GlyphRegistration {
+            cp,
+            glyf: &glyph_square(1000),
+            upm: 1000,
+            params: "aw=1000;lh=1000;ymin=-200;size=advance;align=center,baseline;pad=0.1,0.05,0,0.05",
+        },
     );
     serial += 1;
     glyph_show(&view, cx, serial, 2, 4, &glyph.to_string());
@@ -523,7 +525,7 @@ fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
     });
 
     // Font-size change: the same registration scales to the new real metrics.
-    view.update(cx, |view, _| view.font_size = view.font_size * 2.);
+    view.update(cx, |view, _| view.font_size *= 2.);
     let _ = glyph_paths_with_clip_in_region(window, &view, cx, cell);
     let grown = glyph_region_bounds(window, &view, cx, 2, 4, 1);
     assert!(grown.size.width.0 > cell.size.width.0 + 1.5);

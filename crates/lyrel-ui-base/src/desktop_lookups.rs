@@ -210,7 +210,7 @@ pub fn filter_hosts(hosts: &[HostChoice], query: &str) -> Vec<HostChoice> {
         .iter()
         .filter_map(|host| host_score(query, host).map(|score| (score, host)))
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     scored.into_iter().map(|(_, host)| host.clone()).collect()
 }
 
@@ -288,7 +288,7 @@ pub fn sweep_wsl(cx: &mut App) {
         let probed = cx
             .background_spawn(async { lyrel_protocol::core::shells::wsl_distros_probed() })
             .await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             cx.update_global::<WslDistros, _>(|state, _| adopt_probe(state, probed));
             cx.refresh_windows();
         });

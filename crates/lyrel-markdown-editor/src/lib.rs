@@ -4971,13 +4971,7 @@ impl EditorState {
         let info = &self.content[fence_end..end];
         let leading = info.len() - info.trim_start().len();
         let token_start = fence_end + leading;
-        let token_end = token_start
-            + info
-                .trim_start()
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .len();
+        let token_end = token_start + info.split_whitespace().next().unwrap_or("").len();
         let language = if lang == "text" && token_end == end {
             ""
         } else {
@@ -5573,16 +5567,14 @@ fn shape_runs(
 ) -> Vec<WrappedLine> {
     // Fast's enormous nowrap paint origin is unsafe. Keep every byte, but bound
     // visual lines using native shaping, never source newlines or byte truncation.
-    if !soft_wrap {
-        if let Ok(lines) =
+    if !soft_wrap
+        && let Ok(lines) =
             window
                 .text_system()
                 .shape_text(text.clone(), font_size, runs, None, None)
-        {
-            if lines.iter().all(|line| line.width() <= px(65_536.)) {
-                return lines.into_vec();
-            }
-        }
+        && lines.iter().all(|line| line.width() <= px(65_536.))
+    {
+        return lines.into_vec();
     }
     window
         .text_system()
@@ -6836,7 +6828,7 @@ mod tests {
                 window.window_handle()
             })
             .unwrap();
-        cx.update_window(window.into(), |_, window, cx| window.render_frame(cx))
+        cx.update_window(window, |_, window, cx| window.render_frame(cx))
             .unwrap();
         cx.update(|cx| {
             let editor = editor.read(cx).unwrap();

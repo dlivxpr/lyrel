@@ -50,9 +50,11 @@ pub(crate) enum SettingsEvent {
     /// must repaint without writing `config.json`; committed changes pass
     /// `persist: true`. `refresh_windows` additionally re-lays out every open
     /// window (the interface-font family changes the rem size).
+    /// `rebuild_editor` is false when the settings window already rebuilt it.
     ApplyTheme {
         persist: bool,
         refresh_windows: bool,
+        rebuild_editor: bool,
     },
 }
 
@@ -168,8 +170,7 @@ impl SettingsWindow {
     }
     pub(crate) fn close_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.reset_settings_navigation_frames();
-        // A live preset preview was never confirmed; leaving the settings
-        // window puts the original slots back before the state goes away.
+        // Drop the unconfirmed preview lease before the settings state goes away.
         self.cancel_preset_preview(cx);
         if let Some(mut state) = self.settings.take() {
             state.shortcuts.retire();

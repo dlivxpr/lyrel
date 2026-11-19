@@ -134,11 +134,11 @@ impl SessionRestore {
         mut snapshot: SessionTab,
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
-    ) -> Result<Tab, SessionTab> {
+    ) -> Result<Tab, Box<SessionTab>> {
         let restore = Self::new(workspace, owner, font_size);
         match restore.pane(&snapshot.pane, window, cx, &mut snapshot.presentation) {
             Some(pane) => Ok(Tab::reopened(snapshot, pane)),
-            None => Err(snapshot),
+            None => Err(Box::new(snapshot)),
         }
     }
 }
@@ -195,7 +195,7 @@ pub(crate) fn retire_last_window(cx: &mut App) {
         || !crate::ui::tray::icon_is_up()
     {
         cx.spawn(async move |cx| {
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
         })
         .detach();
     }
@@ -245,12 +245,15 @@ fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
                         lyrel_core::host::session_operations::launch_context(agent, &state)
                     })
                 }),
-                agent_session_scope: view.agent_session().and_then(|s| {
-                    s.readout
-                        .session_scope
-                        .as_ref()
-                        .map(lyrel_core::host::session_operations::durable_scope)
-                }),
+                agent_session_scope: view
+                    .agent_session()
+                    .and_then(|s| {
+                        s.readout
+                            .session_scope
+                            .as_ref()
+                            .map(lyrel_core::host::session_operations::durable_scope)
+                    })
+                    .map(Box::new),
             }
         }
         Pane::Split {
@@ -482,24 +485,24 @@ impl SessionRestore {
                             && (ssh_spec.is_none() || native_ssh_pane_alive(alive, *id))
                     }),
                 };
-                if restore.is_none() {
-                    if let Some(spec) = ssh_spec.clone() {
-                        let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
-                        // A native SSH leaf's recorded cwd is the far shell's own
-                        // report, so it is where the redialled shell starts.
-                        let view = LyrelApp::new_terminal_native(
-                            font_size,
-                            owner,
-                            cwd.clone(),
-                            resolved,
-                            window,
-                            cx,
-                        );
-                        if same_daemon {
-                            remap_presentation_slot(presentation, *pane_id, &view, cx);
-                        }
-                        return Some(Pane::leaf(view));
+                if restore.is_none()
+                    && let Some(spec) = ssh_spec.clone()
+                {
+                    let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
+                    // A native SSH leaf's recorded cwd is the far shell's own
+                    // report, so it is where the redialled shell starts.
+                    let view = LyrelApp::new_terminal_native(
+                        font_size,
+                        owner,
+                        cwd.clone(),
+                        resolved,
+                        window,
+                        cx,
+                    );
+                    if same_daemon {
+                        remap_presentation_slot(presentation, *pane_id, &view, cx);
                     }
+                    return Some(Pane::leaf(view));
                 }
                 // Past here the leaf comes back as a shell on the window's own
                 // machine: reattached, or spawned fresh in place of one that is
@@ -510,12 +513,14 @@ impl SessionRestore {
                     None => cwd.clone(),
                 };
                 let view = LyrelApp::new_terminal(
-                    workspace.cloned(),
-                    Some(owner),
-                    font_size,
-                    local_cwd,
-                    restore,
-                    shell.clone(),
+                    crate::ui::app::PendingTerminalRequest::shell(
+                        workspace.cloned(),
+                        Some(owner),
+                        font_size,
+                        local_cwd,
+                        restore,
+                        shell.clone(),
+                    ),
                     window,
                     cx,
                 );
@@ -525,7 +530,7 @@ impl SessionRestore {
                             *agent,
                             agent_session_id.clone(),
                             agent_launch_argv.clone(),
-                            agent_session_scope.clone(),
+                            agent_session_scope.as_deref().cloned(),
                             false,
                         );
                     });

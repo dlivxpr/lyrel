@@ -254,11 +254,13 @@ fn project_document(
                 let root = add_value(
                     &value,
                     0,
-                    "$".to_owned(),
-                    None,
-                    "$".to_owned(),
-                    None,
-                    None,
+                    NodeIdentity {
+                        key: "$".to_owned(),
+                        key_text: None,
+                        path: "$".to_owned(),
+                        key_range: None,
+                        parent: None,
+                    },
                     text,
                     &mut nodes,
                     &mut path_bytes,
@@ -309,8 +311,7 @@ fn project_lines(text: &str, cancel: &CancelToken) -> Result<JsonProjection, Pro
     let mut records = 0_usize;
     let mut invalid_records = 0_usize;
     let mut offset = 0_usize;
-    let mut line_number = 1_usize;
-    for raw in text.split_inclusive('\n') {
+    for (line_number, raw) in (1_usize..).zip(text.split_inclusive('\n')) {
         if cancel.is_cancelled() {
             return Err(ProjectionFailure::Cancelled);
         }
@@ -336,11 +337,13 @@ fn project_lines(text: &str, cancel: &CancelToken) -> Result<JsonProjection, Pro
                         let record = add_value(
                             &value,
                             value_start,
-                            format!("Line {line_number}"),
-                            None,
-                            format!("line {line_number}"),
-                            None,
-                            Some(root),
+                            NodeIdentity {
+                                key: format!("Line {line_number}"),
+                                key_text: None,
+                                path: format!("line {line_number}"),
+                                key_range: None,
+                                parent: Some(root),
+                            },
                             text,
                             &mut nodes,
                             &mut path_bytes,
@@ -391,7 +394,6 @@ fn project_lines(text: &str, cancel: &CancelToken) -> Result<JsonProjection, Pro
             }
         }
         offset += raw.len();
-        line_number += 1;
     }
     nodes[root].children = children;
     nodes[root].value = format!("{records} records");
@@ -405,24 +407,31 @@ fn project_lines(text: &str, cancel: &CancelToken) -> Result<JsonProjection, Pro
     })
 }
 
-fn add_value(
-    value: &Value<'_>,
-    offset: usize,
+/// Identity half of a node under construction: the place and naming the
+/// parsed value cannot supply about itself. Bundled so `add_value` stays
+/// under the argument limit through recursion.
+struct NodeIdentity {
     key: String,
     key_text: Option<String>,
     path: String,
     key_range: Option<Range<usize>>,
     parent: Option<usize>,
+}
+
+fn add_value(
+    value: &Value<'_>,
+    offset: usize,
+    identity: NodeIdentity,
     text: &str,
     nodes: &mut Vec<JsonNode>,
     path_bytes: &mut usize,
     cancel: &CancelToken,
 ) -> Result<usize, ProjectionFailure> {
-    if nodes.len() % CANCEL_INTERVAL == 0 && cancel.is_cancelled() {
+    if nodes.len().is_multiple_of(CANCEL_INTERVAL) && cancel.is_cancelled() {
         return Err(ProjectionFailure::Cancelled);
     }
-    *path_bytes = path_bytes.saturating_add(path.len());
-    *path_bytes = path_bytes.saturating_add(key_text.as_deref().map_or(0, str::len));
+    *path_bytes = path_bytes.saturating_add(identity.path.len());
+    *path_bytes = path_bytes.saturating_add(identity.key_text.as_deref().map_or(0, str::len));
     if *path_bytes > STRUCTURE_PATH_BYTES {
         return Err(ProjectionFailure::PathsTooLarge);
     }
@@ -432,15 +441,15 @@ fn add_value(
     let index = push_node(
         nodes,
         JsonNode {
-            key,
-            key_text,
-            path,
+            key: identity.key,
+            key_text: identity.key_text,
+            path: identity.path,
             value: preview,
             range,
-            key_range,
+            key_range: identity.key_range,
             kind,
             children: Vec::new(),
-            parent,
+            parent: identity.parent,
             record_line: None,
             error: None,
         },
@@ -466,11 +475,13 @@ fn add_value(
                 children.push(add_value(
                     &property.value,
                     offset,
-                    display,
-                    Some(name.to_owned()),
-                    path,
-                    Some(raw_key),
-                    Some(index),
+                    NodeIdentity {
+                        key: display,
+                        key_text: Some(name.to_owned()),
+                        path,
+                        key_range: Some(raw_key),
+                        parent: Some(index),
+                    },
                     text,
                     nodes,
                     path_bytes,
@@ -483,11 +494,13 @@ fn add_value(
                 children.push(add_value(
                     element,
                     offset,
-                    format!("[{element_index}]"),
-                    None,
-                    format!("{}[{element_index}]", nodes[index].path),
-                    None,
-                    Some(index),
+                    NodeIdentity {
+                        key: format!("[{element_index}]"),
+                        key_text: None,
+                        path: format!("{}[{element_index}]", nodes[index].path),
+                        key_range: None,
+                        parent: Some(index),
+                    },
                     text,
                     nodes,
                     path_bytes,

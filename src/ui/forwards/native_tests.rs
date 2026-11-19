@@ -103,11 +103,10 @@ fn remote_echo(fixture: &native_fixture::NativeSshFixture) -> u16 {
         if let Some(port) = text
             .split_once("FORWARD_READY:")
             .and_then(|(_, tail)| tail.split_once('\n').map(|(port, _)| port))
+            && let Ok(port) = port.trim().parse()
         {
-            if let Ok(port) = port.trim().parse() {
-                ClientMsg::Detach.encode(&mut stream).unwrap();
-                return port;
-            }
+            ClientMsg::Detach.encode(&mut stream).unwrap();
+            return port;
         }
     }
 }

@@ -166,15 +166,15 @@ pub fn wrapped_click_index(
             return Some(i);
         }
     }
-    if let Some(fi) = positions.iter().position(|&(pr, _, _)| pr == target) {
-        if col < positions[fi].1 {
-            return Some(fi);
-        }
+    if let Some(fi) = positions.iter().position(|&(pr, _, _)| pr == target)
+        && col < positions[fi].1
+    {
+        return Some(fi);
     }
-    if let Some(last) = positions.iter().rposition(|&(pr, _, _)| pr == target) {
-        if chars[last] == '\n' {
-            return Some(last);
-        }
+    if let Some(last) = positions.iter().rposition(|&(pr, _, _)| pr == target)
+        && chars[last] == '\n'
+    {
+        return Some(last);
     }
     match positions.iter().position(|&(pr, _, _)| pr > target) {
         Some(ni) => Some(ni),

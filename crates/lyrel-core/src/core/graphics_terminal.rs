@@ -794,7 +794,7 @@ impl Handler for GraphicsState {
                     (0, 2)
                 }
             }
-            (2, 2 | 3 | 4) => (3, 0),
+            (2, 2..=4) => (3, 0),
             (2, _) => (2, 0),
             // ReGIS is unknown and every other item is an error in Pi.
             _ => (1, 0),

@@ -80,7 +80,7 @@ fn the_passphrase_follows_the_first_key_that_is_really_there() {
         Some(real.to_string_lossy().to_string())
     );
     assert_eq!(
-        first_readable_key_in(&[missing.clone()], "example.com", "ada"),
+        first_readable_key_in(std::slice::from_ref(&missing), "example.com", "ada"),
         None
     );
     // An empty field falls back to the defaults the handshake offers —
@@ -91,7 +91,12 @@ fn the_passphrase_follows_the_first_key_that_is_really_there() {
         Some(real.to_string_lossy().to_string())
     );
     assert_eq!(
-        first_readable_key_or(&[missing.clone()], "example.com", "ada", defaults),
+        first_readable_key_or(
+            std::slice::from_ref(&missing),
+            "example.com",
+            "ada",
+            defaults
+        ),
         None
     );
     assert_eq!(
@@ -246,7 +251,7 @@ fn a_jump_host_that_exists_is_kept_by_id() {
         jump: "bastion".to_string(),
         ..draft_with_host()
     };
-    let (profile, errors) = validate_ssh_draft(draft, &[bastion.clone()]);
+    let (profile, errors) = validate_ssh_draft(draft, std::slice::from_ref(&bastion));
     assert_eq!(profile.jump_host, Some(bastion.id));
     assert!(errors.is_empty());
 }

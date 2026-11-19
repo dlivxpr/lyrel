@@ -422,15 +422,12 @@ impl Host for LocalHost {
         &self,
         view: u64,
         query: &crate::host::sqlite::SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: crate::host::sqlite::SqliteCellRead,
         cancel: &crate::host::sqlite::SqliteCancel,
     ) -> io::Result<crate::host::sqlite::SqliteValue> {
         guard_off_ui();
         match &self.sqlite {
-            Some(engine) => engine.value(view, query, row, column, offset, max_bytes, cancel),
+            Some(engine) => engine.value(view, query, cell, cancel),
             None => sqlite_unsupported(),
         }
     }
@@ -932,10 +929,7 @@ fn coalesce(
         take(first, &mut batch, &mut seen);
 
         let deadline = Instant::now() + COALESCE_WINDOW;
-        loop {
-            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-                break;
-            };
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
             match raw_rx.recv_timeout(left) {
                 Ok(paths) => take(paths, &mut batch, &mut seen),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
@@ -1244,8 +1238,18 @@ mod tests {
             host.sqlite_columns(1, "t", &cancel).map(|_| ()),
             host.sqlite_count(1, &query, &cancel).map(|_| ()),
             host.sqlite_page(1, &query, &cancel).map(|_| ()),
-            host.sqlite_value(1, &query, 0, 0, 0, 64, &cancel)
-                .map(|_| ()),
+            host.sqlite_value(
+                1,
+                &query,
+                crate::host::sqlite::SqliteCellRead {
+                    row: 0,
+                    column: 0,
+                    offset: 0,
+                    max_bytes: 64,
+                },
+                &cancel,
+            )
+            .map(|_| ()),
         ] {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
         }

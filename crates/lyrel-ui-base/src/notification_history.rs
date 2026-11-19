@@ -396,13 +396,13 @@ impl Inbox {
         let worker = std::thread::Builder::new()
             .name("notification-history".into())
             .spawn(move || {
-                if let Some(parent) = path.parent() {
-                    if let Err(error) = std::fs::create_dir_all(parent) {
-                        log::error!(
-                            "cannot create notification storage {}: {error}",
-                            parent.display()
-                        );
-                    }
+                if let Some(parent) = path.parent()
+                    && let Err(error) = std::fs::create_dir_all(parent)
+                {
+                    log::error!(
+                        "cannot create notification storage {}: {error}",
+                        parent.display()
+                    );
                 }
                 let mut persisted = persisted;
                 while let Ok(write) = receiver.recv() {
@@ -422,13 +422,11 @@ impl Inbox {
                         }
                         pending = receiver.try_recv().ok();
                     }
-                    if dirty {
-                        if let Err(error) = save(&path, &persisted) {
-                            log::error!(
-                                "cannot persist notification history {}: {error}",
-                                path.display()
-                            );
-                        }
+                    if dirty && let Err(error) = save(&path, &persisted) {
+                        log::error!(
+                            "cannot persist notification history {}: {error}",
+                            path.display()
+                        );
                     }
                 }
             })

@@ -441,7 +441,7 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
     open(&app, &mut cx, &path);
 
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::State {
@@ -472,7 +472,7 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
         );
     });
 
-    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+    view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::Failed {
                 message: "engine stopped".into(),
@@ -487,7 +487,7 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
 
     // A close can race the asynchronous start: the recorded state must fall
     // back to idle instead of keeping a pending engine.
-    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+    view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
         view.engine = super::EngineStatus::Starting;
         view.on_surface_event(SurfaceEvent::Closed, cx);
     });
@@ -520,7 +520,7 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
             .as_slice(),
     );
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -602,7 +602,7 @@ fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -655,7 +655,7 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
             .as_slice(),
     );
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -713,7 +713,7 @@ fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext)
     });
     let committed: Arc<[u8]> = Arc::from(uncompressed(2).as_slice());
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -765,7 +765,7 @@ fn an_identical_commit_is_not_an_edit(tcx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -803,7 +803,7 @@ fn confirm_pending_sync(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) -> O
     let diagram = view(app, cx);
     let request = diagram.read_with(cx, |view, _| view.pending_sync_token());
     if let Some(request) = request {
-        let _ = diagram.update_in(cx, |view, _window, cx| {
+        diagram.update_in(cx, |view, _window, cx| {
             view.on_surface_event(SurfaceEvent::SyncConfirmed { request }, cx);
         });
     }
@@ -833,7 +833,7 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
     });
     let committed: Arc<[u8]> = Arc::from(uncompressed(2).as_slice());
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -883,7 +883,7 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
             .as_slice(),
     );
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -950,7 +950,7 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut T
     let rewritten = original.replacen("Edited page", "Rewritten page", 1);
     let committed: Arc<[u8]> = Arc::from(rewritten.as_bytes());
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {
@@ -1036,7 +1036,7 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
     });
     assert_eq!(views.len(), 2, "two live presentations");
     for view in &views {
-        let _ = view.update_in(&mut cx, |view, _window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             view.on_surface_event(SurfaceEvent::Ready, cx);
             view.attach_test_surface(cx);
         });
@@ -1068,7 +1068,7 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
     let request = views[0]
         .read_with(&cx, |view, _| view.pending_sync_token())
         .expect("the primary requested a sync");
-    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+    views[0].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::Commit {
                 bytes: committed.clone(),
@@ -1081,7 +1081,7 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
         !target.exists(),
         "a commit without this sync's own acknowledgement is not the save's confirmation"
     );
-    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+    views[0].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::SyncConfirmed { request }, cx);
     });
     app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
@@ -1147,7 +1147,7 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
     });
     assert_eq!(views.len(), 2, "two live presentations");
     for view in &views {
-        let _ = view.update_in(&mut cx, |view, _window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             view.on_surface_event(SurfaceEvent::Ready, cx);
             view.attach_test_surface(cx);
         });
@@ -1168,7 +1168,7 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
     let (primary_request, sibling_request) = (requests[0], requests[1]);
     // Each presentation numbers its own session from zero, so both tokens may
     // be equal; what separates them is the view that owns the request.
-    let _ = views[1].update_in(&mut cx, |view, _window, cx| {
+    views[1].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::Commit {
                 bytes: Arc::from(original.as_slice()),
@@ -1189,7 +1189,7 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
     );
     // A request number this view never sent and an ordinary commit are not
     // confirmations.
-    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+    views[0].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::SyncConfirmed {
                 request: primary_request + 1,
@@ -1208,7 +1208,7 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
         !target.exists(),
         "only the primary's own request releases it"
     );
-    let _ = views[0].update_in(&mut cx, |view, _window, cx| {
+    views[0].update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::SyncConfirmed {
                 request: primary_request,
@@ -1245,7 +1245,7 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.attach_test_surface(cx);
         view.on_surface_event(
@@ -1302,7 +1302,7 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
     let request = view(&app, &cx)
         .read_with(&cx, |view, _| view.pending_sync_token())
         .expect("the save asked the canvas for its model");
-    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+    view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::SyncRejected {
                 request,
@@ -1346,7 +1346,7 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
 
     // Fixing the canvas (here: undoing back to the saved model) clears the
     // warning and the unsaved state without a reload or a second authority.
-    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+    view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(
             SurfaceEvent::Commit {
                 bytes: Arc::from(original.as_slice()),
@@ -1392,7 +1392,7 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
             .as_slice(),
     );
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.attach_test_surface(cx);
         view.on_surface_event(
@@ -1483,7 +1483,7 @@ fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppCont
             .as_slice(),
     );
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.attach_test_surface(cx);
         view.on_surface_event(
@@ -1585,7 +1585,7 @@ fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
         })
     });
     let diagram = view(&app, &cx);
-    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+    diagram.update_in(&mut cx, |view, _window, cx| {
         view.on_surface_event(SurfaceEvent::Ready, cx);
         view.on_surface_event(
             SurfaceEvent::Commit {

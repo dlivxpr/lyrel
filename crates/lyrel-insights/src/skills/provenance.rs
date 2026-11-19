@@ -43,10 +43,10 @@ pub(super) fn attach(
         environments.push((request.home.clone(), environment));
     }
     for agent in HookAgent::ALL {
-        if let Ok(environment) = target.agent_environment(agent) {
-            if let Ok(home) = target.agent_home(&environment) {
-                environments.push((home, environment));
-            }
+        if let Ok(environment) = target.agent_environment(agent)
+            && let Ok(home) = target.agent_home(&environment)
+        {
+            environments.push((home, environment));
         }
     }
     for (home, environment) in environments {

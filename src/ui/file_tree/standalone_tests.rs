@@ -473,6 +473,8 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
     let new_dir = temp();
     std::fs::write(old_dir.path().join("old.txt"), "o").unwrap();
     std::fs::write(new_dir.path().join("new.txt"), "n").unwrap();
+    std::fs::write(old_dir.path().join("shared.txt"), "old connection").unwrap();
+    std::fs::write(new_dir.path().join("shared.txt"), "new connection").unwrap();
     // Keep this read/write authority test independent of real OS watcher
     // events. The watcher debounce test uses the real LocalHost separately.
     let old_ns = NamespaceHost::new_unwatched(HostId::LOCAL, old_dir.path());
@@ -541,16 +543,15 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
         });
     });
 
-    // The same fence around writes: a delete dispatched on the retired
-    // adapter and confirmed after a reconnect changes nothing in the tree and
-    // announces nothing. (The background remove still runs on the adapter it
-    // was sent to; what the guard stops is the landing.)
+    // Confirm a delete after reconnecting to another adapter that serves the
+    // same path. Both file versions and the replacement row must survive.
     vcx.update(|_, cx| {
         HostRegistry::insert(cx, old.clone());
     });
     let before = harness.events.borrow().len();
     vcx.update(|window, cx| {
         tree.update(cx, |tree, cx| {
+            tree.sync_host(&old);
             tree.sync_view(
                 FileTreeView {
                     host: HostId::LOCAL,
@@ -560,8 +561,7 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
                 },
                 cx,
             );
-            tree.selected
-                .single(HostId::LOCAL, PathBuf::from("/old.txt"));
+            tree.selected.single(HostId::LOCAL, root.join("shared.txt"));
             tree.delete_selected(window, cx);
         });
     });
@@ -571,11 +571,25 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
     vcx.update(|_, cx| {
         HostRegistry::insert(cx, new.clone());
     });
+    present(&tree, &mut vcx, &new, std::slice::from_ref(&root), "");
     vcx.update(|_, cx| {
-        tree.update(cx, |tree, _| {
+        tree.update(cx, |tree, cx| {
             tree.sync_host(&new);
+            tree.request_loads(&new, std::slice::from_ref(&root), &HashSet::new(), cx);
         });
     });
+    wait_until(
+        &mut vcx,
+        "the replacement listing before confirmation",
+        |vcx| {
+            vcx.update(|_, cx| {
+                tree.read(cx)
+                    .children
+                    .get(HostId::LOCAL, &root)
+                    .is_some_and(|entries| entries.iter().any(|e| e.name == "shared.txt"))
+            })
+        },
+    );
     vcx.simulate_prompt_answer(t(L10nKey::Delete));
     vcx.background_executor.run_until_parked();
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -587,4 +601,26 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
             .all(|e| !e.starts_with("PathRemoved")),
         "a retired adapter's confirmed delete must not announce a removal: {events:?}"
     );
+    drop(events);
+
+    // The confirmation outlived the adapter it named: neither side of it may
+    // land. The retired filesystem keeps its file, and the row the optimistic
+    // delete would have pulled from the current cache is still on screen.
+    assert_eq!(
+        std::fs::read(old_dir.path().join("shared.txt")).unwrap(),
+        b"old connection"
+    );
+    assert_eq!(
+        std::fs::read(new_dir.path().join("shared.txt")).unwrap(),
+        b"new connection"
+    );
+    vcx.update(|_, cx| {
+        tree.update(cx, |tree, _| {
+            let rows = tree.visible_rows(HostId::LOCAL, &[PathBuf::from("/")], &HashSet::new());
+            assert!(
+                rows.iter().any(|r| r.entry.name == "shared.txt"),
+                "the replacement's row survived the retired confirmation"
+            );
+        });
+    });
 }

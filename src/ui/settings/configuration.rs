@@ -91,6 +91,7 @@ impl SettingsWindow {
             cx.emit(SettingsEvent::ApplyTheme {
                 persist: false,
                 refresh_windows: false,
+                rebuild_editor: true,
             });
         }
     }
@@ -441,6 +442,7 @@ impl SettingsWindow {
                 cx.emit(SettingsEvent::ApplyTheme {
                     persist: false,
                     refresh_windows: false,
+                    rebuild_editor: true,
                 });
             }
             L10nKey::SettingsBlur => {
@@ -448,6 +450,7 @@ impl SettingsWindow {
                 cx.emit(SettingsEvent::ApplyTheme {
                     persist: false,
                     refresh_windows: false,
+                    rebuild_editor: true,
                 });
             }
             #[cfg(target_os = "windows")]
@@ -595,6 +598,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: true,
+            rebuild_editor: true,
         });
         cx.notify();
     }

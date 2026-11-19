@@ -673,7 +673,14 @@ impl LyrelApp {
             return;
         };
         self.editor.update(cx, |editor, cx| {
-            editor.strip_picker_key(tab, code, local_host, ev, cap, window, cx);
+            editor.strip_picker_key(
+                lyrel_workbench_editor::code_editor::strip::StripTarget { tab, code },
+                local_host,
+                ev,
+                cap,
+                window,
+                cx,
+            );
         });
     }
 
@@ -1088,7 +1095,7 @@ impl LyrelApp {
     ) -> Option<crate::ui::search::LiveQuery> {
         let code = self.tab_code()?;
         if !self.editor.update(cx, |editor, cx| {
-            editor.lsp_project_symbols_available(&code, cx)
+            editor.lsp_project_symbols_available(code, cx)
         }) {
             return None;
         }
@@ -1097,7 +1104,7 @@ impl LyrelApp {
         let (path, requester) = self
             .editor
             .read(cx)
-            .active_local_file(&code)
+            .active_local_file(code)
             .map(|f| (f.path().to_path_buf(), f.id()))?;
         Some(std::rc::Rc::new(
             move |query: &str, cx: &mut gpui_kit::App| {

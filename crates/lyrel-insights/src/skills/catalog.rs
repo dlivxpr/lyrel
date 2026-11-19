@@ -640,12 +640,12 @@ pub fn discover(http: &dyn Transport, source: &GitHubSource) -> Result<SkillCata
         kinds.insert(entry.path.as_str(), entry.kind.as_str());
     }
     for entry in &tree.tree {
-        if let Some((parent, _)) = entry.path.rsplit_once('/') {
-            if kinds.get(parent) != Some(&"tree") {
-                return Err(CatalogError::Unsafe(format!(
-                    "Missing or non-directory repository parent: {parent}"
-                )));
-            }
+        if let Some((parent, _)) = entry.path.rsplit_once('/')
+            && kinds.get(parent) != Some(&"tree")
+        {
+            return Err(CatalogError::Unsafe(format!(
+                "Missing or non-directory repository parent: {parent}"
+            )));
         }
     }
     let subprefix = source.subpath.as_ref().map(|p| format!("{p}/"));
@@ -858,7 +858,7 @@ pub fn search(http: &dyn Transport, query: &str) -> Result<Vec<SkillSearchResult
             installs: item.installs,
         });
     }
-    rows.sort_by(|a, b| b.installs.cmp(&a.installs));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.installs));
     Ok(rows)
 }
 fn clean_metadata(value: &str) -> String {

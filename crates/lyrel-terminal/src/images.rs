@@ -615,6 +615,15 @@ fn take_metadata_offer(
     inner.offers.remove(&token)?.metadata
 }
 
+/// The advertised footprint of one offered resource: pixel dimensions and the
+/// encoded/metadata byte counts admission accounts against.
+struct OfferFootprint {
+    width: u32,
+    height: u32,
+    encoded_bytes: u64,
+    metadata_bytes: u64,
+}
+
 impl ImageStore {
     pub fn new() -> Self {
         Self::default()
@@ -692,10 +701,12 @@ impl ImageStore {
             None,
             token,
             key,
-            width,
-            height,
-            encoded_bytes,
-            metadata_bytes,
+            OfferFootprint {
+                width,
+                height,
+                encoded_bytes,
+                metadata_bytes,
+            },
         )
     }
 
@@ -729,10 +740,12 @@ impl ImageStore {
             Some(generation),
             token,
             key,
-            width,
-            height,
-            encoded_bytes,
-            if existing { 0 } else { OWNER_METADATA_BYTES },
+            OfferFootprint {
+                width,
+                height,
+                encoded_bytes,
+                metadata_bytes: if existing { 0 } else { OWNER_METADATA_BYTES },
+            },
         )
     }
 
@@ -741,11 +754,14 @@ impl ImageStore {
         generation: Option<u64>,
         token: u64,
         key: u64,
-        width: u32,
-        height: u32,
-        encoded_bytes: u64,
-        metadata_bytes: u64,
+        footprint: OfferFootprint,
     ) -> bool {
+        let OfferFootprint {
+            width,
+            height,
+            encoded_bytes,
+            metadata_bytes,
+        } = footprint;
         let mut inner = self.0.state.lock().unwrap();
         if generation
             .is_some_and(|generation| inner.closed || inner.reader_generation != generation)
@@ -1067,7 +1083,7 @@ impl ImageStore {
                 if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols {
                     continue;
                 }
-                let mut run = slice.run.clone();
+                let mut run = slice.run;
                 run.width = run.width.min(prototype.span_cols - run.col);
                 if rio_vt::ansi::kitty_virtual::compute_run_geometry(
                     &run,
@@ -1839,10 +1855,12 @@ impl DecodeWorker {
             Some(self.generation),
             token,
             key,
-            width,
-            height,
-            encoded_bytes,
-            metadata_bytes,
+            OfferFootprint {
+                width,
+                height,
+                encoded_bytes,
+                metadata_bytes,
+            },
         )
     }
 
@@ -1881,9 +1899,7 @@ impl DecodeWorker {
                         return;
                     }
                     let next = inner.resources.iter_mut().find_map(|(&key, resource)| {
-                        if resource.pending.is_none() {
-                            return None;
-                        }
+                        resource.pending.as_ref()?;
                         Some((
                             key,
                             resource.revision,
@@ -2019,7 +2035,7 @@ fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32, usize)> {
     if w == 0 || h == 0 || rgba.len() != bytes {
         return None;
     }
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     // Inflate may overallocate beyond the admitted RGBA length. Trim that

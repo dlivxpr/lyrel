@@ -579,7 +579,7 @@ impl EditorBuffers {
             return (id, false);
         }
         match loaded {
-            Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Image(image) => (self.create_image(host, *image, window, cx), true),
             Loaded::Drawio(drawio) => (self.create_drawio(host, drawio, cx), true),
             Loaded::Sqlite(sqlite) => (self.create_sqlite(host, sqlite, window, cx), true),
             Loaded::Book(book) => (self.create_book(host, book, window, cx), true),
@@ -961,7 +961,7 @@ impl EditorBuffers {
             );
             let preview = cx.new(|cx| SvgDocument::new(document, cx));
             let presentation =
-                cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx));
+                cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Svg(presentation), None, sub, observe)
         } else if native_json {
@@ -978,15 +978,8 @@ impl EditorBuffers {
             );
             let json_document =
                 cx.new(|cx| JsonDocument::new(document, JsonShell::new(json_format), cx));
-            let presentation = cx.new(|cx| {
-                JsonView::new(
-                    json_document,
-                    JsonMode::Structure,
-                    wrap,
-                    indent.size as usize,
-                    cx,
-                )
-            });
+            let presentation = cx
+                .new(|cx| JsonView::new(json_document, JsonMode::Structure, wrap, indent.size, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Json(presentation), None, sub, observe)
         } else if native_yaml {
@@ -1000,15 +993,8 @@ impl EditorBuffers {
                 },
             );
             let yaml_document = cx.new(|cx| YamlDocument::new(document, YamlShell, cx));
-            let presentation = cx.new(|cx| {
-                YamlView::new(
-                    yaml_document,
-                    YamlMode::Structure,
-                    wrap,
-                    indent.size as usize,
-                    cx,
-                )
-            });
+            let presentation = cx
+                .new(|cx| YamlView::new(yaml_document, YamlMode::Structure, wrap, indent.size, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Yaml(presentation), None, sub, observe)
         } else if native_toml {
@@ -1022,15 +1008,8 @@ impl EditorBuffers {
                 },
             );
             let toml_document = cx.new(|cx| TomlDocument::new(document, TomlShell, cx));
-            let presentation = cx.new(|cx| {
-                TomlView::new(
-                    toml_document,
-                    TomlMode::Structure,
-                    wrap,
-                    indent.size as usize,
-                    cx,
-                )
-            });
+            let presentation = cx
+                .new(|cx| TomlView::new(toml_document, TomlMode::Structure, wrap, indent.size, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Toml(presentation), None, sub, observe)
         } else if native_csv {
@@ -1045,16 +1024,8 @@ impl EditorBuffers {
                 },
             );
             let table = cx.new(|cx| CsvDocument::new(document, delimiter, cx));
-            let presentation = cx.new(|cx| {
-                CsvView::new(
-                    table,
-                    CsvMode::Table,
-                    wrap,
-                    indent.size as usize,
-                    window,
-                    cx,
-                )
-            });
+            let presentation =
+                cx.new(|cx| CsvView::new(table, CsvMode::Table, wrap, indent.size, window, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Csv(presentation), None, sub, observe)
         } else if native_xml {
@@ -1068,15 +1039,8 @@ impl EditorBuffers {
                 },
             );
             let xml_document = cx.new(|cx| XmlDocument::new(document, XmlShell, cx));
-            let presentation = cx.new(|cx| {
-                XmlView::new(
-                    xml_document,
-                    XmlMode::Structure,
-                    wrap,
-                    indent.size as usize,
-                    cx,
-                )
-            });
+            let presentation =
+                cx.new(|cx| XmlView::new(xml_document, XmlMode::Structure, wrap, indent.size, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Xml(presentation), None, sub, observe)
         } else if native_markdown {
@@ -1093,7 +1057,7 @@ impl EditorBuffers {
                 let mut view = lyrel_markdown_editor::EditorState::for_document(document, cx);
                 markdown::configure(&mut view, cx);
                 view.set_soft_wrap(wrap, cx);
-                view.set_tab_indent(indent.size as usize);
+                view.set_tab_indent(indent.size);
                 if path
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"))
@@ -1479,7 +1443,8 @@ impl EditorBuffers {
                             )
                         })?;
                     let meta = h.stat(&target)?;
-                    return read_image(h, target, format, meta).map(Reloaded::Image);
+                    return read_image(h, target, format, meta)
+                        .map(|image| Reloaded::Image(Box::new(image)));
                 }
                 if pdf_reload {
                     let meta = h.stat(&target)?;
@@ -1715,7 +1680,7 @@ pub enum Loaded {
     },
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
-    Image(LoadedImage),
+    Image(Box<LoadedImage>),
     /// A draw.io file. Parsing its page list happened on the Host thread;
     /// failure is part of the document, not a reason to fall back to text.
     Drawio(LoadedDrawio),
@@ -1771,7 +1736,7 @@ impl Loaded {
 /// 一次重新读取在 Host 线程上得到的东西。
 enum Reloaded {
     Text(lyrel_document::text::Decoded, Option<MTime>),
-    Image(LoadedImage),
+    Image(Box<LoadedImage>),
     Drawio(LoadedDrawio),
     Sqlite(LoadedSqlite),
     Book(LoadedBook),
@@ -1859,10 +1824,10 @@ fn load_file(
         // A ZIP renamed away from `.epub` is still identified by its container,
         // not by its extension. A plain archive has no container and keeps the
         // existing external-open behaviour.
-        if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
-            if let Ok(BookOpen::Book(book)) = book_document::load(h, path.clone(), meta) {
-                return Ok(Loaded::Book(book));
-            }
+        if (bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06"))
+            && let Ok(BookOpen::Book(book)) = book_document::load(h, path.clone(), meta)
+        {
+            return Ok(Loaded::Book(*book));
         }
         return Err(EditorOpenError::NotText(path));
     };
@@ -1946,7 +1911,7 @@ fn load_book_candidate(
             .map_err(|error| book_read_error(path, error));
     }
     match book_document::load(h, path.to_path_buf(), meta) {
-        Ok(BookOpen::Book(book)) if book.is_ready() => Ok(Some(Loaded::Book(book))),
+        Ok(BookOpen::Book(book)) if book.is_ready() => Ok(Some(Loaded::Book(*book))),
         Ok(BookOpen::Book(_)) | Ok(BookOpen::NotEpub(_)) => Ok(None),
         Err(error) => Err(book_read_error(path, error)),
     }
@@ -2018,7 +1983,7 @@ fn load_image(
 ) -> Result<Loaded, EditorOpenError> {
     let requested = path.clone();
     read_image(h, path, format, meta)
-        .map(Loaded::Image)
+        .map(|image| Loaded::Image(Box::new(image)))
         .map_err(|error| {
             EditorOpenError::Message(t_fmt(
                 L10nKey::EditorCantRead,

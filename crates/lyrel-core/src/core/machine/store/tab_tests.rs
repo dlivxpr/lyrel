@@ -124,7 +124,17 @@ fn tabs_rename_move_and_regroup_in_place() {
 fn a_sleeping_tab_keeps_its_panes_and_says_so_in_a_delta() {
     let (store, _dir, ws, tab) = store_with_tab();
     store
-        .pane_split(ws, 1, Axis::Horizontal, 0.5, seed(2, "/work"), false, None)
+        .pane_split(
+            ws,
+            1,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                new: seed(2, "/work"),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
     let (_sub, heard) = recorded(&store);
 
@@ -203,7 +213,17 @@ const NOON: u64 = 1_800_000_000;
 fn a_remembered_close_keeps_the_tab_and_its_pane_records() {
     let (store, _dir, ws, tab) = store_with_tab();
     store
-        .pane_split(ws, 1, Axis::Horizontal, 0.5, seed(2, "/else"), false, None)
+        .pane_split(
+            ws,
+            1,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                new: seed(2, "/else"),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
     assert!(store.machine().panes.iter().all(|p| p.live));
     let (_sub, heard) = recorded(&store);

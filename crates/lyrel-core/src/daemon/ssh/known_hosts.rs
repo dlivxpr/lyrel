@@ -70,10 +70,10 @@ pub fn check_in_str(contents: &str, host: &str, port: u16, key: &PublicKey) -> H
         if entry.marker != Some(Marker::Revoked) || !entry.matches_host(&token) {
             continue;
         }
-        if let Some(stored) = entry.key() {
-            if &stored == key {
-                return HostKeyStatus::Revoked;
-            }
+        if let Some(stored) = entry.key()
+            && &stored == key
+        {
+            return HostKeyStatus::Revoked;
         }
     }
 
@@ -287,14 +287,13 @@ pub fn delete_in_str(contents: &str, id: &KnownHostId) -> (String, bool) {
     for segment in split_keep_terminators(contents) {
         if !removed {
             let line = segment.trim_end_matches(['\n', '\r']);
-            if let Some(entry) = KnownHostsLine::parse(line) {
-                if entry.hosts == id.host
-                    && entry.keytype == id.key_type
-                    && entry.keyblob == id.keyblob
-                {
-                    removed = true;
-                    continue;
-                }
+            if let Some(entry) = KnownHostsLine::parse(line)
+                && entry.hosts == id.host
+                && entry.keytype == id.key_type
+                && entry.keyblob == id.keyblob
+            {
+                removed = true;
+                continue;
             }
         }
         out.push_str(segment);
@@ -530,9 +529,9 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     }
     msg.extend_from_slice(&ml.to_be_bytes());
 
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
-        for (i, word) in block.chunks_exact(4).enumerate() {
+        for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
             w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
         }
         for i in 16..80 {

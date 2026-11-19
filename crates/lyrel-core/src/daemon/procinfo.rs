@@ -163,10 +163,11 @@ fn probe_log_due(
     now: std::time::Instant,
     gap: std::time::Duration,
 ) -> bool {
-    if let Some((said, at)) = last.as_ref() {
-        if said == line && now.duration_since(*at) < gap {
-            return false;
-        }
+    if let Some((said, at)) = last.as_ref()
+        && said == line
+        && now.duration_since(*at) < gap
+    {
+        return false;
     }
     *last = Some((line.to_string(), now));
     true
@@ -438,7 +439,7 @@ fn process_table() -> HashMap<u32, Row> {
         let name = proc_name(pid as i32).unwrap_or_else(|| {
             stat[..close]
                 .rfind('(')
-                .map_or_else(|| String::new(), |open| stat[open + 1..close].to_string())
+                .map_or_else(String::new, |open| stat[open + 1..close].to_string())
         });
         // `/proc/<pid>` is normally owned by the process's effective uid, which
         // is the one that governs who may read its sockets. Normally: the
@@ -579,12 +580,12 @@ pub(super) fn proc_name(pid: i32) -> Option<String> {
     if pid <= 0 {
         return None;
     }
-    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe")) {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            let name = name.strip_suffix(" (deleted)").unwrap_or(name);
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
+    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe"))
+        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+    {
+        let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+        if !name.is_empty() {
+            return Some(name.to_string());
         }
     }
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
@@ -646,13 +647,13 @@ fn listening_ports(procs: &[ProcEntry]) -> (Vec<PortEntry>, PortProbe) {
                 // put a doubt on screen every time a `ls` finished. What the
                 // status is worth is a log line when the run both complained
                 // and came back with nothing.
-                if ports.is_empty() && !out.status.success() {
-                    if let Some(line) = String::from_utf8_lossy(&out.stderr)
+                if ports.is_empty()
+                    && !out.status.success()
+                    && let Some(line) = String::from_utf8_lossy(&out.stderr)
                         .lines()
                         .find(|l| !l.trim().is_empty())
-                    {
-                        log::debug!("{tool} found no listeners and said: {line}");
-                    }
+                {
+                    log::debug!("{tool} found no listeners and said: {line}");
                 }
                 return (ports, PortProbe::Ok);
             }

@@ -15,6 +15,17 @@ use lyrel_ui_base::config::Config;
 
 type Grid = Crosswords<EventProxy>;
 
+/// The pointer state a selection starts from: where it landed, which side of
+/// the cell, how many clicks, and whether Shift extends the existing one.
+#[derive(Clone, Copy)]
+pub struct PointerGesture {
+    pub col: usize,
+    pub row: usize,
+    pub left: bool,
+    pub clicks: usize,
+    pub shift: bool,
+}
+
 /// Selection and viewport interaction. Reading owns decoded semantic rows,
 /// while scheduled ticks still request the existing live guard lazily.
 #[derive(Default)]
@@ -335,13 +346,16 @@ impl SelectionScroll {
         &mut self,
         cells: &mut [super::element::RenderCell],
         cols: usize,
-        col: usize,
-        row: usize,
-        left: bool,
-        clicks: usize,
-        shift: bool,
+        gesture: PointerGesture,
         cfg: &Config,
     ) -> bool {
+        let PointerGesture {
+            col,
+            row,
+            left,
+            clicks,
+            shift,
+        } = gesture;
         use super::presentation::{PresentedGrid, PresentedSelection};
         let grid = if let Some(reading) = self.reading.as_ref() {
             PresentedGrid::reading(reading)
@@ -426,16 +440,14 @@ impl SelectionScroll {
         self.animation.is_some()
     }
 
-    pub fn start(
-        &mut self,
-        term: &mut Grid,
-        col: usize,
-        row: usize,
-        left: bool,
-        clicks: usize,
-        shift: bool,
-        cfg: &Config,
-    ) {
+    pub fn start(&mut self, term: &mut Grid, gesture: PointerGesture, cfg: &Config) {
+        let PointerGesture {
+            col,
+            row,
+            left,
+            clicks,
+            shift,
+        } = gesture;
         self.gesture = Some((col, row, left, clicks));
         let point = Pos::new(
             Line(row as i32 - term.grid.display_offset() as i32),

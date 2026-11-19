@@ -3,6 +3,16 @@ use gpui_kit::{Context, EntityId, EventEmitter, WeakEntity};
 use lyrel_document::text::{EncodeError, LineEnding, TextFormat};
 use std::{ops::Range, sync::Arc};
 
+/// A block of source lines moved within one edit: the source range being
+/// replaced, the line spans to put there, and whether the moved block is
+/// padded with a leading and/or trailing newline.
+pub(crate) struct LineReplace {
+    pub range: Range<usize>,
+    pub lines: Vec<Range<usize>>,
+    pub leading: bool,
+    pub trailing: bool,
+}
+
 #[derive(Clone)]
 pub struct SourceSnapshot {
     text: Arc<String>,
@@ -292,7 +302,7 @@ impl Document {
         cx: &mut Context<Self>,
     ) -> Arc<SourceSnapshot> {
         assert!(self.composition.is_none());
-        replacements.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+        replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0.start));
         let mut end = self.source().len();
         for (range, _) in &replacements {
             assert!(
@@ -425,14 +435,17 @@ impl Document {
     }
     pub(crate) fn replace_lines(
         &mut self,
-        range: Range<usize>,
-        lines: Vec<Range<usize>>,
-        leading: bool,
-        trailing: bool,
+        request: LineReplace,
         origin: EntityId,
         caret: usize,
         cx: &mut Context<Self>,
     ) -> Arc<SourceSnapshot> {
+        let LineReplace {
+            range,
+            lines,
+            leading,
+            trailing,
+        } = request;
         assert!(self.composition.is_none());
         let mut inserted = String::new();
         let mut endings = Vec::new();

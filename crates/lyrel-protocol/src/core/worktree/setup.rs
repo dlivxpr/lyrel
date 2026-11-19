@@ -173,8 +173,10 @@ pub fn agent_line(
         let named = (0..args.len())
             .find(|index| CLIAgent::detect_from_argv(&args[..=*index]) == Some(agent))
             .ok_or("Hermes initial task requires an identifiable native executable")?;
-        let mut scope = crate::host::session_operations::SessionScope::default();
-        scope.shell_program = Some(shell_program.into());
+        let mut scope = crate::host::session_operations::SessionScope {
+            shell_program: Some(shell_program.into()),
+            ..Default::default()
+        };
         for assignment in args.drain(..named) {
             let (key, value) = assignment
                 .split_once('=')
@@ -276,8 +278,10 @@ pub fn agent_line(
         let named = (0..args.len())
             .find(|index| CLIAgent::detect_from_argv(&args[..=*index]) == Some(agent))
             .ok_or("OMP initial-task launch requires an identifiable native omp executable")?;
-        let mut scope = crate::host::session_operations::SessionScope::default();
-        scope.shell_program = Some(shell_program.into());
+        let mut scope = crate::host::session_operations::SessionScope {
+            shell_program: Some(shell_program.into()),
+            ..Default::default()
+        };
         for assignment in args.drain(..named) {
             let (key, value) = assignment
                 .split_once('=')

@@ -3,7 +3,7 @@
 //! receives cross-panel intents through `FileTreeEvent`.
 
 use super::*;
-use lyrel_ui_base::file_search::{FileList, IndexKey};
+use lyrel_ui_base::file_search::{FileList, IndexKey, walk};
 use std::time::{Duration, Instant};
 
 const REVALIDATE_AFTER: Duration = std::time::Duration::from_secs(5);
@@ -315,6 +315,52 @@ impl FileTree {
         store.generation += 1;
         store.walking = Some((store.generation, key.clone()));
         Some(store.generation)
+    }
+
+    /// Walks the project for the quick-open index unless a walk of it just
+    /// landed or is already on its way. The scheduling and the landing live
+    /// here, beside the store the walk feeds: the host work runs through
+    /// `HostOps`, instance-verified against the adapter authority the walk
+    /// was dispatched on, and the app hears the outcome through
+    /// [`FileTreeEvent::FileIndexLanded`].
+    pub(crate) fn refresh_file_index(
+        &mut self,
+        host: SharedHost,
+        key: IndexKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(generation) = self.begin_file_index(&key) else {
+            return;
+        };
+        // Only this computer's home is known here, and it is the common case:
+        // a fresh local tab starts there.
+        let home = host
+            .id()
+            .is_local()
+            .then(|| std::env::var_os("HOME").map(PathBuf::from))
+            .flatten();
+        let cwds = key.cwds().to_vec();
+        #[cfg(test)]
+        let landing_host = InstanceTicket::of(&host);
+        let authority = self.read_authority(&host);
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |h| walk(h, &cwds, home.as_deref()),
+            move |tree: &mut FileTree, list, _window, cx| {
+                #[cfg(test)]
+                tree.read_probe.record(ReadKind::Index, landing_host);
+                if !authority.is_current(tree, cx) {
+                    return;
+                }
+                if !tree.finish_file_index(generation, key.clone(), list) {
+                    return;
+                }
+                cx.emit(FileTreeEvent::FileIndexLanded { key });
+            },
+        );
     }
 
     pub(crate) fn finish_file_index(

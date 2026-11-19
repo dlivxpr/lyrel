@@ -30,7 +30,7 @@ fn a_lagged_connection_hears_a_resync_instead_of_the_superseded_backlog() {
     match ControlServerMsg::read(&mut client_end).unwrap() {
         ControlServerMsg::Event(ControlEvent::Layout { workspace, delta }) => {
             assert_eq!(workspace, "ws-2", "the stale backlog was delivered anyway");
-            assert_eq!(delta, machine::LayoutDelta::WorkspaceDeleted);
+            assert_eq!(*delta, machine::LayoutDelta::WorkspaceDeleted);
         }
         other => panic!("expected the post-resync delta, got {other:?}"),
     }

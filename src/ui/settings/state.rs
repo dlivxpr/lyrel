@@ -156,8 +156,9 @@ impl SettingsWindow {
         target: SettingsSection,
         cx: &mut Context<Self>,
     ) {
+        let mut moved = false;
         if let Some(s) = self.settings.as_mut() {
-            let moved = s.navigation.select_section(target);
+            moved = s.navigation.select_section(target);
             s.shortcuts.cancel_recording();
             if moved {
                 s.theme.leave_page();
@@ -171,6 +172,12 @@ impl SettingsWindow {
             s.usage.update(cx, |page, cx| {
                 page.set_visible(target == SettingsSection::Usage, cx)
             });
+        }
+        if moved {
+            // A live preset preview belongs to the page that was showing;
+            // leaving it must put the parked slot values back before any
+            // later save can persist them.
+            self.cancel_preset_preview(cx);
         }
         self.ensure_agent_hooks_loaded(cx);
         self.skills_section_changed(target, cx);

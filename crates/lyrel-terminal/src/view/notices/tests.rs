@@ -266,13 +266,13 @@ fn rich_agent_hooks_suppress_ordinary_command_completion(cx: &mut TestAppContext
     lyrel_core::daemon::protocol::DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
         .encode(&mut daemon)
         .unwrap();
-    lyrel_core::daemon::protocol::DaemonMsg::AgentStatus(Some(AgentSessionState {
+    lyrel_core::daemon::protocol::DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
         status: AgentStatus::Working,
         session_id: Some("sid-command-notification".into()),
         launch_argv: Some(vec!["omp".into()]),
         rich: true,
         ..Default::default()
-    }))
+    })))
     .encode(&mut daemon)
     .unwrap();
     wait_for_shell(

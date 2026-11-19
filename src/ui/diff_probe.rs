@@ -57,10 +57,17 @@ pub(crate) enum ProbeCompletion {
     /// entry: deliver its snapshot. `follow_up` is the live host the one
     /// pending invalidation must be re-probed on, if there is one.
     Deliver { follow_up: Option<SharedHost> },
-    /// A retired `SharedHost` or a superseded probe: drop the result entirely
-    /// — no install, no in-flight state touched, no retry on the retired
-    /// host.
-    Reject,
+    /// A superseded probe: the key's in-flight entry now belongs to a newer
+    /// host's probe (or none, because that probe already landed). Drop the
+    /// result and leave the entry alone — clearing it would strand the probe
+    /// that replaced this one. No retry either: the registry no longer holds
+    /// this host.
+    Superseded,
+    /// The probe's host retired (or left the registry) while it was out, and
+    /// its in-flight entry went with it: no replacement probe exists. The
+    /// landing site must re-arm anything still waiting on this key against
+    /// the host the registry currently holds.
+    Retired,
 }
 
 /// Which diff probes are out and which of them owe a follow-up refresh.
@@ -138,16 +145,17 @@ impl DiffProbeTracker {
             // gone because that probe already landed). Leave the entry alone —
             // clearing it would strand the new probe — and drop the result.
             // No retry either: the registry no longer holds this host.
-            return ProbeCompletion::Reject;
+            return ProbeCompletion::Superseded;
         }
         self.inflight.remove(key);
         let Some(current) = live.filter(|current| Arc::ptr_eq(current, probe)) else {
             // The probe's host retired while it was out: its snapshot answers
-            // a connection nobody is on anymore. Reject the result and drop
-            // the pending refresh with it — the live host's next request
-            // spawns its own probe.
+            // a connection nobody is on anymore. Reject the result; the entry
+            // went out with the removal above, so the landing site must
+            // re-arm a waiting overlay — the live host's next request spawns
+            // its own probe.
             self.restale.remove(key);
-            return ProbeCompletion::Reject;
+            return ProbeCompletion::Retired;
         };
         let follow_up = self.restale.remove(key).then(|| Arc::clone(current));
         ProbeCompletion::Deliver { follow_up }
@@ -243,7 +251,7 @@ mod tests {
                     "the follow-up probes on the same live host"
                 );
             }
-            ProbeCompletion::Reject => panic!("the live probe's landing must deliver"),
+            _ => panic!("the live probe's landing must deliver"),
         }
         assert!(probes.inflight.is_empty());
         assert!(!probes.is_restale(&key));
@@ -258,7 +266,7 @@ mod tests {
             ProbeCompletion::Deliver { follow_up } => {
                 assert!(follow_up.is_none())
             }
-            ProbeCompletion::Reject => panic!("the follow-up's landing must deliver"),
+            _ => panic!("the follow-up's landing must deliver"),
         }
         assert!(probes.inflight.is_empty());
     }
@@ -298,9 +306,9 @@ mod tests {
         assert!(
             matches!(
                 probes.complete(&key, &retired, Some(&live)),
-                ProbeCompletion::Reject
+                ProbeCompletion::Superseded
             ),
-            "a retired host's late landing is rejected"
+            "a retired host's late landing is superseded by the new host's probe"
         );
         assert!(
             probes
@@ -314,13 +322,13 @@ mod tests {
         // superseded invalidation having been answered twice over.
         match probes.complete(&key, &live, Some(&live)) {
             ProbeCompletion::Deliver { follow_up } => assert!(follow_up.is_none()),
-            ProbeCompletion::Reject => panic!("the live probe's landing must deliver"),
+            _ => panic!("the live probe's landing must deliver"),
         }
         assert!(probes.inflight.is_empty());
     }
 
     #[test]
-    fn a_probe_whose_host_left_the_registry_entirely_is_rejected() {
+    fn a_probe_whose_host_left_the_registry_entirely_must_be_rearmed_by_the_landing_site() {
         let mut probes = DiffProbeTracker::default();
         let host = LocalHost::new();
         let cwd = Path::new("/repo");
@@ -337,7 +345,7 @@ mod tests {
         ));
         assert!(matches!(
             probes.complete(&key, &host, None),
-            ProbeCompletion::Reject
+            ProbeCompletion::Retired
         ));
         assert!(
             probes.inflight.is_empty(),
@@ -387,7 +395,7 @@ mod tests {
                     let want_follow_up = (*source == DiffSource::Staged).then(|| Arc::clone(&host));
                     assert_eq!(follow_up.is_some(), want_follow_up.is_some());
                 }
-                ProbeCompletion::Reject => panic!("{source:?} must deliver"),
+                _ => panic!("{source:?} must deliver"),
             }
         }
         assert!(probes.inflight.is_empty());
@@ -775,5 +783,160 @@ mod gpui_tests {
         pump_until(&app, &mut vcx, |app| {
             host.diff_count() == 3 && app.diff_probes.inflight.is_empty()
         });
+    }
+
+    #[gpui_kit::test]
+    fn a_retired_first_probe_rearms_on_the_live_host_instead_of_stranding_the_overlay(
+        cx: &mut TestAppContext,
+    ) {
+        let (_temp, root) = repository();
+        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+        let id = HostId::from_connection_key("diff-probe-rearm");
+        let retired = ProbeGateHost::new(id);
+        vcx.update(|_, cx| {
+            HostRegistry::insert(cx, retired.clone());
+        });
+
+        let gate = retired.arm();
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_diff_overlay(id, root.clone(), DiffSource::Worktree, None, window, cx);
+        });
+        gate.wait_for_probe(&mut vcx);
+        assert!(
+            app.update_in(&mut vcx, |app, _, _| {
+                app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .is_some_and(|o| o.loading)
+            }),
+            "the overlay is waiting on its first probe"
+        );
+
+        // The host retires while that probe is still out. No refresh trigger
+        // fires on the real reconnect path — the rejected landing has to
+        // re-arm the overlay itself.
+        let live = ProbeGateHost::new(id);
+        vcx.update(|_, cx| {
+            HostRegistry::insert(cx, live.clone());
+        });
+        gate.release();
+        gate.wait_for_result(&mut vcx);
+
+        pump_until(&app, &mut vcx, |app| {
+            live.diff_count() == 1 && app.diff_probes.inflight.is_empty()
+        });
+        let fresh =
+            landed_snapshot(&app, &mut vcx).expect("the re-armed probe's snapshot installed");
+        assert_eq!(fresh.untracked, vec!["before.txt".to_string()]);
+        assert!(
+            app.update_in(&mut vcx, |app, _, _| {
+                app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .is_some_and(|o| !o.loading)
+            }),
+            "the overlay stopped waiting once the live host answered"
+        );
+        assert_eq!(
+            retired.diff_count(),
+            1,
+            "the retired host probed once and was never retried"
+        );
+        assert_eq!(live.diff_count(), 1, "the live host answered exactly once");
+    }
+
+    #[gpui_kit::test]
+    fn a_follow_up_covered_epoch_does_not_spawn_a_third_probe(cx: &mut TestAppContext) {
+        use crate::ui::scm::data::ScmData;
+
+        let (_temp, root) = repository();
+        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+        let host = ProbeGateHost::new(HostId::from_connection_key("diff-probe-epoch"));
+        vcx.update(|_, cx| {
+            HostRegistry::insert(cx, host.clone());
+            cx.default_global::<ScmData>();
+        });
+        // The overlay settles: its first probe lands and records the epoch.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_diff_overlay(
+                host.id(),
+                root.clone(),
+                DiffSource::Worktree,
+                None,
+                window,
+                cx,
+            );
+        });
+        pump_until(&app, &mut vcx, |app| {
+            app.diff_probes.inflight.is_empty()
+                && app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .is_some_and(|o| !o.loading && matches!(&o.load, DiffLoad::Ready(_)))
+        });
+        assert_eq!(
+            host.diff_count(),
+            1,
+            "the first probe is the only one so far"
+        );
+
+        // A real repository change bumps the epoch; the consumer check the
+        // status observer runs finds the snapshot stale and probes again.
+        // That probe is held at the gate.
+        let gate = host.arm();
+        vcx.update(|_, cx| {
+            cx.default_global::<ScmData>().bump(host.id(), &root);
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.maybe_refresh_diff_overlay(cx);
+        });
+        gate.wait_for_probe(&mut vcx);
+        assert_eq!(host.diff_count(), 2);
+
+        // More changes while the probe is out: the consumer check must
+        // coalesce them into the one pending follow-up, not overlap probes.
+        for n in 3..=5 {
+            vcx.update(|_, cx| {
+                cx.default_global::<ScmData>().bump(host.id(), &root);
+            });
+            app.update_in(&mut vcx, |app, _, cx| {
+                app.maybe_refresh_diff_overlay(cx);
+            });
+            assert_eq!(
+                host.diff_count(),
+                2,
+                "consumer invalidation #{n} during the flight must coalesce"
+            );
+        }
+        gate.release();
+
+        // The probe lands and spawns exactly one follow-up for the coalesced
+        // invalidations. That follow-up covers the epoch the bumps reached;
+        // when it has landed, the consumer check must read the patch as fresh.
+        pump_until(&app, &mut vcx, |app| {
+            app.diff_probes.inflight.is_empty()
+                && app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .is_some_and(|o| !o.loading && matches!(&o.load, DiffLoad::Ready(_)))
+        });
+        assert_eq!(
+            host.diff_count(),
+            3,
+            "original probe plus exactly one follow-up"
+        );
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.maybe_refresh_diff_overlay(cx);
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            host.diff_count(),
+            3,
+            "the epoch the follow-up covered is not stale anymore; no third probe"
+        );
+        assert!(
+            app.update_in(&mut vcx, |app, _, _| app.diff_probes.inflight.is_empty()),
+            "nothing is left in flight"
+        );
     }
 }

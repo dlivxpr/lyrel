@@ -688,7 +688,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     context.update(|window, cx| window.input("界", cx));
     settle(&mut context);
     let mut inserted = source.clone();
-    inserted.insert_str(clicked, "界");
+    inserted.insert(clicked, '界');
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
@@ -905,7 +905,7 @@ pub(super) fn native_viewport_jump(cx: &mut TestAppContext) {
     context.update(|window, cx| window.input("界", cx));
     save(&app, &mut context);
     let mut expected = source.clone();
-    expected.insert_str(at, "界");
+    expected.insert(at, '界');
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
     context.dispatch_action(gpui_kit::component::input::Undo);
     save(&app, &mut context);

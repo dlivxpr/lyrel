@@ -200,7 +200,7 @@ fn color_queries_answer_the_pane_effective_palette(cx: &mut TestAppContext) {
     // The default preset is `light`: its authored ANSI 1 differs from the
     // dark table the pane was constructed with, which is exactly the
     // query-versus-paint divergence this fixes.
-    cx.update(|cx| crate::test_support::apply_theme(cx));
+    cx.update(crate::test_support::apply_theme);
     let (view, window) = graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
 
     // A replayed query must not leak a reply into the live pane, and the

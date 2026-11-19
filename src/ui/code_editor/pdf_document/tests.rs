@@ -574,7 +574,7 @@ fn malformed_and_oversized_pdfs_fail_visibly(tcx: &mut TestAppContext) {
     open(&app, &mut cx, &big);
     match content(&app, &cx) {
         PdfContent::Failed(message) => assert!(
-            message.contains(&t(L10nKey::EditorPdfTooLarge)),
+            message.contains(t(L10nKey::EditorPdfTooLarge)),
             "the PDF budget is named, got: {message}"
         ),
         _ => panic!("a PDF over the viewing budget parsed"),
@@ -1302,7 +1302,7 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| app.editor.read(cx).buffers.watching())
     });
-    std::fs::write(&path, &fixtures::forms_document(true)).unwrap();
+    std::fs::write(&path, fixtures::forms_document(true)).unwrap();
     until(&mut cx, |cx| status(&app, cx).starts_with("Page 1 / 1"));
     release.send_blocking(()).unwrap();
     until(&mut cx, |_| {

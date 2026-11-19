@@ -1842,7 +1842,7 @@ pub(crate) fn drain_events(cx: &mut gpui_kit::App) {
                 cx.refresh_windows();
             }
             ControlEvent::Layout { workspace, delta } => {
-                crate::ui::tree_sync::on_layout_delta(cx, host, &workspace, delta);
+                crate::ui::tree_sync::on_layout_delta(cx, host, &workspace, *delta);
             }
             ControlEvent::LayoutResync => {
                 log::info!("{host:?} dropped layout deltas for this client; re-pulling");
@@ -2126,9 +2126,11 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
                             stream,
                             buffered,
                             &adopting,
-                            size,
-                            cell_w,
-                            cell_h,
+                            lyrel_terminal::remote::RelinkLayout {
+                                size,
+                                cell_w,
+                                cell_h,
+                            },
                             Some(version),
                             cx,
                         ) {
@@ -2266,9 +2268,11 @@ fn relink_dead_panes(
                             stream,
                             buffered,
                             &route,
-                            size,
-                            cell_w,
-                            cell_h,
+                            lyrel_terminal::remote::RelinkLayout {
+                                size,
+                                cell_w,
+                                cell_h,
+                            },
                             Some(version),
                             cx,
                         )
@@ -2510,10 +2514,9 @@ mod tests {
 
             note_pane_relink_outcome(cx, ws, 0);
             assert!(
-                cx.default_global::<RemoteLinks>()
+                !cx.default_global::<RemoteLinks>()
                     .pane_retries
-                    .get(&ws)
-                    .is_none(),
+                    .contains_key(&ws),
                 "every pane back means no clock left to run"
             );
         });

@@ -616,7 +616,7 @@ fn launch(
             "OpenCode executable is missing",
         )
     })?;
-    if CLIAgent::detect_from_argv(&[executable.clone()]) != Some(CLIAgent::OpenCode) {
+    if CLIAgent::detect_from_argv(std::slice::from_ref(executable)) != Some(CLIAgent::OpenCode) {
         return Err(failure(
             SessionErrorKind::Unsupported,
             "cannot identify the captured OpenCode executable",

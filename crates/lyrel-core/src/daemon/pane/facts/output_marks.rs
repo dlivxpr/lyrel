@@ -158,10 +158,10 @@ impl OscSniffer {
                     }
                 } else if let Some(event) = crate::core::cli_agent::parse_agent_event(payload) {
                     signals.agent_events.push(event);
-                } else if let Some((title, body)) = notes.parse(payload) {
-                    if title.as_deref() != Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL) {
-                        signals.notification = Some(body);
-                    }
+                } else if let Some((title, body)) = notes.parse(payload)
+                    && title.as_deref() != Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL)
+                {
+                    signals.notification = Some(body);
                 }
             });
         }
@@ -248,12 +248,13 @@ pub(super) fn percent_decode(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
     while i < input.len() {
-        if input[i] == b'%' && i + 2 < input.len() {
-            if let (Some(h), Some(l)) = (hex_val(input[i + 1]), hex_val(input[i + 2])) {
-                out.push((h << 4) | l);
-                i += 3;
-                continue;
-            }
+        if input[i] == b'%'
+            && i + 2 < input.len()
+            && let (Some(h), Some(l)) = (hex_val(input[i + 1]), hex_val(input[i + 2]))
+        {
+            out.push((h << 4) | l);
+            i += 3;
+            continue;
         }
         out.push(input[i]);
         i += 1;

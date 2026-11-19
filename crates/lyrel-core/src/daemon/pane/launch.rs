@@ -292,13 +292,14 @@ fn initial_working_directory(cwd: Option<PathBuf>) -> Option<PathBuf> {
     // now, but a hand-edited config.json can still hold one — name it, with
     // the reason, at the moment it actually costs something (an explicit cwd
     // that resolves never consults the config, so that case stays quiet).
-    if let Some(dir) = &forced {
-        if !dir.is_dir() && cwd.as_ref().is_none_or(|d| !d.is_dir()) {
-            log::warn!(
-                "configured working directory {} is not a directory; new panes fall back",
-                dir.display()
-            );
-        }
+    if let Some(dir) = &forced
+        && !dir.is_dir()
+        && cwd.as_ref().is_none_or(|d| !d.is_dir())
+    {
+        log::warn!(
+            "configured working directory {} is not a directory; new panes fall back",
+            dir.display()
+        );
     }
     [cwd, forced, fallback]
         .into_iter()

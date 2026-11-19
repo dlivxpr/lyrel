@@ -203,11 +203,7 @@ impl Tab {
         pane: Pane,
         presentation: lyrel_core::core::machine::TabPresentation,
     ) -> Self {
-        let mut tab = Self::with_identity(
-            pane,
-            st.tree_id
-                .unwrap_or_else(lyrel_core::core::machine::TabId::new),
-        );
+        let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_default());
         tab.name = st.name.clone();
         tab.presentation = presentation;
         tab.group.set(st.group);
@@ -218,11 +214,7 @@ impl Tab {
     }
 
     pub(crate) fn reopened(st: SessionTab, pane: Pane) -> Self {
-        let mut tab = Self::with_identity(
-            pane,
-            st.tree_id
-                .unwrap_or_else(lyrel_core::core::machine::TabId::new),
-        );
+        let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_default());
         tab.name = st.name;
         tab.presentation = st.presentation;
         tab.group.set(st.group);

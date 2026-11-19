@@ -611,7 +611,7 @@ fn tree_selection_is_tab_and_host_scoped_and_protects_roots() {
     assert!(
         first
             .selected
-            .targets(remote, &[path.clone()], false)
+            .targets(remote, std::slice::from_ref(&path), false)
             .is_empty()
     );
     first.selected.clear();

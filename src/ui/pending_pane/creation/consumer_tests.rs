@@ -36,7 +36,7 @@ fn pending(
         &waiting,
         window,
         |app, pending, _: &SpawnFinished, window, cx| {
-            app.land_pane(&pending, window, cx);
+            app.land_pane(pending, window, cx);
         },
     )
     .detach();
@@ -550,7 +550,7 @@ fn reduced_motion_keeps_connecting_legible_without_animation_frames(cx: &mut Tes
             .motion_preference = lyrel_core::core::config::MotionPreference::Reduce;
         crate::ui::motion::apply(cx);
     });
-    let waiting = app.update_in(&mut vcx, |app, window, cx| pending(app, window, cx));
+    let waiting = app.update_in(&mut vcx, pending);
     let pane = waiting.entity_id().as_u64() as usize;
     vcx.run_until_parked();
 

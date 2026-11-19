@@ -154,15 +154,16 @@ pub(super) fn query(
                 reset: None,
                 expires: end.clone(),
             };
-            if pool.used.is_none() && pool.limit.is_none() {
-                if let Some(percent) = decimal(item.get("percent"))? {
-                    let percent: f64 = percent.parse().map_err(|_| UsageError::Response)?;
-                    if !(0.0..=1.0).contains(&percent) {
-                        return Err(UsageError::Response);
-                    }
-                    pool.used = Some((percent * 100.0).to_string());
-                    pool.unit = "%".to_owned();
+            if pool.used.is_none()
+                && pool.limit.is_none()
+                && let Some(percent) = decimal(item.get("percent"))?
+            {
+                let percent: f64 = percent.parse().map_err(|_| UsageError::Response)?;
+                if !(0.0..=1.0).contains(&percent) {
+                    return Err(UsageError::Response);
                 }
+                pool.used = Some((percent * 100.0).to_string());
+                pool.unit = "%".to_owned();
             }
             report.pools.push(pool);
         }

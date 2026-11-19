@@ -676,7 +676,7 @@ fn native_pip_geometry_survives_primary_updates_without_changing_remote_geometry
             .set_pip_geometry(PipGeometry::new(1., 1., 0.5, 0.5));
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: primary,
+                tab: Box::new(primary),
                 pane: None
             },
             window,

@@ -338,7 +338,7 @@ pub(super) fn read_shared(transfer: &MediumTransfer) -> Option<Vec<u8>> {
         }
         let (mut low, mut high) = (1, MAX_IMAGE_BYTES);
         while low < high {
-            let middle = low + (high - low + 1) / 2;
+            let middle = low + (high - low).div_ceil(2);
             if fits(middle) {
                 low = middle;
             } else {

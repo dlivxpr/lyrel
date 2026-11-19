@@ -68,19 +68,19 @@ impl Log for FileLogger {
     }
 
     fn flush(&self) {
-        if let Ok(mut repeats) = self.lock.lock() {
-            if repeats.count > 5 {
-                append(
-                    &self.path,
-                    &format!(
-                        "{} {} [suppressed {} repeats]\n",
-                        timestamp(),
-                        repeats.message,
-                        repeats.count - 5
-                    ),
-                );
-                repeats.count = 5;
-            }
+        if let Ok(mut repeats) = self.lock.lock()
+            && repeats.count > 5
+        {
+            append(
+                &self.path,
+                &format!(
+                    "{} {} [suppressed {} repeats]\n",
+                    timestamp(),
+                    repeats.message,
+                    repeats.count - 5
+                ),
+            );
+            repeats.count = 5;
         }
     }
 }
@@ -132,7 +132,7 @@ fn append(path: &Path, record: &str) {
     while !record.is_char_boundary(end) {
         end -= 1;
     }
-    let _ = append_rotating(path, record[..end].as_bytes(), MAX_BYTES);
+    let _ = append_rotating(path, &record.as_bytes()[..end], MAX_BYTES);
 }
 
 fn private_options() -> std::fs::OpenOptions {
@@ -223,10 +223,10 @@ pub fn capture_stderr() -> std::io::Result<()> {
                 match reader.read(&mut bytes) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if let Some(out) = original.as_mut() {
-                            if out.write_all(&bytes[..n]).is_err() {
-                                original = None;
-                            }
+                        if let Some(out) = original.as_mut()
+                            && out.write_all(&bytes[..n]).is_err()
+                        {
+                            original = None;
                         }
                         let header = format!("{} pid={} stderr: ", timestamp(), std::process::id());
                         let mut record = header.into_bytes();

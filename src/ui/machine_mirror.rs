@@ -428,7 +428,7 @@ fn apply(machine: &mut Machine, workspace: WorkspaceId, delta: &LayoutDelta) -> 
             let Some(t) = ws.tabs.iter_mut().find(|t| t.id == tab.id) else {
                 return false;
             };
-            *t = tab.clone();
+            *t = (**tab).clone();
             if let Some(pane) = pane {
                 match machine.panes.iter_mut().find(|p| p.id == pane.id) {
                     Some(record) => *record = pane.clone(),
@@ -722,9 +722,11 @@ mod tests {
         use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
 
         cx.update(|cx| {
-            let mut view = WindowView::default();
-            view.label = Some("api".into());
-            view.subject = Some("/repo/api".into());
+            let view = WindowView {
+                label: Some("api".into()),
+                subject: Some("/repo/api".into()),
+                ..Default::default()
+            };
             let id = view.id;
             let entry = view.clone();
             WorkspaceStore::install_for_test(
@@ -1315,7 +1317,7 @@ mod tests {
             &mut machine,
             id,
             &LayoutDelta::TabRestructured {
-                tab: restructured,
+                tab: Box::new(restructured),
                 pane: Some(PaneRecord::new(2)),
             },
         ));

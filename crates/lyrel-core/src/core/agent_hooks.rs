@@ -176,10 +176,10 @@ fn write_to_controlling_tty(bytes: &[u8]) -> bool {
             .is_some_and(|n| is_lyrel_host_exe(&n))
     });
 
-    if let Some(pid) = shell {
-        if attach_and_write(pid, bytes) {
-            return true;
-        }
+    if let Some(pid) = shell
+        && attach_and_write(pid, bytes)
+    {
+        return true;
     }
 
     let mut any = false;

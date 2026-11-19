@@ -49,6 +49,9 @@ impl TextSnapshot {
             Self::Shared(text) => text.len(),
         }
     }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     pub fn chunks(&self) -> impl Iterator<Item = &str> {
         let (code, markdown) = match self {
             Self::Code(text) => (Some(text), None),

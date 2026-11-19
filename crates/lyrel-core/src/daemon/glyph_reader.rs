@@ -106,14 +106,13 @@ mod tests {
             tx,
             &OutputGate::new(),
             false,
-            false,
-            false,
-            // Glyph state only: this peer decodes `GlyphState` frames but
-            // holds no coverage answerer — the CLI `run` shape. Query tests
-            // attach through `pane_with_renderer`; this fixture stays silent.
-            true,
-            false,
-            false,
+            AttachFeatures {
+                // Glyph state only: this peer decodes `GlyphState` frames but
+                // holds no coverage answerer — the CLI `run` shape. Query tests
+                // attach through `pane_with_renderer`; this fixture stays silent.
+                glyph_state: true,
+                ..AttachFeatures::default()
+            },
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -129,11 +128,11 @@ mod tests {
             tx,
             &OutputGate::new(),
             false,
-            false,
-            false,
-            true,
-            true,
-            false,
+            AttachFeatures {
+                glyph_state: true,
+                glyph_render: true,
+                ..AttachFeatures::default()
+            },
         );
         (Arc::new(Mutex::new(pane)), rx)
     }
@@ -262,13 +261,13 @@ mod pipeline_tests {
             tx,
             &OutputGate::new(),
             false,
-            false,
-            false,
-            true,
-            // Both credentials: `q` only reaches a controller that declared
-            // the monochrome-render opt-in, so the pipeline fixture renders.
-            true,
-            false,
+            AttachFeatures {
+                glyph_state: true,
+                // Both credentials: `q` only reaches a controller that declared
+                // the monochrome-render opt-in, so the pipeline fixture renders.
+                glyph_render: true,
+                ..AttachFeatures::default()
+            },
         );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();

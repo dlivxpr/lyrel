@@ -133,7 +133,7 @@ fn a_standing_failure_stops_shouting_once_the_backoff_settles() {
 #[gpui_kit::test]
 fn the_backoff_count_ends_with_the_run_of_failures(cx: &mut gpui_kit::TestAppContext) {
     cx.update(|cx| {
-        let _ = lyrel_core::core::config::set_config_dir(
+        lyrel_core::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-backoff-count-{}", std::process::id())),
         );
         let view = lyrel_ui_base::session::WindowView::default();

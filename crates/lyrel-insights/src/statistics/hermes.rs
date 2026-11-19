@@ -50,13 +50,15 @@ pub fn discover_hermes(
             .map_or("hermes", String::as_str),
     )
     .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-    let mut scope = SessionScope::default();
-    scope.environment = environment
-        .into_iter()
-        .filter(|(key, _)| {
-            ["HOME", "USERPROFILE", "HERMES_HOME", "HERMES_RUNTIME_DIR"].contains(&key.as_str())
-        })
-        .collect();
+    let mut scope = SessionScope {
+        environment: environment
+            .into_iter()
+            .filter(|(key, _)| {
+                ["HOME", "USERPROFILE", "HERMES_HOME", "HERMES_RUNTIME_DIR"].contains(&key.as_str())
+            })
+            .collect(),
+        ..SessionScope::default()
+    };
     scope
         .environment
         .insert("HERMES_HOME".into(), root.to_string_lossy().into_owned());
@@ -196,18 +198,17 @@ pub(super) fn parse(
             if !ids.insert(id.to_owned()) {
                 continue;
             }
-            if let Some(profile) = row["profile"].as_str() {
-                if source
+            if let Some(profile) = row["profile"].as_str()
+                && source
                     .hermes_request
                     .as_ref()
                     .and_then(|r| r.scope.profile.as_deref())
                     .is_some_and(|p| p != profile)
-                {
-                    issues.push(issue(
-                        "Hermes response profile differs from selected scope; row omitted",
-                    ));
-                    continue;
-                }
+            {
+                issues.push(issue(
+                    "Hermes response profile differs from selected scope; row omitted",
+                ));
+                continue;
             }
             // Rolled-up compression lineage must never be billed twice. Branch rows retain their independent stored ID.
             if lineage_members.contains(id) {

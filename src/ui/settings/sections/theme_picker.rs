@@ -2,24 +2,14 @@
 //! per theme slot with a live preview of the theme under the pointer, and the
 //! editor a duplicated theme opens.
 //!
-//! Arrowing through a slot's menu live-previews the highlighted preset: the
-//! in-memory `Config` moves at once and a non-persisting
-//! [`SettingsEvent::ApplyTheme`] repaints theme and menus, so `config.json`
-//! is written only when the pick is confirmed. The values the slots held
-//! before the first preview are kept here and restored on cancel.
+//! Arrowing through a slot's menu previews the highlight without mutating
+//! `Config`. The settings view holds the preview lease; a non-persisting
+//! [`SettingsEvent::ApplyTheme`] repaints the desktop and its menus.
 
 use std::rc::Rc;
 
 use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
-
-/// The slot values a live preset preview must put back when the picker
-/// closes without a confirmed pick.
-pub(crate) struct PresetPreview {
-    theme_preset: String,
-    theme_preset_light: String,
-    theme_preset_dark: String,
-}
 
 fn rgb_of((r, g, b): (u8, u8, u8)) -> gpui_kit::Rgba {
     rgb((r as u32) << 16 | (g as u32) << 8 | b as u32)
@@ -248,11 +238,7 @@ impl SettingsWindow {
             .collect()
     }
 
-    /// Live-previews the preset the open slot menu has highlighted. The first
-    /// preview remembers the slot values it replaces; each move only rewrites
-    /// the in-memory `Config` and emits a non-persisting `ApplyTheme`, so the
-    /// visual theme and menus follow the highlight without touching
-    /// `config.json`.
+    /// Apply the highlighted preset to the live desktop, not `Config`.
     fn preview_theme_menu_selection(&mut self, dark_slot: bool, cx: &mut Context<Self>) {
         if self.theme_draft_dirty() {
             return;
@@ -270,19 +256,11 @@ impl SettingsWindow {
         let state = self
             .active_settings_mut()
             .expect("settings present: checked above");
-        if state.preset_preview.is_none() {
-            let cfg = cx.global::<Config>();
-            state.preset_preview = Some(PresetPreview {
-                theme_preset: cfg.theme_preset.clone(),
-                theme_preset_light: cfg.theme_preset_light.clone(),
-                theme_preset_dark: cfg.theme_preset_dark.clone(),
-            });
-        }
-        let dark_now = crate::ui::theme::system_dark(cx);
-        theme_edit::ThemeEditing::select_preset(cx.global_mut::<Config>(), &pick, dark_now);
+        state.preset_preview = Some(lyrel_ui_base::presentation::preview_preset(pick, cx));
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }
@@ -316,23 +294,18 @@ impl SettingsWindow {
         }
     }
 
-    /// Puts the slot values back the way they were before the first live
-    /// preview and asks the shell to repaint. A no-op unless a preview is
-    /// live, so every menu-dismissal path can call it unconditionally.
+    /// End any live preset preview before dismissing or confirming its picker.
     pub(crate) fn cancel_preset_preview(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.active_settings_mut() else {
             return;
         };
-        let Some(preview) = state.preset_preview.take() else {
+        if state.preset_preview.take().is_none() {
             return;
-        };
-        let cfg = cx.global_mut::<Config>();
-        cfg.theme_preset = preview.theme_preset;
-        cfg.theme_preset_light = preview.theme_preset_light;
-        cfg.theme_preset_dark = preview.theme_preset_dark;
+        }
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }

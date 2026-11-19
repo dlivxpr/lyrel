@@ -475,12 +475,14 @@ fn io_error(error: io::Error) -> BrowserError {
 }
 
 fn utf16(bytes: &[u8]) -> Result<String, BrowserError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(BrowserError::Unreadable);
     }
     char::decode_utf16(
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
     )
     .map(|value| value.map_err(|_| BrowserError::Unreadable))

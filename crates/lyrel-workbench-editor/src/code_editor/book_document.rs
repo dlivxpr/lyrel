@@ -127,7 +127,7 @@ pub struct NotEpub {
 
 /// The result of a container probe: a real book answer or a generic archive.
 pub enum BookOpen {
-    Book(LoadedBook),
+    Book(Box<LoadedBook>),
     NotEpub(NotEpub),
 }
 
@@ -215,7 +215,7 @@ pub fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Result<BookO
     let mtime = bound.mtime.or(meta.mtime);
     let record = read_record(host.id(), &path, &fingerprint);
     match result {
-        Ok(book) => Ok(BookOpen::Book(LoadedBook {
+        Ok(book) => Ok(BookOpen::Book(Box::new(LoadedBook {
             path,
             mtime,
             fingerprint,
@@ -224,11 +224,11 @@ pub fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Result<BookO
             failure: None,
             unsupported: false,
             record,
-        })),
+        }))),
         Err(EpubError::NotEpub) => Ok(BookOpen::NotEpub(NotEpub { fingerprint, mtime })),
         Err(error) => {
             let (unsupported, message) = describe(&error);
-            Ok(BookOpen::Book(LoadedBook {
+            Ok(BookOpen::Book(Box::new(LoadedBook {
                 path,
                 mtime,
                 fingerprint,
@@ -237,7 +237,7 @@ pub fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Result<BookO
                 failure: Some(message),
                 unsupported,
                 record,
-            }))
+            })))
         }
     }
 }
@@ -246,7 +246,7 @@ pub fn load(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Result<BookO
 /// shows an honest book failure rather than handing it to a ZIP application.
 pub fn load_claimed(host: &dyn Host, path: PathBuf, meta: Meta) -> std::io::Result<LoadedBook> {
     match load(host, path.clone(), meta)? {
-        BookOpen::Book(book) => Ok(book),
+        BookOpen::Book(book) => Ok(*book),
         BookOpen::NotEpub(not_epub) => {
             let record = read_record(host.id(), &path, &not_epub.fingerprint);
             Ok(LoadedBook {

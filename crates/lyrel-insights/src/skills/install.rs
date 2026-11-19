@@ -569,13 +569,14 @@ pub(super) fn safe_meta(host: &dyn Host, path: &Path) -> io::Result<Option<Meta>
 }
 pub(super) fn check_ancestors(host: &dyn Host, path: &Path) -> io::Result<()> {
     for ancestor in ancestors(host, path)? {
-        if let Some(meta) = safe_meta(host, &ancestor)? {
-            if ancestor != path && !meta.is_dir {
-                return Err(invalid(format!(
-                    "ancestor is not a directory: {}",
-                    ancestor.display()
-                )));
-            }
+        if let Some(meta) = safe_meta(host, &ancestor)?
+            && ancestor != path
+            && !meta.is_dir
+        {
+            return Err(invalid(format!(
+                "ancestor is not a directory: {}",
+                ancestor.display()
+            )));
         }
     }
     Ok(())
@@ -1043,13 +1044,11 @@ fn install_one(
     }
     let mut rollback_errors = Vec::new();
     if !committed {
-        if old_lock_moved {
-            if let Err(e) = host.rename(&lock_backup, &target.lock_path) {
-                rollback_errors.push(format!(
-                    "source lock backup retained at {}: {e}",
-                    lock_backup.display()
-                ));
-            }
+        if old_lock_moved && let Err(e) = host.rename(&lock_backup, &target.lock_path) {
+            rollback_errors.push(format!(
+                "source lock backup retained at {}: {e}",
+                lock_backup.display()
+            ));
         }
         if new_content_moved {
             match inspect_directory(host, &item.destination) {
@@ -1074,13 +1073,11 @@ fn install_one(
                 )),
             }
         }
-        if old_content_moved {
-            if let Err(e) = host.rename(&backup, &item.destination) {
-                rollback_errors.push(format!(
-                    "original content backup retained at {}: {e}",
-                    backup.display()
-                ));
-            }
+        if old_content_moved && let Err(e) = host.rename(&backup, &item.destination) {
+            rollback_errors.push(format!(
+                "original content backup retained at {}: {e}",
+                backup.display()
+            ));
         }
     } else {
         if old_lock_moved {

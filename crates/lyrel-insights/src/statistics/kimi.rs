@@ -97,18 +97,26 @@ fn directories(
     }
 }
 
+/// Scan-wide bookkeeping threaded through a per-source scanner: which wire
+/// files were already visited, the directory and file counters, and the byte
+/// budget spent. Bundled so `scan_source` stays under the argument limit.
+#[derive(Default)]
+pub(super) struct ScanCounters {
+    pub seen: HashSet<(String, String, PathBuf)>,
+    pub dirs: usize,
+    pub files: usize,
+    pub bytes: u64,
+}
+
 pub(super) fn scan_source(
     host: &dyn Host,
     source: &Source,
     cache: &mut StatisticsCache,
     snapshot: &mut Snapshot,
-    seen: &mut HashSet<(String, String, PathBuf)>,
-    dirs: &mut usize,
-    files: &mut usize,
-    bytes: &mut u64,
+    counters: &mut ScanCounters,
 ) {
-    for workspace in directories(host, &source.root, snapshot, dirs) {
-        for directory in directories(host, &workspace, snapshot, dirs) {
+    for workspace in directories(host, &source.root, snapshot, &mut counters.dirs) {
+        for directory in directories(host, &workspace, snapshot, &mut counters.dirs) {
             let result = (|| -> io::Result<()> {
                 let name = directory.to_string_lossy();
                 let name = name.rsplit(['/', '\\']).next().unwrap_or("");
@@ -133,8 +141,8 @@ pub(super) fn scan_source(
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 state_bytes.hash(&mut hasher);
                 let metadata_stamp = Some(hasher.finish());
-                *bytes += state_bytes.len() as u64;
-                if *bytes > MAX_SCAN_BYTES {
+                counters.bytes += state_bytes.len() as u64;
+                if counters.bytes > MAX_SCAN_BYTES {
                     return Err(invalid("statistics byte scan limit reached"));
                 }
                 let state: Value = serde_json::from_slice(&state_bytes)
@@ -156,7 +164,7 @@ pub(super) fn scan_source(
                     return Ok(());
                 }
                 let agents = host.join(&directory, "agents");
-                let agent_dirs = directories(host, &agents, snapshot, dirs);
+                let agent_dirs = directories(host, &agents, snapshot, &mut counters.dirs);
                 if agent_dirs.is_empty() {
                     return Err(invalid(
                         "Kimi session has no readable durable agent history",
@@ -166,11 +174,15 @@ pub(super) fn scan_source(
                     let path = host.join(&agent_dir, "wire.jsonl");
                     let agent_name = agent_dir.to_string_lossy();
                     let agent = agent_name.rsplit(['/', '\\']).next().unwrap_or("");
-                    if !seen.insert((source.agent.clone(), source.scope.clone(), path.clone())) {
+                    if !counters.seen.insert((
+                        source.agent.clone(),
+                        source.scope.clone(),
+                        path.clone(),
+                    )) {
                         continue;
                     }
-                    *files += 1;
-                    if *files > MAX_FILES {
+                    counters.files += 1;
+                    if counters.files > MAX_FILES {
                         return Err(invalid("file scan limit reached"));
                     }
                     let key = (
@@ -184,16 +196,17 @@ pub(super) fn scan_source(
                         if meta.is_symlink {
                             return Err(invalid("symbolic link omitted from Kimi durable history"));
                         }
-                        if let Some((old, facts)) = cache.files.get(&key) {
-                            if old == &meta && facts.metadata_stamp == metadata_stamp {
-                                return Ok((meta, facts.clone()));
-                            }
+                        if let Some((old, facts)) = cache.files.get(&key)
+                            && old == &meta
+                            && facts.metadata_stamp == metadata_stamp
+                        {
+                            return Ok((meta, facts.clone()));
                         }
-                        if meta.len > MAX_FILE_BYTES || *bytes + meta.len > MAX_SCAN_BYTES {
+                        if meta.len > MAX_FILE_BYTES || counters.bytes + meta.len > MAX_SCAN_BYTES {
                             return Err(invalid("statistics byte scan limit reached"));
                         }
                         // A metadata change invalidates fork/archive/identity facts even when the wire is unchanged.
-                        *bytes += meta.len;
+                        counters.bytes += meta.len;
                         let data = host.read_file(&path, MAX_FILE_BYTES)?;
                         let (session, child) = parse(&data, &state, agent)?;
                         Ok((
@@ -226,7 +239,10 @@ pub(super) fn scan_source(
             if let Err(error) = result {
                 issue(snapshot, &directory, error);
             }
-            if *files > MAX_FILES || *dirs > MAX_DIRS || *bytes > MAX_SCAN_BYTES {
+            if counters.files > MAX_FILES
+                || counters.dirs > MAX_DIRS
+                || counters.bytes > MAX_SCAN_BYTES
+            {
                 return;
             }
         }
@@ -293,57 +309,54 @@ fn parse(bytes: &[u8], state: &Value, agent: &str) -> io::Result<(NativeSession,
         if !boundary {
             continue;
         }
-        match record["type"].as_str() {
-            Some("turn.prompt" | "turn.steer" | "usage.record") => {
-                let time = record["time"]
-                    .as_i64()
-                    .filter(|v| *v >= 0)
-                    .ok_or_else(|| invalid("Kimi activity lacks epoch-millisecond time"))?
-                    / 1000;
-                active = Some(active.map_or(time, |old: i64| old.min(time)));
-                if record["type"] != "usage.record" {
-                    activity.push(time);
-                    continue;
-                }
-                if record["agentId"].as_str() != Some(agent) {
-                    return Err(invalid("Kimi usage lacks reliable agent identity"));
-                }
-                if record
-                    .get("usageScope")
-                    .is_some_and(|scope| !matches!(scope.as_str(), Some("turn" | "session")))
-                {
-                    return Err(invalid("unsupported Kimi usage scope"));
-                }
-                let usage = &record["usage"];
-                let input = usage["inputOther"].as_u64();
-                let output = usage["output"].as_u64();
-                let cache_read = usage["inputCacheRead"].as_u64();
-                let cache_write = usage["inputCacheCreation"].as_u64();
-                let total = input
-                    .and_then(|n| n.checked_add(output?))
-                    .and_then(|n| n.checked_add(cache_read?))
-                    .and_then(|n| n.checked_add(cache_write?));
-                records.push(UsageRecord {
-                    id: format!("{agent}:{line_offset}"),
-                    fingerprint: None,
-                    timestamp: time,
-                    provider: String::new(),
-                    model: record["model"].as_str().unwrap_or("").into(),
-                    tokens: Tokens {
-                        input,
-                        output,
-                        reasoning: None,
-                        cache_read,
-                        cache_write,
-                        total,
-                    },
-                    recorded_usd: None,
-                    coverage_start: None,
-                    estimated_usd: None,
-                    time_unknown: false,
-                });
+        if let Some("turn.prompt" | "turn.steer" | "usage.record") = record["type"].as_str() {
+            let time = record["time"]
+                .as_i64()
+                .filter(|v| *v >= 0)
+                .ok_or_else(|| invalid("Kimi activity lacks epoch-millisecond time"))?
+                / 1000;
+            active = Some(active.map_or(time, |old: i64| old.min(time)));
+            if record["type"] != "usage.record" {
+                activity.push(time);
+                continue;
             }
-            _ => {}
+            if record["agentId"].as_str() != Some(agent) {
+                return Err(invalid("Kimi usage lacks reliable agent identity"));
+            }
+            if record
+                .get("usageScope")
+                .is_some_and(|scope| !matches!(scope.as_str(), Some("turn" | "session")))
+            {
+                return Err(invalid("unsupported Kimi usage scope"));
+            }
+            let usage = &record["usage"];
+            let input = usage["inputOther"].as_u64();
+            let output = usage["output"].as_u64();
+            let cache_read = usage["inputCacheRead"].as_u64();
+            let cache_write = usage["inputCacheCreation"].as_u64();
+            let total = input
+                .and_then(|n| n.checked_add(output?))
+                .and_then(|n| n.checked_add(cache_read?))
+                .and_then(|n| n.checked_add(cache_write?));
+            records.push(UsageRecord {
+                id: format!("{agent}:{line_offset}"),
+                fingerprint: None,
+                timestamp: time,
+                provider: String::new(),
+                model: record["model"].as_str().unwrap_or("").into(),
+                tokens: Tokens {
+                    input,
+                    output,
+                    reasoning: None,
+                    cache_read,
+                    cache_write,
+                    total,
+                },
+                recorded_usd: None,
+                coverage_start: None,
+                estimated_usd: None,
+                time_unknown: false,
+            });
         }
     }
     if !metadata {

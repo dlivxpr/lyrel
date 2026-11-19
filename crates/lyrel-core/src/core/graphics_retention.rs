@@ -81,6 +81,21 @@ pub(crate) struct Retention {
     registry: Mutex<Registry>,
 }
 static RETENTION: OnceLock<Arc<Retention>> = OnceLock::new();
+
+/// One admission attempt: who owns the content, its decoded footprint, the
+/// slot it replaces (if any), the eviction wake channel, the pane and daemon
+/// budgets, and the packet being admitted. Bundled so `admit` stays within
+/// the argument lint.
+pub(super) struct AdmitRequest<'a> {
+    pub owner: u64,
+    pub group: u64,
+    pub decoded: usize,
+    pub replacement: Option<&'a Arc<Mutex<Resident>>>,
+    pub wake: Option<SyncSender<()>>,
+    pub capacity: (usize, usize),
+    pub packet: crate::daemon::protocol::GraphicsPacket,
+}
+
 impl Retention {
     pub(crate) fn shared() -> Arc<Self> {
         RETENTION
@@ -148,16 +163,16 @@ impl Retention {
         }
         true
     }
-    pub(super) fn admit(
-        &self,
-        owner: u64,
-        group: u64,
-        decoded: usize,
-        replacement: Option<&Arc<Mutex<Resident>>>,
-        wake: Option<SyncSender<()>>,
-        capacity: (usize, usize),
-        packet: crate::daemon::protocol::GraphicsPacket,
-    ) -> Option<Arc<Mutex<Resident>>> {
+    pub(super) fn admit(&self, request: AdmitRequest<'_>) -> Option<Arc<Mutex<Resident>>> {
+        let AdmitRequest {
+            owner,
+            group,
+            decoded,
+            replacement,
+            wake,
+            capacity,
+            packet,
+        } = request;
         let mut registry = self.registry.lock().unwrap();
         registry
             .entries

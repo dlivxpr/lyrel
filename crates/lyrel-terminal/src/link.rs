@@ -366,10 +366,11 @@ impl LinkInteraction {
         let files = include_files && location.files;
         if files && let Some(cwd) = location.cwd.as_deref() {
             self.root_wanted = true;
-            if self.repo_root.is_none() && !self.root_pending {
-                if let Some(root) = cached_root(location.host, cwd) {
-                    self.repo_root = Some(Some(root));
-                }
+            if self.repo_root.is_none()
+                && !self.root_pending
+                && let Some(root) = cached_root(location.host, cwd)
+            {
+                self.repo_root = Some(Some(root));
             }
         }
         let roots = if files {

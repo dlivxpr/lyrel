@@ -10,7 +10,8 @@ use crate::core::machine::operations::{
     refuse, register_pane,
 };
 use crate::core::machine::{
-    Axis, LayoutDelta, PaneNode, PaneSeed, PipGeometry, PipPane, Side, TabCloseReason, TabId,
+    Axis, LayoutDelta, PaneNode, PaneSeed, PaneSplitSpec, PipGeometry, PipPane, Side,
+    TabCloseReason, TabId,
 };
 
 impl MachineStore {
@@ -18,20 +19,17 @@ impl MachineStore {
         &self,
         workspace: WorkspaceId,
         pane: u64,
-        axis: Axis,
-        ratio: f32,
-        new: PaneSeed,
-        first: bool,
+        spec: PaneSplitSpec,
         origin: Option<SubscriberId>,
     ) -> io::Result<()> {
-        let ratio = clamp_ratio(ratio)?;
-        let live = self.seed_is_live(new.pane);
+        let ratio = clamp_ratio(spec.ratio)?;
+        let live = self.seed_is_live(spec.new.pane);
         self.mutate(origin, |m| {
-            register_pane(m, new.clone(), live)?;
+            register_pane(m, spec.new.clone(), live)?;
             let record = m
                 .panes
                 .iter()
-                .find(|p| p.id == new.pane)
+                .find(|p| p.id == spec.new.pane)
                 .cloned()
                 .expect("registered above");
             let ws = find_workspace(m, workspace)?;
@@ -42,9 +40,10 @@ impl MachineStore {
                 .ok_or_else(|| {
                     not_found(format!("workspace {workspace} has no pane {pane} to split"))
                 })?;
-            tab.root.split_leaf(pane, new.pane, axis, ratio, first);
+            tab.root
+                .split_leaf(pane, spec.new.pane, spec.axis, ratio, spec.first);
             let delta = LayoutDelta::TabRestructured {
-                tab: tab.clone(),
+                tab: Box::new(tab.clone()),
                 pane: Some(record),
             };
             Ok(((), vec![(workspace, delta)]))
@@ -102,7 +101,7 @@ impl MachineStore {
                 Some(true) => deltas.push((
                     workspace,
                     LayoutDelta::TabRestructured {
-                        tab: ws.tabs[index].clone(),
+                        tab: Box::new(ws.tabs[index].clone()),
                         pane: None,
                     },
                 )),
@@ -151,7 +150,7 @@ impl MachineStore {
                 vec![(
                     workspace,
                     LayoutDelta::TabRestructured {
-                        tab: tab.clone(),
+                        tab: Box::new(tab.clone()),
                         pane: None,
                     },
                 )]
@@ -184,7 +183,7 @@ impl MachineStore {
                 vec![(
                     workspace,
                     LayoutDelta::TabRestructured {
-                        tab: tab.clone(),
+                        tab: Box::new(tab.clone()),
                         pane: None,
                     },
                 )]
@@ -214,7 +213,7 @@ impl MachineStore {
                 vec![(
                     workspace,
                     LayoutDelta::TabRestructured {
-                        tab: tab.clone(),
+                        tab: Box::new(tab.clone()),
                         pane: None,
                     },
                 )]
@@ -248,7 +247,7 @@ impl MachineStore {
                 vec![(
                     workspace,
                     LayoutDelta::TabRestructured {
-                        tab: tab.clone(),
+                        tab: Box::new(tab.clone()),
                         pane: None,
                     },
                 )]
@@ -335,7 +334,7 @@ impl MachineStore {
                     deltas.push((
                         workspace,
                         LayoutDelta::TabRestructured {
-                            tab: ws.tabs[from].clone(),
+                            tab: Box::new(ws.tabs[from].clone()),
                             pane: None,
                         },
                     ));
@@ -352,7 +351,7 @@ impl MachineStore {
             deltas.push((
                 workspace,
                 LayoutDelta::TabRestructured {
-                    tab: dest_tab.clone(),
+                    tab: Box::new(dest_tab.clone()),
                     pane: None,
                 },
             ));
@@ -384,7 +383,7 @@ impl MachineStore {
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {old}")))?;
             tab.replace_pane(old, new.pane);
             let delta = LayoutDelta::TabRestructured {
-                tab: tab.clone(),
+                tab: Box::new(tab.clone()),
                 pane: Some(record),
             };
             m.panes.retain(|p| p.id != old);

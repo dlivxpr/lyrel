@@ -276,13 +276,13 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
             "skill home/project must be absolute on the selected Host",
         ));
     }
-    if let Some(project) = &request.project {
-        if !host.stat(project)?.is_dir {
-            return Err(io::Error::new(
-                io::ErrorKind::NotADirectory,
-                "selected skill project is not a directory",
-            ));
-        }
+    if let Some(project) = &request.project
+        && !host.stat(project)?.is_dir
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "selected skill project is not a directory",
+        ));
     }
     let target = HookTarget::remote(host, request.home.clone())
         .with_launch_commands(&request.launch_commands);

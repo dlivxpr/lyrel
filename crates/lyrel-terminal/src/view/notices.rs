@@ -333,9 +333,11 @@ impl TerminalView {
         let session = self.terminal.agent_session();
         let update = self.agent_activity.observe(
             (self.host_id, self.pane_id),
-            self.terminal.foreground_agent(),
-            session.as_ref(),
-            replayed,
+            crate::agent_activity::AgentObservation {
+                agent: self.terminal.foreground_agent(),
+                session: session.as_ref(),
+                replayed,
+            },
             self.focus_handle.is_focused(window),
             notify_allowed,
             cx,

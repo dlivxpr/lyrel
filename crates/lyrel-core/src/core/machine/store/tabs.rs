@@ -303,7 +303,7 @@ impl MachineStore {
             }
             t.hibernated = hibernated;
             let delta = LayoutDelta::TabRestructured {
-                tab: t.clone(),
+                tab: Box::new(t.clone()),
                 pane: None,
             };
             Ok((panes, vec![(workspace, delta)]))

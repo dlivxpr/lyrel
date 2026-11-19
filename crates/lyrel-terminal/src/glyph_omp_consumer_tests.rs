@@ -173,7 +173,7 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
     graphics_recovery_wait(cx, "real omp registered its bundled outlines", |cx| {
         view.read_with(cx, |view, _| {
             let store = view.terminal.glyphs();
-            store.len() > 0 && store.contains(OMP_CONFIRM_CP)
+            !store.is_empty() && store.contains(OMP_CONFIRM_CP)
         })
     });
 

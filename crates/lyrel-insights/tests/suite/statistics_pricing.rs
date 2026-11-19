@@ -73,7 +73,7 @@ fn statistics_pricing_catalog_is_opt_in_and_failed_refresh_retains_timestamped_p
         .upsert_custom(price("USD", Some(3.0), None))
         .unwrap();
     let record = json!({"input":1_000_000,"output":2_000_000,"totalTokens":3_000_000});
-    let totals = snapshot(&[record.clone()])
+    let totals = snapshot(std::slice::from_ref(&record))
         .with_pricing(pricing.clone())
         .aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.estimated_costs()["USD"].custom, Some(3.0));
@@ -87,7 +87,7 @@ fn statistics_pricing_catalog_is_opt_in_and_failed_refresh_retains_timestamped_p
     assert_eq!(pricing.last_error.as_deref(), Some("offline"));
     let restored: Pricing = serde_json::from_slice(&serde_json::to_vec(&pricing).unwrap()).unwrap();
     assert_eq!(
-        snapshot(&[record.clone()])
+        snapshot(std::slice::from_ref(&record))
             .with_pricing(restored)
             .aggregate(&DateWindow::all("UTC"))
             .cost_in("USD"),
@@ -324,7 +324,7 @@ fn statistics_failed_source_keeps_old_facts_but_changed_root_cannot_revive_them(
     let mut cache = StatisticsCache::default();
     let source = Source::omp(root.clone(), "same-scope");
     assert_eq!(
-        scan(&*host, &[source.clone()], &mut cache)
+        scan(&*host, std::slice::from_ref(&source), &mut cache)
             .unwrap()
             .aggregate(&DateWindow::all("UTC"))
             .tokens()

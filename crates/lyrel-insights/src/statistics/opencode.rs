@@ -333,7 +333,7 @@ mod tests {
         let source = Source::opencode(dir.path().into(), "selector-a", request.clone());
         let host = LocalHost::new();
         let mut cache = StatisticsCache::default();
-        let snapshot = scan(&*host, &[source.clone()], &mut cache).unwrap();
+        let snapshot = scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
         let totals = snapshot.aggregate(&DateWindow::all("UTC"));
         assert_eq!(totals.main_sessions(), 2);
         assert_eq!(totals.tokens().input(), Some(60));
@@ -371,7 +371,12 @@ mod tests {
             "stats.json",
             json!({"data":{"steps":3,"tokens":{"input":100,"output":8,"reasoning":12,"cache":{"read":16,"write":20}},"cost":1.0}}),
         );
-        let compacted = scan(&*host, &[source.clone()], &mut StatisticsCache::default()).unwrap();
+        let compacted = scan(
+            &*host,
+            std::slice::from_ref(&source),
+            &mut StatisticsCache::default(),
+        )
+        .unwrap();
         assert_eq!(
             compacted
                 .aggregate(&DateWindow::all("UTC"))
@@ -419,7 +424,12 @@ mod tests {
             "stats.json",
             json!({"data":{"steps":1,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":4,"write":5}},"cost":0.25}}),
         );
-        let empty = scan(&*host, &[source.clone()], &mut StatisticsCache::default()).unwrap();
+        let empty = scan(
+            &*host,
+            std::slice::from_ref(&source),
+            &mut StatisticsCache::default(),
+        )
+        .unwrap();
         assert_eq!(empty.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
         assert!(empty.is_complete(), "{:?}", empty.issues());
         // Restore official lineage metadata before checking restricted pagination.
@@ -436,7 +446,7 @@ mod tests {
             "root-next.json",
             json!({"data":[],"cursor":{"next":"messages-next"}}),
         );
-        let partial = scan(&*host, &[source.clone()], &mut cache).unwrap();
+        let partial = scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
         assert!(!partial.is_complete());
         assert!(
             partial

@@ -377,15 +377,13 @@ impl Accounts {
                 }),
                 Balance::Provider(next),
             ) = (&account.snapshot, &balance)
-            {
-                if previous.provider != next.provider
+                && (previous.provider != next.provider
                     || previous
                         .identity
                         .as_ref()
-                        .is_some_and(|identity| next.identity.as_ref() != Some(identity))
-                {
-                    return Err(UsageError::BrowserChanged);
-                }
+                        .is_some_and(|identity| next.identity.as_ref() != Some(identity)))
+            {
+                return Err(UsageError::BrowserChanged);
             }
             Ok(balance)
         });
@@ -413,13 +411,12 @@ impl Accounts {
         balance: Balance,
         now: u64,
     ) -> Result<Uuid, UsageError> {
-        if let Some(query) = replace {
-            if !self
+        if let Some(query) = replace
+            && !self
                 .account(query.id)
                 .is_some_and(|a| a.revision == query.revision && !a.removing)
-            {
-                return Err(UsageError::Stale);
-            }
+        {
+            return Err(UsageError::Stale);
         }
         let id = replace.map_or_else(Uuid::new_v4, |q| q.id);
         let (secret, kind) = match &source {
@@ -430,18 +427,17 @@ impl Accounts {
             VerifiedSource::BrowserCookies { .. } => (None, None),
         };
         let slot = secret.map(|_| Uuid::new_v4());
-        if let (Some(secret), Some(slot)) = (secret, slot) {
-            if secret.len() > 2560
+        if let (Some(secret), Some(slot)) = (secret, slot)
+            && (secret.len() > 2560
                 || self
                     .vault
                     .set_secret(SERVICE, &slot.to_string(), secret)
-                    .is_err()
-            {
-                if let Some(query) = replace {
-                    self.fail_replace(query, UsageError::Credentials);
-                }
-                return Err(UsageError::Credentials);
+                    .is_err())
+        {
+            if let Some(query) = replace {
+                self.fail_replace(query, UsageError::Credentials);
             }
+            return Err(UsageError::Credentials);
         }
         let auth = match source {
             VerifiedSource::ApiKey(_) => Authentication::ManualApiKey {
@@ -565,10 +561,10 @@ impl Accounts {
                 report.enhancement = Some(error);
             }
         }
-        if self.persist(&self.stored).is_err() {
-            if let Some(account) = self.account_mut(query.id) {
-                account.error = Some(UsageError::Persistence);
-            }
+        if self.persist(&self.stored).is_err()
+            && let Some(account) = self.account_mut(query.id)
+        {
+            account.error = Some(UsageError::Persistence);
         }
     }
     pub fn save_enhancement(

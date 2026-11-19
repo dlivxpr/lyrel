@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ui::file_tree::lifecycle::browsable_roots;
-use crate::ui::file_tree::{Decorations, FileTree, FileTreeEvent, shell_quote_for};
+use crate::ui::file_tree::{CopyEnds, Decorations, FileTree, FileTreeEvent, shell_quote_for};
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::{Context, Entity, Subscription, Window};
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
@@ -70,6 +70,12 @@ impl LyrelApp {
             FileTreeEvent::ViewStateChanged => {
                 self.sync_file_tree_tab_view(cx);
                 cx.notify();
+            }
+            FileTreeEvent::FileIndexLanded { key } => {
+                self.on_file_index_landed(key, window, cx);
+            }
+            FileTreeEvent::OperationFailed { title, error } => {
+                lyrel_ui_base::host_ops::HostOps::notify_err(window, cx, title, error);
             }
         }
     }
@@ -324,8 +330,7 @@ impl LyrelApp {
 
     pub(crate) fn file_tree_copy_between(
         &mut self,
-        source: SharedHost,
-        host: SharedHost,
+        ends: CopyEnds,
         sources: Vec<PathBuf>,
         dir: PathBuf,
         overwrite: bool,
@@ -333,7 +338,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         self.file_tree.update(cx, |tree, cx| {
-            tree.copy_between(source, host, sources, dir, overwrite, window, cx);
+            tree.copy_between(ends, sources, dir, overwrite, window, cx);
         });
     }
 

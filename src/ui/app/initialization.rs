@@ -123,7 +123,7 @@ impl LyrelApp {
                 let _ = this.update_in(cx, |this, _window, cx| this.restart_daemon_confirmed(cx));
             }
             Ok(_) => {
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
             }
             // Dismissed without an answer: the window went away before the
             // question was settled. Arm it again so the next window asks, rather
@@ -207,7 +207,7 @@ impl LyrelApp {
         crate::ui::scm_snapshot::install_scm_snapshot_source(cx);
         let git_status_watch =
             cx.observe_global::<crate::ui::scm::status_cache::GitStatusCache>(|this, cx| {
-                this.maybe_refresh_diff_overlay(cx);
+                this.on_diff_status_changed(cx);
                 this.right_panel_refresh_changes(cx);
                 cx.notify();
             });
@@ -285,12 +285,14 @@ impl LyrelApp {
         let (tabs, active) = match session {
             None => {
                 let first = Self::new_terminal(
-                    pane_ws.clone(),
-                    Some(workspace),
-                    font_size,
-                    initial_cwd,
-                    None,
-                    None,
+                    super::PendingTerminalRequest::shell(
+                        pane_ws.clone(),
+                        Some(workspace),
+                        font_size,
+                        initial_cwd,
+                        None,
+                        None,
+                    ),
                     window,
                     cx,
                 );

@@ -32,8 +32,9 @@ use gpui_kit::{
 
 pub use lyrel_core::host::sqlite::SqliteValue;
 use lyrel_core::host::sqlite::{
-    COLUMN_WINDOW, PAGE_ROWS, QUERY_SECONDS, SqliteCancel, SqliteColumns, SqliteObject,
-    SqliteObjectKind, SqliteOpened, SqlitePage, SqliteQuery, VALUE_CHUNK_BYTES, is_stale_view,
+    COLUMN_WINDOW, PAGE_ROWS, QUERY_SECONDS, SqliteCancel, SqliteCellRead, SqliteColumns,
+    SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage, SqliteQuery, VALUE_CHUNK_BYTES,
+    is_stale_view,
 };
 
 use lyrel_ui_base::display::human_bytes as byte_count;
@@ -1035,11 +1036,10 @@ impl SqliteView {
             view.sync(cx);
             cx.notify();
         });
-        let _grid = cx.subscribe_in(&grid, window, |view, _, event, window, cx| match event {
-            TableEvent::DoubleClickedCell(row, col) => {
+        let _grid = cx.subscribe_in(&grid, window, |view, _, event, window, cx| {
+            if let TableEvent::DoubleClickedCell(row, col) = event {
                 view.inspect_cell(*row, *col, window, cx);
             }
-            _ => {}
         });
         let _search = cx.subscribe_in(
             &search_input,
@@ -1204,23 +1204,19 @@ impl SqliteView {
             ) else {
                 return;
             };
-            let name = query
-                .columns
-                .get(schema_col)
-                .cloned()
-                .unwrap_or_default()
-                .into();
+            let Some(name) = query.columns.get(schema_col).cloned() else {
+                return;
+            };
+            let name = name.into();
             (view, epoch, query_rev, query, name)
         };
-        if schema_col as u32 != schema_col as usize as u32
-            || query.columns.get(schema_col).is_none()
-        {
+        let (Ok(row), Ok(column)) = (u32::try_from(row), u32::try_from(schema_col)) else {
             return;
-        }
+        };
         self.close_detail(cx);
         self.detail = Some(ValueDetail {
-            row: row as u32,
-            column: schema_col as u32,
+            row,
+            column,
             name,
             query,
             view,
@@ -1288,7 +1284,19 @@ impl SqliteView {
             host,
             window,
             cx,
-            move |h| h.sqlite_value(view, &query, row, column, offset, VALUE_CHUNK_BYTES, &token),
+            move |h| {
+                h.sqlite_value(
+                    view,
+                    &query,
+                    SqliteCellRead {
+                        row,
+                        column,
+                        offset,
+                        max_bytes: VALUE_CHUNK_BYTES,
+                    },
+                    &token,
+                )
+            },
             move |view, result, window, cx| view.on_detail(serial, result, window, cx),
         );
     }
@@ -1427,10 +1435,12 @@ impl SqliteView {
                             let chunk = h.sqlite_value(
                                 view,
                                 &query,
-                                row,
-                                column,
-                                offset,
-                                VALUE_CHUNK_BYTES,
+                                SqliteCellRead {
+                                    row,
+                                    column,
+                                    offset,
+                                    max_bytes: VALUE_CHUNK_BYTES,
+                                },
                                 &work_token,
                             )?;
                             let (preview, total) = match chunk {

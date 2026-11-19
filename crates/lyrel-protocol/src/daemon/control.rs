@@ -621,10 +621,10 @@ impl ControlRequest {
                 crate::host::sqlite::SqliteRequest::Count { query, .. }
                 | crate::host::sqlite::SqliteRequest::Page { query, .. }
                 | crate::host::sqlite::SqliteRequest::Value { query, .. } => {
-                    let seconds = query
-                        .seconds
-                        .max(crate::host::sqlite::QUERY_SECONDS)
-                        .min(crate::host::sqlite::QUERY_SECONDS_MAX);
+                    let seconds = query.seconds.clamp(
+                        crate::host::sqlite::QUERY_SECONDS,
+                        crate::host::sqlite::QUERY_SECONDS_MAX,
+                    );
                     Duration::from_secs(seconds).saturating_add(Duration::from_secs(10))
                 }
             },
@@ -935,7 +935,9 @@ pub enum ControlEvent {
     },
     Layout {
         workspace: String,
-        delta: LayoutDelta,
+        /// Boxed: a `LayoutDelta` is hundreds of bytes and this event rides
+        /// every control frame; serde treats the box transparently.
+        delta: Box<LayoutDelta>,
     },
     LayoutResync,
 }

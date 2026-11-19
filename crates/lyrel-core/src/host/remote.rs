@@ -360,13 +360,16 @@ impl Host for RemoteHost {
         &self,
         view: u64,
         query: &crate::host::sqlite::SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: crate::host::sqlite::SqliteCellRead,
         cancel: &crate::host::sqlite::SqliteCancel,
     ) -> io::Result<crate::host::sqlite::SqliteValue> {
         guard_off_ui();
+        let crate::host::sqlite::SqliteCellRead {
+            row,
+            column,
+            offset,
+            max_bytes,
+        } = cell;
         match self.sqlite_call(
             crate::host::sqlite::SqliteRequest::Value {
                 view,
@@ -2274,7 +2277,7 @@ mod tests {
         };
         let reply = session.clone();
         let (host, seen) = host_with_peer('/', move |req| match req {
-            ControlRequest::AgentSessions { .. } => Some((
+            ControlRequest::AgentSessions => Some((
                 ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
                 vec![],
             )),

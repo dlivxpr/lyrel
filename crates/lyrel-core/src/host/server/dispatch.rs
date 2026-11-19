@@ -498,10 +498,12 @@ fn run_request(
             conn.machine()?.pane_split(
                 workspace,
                 pane,
-                axis,
-                ratio,
-                new,
-                first,
+                machine::PaneSplitSpec {
+                    axis,
+                    ratio,
+                    new,
+                    first,
+                },
                 conn.machine_origin,
             )?;
             (ReplyOk::Unit, Vec::new())
@@ -697,8 +699,17 @@ fn run_sqlite(
             max_bytes,
         } => {
             tracked_view(conn, view)?;
-            let value: SqliteValue =
-                h.sqlite_value(view, &query, row, column, offset, max_bytes, cancel)?;
+            let value: SqliteValue = h.sqlite_value(
+                view,
+                &query,
+                crate::host::sqlite::SqliteCellRead {
+                    row,
+                    column,
+                    offset,
+                    max_bytes,
+                },
+                cancel,
+            )?;
             Ok(SqliteReply::Value(value))
         }
     }

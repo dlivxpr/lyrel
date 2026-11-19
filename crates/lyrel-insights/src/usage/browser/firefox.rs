@@ -45,10 +45,10 @@ pub(super) fn profiles(
             .and_then(|line| line.strip_suffix(']'))
         {
             sections.push((name.to_owned(), HashMap::new()));
-        } else if let Some((key, value)) = line.split_once('=') {
-            if let Some((_, values)) = sections.last_mut() {
-                values.insert(key.trim().to_owned(), value.trim().to_owned());
-            }
+        } else if let Some((key, value)) = line.split_once('=')
+            && let Some((_, values)) = sections.last_mut()
+        {
+            values.insert(key.trim().to_owned(), value.trim().to_owned());
         }
     }
     let canonical_root = if isolated {
@@ -74,10 +74,10 @@ pub(super) fn profiles(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io_error(error)),
         }
-        if let Some(root) = canonical_root.as_ref() {
-            if !fs::canonicalize(&path).map_err(io_error)?.starts_with(root) {
-                return Err(BrowserError::Denied);
-            }
+        if let Some(root) = canonical_root.as_ref()
+            && !fs::canonicalize(&path).map_err(io_error)?.starts_with(root)
+        {
+            return Err(BrowserError::Denied);
         }
         let label = fields
             .get("Name")

@@ -371,10 +371,8 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A confirmed pick ends any preview: there is nothing left to roll back.
-        if let Some(s) = self.active_settings_mut() {
-            s.preset_preview = None;
-        }
+        // Discard the live override before applying the confirmed slot.
+        self.cancel_preset_preview(cx);
         if cx.global::<Config>().theme_follow_system {
             self.set_slot_preset(dark_slot, id, window, cx);
             return;
@@ -408,6 +406,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist,
             refresh_windows: false,
+            rebuild_editor: false,
         });
         self.rebuild_theme_editor(window, cx);
         cx.notify();
@@ -471,6 +470,7 @@ impl SettingsWindow {
             cx.emit(SettingsEvent::ApplyTheme {
                 persist: false,
                 refresh_windows: false,
+                rebuild_editor: false,
             });
             self.rebuild_theme_editor(window, cx);
             cx.notify();
@@ -499,6 +499,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }
@@ -534,6 +535,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }
@@ -550,6 +552,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }
@@ -563,6 +566,7 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::ApplyTheme {
             persist: false,
             refresh_windows: false,
+            rebuild_editor: true,
         });
         cx.notify();
     }
@@ -582,12 +586,12 @@ impl SettingsWindow {
             prompt: None,
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = rx.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.apply_theme_image_selection(selection, path, window, cx);
-                    });
-                }
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.apply_theme_image_selection(selection, path, window, cx);
+                });
             }
         })
         .detach();

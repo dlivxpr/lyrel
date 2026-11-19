@@ -1499,7 +1499,7 @@ fn discovered_profile_search_filters_navigates_cancels_and_persists_the_choice(
     assert_eq!(selected_profile(&page, &vcx), None);
     let focused = vcx.update(|window, cx| {
         let page = page.read(cx);
-        gpui_kit::Focusable::focus_handle(&*page.profiles.read(cx), cx).is_focused(window)
+        gpui_kit::Focusable::focus_handle(page.profiles.read(cx), cx).is_focused(window)
     });
     assert!(focused, "Escape must restore focus to the select trigger");
     click(&mut vcx, "usage-profile");

@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_BYTES: u64 = 256 * 1024;
 
@@ -30,7 +30,7 @@ fn record(role: &str, info: &std::panic::PanicHookInfo<'_>) {
     append(&path, &record);
 }
 
-fn append(path: &PathBuf, record: &str) {
+fn append(path: &Path, record: &str) {
     let _ = super::logfile::append_rotating(path, record.as_bytes(), MAX_BYTES);
 }
 

@@ -223,7 +223,7 @@ pub fn page_links(doc: &Pdf) -> Vec<Vec<PdfLink>> {
                 else {
                     continue;
                 };
-                if let Some(rect) = normalized_rect(&page, rect) {
+                if let Some(rect) = normalized_rect(page, rect) {
                     links.push(PdfLink {
                         x: rect.x,
                         y: rect.y,

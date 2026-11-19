@@ -87,12 +87,11 @@ pub(super) fn prepare<H: Host + ?Sized>(
         };
         match key {
             "--session" => {
-                if scope.session_file.is_none() {
-                    if let Some(value) = value
+                if scope.session_file.is_none()
+                    && let Some(value) = value
                         .filter(|value| value.ends_with(".jsonl") || value.contains(['/', '\\']))
-                    {
-                        scope.session_file = Some(resolve(&request.cwd, Path::new(value)));
-                    }
+                {
+                    scope.session_file = Some(resolve(&request.cwd, Path::new(value)));
                 }
             }
             "--session-dir" => {

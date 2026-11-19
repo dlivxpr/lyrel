@@ -304,7 +304,7 @@ impl<'a> Builder<'a> {
         if self.nodes.len() >= STRUCTURE_NODES {
             return Err(ProjectionFailure::TooManyNodes);
         }
-        if (self.nodes.len() + 1) % CANCEL_INTERVAL == 0 {
+        if (self.nodes.len() + 1).is_multiple_of(CANCEL_INTERVAL) {
             self.check_cancel()?;
         }
         self.path_bytes = self.path_bytes.saturating_add(node.path.len());
@@ -939,10 +939,8 @@ fn node_properties(node: &SyntaxNode) -> Properties {
                             properties.anchor = token.text().strip_prefix('&').map(str::to_owned);
                         }
                     }
-                    SyntaxKind::TAG => {
-                        if properties.tag.is_none() {
-                            properties.tag = Some(token.text().to_owned());
-                        }
+                    SyntaxKind::TAG if properties.tag.is_none() => {
+                        properties.tag = Some(token.text().to_owned());
                     }
                     _ => {}
                 }

@@ -95,19 +95,18 @@ impl Observer {
             self.offset += count as u64;
             for byte in &bytes[..count] {
                 if *byte == b'\n' {
-                    if !self.discard {
-                        if let Ok(record) =
+                    if !self.discard
+                        && let Ok(record) =
                             serde_json::from_slice::<serde_json::Value>(&self.partial)
-                        {
-                            if record["type"] == "metadata" && record["protocol_version"] != "1.5" {
-                                self.incompatible = true;
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Unsupported,
-                                    "Kimi durable wire protocol differs from verified 2.2.0 protocol 1.5",
-                                ));
-                            }
-                            self.record(&record, &mut events);
+                    {
+                        if record["type"] == "metadata" && record["protocol_version"] != "1.5" {
+                            self.incompatible = true;
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "Kimi durable wire protocol differs from verified 2.2.0 protocol 1.5",
+                            ));
                         }
+                        self.record(&record, &mut events);
                     }
                     self.partial.clear();
                     self.discard = false;

@@ -2854,19 +2854,19 @@ fn current_locale_index() -> usize {
 }
 
 fn translate(locale_idx: usize, key: L10nKey) -> &'static str {
-    if let Some(lang) = SUPPORTED_LANGUAGES.get(locale_idx) {
-        if let Some(text) = (lang.translate_fn)(key) {
-            return text;
-        }
+    if let Some(lang) = SUPPORTED_LANGUAGES.get(locale_idx)
+        && let Some(text) = (lang.translate_fn)(key)
+    {
+        return text;
     }
     translate_en(key)
 }
 
 fn translate_variant(locale_idx: usize, key: L10nKey, branch: &'static str) -> &'static str {
-    if let Some(lang) = SUPPORTED_LANGUAGES.get(locale_idx) {
-        if let Some(text) = (lang.translate_variant_fn)(key, branch) {
-            return text;
-        }
+    if let Some(lang) = SUPPORTED_LANGUAGES.get(locale_idx)
+        && let Some(text) = (lang.translate_variant_fn)(key, branch)
+    {
+        return text;
     }
     translate_variant_en(key, branch).unwrap_or_else(|| translate(locale_idx, key))
 }
@@ -2880,7 +2880,8 @@ mod tests {
         for &key in L10nKey::ALL {
             let en = translate_en(key);
             assert!(!en.is_empty(), "missing en translation for {key:?}");
-            for (name, text) in [("zh", translate_zh(key))] {
+            {
+                let (name, text) = ("zh", translate_zh(key));
                 let text = text.unwrap_or_else(|| panic!("missing {name} translation for {key:?}"));
                 assert!(!text.is_empty(), "empty {name} translation for {key:?}");
             }

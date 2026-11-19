@@ -2567,7 +2567,7 @@ mod tests {
     #[test]
     fn the_group_chevron_stands_in_the_status_letters_column() {
         assert_eq!(BADGE_W, crate::ui::right_panel::BADGE_W);
-        assert!(GROUP_CHEVRON <= BADGE_W && BADGE_W - GROUP_CHEVRON <= 2.);
+        const { assert!(GROUP_CHEVRON <= BADGE_W && BADGE_W - GROUP_CHEVRON <= 2.) };
     }
 
     fn repo(root: &str) -> RepoKey {

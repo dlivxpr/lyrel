@@ -283,7 +283,7 @@ fn host_instance_go_to_file_after_hidden_reconnect_uses_current_adapter(cx: &mut
         app.read_with(vcx, |app, cx| {
             app.editor_active_local_file(cx).is_some_and(|file| {
                 file.path() == Path::new("/repo/needle-shared.txt")
-                    && file.input().read(cx).text().to_string() == "current adapter\n"
+                    && file.input().read(cx).text() == "current adapter\n"
             })
         })
     });

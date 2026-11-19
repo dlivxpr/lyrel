@@ -138,6 +138,12 @@ impl BufferId {
     }
 }
 
+impl Default for BufferId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// What a buffer's text looked like the last time it matched the disk.
 ///
 /// Dirtiness is a comparison against this rather than a flag set by the first
@@ -529,6 +535,12 @@ impl TabCode {
             self.active = self.active.saturating_sub(1);
         }
         true
+    }
+}
+
+impl Default for TabCode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -2609,7 +2621,6 @@ impl EditorPanelState {
             .and_then(|f| f.format(cx))
             .map(|format| format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
-        let lsp = lsp;
 
         let item = |id: &'static str, label: SharedString| {
             Button::new(id).ghost().xsmall().flex_none().label(label)

@@ -15,10 +15,12 @@ fn the_tree_round_trips_through_the_file() {
         .pane_split(
             ws.id,
             1,
-            Axis::Vertical,
-            0.3,
-            seed(2, "/work/api"),
-            false,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Vertical,
+                ratio: 0.3,
+                new: seed(2, "/work/api"),
+                first: false,
+            },
             None,
         )
         .unwrap();

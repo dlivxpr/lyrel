@@ -37,7 +37,7 @@ fn report(
     DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
         .encode(stream)
         .unwrap();
-    DaemonMsg::AgentStatus(Some(state.clone()))
+    DaemonMsg::AgentStatus(Some(Box::new(state.clone())))
         .encode(stream)
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);

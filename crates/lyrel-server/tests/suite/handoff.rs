@@ -13,8 +13,7 @@
 
 #![cfg(unix)]
 
-#[path = "../program_status_support/mod.rs"]
-mod support;
+use crate::program_status_support as support;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

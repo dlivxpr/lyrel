@@ -178,7 +178,8 @@ impl SettingsWindow {
                 })
             })
             .collect::<Vec<_>>();
-        let host_picker = Button::new("skills-machine")
+
+        Button::new("skills-machine")
             .small()
             .ghost()
             .w(rems(11.))
@@ -219,8 +220,7 @@ impl SettingsWindow {
                     menu
                 }
             })
-            .into_any_element();
-        host_picker
+            .into_any_element()
     }
     fn render_skill_detail(
         &self,

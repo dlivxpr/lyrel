@@ -208,11 +208,7 @@ mod standalone_tests {
             view.move_theme_menu_highlight(true, true, cx);
             view.move_theme_menu_highlight(true, true, cx);
         });
-        let previewed = vcx.update(|_, cx| {
-            cx.global::<lyrel_ui_base::config::Config>()
-                .theme_preset
-                .clone()
-        });
+        let previewed = vcx.update(|_, cx| lyrel_ui_base::presentation::effective_preset_id(cx));
         assert_eq!(previewed, "harbor", "the highlight lives in memory");
         assert!(
             events
@@ -232,6 +228,15 @@ mod standalone_tests {
         assert!(
             !on_disk.contains("harbor"),
             "arrowing through the menu must not write config.json"
+        );
+        view.update(&mut vcx, |view, cx| view.persist_settings_config(cx));
+        let saved: serde_json::Value = serde_json::from_str(
+            &config_json_on_disk().expect("saving another setting writes config.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            saved["theme_preset"], original,
+            "unconfirmed preview must not be serialized"
         );
 
         // Cancel: closing the menu without a pick puts the original back.
@@ -277,6 +282,79 @@ mod standalone_tests {
                 .iter()
                 .any(|event| matches!(event, SettingsEvent::ApplyTheme { persist: true, .. })),
             "the commit asks the shell to persist"
+        );
+    }
+
+    /// A live preview from the inactive slot must not change the active
+    /// slot when the inactive selection is confirmed and saved.
+    #[gpui_kit::test]
+    fn system_mode_confirm_restores_the_previewed_slot_before_writing_its_own(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, _store, mut vcx) = harness_standalone(cx);
+        let (events, _events_sub) = record_events(&view, cx);
+        let _bridge_sub = cx.update(|cx| {
+            cx.subscribe(&view, |_, event, cx| {
+                if let SettingsEvent::ApplyTheme { persist: true, .. } = event {
+                    cx.global::<lyrel_ui_base::config::Config>()
+                        .try_save()
+                        .expect("the scratch config saves");
+                }
+            })
+        });
+
+        // System mode with the OS in light appearance: the light slot is what
+        // shows, and both slots start out distinct.
+        vcx.update(|_, cx| {
+            let cfg = cx.global_mut::<lyrel_ui_base::config::Config>();
+            cfg.theme_follow_system = true;
+            cfg.theme_preset_light = "one_light".to_string();
+            cfg.theme_preset_dark = "dark".to_string();
+        });
+        view.update_in(&mut vcx, |view, window, cx| {
+            view.open_settings_section(SettingsSection::Appearance, window, cx);
+            // The dark slot's menu, opened while the OS shows the light slot.
+            view.toggle_settings_menu("theme-slot-dark".into(), 0, false, window, cx);
+            view.move_theme_menu_highlight(true, true, cx);
+        });
+        let previewed = vcx.update(|_, cx| lyrel_ui_base::presentation::effective_preset_id(cx));
+        assert_ne!(
+            previewed, "one_light",
+            "previewing the dark menu shows through the OS-active light slot"
+        );
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, SettingsEvent::ApplyTheme { persist: true, .. })),
+            "the preview still asks for no save"
+        );
+
+        // The popover's Enter, without its close: the confirm itself must put
+        // the previewed slot back before the pick lands.
+        view.update_in(&mut vcx, |view, window, cx| {
+            view.pick_slot_theme(true, "dracula", window, cx);
+        });
+        let (light, dark) = vcx.update(|_, cx| {
+            let cfg = cx.global::<lyrel_ui_base::config::Config>();
+            (
+                cfg.theme_preset_light.clone(),
+                cfg.theme_preset_dark.clone(),
+            )
+        });
+        assert_eq!(
+            light, "one_light",
+            "the previewed slot is restored, not persisted"
+        );
+        assert_eq!(dark, "dracula", "the confirmed pick lands in its own slot");
+        let on_disk = config_json_on_disk().expect("the confirm saved config.json");
+        assert!(
+            on_disk.contains("one_light"),
+            "the saved config keeps the light slot's real theme: {on_disk}"
+        );
+        assert!(
+            on_disk.contains("dracula"),
+            "the saved config carries the confirmed dark pick: {on_disk}"
         );
     }
 }

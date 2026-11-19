@@ -324,7 +324,7 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         })
     });
     until(&mut cx, |cx| {
-        cells_contain(&dump(&sqlite_view(&app, &cx), &cx), "mapped")
+        cells_contain(&dump(&sqlite_view(&app, cx), cx), "mapped")
     });
     assert!(
         !cells_contain(&dump(&sqlite_view(&app, &cx), &cx), "local"),
@@ -343,7 +343,7 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
         })
     });
     until(&mut cx, |cx| {
-        cells_contain(&dump(&sqlite_view(&app, &cx), &cx), "local")
+        cells_contain(&dump(&sqlite_view(&app, cx), cx), "local")
     });
     assert_eq!(std::fs::read(&local_path).unwrap(), local_bytes);
     assert_eq!(std::fs::read(&mapped_path).unwrap(), mapped_bytes);

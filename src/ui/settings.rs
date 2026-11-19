@@ -162,7 +162,7 @@ fn group_thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.char_indices() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -351,9 +351,8 @@ pub(crate) struct SettingsState {
     pub(crate) link_file_command_input: Entity<InputState>,
     pub(crate) http_proxy_input: Entity<InputState>,
     pub(crate) theme: sections::theme_edit::ThemeEditing,
-    /// The slot values live before a theme-preset preview began, put back
-    /// when the picker closes without a confirmed pick.
-    pub(crate) preset_preview: Option<sections::theme_picker::PresetPreview>,
+    /// Lease for a transient preset preview, separate from the persisted configuration.
+    pub(crate) preset_preview: Option<std::rc::Rc<String>>,
     /// The one popover open on the page — a dropdown, a theme list, a row's
     /// menu — by the id its trigger was drawn with.
     pub(crate) menu: Option<SharedString>,
@@ -574,6 +573,10 @@ impl SettingsWindow {
             state.navigation.navigate(setting, cx.global::<Config>());
             state.menu = None;
         }
+        // The menu dies here, so must any live preset it held: the values a
+        // preview parked in the canonical Config are what the next save would
+        // persist, and navigation is not a confirmation.
+        self.cancel_preset_preview(cx);
         self.select_settings_section(target, cx);
     }
 
@@ -619,10 +622,8 @@ mod tests {
         ] {
             lyrel_ui_base::i18n::set_locale("en");
             let expected = settings_row_id(t(key), "");
-            for locale in ["zh-CN"] {
-                lyrel_ui_base::i18n::set_locale(locale);
-                assert_eq!(settings_row_id(t(key), ""), expected);
-            }
+            lyrel_ui_base::i18n::set_locale("zh-CN");
+            assert_eq!(settings_row_id(t(key), ""), expected);
         }
         lyrel_ui_base::i18n::set_locale("en");
     }
@@ -772,8 +773,10 @@ mod tests {
 
     #[test]
     fn synced_windows_backdrop_is_only_a_local_override_on_windows() {
-        let mut config = Config::default();
-        config.window_backdrop = WindowBackdrop::MicaAlt;
+        let config = Config(lyrel_ui_base::config::CoreConfig {
+            window_backdrop: WindowBackdrop::MicaAlt,
+            ..Default::default()
+        });
 
         assert!(window_overrides_active(&config, true));
         assert!(!window_overrides_active(&config, false));
@@ -781,12 +784,16 @@ mod tests {
 
     #[test]
     fn opacity_and_blur_are_local_overrides_on_every_platform() {
-        let mut opacity = Config::default();
-        opacity.window_opacity = Some(0.8);
-        opacity.window_backdrop = WindowBackdrop::Mica;
-        let mut blur = Config::default();
-        blur.window_blur = Some(true);
-        blur.window_backdrop = WindowBackdrop::Acrylic;
+        let opacity = Config(lyrel_ui_base::config::CoreConfig {
+            window_opacity: Some(0.8),
+            window_backdrop: WindowBackdrop::Mica,
+            ..Default::default()
+        });
+        let blur = Config(lyrel_ui_base::config::CoreConfig {
+            window_blur: Some(true),
+            window_backdrop: WindowBackdrop::Acrylic,
+            ..Default::default()
+        });
 
         assert!(window_overrides_active(&opacity, false));
         assert!(window_overrides_active(&blur, false));

@@ -60,7 +60,7 @@ pub(crate) enum PendingLaunch {
         agent: Option<crate::core::cli_agent::CLIAgent>,
         session: Option<String>,
         argv: Option<Vec<String>>,
-        scope: Option<lyrel_core::host::session_operations::SessionScope>,
+        scope: Option<Box<lyrel_core::host::session_operations::SessionScope>>,
     },
 }
 
@@ -170,17 +170,18 @@ impl PendingSpawn {
                                 .to_string(),
                             ),
                         });
-                let (terminal, pane) = PaneHandshake::spawn_on(
-                    &route,
-                    TermSize::new(80, 24),
-                    8,
-                    17,
-                    self.working_directory,
-                    self.shell.clone(),
-                    self.owner.map(|owner| owner.to_string()),
-                    restore,
-                    Some(cancellation),
-                )?;
+                let (terminal, pane) =
+                    PaneHandshake::spawn_on(&lyrel_terminal::remote::handshake::SpawnRequest {
+                        route,
+                        size: TermSize::new(80, 24),
+                        cell_w: 8,
+                        cell_h: 17,
+                        cwd: self.working_directory,
+                        shell: self.shell.clone(),
+                        owner: self.owner.map(|owner| owner.to_string()),
+                        restore,
+                        cancellation: Some(cancellation),
+                    })?;
                 (terminal, pane, self.shell)
             }
         };
@@ -371,7 +372,7 @@ impl PendingPane {
                 agent: self.spawn.agent,
                 session: self.spawn.agent_session_id.clone(),
                 argv: self.spawn.agent_launch_argv.clone(),
-                scope: self.spawn.agent_session_scope.clone(),
+                scope: self.spawn.agent_session_scope.clone().map(Box::new),
             }
         };
         Some(PaneInstallation {

@@ -1235,8 +1235,7 @@ impl Render for SearchView {
         let tabs_h = if tabs { TABS_H } else { 0. };
         let chrome = tabs_h + FOOTER_H * 2. + CARD_MARGIN + 2.;
         let list_max_h = px((viewport.height.as_f32() - top - chrome)
-            .max(ROW_H)
-            .min(ROW_H * VISIBLE_ROWS + LIST_PAD * 2.));
+            .clamp(ROW_H, ROW_H * VISIBLE_ROWS + LIST_PAD * 2.));
         let typed = !self.query_input.read(cx).value().is_empty();
         let placeholder = match self.scope(cx) {
             Scope::Tab(_) => self.tab.placeholder(),

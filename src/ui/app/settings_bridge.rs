@@ -209,8 +209,12 @@ impl LyrelApp {
                     SettingsEvent::ApplyTheme {
                         persist,
                         refresh_windows,
+                        rebuild_editor,
                     } => {
                         this.apply_theme_change(*persist, window, cx);
+                        if *rebuild_editor {
+                            this.refresh_settings_theme(cx);
+                        }
                         if *refresh_windows {
                             cx.refresh_windows();
                         }
@@ -423,7 +427,6 @@ impl LyrelApp {
         if persist {
             self.persist_settings_config(cx);
         }
-        self.refresh_settings_theme(cx);
         cx.notify();
     }
     pub(super) fn refresh_settings_theme(&self, cx: &mut Context<Self>) {

@@ -43,18 +43,35 @@ pub struct ReaderTask {
     thread: Option<JoinHandle<()>>,
 }
 
+/// The pane endpoints a reader thread parses against and answers through for
+/// its whole lifetime: the grid it locks and the proxy device queries go via.
+pub struct ReaderGrid {
+    pub term: Arc<FairMutex<Crosswords<EventProxy>>>,
+    pub proxy: EventProxy,
+}
+
+/// The daemon-bound handles one link's reader reports through: the writer for
+/// `ClientMsg`s and the graphics viewport reporter bound to the same link.
+pub struct ReaderReporting {
+    pub writer: LinkSender,
+    pub viewport_reporter: GraphicsViewportReporter,
+}
+
 impl ReaderTask {
     pub fn spawn(
-        term: Arc<FairMutex<Crosswords<EventProxy>>>,
-        proxy: EventProxy,
+        grid: ReaderGrid,
         read_half: Stream,
         buffered: Vec<u8>,
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
-        writer: LinkSender,
-        viewport_reporter: GraphicsViewportReporter,
+        reporting: ReaderReporting,
         glyph_generation: u64,
     ) -> Self {
+        let ReaderGrid { term, proxy } = grid;
+        let ReaderReporting {
+            writer,
+            viewport_reporter,
+        } = reporting;
         let pressure_displayed = viewport_reporter.displayed();
         let pressure_term = Arc::downgrade(&term);
         let pressure_writer = writer.clone();
@@ -100,13 +117,14 @@ impl ReaderTask {
             .spawn(move || {
                 lyrel_core::core::threads::promote_to_user_interactive();
                 FrameReader::new(buffered, glyph_generation).consume(
-                    term,
-                    proxy,
+                    ReaderGrid { term, proxy },
                     read_half,
                     quit,
                     signals,
-                    writer,
-                    viewport_reporter,
+                    ReaderReporting {
+                        writer,
+                        viewport_reporter,
+                    },
                     image_decoder,
                 );
             })
@@ -187,15 +205,18 @@ impl FrameReader {
 
     fn consume(
         self,
-        term: Arc<FairMutex<Crosswords<EventProxy>>>,
-        proxy: EventProxy,
+        grid: ReaderGrid,
         mut stream: Stream,
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
-        writer: LinkSender,
-        viewport_reporter: GraphicsViewportReporter,
+        reporting: ReaderReporting,
         image_decoder: crate::images::DecodeWorker,
     ) {
+        let ReaderGrid { term, proxy } = grid;
+        let ReaderReporting {
+            writer,
+            viewport_reporter,
+        } = reporting;
         let Self {
             mut processor,
             mut keyboard,
@@ -316,23 +337,25 @@ impl FrameReader {
                         {
                             let t0 = trace.then(std::time::Instant::now);
                             let Some(waited) = feed_grid(
-                                &term,
-                                &mut processor,
-                                proxy.clone(),
-                                &mut keyboard,
+                                &mut FeedSession {
+                                    term: &term,
+                                    proxy: &proxy,
+                                    processor: &mut processor,
+                                    keyboard: &mut keyboard,
+                                    history_limit: Some(&proxy.parse_state.history_limit),
+                                    presentation: Some(&proxy.parse_state.presentation),
+                                    glyph: Some(crate::glyph::GlyphApply {
+                                        store: &proxy.parse_state.glyphs,
+                                        authority: &proxy.parse_state.glyph_authority,
+                                        denied: &proxy.parse_state.glyph_denied,
+                                        generation: &proxy.parse_state.glyph_generation,
+                                        reader: glyph_generation,
+                                    }),
+                                    colors: Some(colors.as_ref()),
+                                    quit: &quit,
+                                },
                                 &out_batch,
                                 cuts,
-                                Some(&proxy.parse_state.history_limit),
-                                Some(&proxy.parse_state.presentation),
-                                Some(crate::glyph::GlyphApply {
-                                    store: &proxy.parse_state.glyphs,
-                                    authority: &proxy.parse_state.glyph_authority,
-                                    denied: &proxy.parse_state.glyph_denied,
-                                    generation: &proxy.parse_state.glyph_generation,
-                                    reader: glyph_generation,
-                                }),
-                                Some(colors.as_ref()),
-                                &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
                                     match cut {
@@ -525,21 +548,23 @@ impl FrameReader {
                         title_cuts(&mut title_tok, &mut title_life, &bytes, &mut cuts);
                         pointer_cuts(&mut pointer_tok, &bytes, &mut cuts);
                         let fed = feed_grid(
-                            &term,
-                            &mut processor,
-                            proxy.clone(),
-                            &mut keyboard,
+                            &mut FeedSession {
+                                term: &term,
+                                proxy: &proxy,
+                                processor: &mut processor,
+                                keyboard: &mut keyboard,
+                                history_limit: Some(&proxy.parse_state.history_limit),
+                                presentation: Some(&proxy.parse_state.presentation),
+                                // Replayed glyph bodies are not authority: their
+                                // original bytes may have been trimmed, rejected,
+                                // or written by an older daemon that never owned
+                                // the glossary. The projection follows the ring.
+                                glyph: None,
+                                colors: None,
+                                quit: &quit,
+                            },
                             &bytes,
                             cuts,
-                            Some(&proxy.parse_state.history_limit),
-                            Some(&proxy.parse_state.presentation),
-                            // Replayed glyph bodies are not authority: their
-                            // original bytes may have been trimmed, rejected,
-                            // or written by an older daemon that never owned
-                            // the glossary. The projection follows the ring.
-                            None,
-                            None,
-                            &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
                                 ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
@@ -930,7 +955,7 @@ impl FrameReader {
                     DaemonMsg::AgentStatus(state) => {
                         flush_batch!();
                         if let Ok(mut guard) = agent_session.lock() {
-                            guard.state = state;
+                            guard.state = state.map(|state| *state);
                             // The first such frame on an attached link
                             // is the pane's stored status being
                             // replayed, not a turn changing state now.
@@ -1200,6 +1225,22 @@ fn expire_presentation<T: EventListener>(
 /// (`MAX_LOCKED_READ`).
 const MAX_LOCKED_FEED: usize = 64 * 1024;
 
+/// The parse-side state one feed borrows for the whole batch: the grid lock,
+/// the processor and keyboard stacks, the bridge options, and the retirement
+/// flag that cancels the feed. Grouped so `feed_grid` stops threading nine
+/// positional arguments through every slice.
+struct FeedSession<'a, T: EventListener + Clone> {
+    term: &'a FairMutex<Crosswords<T>>,
+    proxy: &'a T,
+    processor: &'a mut Processor,
+    keyboard: &'a mut KeyboardStacks,
+    history_limit: Option<&'a AtomicUsize>,
+    presentation: Option<&'a Mutex<crate::presentation::ParsePresentation>>,
+    glyph: Option<crate::glyph::GlyphApply<'a>>,
+    colors: Option<&'a Mutex<lyrel_core::core::pane_colors::PaneColors>>,
+    quit: &'a AtomicBool,
+}
+
 /// Parses `bytes` into the emulator, stopping at each of `cuts` for `on_cut` to
 /// act on the state the bytes before it left behind — and letting go of the
 /// grid every [`MAX_LOCKED_FEED`] bytes, so a waiting handler gets its turn
@@ -1217,19 +1258,22 @@ const MAX_LOCKED_FEED: usize = 64 * 1024;
 /// raised while it waited: a retired reader must not write into a grid its
 /// successor now owns.
 fn feed_grid<T: EventListener + Clone>(
-    term: &FairMutex<Crosswords<T>>,
-    processor: &mut Processor,
-    proxy: T,
-    keyboard: &mut KeyboardStacks,
+    session: &mut FeedSession<'_, T>,
     bytes: &[u8],
     cuts: Vec<(usize, ReaderCut)>,
-    history_limit: Option<&AtomicUsize>,
-    presentation: Option<&Mutex<crate::presentation::ParsePresentation>>,
-    glyph: Option<crate::glyph::GlyphApply<'_>>,
-    colors: Option<&Mutex<lyrel_core::core::pane_colors::PaneColors>>,
-    quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
+    let FeedSession {
+        term,
+        proxy,
+        processor,
+        keyboard,
+        history_limit,
+        presentation,
+        glyph,
+        colors,
+        quit,
+    } = &mut *session;
     let mut waited = std::time::Duration::ZERO;
     let mut lock = || {
         let t = std::time::Instant::now();
@@ -1254,13 +1298,13 @@ fn feed_grid<T: EventListener + Clone>(
             {
                 let mut bridge = ParseBridge::new(
                     &mut grid,
-                    proxy.clone(),
+                    (*proxy).clone(),
                     keyboard,
-                    history_limit.map(|limit| limit.load(Ordering::Relaxed)),
+                    (*history_limit).map(|limit| limit.load(Ordering::Relaxed)),
                 )
-                .with_presentation(presentation)
-                .with_glyph(glyph)
-                .with_colors(colors);
+                .with_presentation(*presentation)
+                .with_glyph(*glyph)
+                .with_colors(*colors);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;
@@ -1268,8 +1312,8 @@ fn feed_grid<T: EventListener + Clone>(
         }
         let Some((_, cut)) = next else { break };
         if matches!(cut, ReaderCut::KeyboardBoundary) {
-            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None)
-                .with_presentation(presentation)
+            ParseBridge::new(&mut grid, (*proxy).clone(), keyboard, None)
+                .with_presentation(*presentation)
                 .clear_keyboard();
         }
         if matches!(
@@ -1283,7 +1327,7 @@ fn feed_grid<T: EventListener + Clone>(
         if matches!(
             cut,
             ReaderCut::PointerReset | ReaderCut::Command(CommandMark::Finished)
-        ) && let Some(presentation) = presentation
+        ) && let Some(presentation) = *presentation
         {
             // The application's release and the shell's command-finished
             // mark both end its claim on the pointer, at stream position —

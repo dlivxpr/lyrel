@@ -436,7 +436,7 @@ pub fn ensure_running() -> anyhow::Result<()> {
             log::warn!(
                 "daemon connection failed; recorded_pid={:?}: {}",
                 pidfile::read(),
-                connection.err().expect("failed connect")
+                connection.expect_err("failed connect")
             );
             // A refused connect is the other stale signal, and it is the only
             // one left when the pidfile cannot answer: it is missing (the
@@ -610,7 +610,7 @@ pub fn seat_holder_note() -> String {
                  alive — find the holder of daemon.lock before killing anything"
             );
         }
-        return match process_identity(pid as libc::pid_t) {
+        match process_identity(pid as libc::pid_t) {
             ProcessIdentity::OurDaemon => format!(
                 "; the server seat is still held by pid {pid}, which could not be reaped — \
                  `kill {pid}` and retry"
@@ -627,7 +627,7 @@ pub fn seat_holder_note() -> String {
                  longer be read — likely a stranded server; check it with `ps -p {pid}` \
                  before killing it"
             ),
-        };
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     format!("; the server seat is still held (recorded pid {pid})")
@@ -978,14 +978,14 @@ pub fn stop() {
         .filter(|&pid| pid > 4 && pid != std::process::id());
 
     let mut asked = false;
-    if let Ok(mut stream) = transport::connect() {
-        if ClientMsg::Shutdown.encode(&mut stream).is_ok() {
-            let _ = stream.flush();
-            asked = true;
-            let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-            while Instant::now() < deadline && transport::connect().is_ok() {
-                std::thread::sleep(POLL_INTERVAL);
-            }
+    if let Ok(mut stream) = transport::connect()
+        && ClientMsg::Shutdown.encode(&mut stream).is_ok()
+    {
+        let _ = stream.flush();
+        asked = true;
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        while Instant::now() < deadline && transport::connect().is_ok() {
+            std::thread::sleep(POLL_INTERVAL);
         }
     }
 

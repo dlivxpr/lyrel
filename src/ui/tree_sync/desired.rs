@@ -21,7 +21,9 @@ pub(crate) struct DesiredTab {
 pub(crate) enum DesiredNode {
     Leaf {
         pane: u64,
-        seed: PaneSeed,
+        // The seed carries the whole spawn spec; a bare `PaneSeed` here would
+        // make every `DesiredNode` as large as it.
+        seed: Box<PaneSeed>,
     },
     Split {
         axis: TreeAxis,
@@ -34,7 +36,7 @@ pub(crate) enum DesiredNode {
 impl DesiredNode {
     pub(super) fn first_leaf(&self) -> (&u64, &PaneSeed) {
         match self {
-            DesiredNode::Leaf { pane, seed } => (pane, seed),
+            DesiredNode::Leaf { pane, seed } => (pane, &**seed),
             DesiredNode::Split { a, .. } => a.first_leaf(),
         }
     }
@@ -53,7 +55,7 @@ impl DesiredNode {
 
     pub(super) fn seed_of(&self, pane: u64) -> Option<&PaneSeed> {
         match self {
-            DesiredNode::Leaf { pane: p, seed } => (*p == pane).then_some(seed),
+            DesiredNode::Leaf { pane: p, seed } => (*p == pane).then_some(&**seed),
             DesiredNode::Split { a, b, .. } => a.seed_of(pane).or_else(|| b.seed_of(pane)),
         }
     }
@@ -80,7 +82,7 @@ pub(super) fn seeded_records(
 ) -> Vec<PaneRecord> {
     fn walk(node: &DesiredNode, live: &impl Fn(u64) -> bool, out: &mut Vec<PaneRecord>) {
         match node {
-            DesiredNode::Leaf { pane, seed } => out.push(seed.clone().into_record(live(*pane))),
+            DesiredNode::Leaf { pane, seed } => out.push((**seed).clone().into_record(live(*pane))),
             DesiredNode::Split { a, b, .. } => {
                 walk(a, live, out);
                 walk(b, live, out);

@@ -274,6 +274,17 @@ pub(crate) fn run_known_agent_when_ready(
     }
 }
 
+/// What resuming — or forking — a saved agent session needs beyond the window
+/// and context. Built by the command dispatch that already holds the pieces.
+pub(crate) struct ResumeSessionRequest {
+    pub(crate) agent: CLIAgent,
+    pub(crate) session_id: String,
+    pub(crate) cwd: Option<std::path::PathBuf>,
+    pub(crate) host_id: lyrel_ui_base::host_ops::HostId,
+    pub(crate) scope: Option<lyrel_core::host::session_operations::SessionScope>,
+    pub(crate) fork: bool,
+}
+
 impl LyrelApp {
     /// The agents this window's quick launch offers, most likely first.
     pub(crate) fn offered_agents(&self, cx: &App) -> Vec<CLIAgent> {
@@ -345,15 +356,18 @@ impl LyrelApp {
     /// one from its history and the original is left as it was.
     pub(crate) fn resume_session(
         &mut self,
-        agent: CLIAgent,
-        session_id: &str,
-        cwd: Option<std::path::PathBuf>,
-        host_id: lyrel_ui_base::host_ops::HostId,
-        scope: Option<lyrel_core::host::session_operations::SessionScope>,
-        fork: bool,
+        request: ResumeSessionRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let ResumeSessionRequest {
+            agent,
+            session_id,
+            cwd,
+            host_id,
+            scope,
+            fork,
+        } = request;
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
         let Some(cwd) = cwd else {
             window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
@@ -410,7 +424,7 @@ impl LyrelApp {
             } else {
                 SessionOperationKind::Resume
             },
-            source_id: session_id.into(),
+            source_id: session_id,
             cwd,
             launch_argv,
             scope,
@@ -649,7 +663,7 @@ mod tests {
         app.update_in(&mut window, |app, window, cx| {
             let view = app
                 .tabs
-                .get(0)
+                .first()
                 .unwrap()
                 .pane
                 .focused_or_first(window, cx)

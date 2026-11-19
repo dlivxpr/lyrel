@@ -210,21 +210,21 @@ pub(crate) fn shape_document(
         // A ready mermaid block renders as its diagram (on the first line) with the
         // rest of the block collapsed — bypassing the normal per-line handling. Its
         // ``` fences still toggle `in_fence` so later code blocks track correctly.
-        if let Some((range, widget)) = mermaid.iter().find(|(r, _)| r.contains(&idx)) {
-            if matches!(widget, Block::Image(_)) || idx == range.start {
-                if line.trim_start().starts_with("```") {
-                    in_fence = !in_fence;
-                }
-                let (h, widget) = if idx == range.start {
-                    (widget.height(), Some(widget.clone()))
-                } else {
-                    (px(0.), None)
-                };
-                out.push_placeholder(window, base_font_size, wrap_width, h, widget, None, 1);
-                line_start = line_end + 1;
-                alert_run = None;
-                continue;
+        if let Some((range, widget)) = mermaid.iter().find(|(r, _)| r.contains(&idx))
+            && (matches!(widget, Block::Image(_)) || idx == range.start)
+        {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
             }
+            let (h, widget) = if idx == range.start {
+                (widget.height(), Some(widget.clone()))
+            } else {
+                (px(0.), None)
+            };
+            out.push_placeholder(window, base_font_size, wrap_width, h, widget, None, 1);
+            line_start = line_end + 1;
+            alert_run = None;
+            continue;
         }
 
         // An in-line-edited $$ block reserves a fixed gap; the host paints the live editor

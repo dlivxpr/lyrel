@@ -441,6 +441,12 @@ impl TerminalHistory {
     }
 }
 
+impl Default for TerminalHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

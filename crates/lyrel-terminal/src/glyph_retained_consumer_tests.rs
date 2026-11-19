@@ -479,21 +479,12 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
     );
     let (client, mut sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        view.adopt_relink_with_version(
-            client,
-            Vec::new(),
-            &lyrel_ui_base::route::PaneRoute::Remote {
-                header: Box::new(lyrel_core::daemon::router::RouteHeader::wsl(
-                    "glyph-resize-fixture",
-                )),
-                resize_echo: true,
-            },
-            TermSize::new(80, 24),
-            10,
-            20,
-            Some(lyrel_core::daemon::protocol::DaemonVersion::current()),
-            cx,
-        )
+        view.adopt_relink_with_version(client, Vec::new(), &lyrel_ui_base::route::PaneRoute::Remote {
+            header: Box::new(lyrel_core::daemon::router::RouteHeader::wsl(
+                "glyph-resize-fixture",
+            )),
+            resize_echo: true,
+        }, crate::remote::RelinkLayout { size: TermSize::new(80, 24), cell_w: 10, cell_h: 20 }, Some(lyrel_core::daemon::protocol::DaemonVersion::current()), cx)
         .unwrap();
     });
     let cp = char::from_u32(GLYPH_CP).unwrap();

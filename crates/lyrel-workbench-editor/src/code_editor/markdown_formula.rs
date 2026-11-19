@@ -510,7 +510,7 @@ fn report(key: L10nKey, window: &mut Window, cx: &mut App) {
     HostOps::notify_err(
         window,
         cx,
-        &t(L10nKey::EditorFormulaEditing),
+        t(L10nKey::EditorFormulaEditing),
         &std::io::Error::other(t(key)),
     );
 }
@@ -595,12 +595,12 @@ fn export(action: ExportFormula, cx: &mut App) {
             Ok(Ok(None)) => return,
             _ => Err(std::io::Error::other("formula export path unavailable")),
         };
-        if let Err(error) = result {
-            if let Some(window) = window {
-                let _ = window.update(cx, |_, window, cx| {
-                    HostOps::notify_err(window, cx, &t(L10nKey::EditorFormulaExportFailed), &error)
-                });
-            }
+        if let Err(error) = result
+            && let Some(window) = window
+        {
+            let _ = window.update(cx, |_, window, cx| {
+                HostOps::notify_err(window, cx, t(L10nKey::EditorFormulaExportFailed), &error)
+            });
         }
     })
     .detach();

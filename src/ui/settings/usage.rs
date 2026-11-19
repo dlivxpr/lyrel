@@ -447,7 +447,7 @@ impl UsagePage {
                     presentation
                 })
                 .await;
-                let _ = entity.update(cx, |data, cx| {
+                entity.update(cx, |data, cx| {
                     data.loading = false;
                     match result {
                         Ok(stored) => data.stored = stored,
@@ -633,7 +633,7 @@ impl UsagePage {
                 cx.background_executor()
                     .timer(Duration::from_secs(secs))
                     .await;
-                if page
+                if !page
                     .update(cx, |page, cx| {
                         if !page.visible {
                             return false;
@@ -642,7 +642,6 @@ impl UsagePage {
                         true
                     })
                     .unwrap_or(false)
-                    == false
                 {
                     break;
                 }
@@ -1233,46 +1232,46 @@ impl UsagePage {
                         )
                     }
                 });
-                if let Ok(Balance::Provider(report)) = &mut result {
-                    if report.provider == Provider::CommandCode {
-                        let enhancement = if let Some(selection) = enhancement_browser {
-                            if gate.load(Ordering::SeqCst) {
-                                selection
-                                    .cookie_name()
-                                    .ok_or(UsageError::BrowserChanged)
-                                    .and_then(|name| {
-                                        shared
-                                            .browser
-                                            .resolve_cookies(
-                                                &selection,
-                                                browser::CookieProvider::CommandCode(name),
-                                            )
-                                            .map_err(browser_error)
-                                            .and_then(|material| {
-                                                providers::command_code::session(material.secret())
-                                            })
-                                            .map(Some)
-                                    })
-                            } else {
-                                Err(UsageError::Stale)
-                            }
+                if let Ok(Balance::Provider(report)) = &mut result
+                    && report.provider == Provider::CommandCode
+                {
+                    let enhancement = if let Some(selection) = enhancement_browser {
+                        if gate.load(Ordering::SeqCst) {
+                            selection
+                                .cookie_name()
+                                .ok_or(UsageError::BrowserChanged)
+                                .and_then(|name| {
+                                    shared
+                                        .browser
+                                        .resolve_cookies(
+                                            &selection,
+                                            browser::CookieProvider::CommandCode(name),
+                                        )
+                                        .map_err(browser_error)
+                                        .and_then(|material| {
+                                            providers::command_code::session(material.secret())
+                                        })
+                                        .map(Some)
+                                })
                         } else {
-                            enhancement
-                        };
-                        match enhancement {
-                            Ok(Some(cookie)) => {
-                                if let Err(error) = providers::command_code::enhance(
-                                    &*shared.http,
-                                    &cookie,
-                                    report,
-                                    proxy.as_deref(),
-                                ) {
-                                    report.enhancement = Some(error);
-                                }
-                            }
-                            Err(error) => report.enhancement = Some(error),
-                            Ok(None) => {}
+                            Err(UsageError::Stale)
                         }
+                    } else {
+                        enhancement
+                    };
+                    match enhancement {
+                        Ok(Some(cookie)) => {
+                            if let Err(error) = providers::command_code::enhance(
+                                &*shared.http,
+                                &cookie,
+                                report,
+                                proxy.as_deref(),
+                            ) {
+                                report.enhancement = Some(error);
+                            }
+                        }
+                        Err(error) => report.enhancement = Some(error),
+                        Ok(None) => {}
                     }
                 }
                 if let Ok(accounts) = shared.accounts.lock().unwrap().as_mut() {
@@ -1300,7 +1299,7 @@ async fn publish(data: &Entity<UsageData>, cx: &mut gpui_kit::AsyncApp) {
         )
     })
     .await;
-    let _ = data.update(cx, |data, cx| {
+    data.update(cx, |data, cx| {
         if version >= data.presentation {
             data.presentation = version;
             if let Some(stored) = stored {

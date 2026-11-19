@@ -26,6 +26,17 @@ pub struct GraphicsAdmissionBroker {
     changed: Condvar,
 }
 
+/// The payload of one admission offer: which resource is being published and
+/// the pixel/metadata reservation its consumer must grant. Grouped so the
+/// request entry points stay within the argument lint.
+pub(crate) struct OfferSpec {
+    pub key: u64,
+    pub width: u32,
+    pub height: u32,
+    pub encoded_bytes: usize,
+    pub metadata_bytes: usize,
+}
+
 pub(crate) struct GraphicsGrant {
     broker: Arc<GraphicsAdmissionBroker>,
     // Live offers depend on the active-consumer/session revision. A replay
@@ -132,11 +143,7 @@ impl GraphicsAdmissionBroker {
     pub(crate) fn request_after_release(
         self: &Arc<Self>,
         only: Option<u64>,
-        key: u64,
-        width: u32,
-        height: u32,
-        encoded_bytes: usize,
-        metadata_bytes: usize,
+        offer: OfferSpec,
         current: impl Fn() -> bool,
     ) -> Option<GraphicsGrant> {
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -144,9 +151,14 @@ impl GraphicsAdmissionBroker {
             if !current() {
                 return None;
             }
-            if let Some(grant) =
-                self.request(only, key, width, height, encoded_bytes, metadata_bytes)
-            {
+            if let Some(grant) = self.request(
+                only,
+                offer.key,
+                offer.width,
+                offer.height,
+                offer.encoded_bytes,
+                offer.metadata_bytes,
+            ) {
                 return Some(grant);
             }
             let remaining = deadline.checked_duration_since(Instant::now())?;

@@ -456,10 +456,11 @@ impl Host for WriteFailure {
             ));
         }
         let written = self.inner.write_file(p, bytes)?;
-        if !self.fail_lock_commit && p.file_name().is_some_and(|name| name == "SKILL.md") {
-            if let Some(target) = &self.change_target_after_stage {
-                fs::write(target, "user edited while staging")?;
-            }
+        if !self.fail_lock_commit
+            && p.file_name().is_some_and(|name| name == "SKILL.md")
+            && let Some(target) = &self.change_target_after_stage
+        {
+            fs::write(target, "user edited while staging")?;
         }
         Ok(written)
     }

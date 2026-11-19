@@ -282,12 +282,10 @@ pub(super) fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
 
     daemon.run_ok(&["send", &address, "--enter"]);
     loop {
-        match pane.recv().expect("wait for capture-tail fixture exit") {
-            DaemonMsg::Exited { code } => {
-                assert_eq!(code, Some(0), "capture-tail fixture failed");
-                break;
-            }
-            _ => {}
+        if let DaemonMsg::Exited { code } = pane.recv().expect("wait for capture-tail fixture exit")
+        {
+            assert_eq!(code, Some(0), "capture-tail fixture failed");
+            break;
         }
     }
     let _ = pane.detach();

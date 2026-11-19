@@ -35,7 +35,7 @@ use super::completion::state::TerminalCompletion;
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::history_session::TerminalHistory;
 use super::link::LinkInteraction;
-use super::remote::RemoteTerminal;
+use super::remote::{RelinkLayout, RemoteTerminal};
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
 use super::search_controller::TerminalSearch;
 #[cfg(test)]
@@ -1030,12 +1030,10 @@ impl TerminalView {
         stream: lyrel_core::daemon::transport::Stream,
         buffered: Vec<u8>,
         route: &lyrel_ui_base::route::PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None, cx)
+        self.adopt_relink_with_version(stream, buffered, route, layout, None, cx)
     }
 
     pub fn adopt_relink_with_version(
@@ -1043,9 +1041,7 @@ impl TerminalView {
         stream: lyrel_core::daemon::transport::Stream,
         buffered: Vec<u8>,
         route: &lyrel_ui_base::route::PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         version: Option<lyrel_core::daemon::protocol::DaemonVersion>,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
@@ -1054,7 +1050,7 @@ impl TerminalView {
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
         self.terminal
-            .adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, version)?;
+            .adopt_relink_with_version(stream, buffered, route, layout, version)?;
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -1882,11 +1878,13 @@ impl TerminalView {
                 let selected = self.selection_scroll.start_presented(
                     &mut self.grid_buf,
                     geom.cols,
-                    col,
-                    row,
-                    left,
-                    clicks,
-                    shift,
+                    super::selection_scroll::PointerGesture {
+                        col,
+                        row,
+                        left,
+                        clicks,
+                        shift,
+                    },
                     cx.global::<Config>(),
                 );
                 self.set_presented_selection(selected);
@@ -1902,11 +1900,13 @@ impl TerminalView {
         let mut term = term.unwrap();
         self.selection_scroll.start(
             &mut term,
-            col,
-            row,
-            left,
-            clicks,
-            shift,
+            super::selection_scroll::PointerGesture {
+                col,
+                row,
+                left,
+                clicks,
+                shift,
+            },
             cx.global::<Config>(),
         );
         drop(term);
@@ -3104,7 +3104,7 @@ mod gpui_tests {
             .unwrap();
 
         let report = |status: AgentStatus, daemon: &mut Stream| {
-            DaemonMsg::AgentStatus(Some(AgentSessionState {
+            DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
                 status,
                 message: None,
                 session_id: Some("sid-abc".into()),
@@ -3118,7 +3118,7 @@ mod gpui_tests {
                 pending_stop: false,
                 readout: Default::default(),
                 since_ms: None,
-            }))
+            })))
             .encode(daemon)
             .unwrap();
         };
@@ -3164,7 +3164,7 @@ mod gpui_tests {
         DaemonMsg::Cwd(launched_in.clone())
             .encode(&mut daemon)
             .unwrap();
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Working,
             message: None,
             session_id: Some("sid-wt".into()),
@@ -3178,7 +3178,7 @@ mod gpui_tests {
             pending_stop: false,
             readout: Default::default(),
             since_ms: None,
-        }))
+        })))
         .encode(&mut daemon)
         .unwrap();
         daemon.flush().unwrap();
@@ -4526,9 +4526,11 @@ mod gpui_tests {
                     new_client,
                     Vec::new(),
                     &lyrel_ui_base::route::PaneRoute::Local,
-                    TermSize::new(100, 30),
-                    8,
-                    17,
+                    RelinkLayout {
+                        size: TermSize::new(100, 30),
+                        cell_w: 8,
+                        cell_h: 17,
+                    },
                     cx,
                 )
                 .expect("the swap itself cannot fail");
@@ -4967,11 +4969,11 @@ mod gpui_tests {
 
         // A question the hooks report steps it aside at once, and nothing in
         // the box is sent as the answer.
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Waiting,
             rich: true,
             ..Default::default()
-        }))
+        })))
         .encode(&mut daemon)
         .unwrap();
         wait_for(cx, &|v| {
@@ -5696,7 +5698,7 @@ mod gpui_tests {
     /// failing, which reads as a CI timeout on exactly this name.
     #[gpui_kit::test]
     fn a_frame_that_cannot_have_the_grid_leaves_the_previous_one_alone(cx: &mut TestAppContext) {
-        use super::super::element::PaintColors;
+        use super::super::element::{GridPaint, PaintColors};
 
         let (_window, view, _daemon) = rooted_harness(cx);
         let element = TerminalElement::new(view.clone());
@@ -5705,16 +5707,18 @@ mod gpui_tests {
             cx.update(|cx| {
                 let colors = PaintColors::resolve(cx.theme(), cx);
                 element.build_grid(
-                    &colors,
-                    buf,
-                    24,
-                    80,
-                    false,
                     cx,
-                    1.,
-                    gpui_kit::Rgba::default(),
-                    must_block,
-                    false,
+                    GridPaint {
+                        colors: &colors,
+                        buf,
+                        rows: 24,
+                        cols: 80,
+                        want_sliver: false,
+                        dim: 1.,
+                        under: gpui_kit::Rgba::default(),
+                        must_block,
+                        has_previous: false,
+                    },
                 )
             })
         };

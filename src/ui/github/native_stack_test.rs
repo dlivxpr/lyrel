@@ -70,11 +70,13 @@ fn native_stacked_pull_panel() {
         .with_assets(crate::ui::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            let mut config = lyrel_ui_base::config::Config::default();
-            config.install_cli_on_path = false;
-            config.check_for_updates = false;
-            config.auto_download_updates = false;
-            config.cursor_blink = false;
+            let config = lyrel_ui_base::config::Config(lyrel_ui_base::config::CoreConfig {
+                install_cli_on_path: false,
+                check_for_updates: false,
+                auto_download_updates: false,
+                cursor_blink: false,
+                ..Default::default()
+            });
             cx.set_global(config);
             crate::register_bundled_fonts(cx);
             lyrel_ui_base::presets::load_registry(cx);

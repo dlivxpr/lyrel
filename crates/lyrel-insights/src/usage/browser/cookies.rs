@@ -123,10 +123,10 @@ impl BrowserReader {
         provider: CookieProvider,
         permission: &ImportPermission,
     ) -> Result<(BrowserSelection, SessionMaterial), BrowserError> {
-        if let CookieProvider::CommandCode(name) = provider {
-            if !valid_command_cookie_name(name) {
-                return Err(BrowserError::Unreadable);
-            }
+        if let CookieProvider::CommandCode(name) = provider
+            && !valid_command_cookie_name(name)
+        {
+            return Err(BrowserError::Unreadable);
         }
         let current = self
             .profiles(profile.browser)?
@@ -158,10 +158,10 @@ impl BrowserReader {
         if !selection.token_fingerprint.starts_with(provider.binding()) {
             return Err(BrowserError::SourceChanged);
         }
-        if let CookieProvider::CommandCode(name) = provider {
-            if selection.cookie_name.as_deref() != Some(name) || !valid_command_cookie_name(name) {
-                return Err(BrowserError::SourceChanged);
-            }
+        if let CookieProvider::CommandCode(name) = provider
+            && (selection.cookie_name.as_deref() != Some(name) || !valid_command_cookie_name(name))
+        {
+            return Err(BrowserError::SourceChanged);
         }
         let profile = self
             .profiles(selection.browser)?

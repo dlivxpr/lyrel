@@ -57,17 +57,18 @@ pub fn discover_omp(host: &dyn Host, launch: &HashMap<String, String>) -> io::Re
         root.to_string_lossy()
     );
     let category = |key: &str| -> io::Result<PathBuf> {
-        if host.separator() == '/' && (profile.is_some() || root == host.join(&base, "agent")) {
-            if let Some(xdg) = environment.get(key).filter(|v| !v.is_empty()) {
-                let mut path = host.join(std::path::Path::new(xdg), "omp");
-                if let Some(profile) = profile {
-                    path = host.join(&host.join(&path, "profiles"), profile);
-                }
-                match host.stat(&path) {
-                    Ok(meta) if meta.is_dir => return Ok(path),
-                    Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-                    _ => {}
-                }
+        if host.separator() == '/'
+            && (profile.is_some() || root == host.join(&base, "agent"))
+            && let Some(xdg) = environment.get(key).filter(|v| !v.is_empty())
+        {
+            let mut path = host.join(std::path::Path::new(xdg), "omp");
+            if let Some(profile) = profile {
+                path = host.join(&host.join(&path, "profiles"), profile);
+            }
+            match host.stat(&path) {
+                Ok(meta) if meta.is_dir => return Ok(path),
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
             }
         }
         Ok(root.clone())

@@ -101,10 +101,9 @@ impl GraphicsState {
     pub(super) fn drain_playback_metadata(&mut self) -> Vec<GraphicsEffect> {
         std::mem::take(&mut self.playback_dirty)
             .into_iter()
-            .filter_map(|key| {
-                self.animations.contains_key(&key).then(|| {
-                    GraphicsEffect::Update(GraphicsUpdate::Playback(self.playback_snapshot(key)))
-                })
+            .filter(|&key| self.animations.contains_key(&key))
+            .map(|key| {
+                GraphicsEffect::Update(GraphicsUpdate::Playback(self.playback_snapshot(key)))
             })
             .collect()
     }

@@ -101,6 +101,10 @@ impl SharedMedia {
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.metadata().unwrap().len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[cfg(unix)]

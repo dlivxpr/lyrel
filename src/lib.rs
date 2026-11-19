@@ -803,7 +803,7 @@ pub fn run() {
     // delegate stack, which is also how Zed's own reopen handler runs.
     application.on_reopen(|cx| {
         cx.spawn(async move |cx| {
-            let _ = cx.update(crate::ui::windows::reopen);
+            cx.update(crate::ui::windows::reopen);
         })
         .detach();
     });
@@ -813,7 +813,7 @@ pub fn run() {
         // AppKit's delegate call stack.
         cx.spawn(async move |cx| {
             while let Ok(urls) = external_open_rx.recv().await {
-                let _ = cx.update(|cx| handle_external_opens(urls, cx));
+                cx.update(|cx| handle_external_opens(urls, cx));
             }
         })
         .detach();

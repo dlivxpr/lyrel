@@ -277,14 +277,10 @@ impl Host for FileHost {
         &self,
         view: u64,
         query: &lyrel_core::host::sqlite::SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: lyrel_core::host::sqlite::SqliteCellRead,
         cancel: &lyrel_core::host::sqlite::SqliteCancel,
     ) -> io::Result<lyrel_core::host::sqlite::SqliteValue> {
-        self.inner
-            .sqlite_value(view, query, row, column, offset, max_bytes, cancel)
+        self.inner.sqlite_value(view, query, cell, cancel)
     }
     fn sqlite_close(&self, view: u64) {
         self.inner.sqlite_close(view)

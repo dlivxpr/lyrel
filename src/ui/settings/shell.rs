@@ -566,14 +566,12 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(control),
             );
-        if capture {
-            if let Some(entry) = entry {
-                self.active_settings()
-                    .unwrap()
-                    .navigation
-                    .capture_row(entry.title, row.into_any_element());
-                return div().id("captured-setting");
-            }
+        if capture && let Some(entry) = entry {
+            self.active_settings()
+                .unwrap()
+                .navigation
+                .capture_row(entry.title, row.into_any_element());
+            return div().id("captured-setting");
         }
         row
     }

@@ -287,7 +287,17 @@ impl EditorState {
         let origin = cx.entity_id();
         let caret = self.cursor_offset();
         let snapshot = document.update(cx, |document, cx| {
-            document.replace_lines(range, lines, leading, trailing, origin, caret, cx)
+            document.replace_lines(
+                document::LineReplace {
+                    range,
+                    lines,
+                    leading,
+                    trailing,
+                },
+                origin,
+                caret,
+                cx,
+            )
         });
         self.diagnostics.clear();
         self.content = snapshot.text_handle();

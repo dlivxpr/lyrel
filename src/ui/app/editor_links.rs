@@ -8,7 +8,7 @@
 //! — and the file opens through the editor's epoch-guarded open, placing a
 //! reused buffer exactly where the pre-inversion link opener did.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use super::*;
 use gpui_kit::EntityId;
@@ -17,6 +17,30 @@ use lyrel_ui_base::host_ops::{HostOps, SharedHost};
 use lyrel_workbench_editor::code_editor::markdown::links;
 use lyrel_workbench_editor::code_editor::{BufferId, GroupId};
 
+/// A markdown link the editor asked the shell to follow: the presentation it
+/// was clicked in, and the file destination on its owning Host. The gesture
+/// travels as one value so a call site cannot pair the path with the wrong
+/// Host or drop half of it between the follow and the open.
+pub(crate) struct FollowedLink {
+    pub(crate) buffer: BufferId,
+    pub(crate) source: EntityId,
+    pub(crate) host: SharedHost,
+    pub(crate) path: PathBuf,
+    pub(crate) anchor: Option<String>,
+    pub(crate) revision: u64,
+}
+
+/// The destination half of a link open, resolved once any anchor has been
+/// decoded on the file's owning Host: which file, where the cursor lands,
+/// and the (buffer, revision) the epoch-guarded open re-validates against a
+/// document that moved on.
+struct LinkOpen {
+    host: SharedHost,
+    path: PathBuf,
+    cursor: Option<Position>,
+    origin: Option<(BufferId, u64)>,
+}
+
 impl LyrelApp {
     /// Answers `EditorPanelEvent::FollowLink`: find the tab and group whose
     /// editor group still shows the originating presentation, then open the
@@ -24,15 +48,18 @@ impl LyrelApp {
     /// group merged away — has nowhere to open and is dropped.
     pub(crate) fn editor_follow_link(
         &mut self,
-        buffer: BufferId,
-        source: EntityId,
-        host: SharedHost,
-        path: &Path,
-        anchor: Option<String>,
-        revision: u64,
+        link: FollowedLink,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let FollowedLink {
+            buffer,
+            source,
+            host,
+            path,
+            anchor,
+            revision,
+        } = link;
         let Some((tab, group)) = self.tabs.iter().find_map(|entry| {
             let code = entry.code.as_ref()?;
             std::iter::once(code.group())
@@ -48,9 +75,8 @@ impl LyrelApp {
         };
         let origin = Some((buffer, revision));
         if let Some(anchor) = anchor {
-            let requested = path.to_path_buf();
+            let requested = path.clone();
             let destination_host = host.clone();
-            let path = path.to_path_buf();
             // Decode on the same owning Host, never by opening a local lookalike.
             HostOps::run_in(
                 host,
@@ -59,10 +85,12 @@ impl LyrelApp {
                 move |h| links::locate_anchor(h, &requested, &anchor),
                 move |app, result, window, cx| match result {
                     Ok(cursor) => app.editor_open_link(
-                        destination_host,
-                        &path,
-                        Some(cursor),
-                        origin,
+                        LinkOpen {
+                            host: destination_host,
+                            path,
+                            cursor: Some(cursor),
+                            origin,
+                        },
                         tab,
                         group,
                         window,
@@ -74,7 +102,18 @@ impl LyrelApp {
                 },
             );
         } else {
-            self.editor_open_link(host, path, None, origin, tab, group, window, cx);
+            self.editor_open_link(
+                LinkOpen {
+                    host,
+                    path,
+                    cursor: None,
+                    origin,
+                },
+                tab,
+                group,
+                window,
+                cx,
+            );
         }
     }
 
@@ -84,15 +123,18 @@ impl LyrelApp {
     /// `OpenCompleted` placement, which re-validates tab and group.
     fn editor_open_link(
         &mut self,
-        host: SharedHost,
-        path: &Path,
-        cursor: Option<Position>,
-        origin: Option<(BufferId, u64)>,
+        open: LinkOpen,
         tab: TabId,
         group: GroupId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let LinkOpen {
+            host,
+            path,
+            cursor,
+            origin,
+        } = open;
         let workspace = self.workspace;
         let window_host = self.spawn_host(cx);
         // `origin_epoch` is captured at open start; the revision captured when
@@ -100,7 +142,7 @@ impl LyrelApp {
         let reused = self.editor.update(cx, |editor, cx| {
             editor.open_on_host_at(
                 host,
-                path,
+                &path,
                 cursor,
                 origin,
                 workspace,

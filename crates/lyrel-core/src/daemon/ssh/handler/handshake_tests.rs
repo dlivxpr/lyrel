@@ -115,10 +115,12 @@ impl TestSshd {
             .await
             .expect("bind a loopback port");
         let addr = listener.local_addr().expect("bound address");
-        let mut config = server::Config::default();
-        config.inactivity_timeout = None;
-        config.keys = keys;
-        config.certificates = certificates;
+        let config = server::Config {
+            inactivity_timeout: None,
+            keys,
+            certificates,
+            ..Default::default()
+        };
         let sessions: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let accept = tokio::spawn({
@@ -339,31 +341,32 @@ async fn an_unknown_key_accepted_once_connects_without_recording() {
     let (result, asked) = handshake(&sshd, true, store.clone(), answers).await;
     expect_connected(result, &sshd).await;
 
-    let asked = asked.lock().unwrap();
-    let [
-        AuthPromptKind::HostKeyUnknown {
-            host,
-            port,
-            algorithm,
+    {
+        let asked = asked.lock().unwrap();
+        let [
+            AuthPromptKind::HostKeyUnknown {
+                host,
+                port,
+                algorithm,
+                fingerprint_sha256,
+                previously_known_as,
+            },
+        ] = asked.as_slice()
+        else {
+            panic!(
+                "an unknown key asks exactly once, got {:?}",
+                asked.as_slice()
+            );
+        };
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(*port, sshd.port());
+        assert_eq!(algorithm, "ssh-ed25519");
+        assert_eq!(
             fingerprint_sha256,
-            previously_known_as,
-        },
-    ] = asked.as_slice()
-    else {
-        panic!(
-            "an unknown key asks exactly once, got {:?}",
-            asked.as_slice()
+            &known_hosts::fingerprint_sha256(key.public_key())
         );
-    };
-    assert_eq!(host, "127.0.0.1");
-    assert_eq!(*port, sshd.port());
-    assert_eq!(algorithm, "ssh-ed25519");
-    assert_eq!(
-        fingerprint_sha256,
-        &known_hosts::fingerprint_sha256(key.public_key())
-    );
-    assert_eq!(previously_known_as, &None);
-    drop(asked);
+        assert_eq!(previously_known_as, &None);
+    }
 
     assert!(
         !store.exists(),
@@ -471,31 +474,32 @@ async fn an_accepted_replacement_replaces_the_key_it_contradicts() {
     let (result, asked) = handshake(&sshd, true, store.clone(), answers).await;
     expect_connected(result, &sshd).await;
 
-    let asked = asked.lock().unwrap();
-    let [
-        AuthPromptKind::HostKeyChanged {
-            algorithm,
+    {
+        let asked = asked.lock().unwrap();
+        let [
+            AuthPromptKind::HostKeyChanged {
+                algorithm,
+                fingerprint_sha256,
+                old_fingerprint_sha256,
+                ..
+            },
+        ] = asked.as_slice()
+        else {
+            panic!(
+                "a contradicting key uses the changed-key prompt, got {:?}",
+                asked.as_slice()
+            );
+        };
+        assert_eq!(algorithm, "ssh-ed25519");
+        assert_eq!(
             fingerprint_sha256,
-            old_fingerprint_sha256,
-            ..
-        },
-    ] = asked.as_slice()
-    else {
-        panic!(
-            "a contradicting key uses the changed-key prompt, got {:?}",
-            asked.as_slice()
+            &known_hosts::fingerprint_sha256(new_key.public_key())
         );
-    };
-    assert_eq!(algorithm, "ssh-ed25519");
-    assert_eq!(
-        fingerprint_sha256,
-        &known_hosts::fingerprint_sha256(new_key.public_key())
-    );
-    assert_eq!(
-        old_fingerprint_sha256,
-        &known_hosts::fingerprint_sha256(old_key.public_key())
-    );
-    drop(asked);
+        assert_eq!(
+            old_fingerprint_sha256,
+            &known_hosts::fingerprint_sha256(old_key.public_key())
+        );
+    }
 
     // The line the new key contradicts is gone: check_in_file answers Known
     // on any same-algorithm match, so an append alone would have left the
@@ -534,24 +538,25 @@ async fn a_key_under_a_new_algorithm_asks_the_unknown_prompt_and_keeps_the_old_l
     let (result, asked) = handshake(&sshd, true, store.clone(), answers).await;
     expect_connected(result, &sshd).await;
 
-    let asked = asked.lock().unwrap();
-    // A key new only because its *algorithm* is new is not the
-    // man-in-the-middle warning; it is the unknown-host prompt that names
-    // what the host was previously known by.
-    let [
-        AuthPromptKind::HostKeyUnknown {
-            previously_known_as,
-            ..
-        },
-    ] = asked.as_slice()
-    else {
-        panic!(
-            "a new-algorithm key uses the unknown-host prompt, got {:?}",
-            asked.as_slice()
-        );
-    };
-    assert_eq!(previously_known_as.as_deref(), Some("ssh-rsa"));
-    drop(asked);
+    {
+        let asked = asked.lock().unwrap();
+        // A key new only because its *algorithm* is new is not the
+        // man-in-the-middle warning; it is the unknown-host prompt that names
+        // what the host was previously known by.
+        let [
+            AuthPromptKind::HostKeyUnknown {
+                previously_known_as,
+                ..
+            },
+        ] = asked.as_slice()
+        else {
+            panic!(
+                "a new-algorithm key uses the unknown-host prompt, got {:?}",
+                asked.as_slice()
+            );
+        };
+        assert_eq!(previously_known_as.as_deref(), Some("ssh-rsa"));
+    }
 
     // The replacement rule only retires a same-algorithm contradiction: the
     // ssh-rsa entry is uncontradicted and stays, exactly as OpenSSH keeps it.

@@ -38,7 +38,13 @@ fn history_pane(
     };
     fixture.track_pane(pane);
     stream.set_read_timeout(None).unwrap();
-    let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), crate::remote::PtySource::Raw).unwrap();
+    let terminal = RemoteTerminal::from_stream_with(
+        stream,
+        TermSize::new(80, 24),
+        Vec::new(),
+        crate::remote::PtySource::Raw,
+    )
+    .unwrap();
     let built = std::rc::Rc::new(std::cell::RefCell::new(None));
     let out = built.clone();
     cx.add_window(move |window, cx| {
@@ -50,14 +56,16 @@ fn history_pane(
         *out.borrow_mut() = Some(view.clone());
         gpui_kit::component::Root::new(view, window, cx)
     });
-    let view = built.borrow_mut().take().unwrap();
-    view
+
+    built.borrow_mut().take().unwrap()
 }
 
 #[gpui_kit::test]
 #[ignore = "requires isolated pinned SSH/SFTP, same-commit server and real nested SSH key/pin; run alone"]
 fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut TestAppContext) {
-    let binary = std::path::PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"));
+    let binary = std::path::PathBuf::from(
+        std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
+    );
     let fixture = lyrel_test_support::native_ssh::NativeSshFixture::start(&binary);
     lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     cx.executor().allow_parking();
@@ -74,7 +82,11 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     host.write_file(&path, b"echo REMOTE_HOME_ONLY_185\n")
         .unwrap();
     let _history = RemoteHistoryFile(host.clone(), path);
-    std::fs::write(fixture.local_config_dir().join("history"), b"echo LOCAL_ONLY_185\n").unwrap();
+    std::fs::write(
+        fixture.local_config_dir().join("history"),
+        b"echo LOCAL_ONLY_185\n",
+    )
+    .unwrap();
     // The workbench's `HostLinks` table is shell-side; the terminal client
     // reads the remote home through the desktop foundation's published
     // fact (`home_for_host`), so seed that directly.
@@ -82,7 +94,9 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
         lyrel_ui_base::desktop_lookups::publish_remote_home(cx, host.id(), Some(host.home()))
     });
     let shell = lyrel_core::daemon::protocol::ShellSpec {
-        program: "/bin/cat".into(), args: Vec::new(), args_are_lyrel_defaults: false,
+        program: "/bin/cat".into(),
+        args: Vec::new(),
+        args_are_lyrel_defaults: false,
     };
     let direct = history_pane(&fixture, shell.clone(), host.clone(), cx);
     direct.update(cx, |view, cx| view.follow_history_scope(cx));
@@ -129,10 +143,22 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
         .join(" ");
     // A real user starts ssh from their existing shell. Making ssh itself
     // the pane's root shell suppresses the daemon's foreground-child detector.
-    let nested = history_pane(&fixture, lyrel_core::daemon::protocol::ShellSpec {
-        program: "/bin/bash".into(), args: vec!["--noprofile".into(), "--norc".into(), "-i".into(), "-c".into(), format!("{command}; :")],
-        args_are_lyrel_defaults: false,
-    }, host.clone(), cx);
+    let nested = history_pane(
+        &fixture,
+        lyrel_core::daemon::protocol::ShellSpec {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--norc".into(),
+                "-i".into(),
+                "-c".into(),
+                format!("{command}; :"),
+            ],
+            args_are_lyrel_defaults: false,
+        },
+        host.clone(),
+        cx,
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         cx.run_until_parked();
@@ -182,7 +208,9 @@ impl Drop for OwnedNativeHistoryPane {
 #[ignore = "requires isolated pinned SSH/SFTP and same-commit local server; run alone"]
 fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     use lyrel_core::daemon::protocol::{ClientMsg, RemoteKind, SshPhase};
-    let binary = std::path::PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"));
+    let binary = std::path::PathBuf::from(
+        std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
+    );
     let fixture = lyrel_test_support::native_ssh::NativeSshFixture::start(&binary);
     lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     cx.executor().allow_parking();
@@ -199,7 +227,11 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     host.write_file(&path, b"echo LYREL185_NATIVE_HISTORY_SEED\n")
         .unwrap();
     let _history = RemoteHistoryFile(host, path);
-    let endpoint = fixture.local_config_dir().join(if cfg!(windows) { "daemon.port" } else { "daemon.sock" });
+    let endpoint = fixture.local_config_dir().join(if cfg!(windows) {
+        "daemon.port"
+    } else {
+        "daemon.sock"
+    });
     let mut stream = lyrel_core::daemon::transport::connect_endpoint_at(&endpoint).unwrap();
     lyrel_core::daemon::protocol::negotiate_pane(&mut stream).unwrap();
     let mut spec = fixture.spec();
@@ -216,7 +248,13 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
         other => panic!("real native SSH shell-channel spawn failed: {other:?}"),
     };
     let _pane = OwnedNativeHistoryPane(endpoint, pane);
-    let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), crate::remote::PtySource::Raw).unwrap();
+    let terminal = RemoteTerminal::from_stream_with(
+        stream,
+        TermSize::new(80, 24),
+        Vec::new(),
+        crate::remote::PtySource::Raw,
+    )
+    .unwrap();
     let built = std::rc::Rc::new(std::cell::RefCell::new(None));
     let out = built.clone();
     cx.add_window(move |window, cx| {

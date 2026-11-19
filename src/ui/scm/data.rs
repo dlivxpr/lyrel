@@ -1191,7 +1191,20 @@ impl LyrelApp {
         })
         .detach();
     }
+}
 
+/// A git op already aimed at the repository it runs on: the host owning the
+/// working tree, the tree's root, the HEAD observed when the op was
+/// confirmed, and the follow-up waiting on its result.
+pub(crate) struct PreparedGitOp {
+    pub(crate) host: SharedHost,
+    pub(crate) root: PathBuf,
+    pub(crate) op: GitOp,
+    pub(crate) then: Option<crate::ui::scm::actions::ScmFollowUp>,
+    pub(crate) head: crate::core::git::status::HeadState,
+}
+
+impl LyrelApp {
     /// Change the repository, then let everyone notice.
     ///
     /// Confirmation of a destructive operation is the caller's job, not this
@@ -1212,21 +1225,34 @@ impl LyrelApp {
             window,
             cx,
             move |app, status, window, cx| {
-                app.run_git_op_prepared(host, root, op, then, status.head.clone(), window, cx);
+                app.run_git_op_prepared(
+                    PreparedGitOp {
+                        host,
+                        root,
+                        op,
+                        then,
+                        head: status.head.clone(),
+                    },
+                    window,
+                    cx,
+                );
             },
         );
     }
 
     pub(crate) fn run_git_op_prepared(
         &mut self,
-        host: SharedHost,
-        root: PathBuf,
-        op: GitOp,
-        then: Option<crate::ui::scm::actions::ScmFollowUp>,
-        head: crate::core::git::status::HeadState,
+        prepared: PreparedGitOp,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let PreparedGitOp {
+            host,
+            root,
+            op,
+            then,
+            head,
+        } = prepared;
         if !lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host.id())
             .is_some_and(|current| Arc::ptr_eq(&current, &host))
         {
@@ -1297,10 +1323,8 @@ impl LyrelApp {
                 app.on_git_op_done(result, window, cx);
                 // The second half of a compound verb starts only now, against
                 // the repository this operation produced — never alongside it.
-                if ok {
-                    if let Some(follow) = then {
-                        app.scm_follow_up(id, root, follow, window, cx);
-                    }
+                if ok && let Some(follow) = then {
+                    app.scm_follow_up(id, root, follow, window, cx);
                 }
             },
         );

@@ -213,6 +213,23 @@ fn render_reading_cell(
     rendered
 }
 
+/// Everything one [`TerminalElement::build_grid`] paint needs beyond `self`
+/// and `cx`: the caller's resolved colors and scratch cell buffer, the grid
+/// shape, the dim/underline painting modifiers, and the frame-policy flags.
+/// Grouped so new paint knobs stay named fields here instead of growing the
+/// signature past the argument ceiling.
+pub struct GridPaint<'a> {
+    pub colors: &'a PaintColors,
+    pub buf: &'a mut Vec<RenderCell>,
+    pub rows: usize,
+    pub cols: usize,
+    pub want_sliver: bool,
+    pub dim: f32,
+    pub under: Rgba,
+    pub must_block: bool,
+    pub has_previous: bool,
+}
+
 impl TerminalElement {
     /// The shape `prompt_cursor_style` puts on the grid cursor while the shell
     /// waits at a prompt with its own line editor — `prompt_editor` off, or a
@@ -227,17 +244,20 @@ impl TerminalElement {
 
     pub fn build_grid(
         &self,
-        colors: &PaintColors,
-        buf: &mut Vec<RenderCell>,
-        rows: usize,
-        cols: usize,
-        want_sliver: bool,
         cx: &App,
-        dim: f32,
-        under: Rgba,
-        must_block: bool,
-        has_previous: bool,
+        paint: GridPaint<'_>,
     ) -> Result<GridSnapshot, SnapshotUnavailable> {
+        let GridPaint {
+            colors,
+            buf,
+            rows,
+            cols,
+            want_sliver,
+            dim,
+            under,
+            must_block,
+            has_previous,
+        } = paint;
         let mut cursor: Option<GridCursor> = None;
         let mut sliver: Option<Vec<RenderCell>> = None;
         let mut any_selected = false;
@@ -501,7 +521,7 @@ impl TerminalElement {
             self.flag_hovered_link(buf, rows, cols, display_offset, cx);
             let (any_match, any_current) =
                 self.flag_search_matches(buf, rows, cols, display_offset, live_origin, cx);
-            return Ok(GridSnapshot {
+            Ok(GridSnapshot {
                 cursor,
                 background_override: colors
                     .overrides
@@ -517,7 +537,7 @@ impl TerminalElement {
                 scroll_shift: 0.,
                 held: false,
                 images,
-            });
+            })
         }
     }
 

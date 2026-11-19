@@ -128,7 +128,7 @@ fn agent_glyph(agent: crate::core::cli_agent::CLIAgent, size: u32) -> Option<tin
         let decoded = image::imageops::thumbnail(&decoded, size, size);
         let (width, height) = decoded.dimensions();
         let mut pixels = decoded.into_raw();
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             let alpha = u16::from(pixel[3]);
             for channel in &mut pixel[..3] {
                 *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
@@ -255,7 +255,13 @@ mod tests {
         for img in [&normal, &attention] {
             assert_eq!((img.width, img.height), (SIZE, SIZE));
             assert_eq!(img.data.len(), (SIZE * SIZE * 4) as usize);
-            let covered = img.data.chunks_exact(4).filter(|p| p[3] > 0).count();
+            let covered = img
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[3] > 0)
+                .count();
             assert!(covered > 0, "icon rendered fully transparent");
         }
         assert_ne!(normal.data, attention.data);

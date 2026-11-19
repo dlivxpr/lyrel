@@ -133,15 +133,7 @@ fn reading_lifecycle_replay_and_relink_publish_fresh_content(cx: &mut TestAppCon
     graphics_assert_production_paint(window, &view, cx);
     let (client, mut fresh_sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        view.adopt_relink(
-            client,
-            Vec::new(),
-            &lyrel_ui_base::route::PaneRoute::Local,
-            TermSize::new(80, 24),
-            10,
-            20,
-            cx,
-        )
+        view.adopt_relink(client, Vec::new(), &lyrel_ui_base::route::PaneRoute::Local, crate::remote::RelinkLayout { size: TermSize::new(80, 24), cell_w: 10, cell_h: 20 }, cx)
         .unwrap();
     });
     DaemonMsg::Snapshot(b"\x1b[HRELINKED-BASELINE".to_vec())
@@ -424,9 +416,11 @@ fn reading_lifecycle_wheel_uses_live_agent_modes_and_shift_local_escape(cx: &mut
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
-        let mut config = Config::default();
-        config.smooth_scroll = false;
-        config.mouse_scroll_multiplier = 1.;
+        let config = Config(lyrel_ui_base::config::CoreConfig {
+            smooth_scroll: false,
+            mouse_scroll_multiplier: 1.,
+            ..Default::default()
+        });
         cx.set_global(config);
     });
     let daemon = GraphicsDaemonProcess::start();

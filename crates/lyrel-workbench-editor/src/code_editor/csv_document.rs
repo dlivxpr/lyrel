@@ -642,11 +642,12 @@ impl CsvView {
         let stale =
             self.editing_revision != Some(self.document.read(cx).document().read(cx).revision());
         self.editing_revision = None;
-        if !stale && self.apply_edit(CsvEdit::Cell { cell, value }, cx) {
-            if let (Some(step), Some(count)) = (advance, count) {
-                let next = (record as isize + step).clamp(0, count as isize - 1) as usize;
-                self.select_identity(next, column, cx);
-            }
+        if !stale
+            && self.apply_edit(CsvEdit::Cell { cell, value }, cx)
+            && let (Some(step), Some(count)) = (advance, count)
+        {
+            let next = (record as isize + step).clamp(0, count as isize - 1) as usize;
+            self.select_identity(next, column, cx);
         }
         if let Some(window) = window {
             self.focus.focus(window, cx);
@@ -1696,7 +1697,7 @@ impl CsvView {
                     .filter_map(|position| {
                         let record = *this.order.get(position)?;
                         Some(render_record(
-                            &this,
+                            this,
                             record,
                             columns.clone(),
                             &table,
@@ -1880,7 +1881,7 @@ fn render_record(
                         .into_any_element(),
                 })
                 .on_click(move |event, window, cx| {
-                    let _ = cell_view.update(cx, |this, cx| {
+                    cell_view.update(cx, |this, cx| {
                         this.focus.focus(window, cx);
                         this.click_cell(record, column, event.modifiers().shift, cx);
                         if event.click_count() == 2 {

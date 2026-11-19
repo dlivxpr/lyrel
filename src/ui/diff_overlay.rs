@@ -478,7 +478,7 @@ impl LyrelApp {
 
     /// Land a probe that finished on the background worker. The tracker
     /// decides whether the landing may install: a retired `SharedHost`, or a
-    /// probe superseded by a reconnect, is rejected here — no snapshot, no
+    /// probe superseded by a reconnect, is dropped here — no snapshot, no
     /// in-flight state touched, no retry on a host the registry no longer
     /// holds. A live landing installs and then spawns exactly one follow-up
     /// for the invalidations that coalesced while it was out, on the host the
@@ -494,13 +494,93 @@ impl LyrelApp {
     ) {
         let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, key.host_id);
         match self.diff_probes.complete(&key, &probe, live.as_ref()) {
-            ProbeCompletion::Reject => {}
+            ProbeCompletion::Superseded => {
+                // A newer host's probe already owns the key and answers
+                // whatever this landing could have. Touching the overlay here
+                // — even to clear `loading` — would tear up that probe's
+                // in-flight state.
+            }
+            ProbeCompletion::Retired => {
+                // No replacement probe is out and the host that could deliver
+                // this answer is gone. Whatever is still waiting on the key
+                // must be pointed at the live host or stopped from claiming
+                // to load forever.
+                self.retry_diff_probe_after_retirement(&key, &cwd, &source, cx);
+            }
             ProbeCompletion::Deliver { follow_up } => {
+                let root = result.as_ref().map(|snap| snap.root.clone());
                 self.install_diff_snapshot(key.host_id, &cwd, &source, result.map(Arc::new), cx);
                 if let Some(next) = follow_up {
+                    self.note_diff_follow_up(&key, &cwd, &source, root.as_deref(), cx);
                     self.spawn_diff_probe_for(next, cwd, source, cx);
                 }
             }
+        }
+    }
+
+    /// A retired probe's key owns no in-flight entry anymore. If an overlay is
+    /// still waiting on it — its first probe is the usual case — hand the
+    /// question to the host the registry now holds; when the registry holds
+    /// nobody, at least put `loading` down so a later invalidation can ask
+    /// again after a reconnect.
+    fn retry_diff_probe_after_retirement(
+        &mut self,
+        key: &DiffProbeKey,
+        cwd: &Path,
+        source: &DiffSource,
+        cx: &mut Context<Self>,
+    ) {
+        if source.is_supplied() {
+            return;
+        }
+        let matches_key = |overlay: &DiffOverlayState| {
+            overlay.host_id == key.host_id && overlay.cwd == *cwd && overlay.source == *source
+        };
+        let waiting = self.tabs.iter().any(|tab| {
+            tab.diff_overlay
+                .as_ref()
+                .is_some_and(|overlay| matches_key(overlay) && overlay.loading)
+        });
+        if !waiting {
+            return;
+        }
+        match lyrel_ui_base::host_registry::HostRegistry::lookup(cx, key.host_id) {
+            Some(live) => self.spawn_diff_probe_for(live, cwd.to_path_buf(), source.clone(), cx),
+            None => {
+                for tab in self.tabs.iter_mut() {
+                    if let Some(overlay) = tab.diff_overlay.as_mut().filter(|o| matches_key(o)) {
+                        overlay.loading = false;
+                    }
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// A follow-up probe re-reads the tree as it stands at dispatch, not at
+    /// the landing that spawned it. Record that epoch (and the loading flag)
+    /// on the overlays it serves: `install_diff_snapshot` keeps the older
+    /// epoch a landed probe recorded, and without this the stale check would
+    /// re-flag the very change the follow-up covers and probe a third time.
+    fn note_diff_follow_up(
+        &mut self,
+        key: &DiffProbeKey,
+        cwd: &Path,
+        source: &DiffSource,
+        root: Option<&Path>,
+        cx: &mut Context<Self>,
+    ) {
+        let epoch = root.map(|root| scm_epoch(cx, key.host_id, root));
+        for tab in self.tabs.iter_mut() {
+            let Some(overlay) = tab
+                .diff_overlay
+                .as_mut()
+                .filter(|o| o.host_id == key.host_id && o.cwd == *cwd && o.source == *source)
+            else {
+                continue;
+            };
+            overlay.loading = true;
+            overlay.epoch = epoch;
         }
     }
 
@@ -568,6 +648,14 @@ impl LyrelApp {
     }
 
     pub(crate) fn maybe_refresh_diff_overlay(&mut self, cx: &mut Context<Self>) {
+        self.refresh_diff_overlay(false, cx);
+    }
+
+    pub(crate) fn on_diff_status_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_diff_overlay(true, cx);
+    }
+
+    fn refresh_diff_overlay(&mut self, status_changed: bool, cx: &mut Context<Self>) {
         let Some(overlay) = self
             .tabs
             .get(self.tabs.active_index())
@@ -575,18 +663,24 @@ impl LyrelApp {
         else {
             return;
         };
-        // No `loading` early return here: an invalidation arriving mid-flight
-        // must reach `spawn_diff_probe` and the tracker, where it folds into
-        // the one pending follow-up refresh instead of being dropped.
+        if matches!(overlay.load, DiffLoad::Loading) {
+            // Allow a disconnected probe to restart on either wake. Only an
+            // actual status notification can queue a follow-up mid-flight.
+            if !overlay.loading
+                || (status_changed
+                    && matches!(
+                        overlay.source,
+                        DiffSource::Head | DiffSource::Worktree | DiffSource::Staged
+                    ))
+            {
+                self.spawn_diff_probe(cx);
+            }
+            return;
+        }
         let DiffLoad::Ready(snap) = &overlay.load else {
             return;
         };
         let stale = match overlay.source {
-            // A commit and a range are fixed patches. Nothing can make either
-            // of them out of date, so nothing should reprobe them.
-            DiffSource::Commit { .. } | DiffSource::Range { .. } | DiffSource::Patch { .. } => {
-                return;
-            }
             // The cached counts come from `git diff --numstat HEAD`, so only a
             // HEAD snapshot is comparable to them.
             DiffSource::Head => {
@@ -608,6 +702,9 @@ impl LyrelApp {
                     return;
                 };
                 scm_epoch(cx, overlay.host_id, &snap.root) != seen
+            }
+            DiffSource::Commit { .. } | DiffSource::Range { .. } | DiffSource::Patch { .. } => {
+                false
             }
         };
         if stale {
@@ -1109,7 +1206,13 @@ impl LyrelApp {
         let overlay = self.tabs.get_mut(active)?.diff_overlay.as_mut()?;
 
         let snap = match &overlay.load {
-            DiffLoad::Loading => return Some(DiffBody::Message(t(L10nKey::DiffReading))),
+            DiffLoad::Loading => {
+                return Some(DiffBody::Message(t(if overlay.loading {
+                    L10nKey::DiffReading
+                } else {
+                    L10nKey::DiffReadFailed
+                })));
+            }
             DiffLoad::NotARepo => return Some(DiffBody::Message(t(L10nKey::DiffNotARepo))),
             DiffLoad::Ready(snap) if empty_snapshot(snap) && snap.read_failed => {
                 return Some(DiffBody::Message(t(L10nKey::DiffReadFailed)));

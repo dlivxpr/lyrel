@@ -591,7 +591,7 @@ fn apply_to_mirror(mirror: &mut WsMirror, delta: &LayoutDelta) -> bool {
             let Some(t) = mirror.tabs.iter_mut().find(|t| t.id == tab.id) else {
                 return false;
             };
-            *t = tab.clone();
+            *t = tab.as_ref().clone();
             true
         }
         LayoutDelta::RatioChanged { tab, path, ratio } => {

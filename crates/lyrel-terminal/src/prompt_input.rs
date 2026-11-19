@@ -102,7 +102,7 @@ impl PromptInput {
     }
 
     fn key_event(&self, ks: &gpui_kit::Keystroke, held: bool) -> super::input::KeyEventType {
-        if held && self.pressed_keys.iter().any(|pressed| *pressed == ks.key) {
+        if held && self.pressed_keys.contains(&ks.key) {
             super::input::KeyEventType::Repeat
         } else {
             super::input::KeyEventType::Press
@@ -127,7 +127,7 @@ impl PromptInput {
         terminal: &RemoteTerminal,
     ) {
         terminal.write(bytes);
-        if report_release && !self.pressed_keys.iter().any(|pressed| *pressed == ks.key) {
+        if report_release && !self.pressed_keys.contains(&ks.key) {
             // Bound even malformed framework input without inventing releases.
             if self.pressed_keys.len() == 256 {
                 self.pressed_keys.swap_remove(0);
@@ -598,10 +598,11 @@ impl PromptInput {
         // prompt. So it takes the same route an unknown Ctrl chord takes:
         // hand the line over first, then send the key, with every modifier
         // combination going the same way (Alt+F7 is ClearHistory).
-        if super::input::is_function_key(key) && !m.platform {
-            if let Some((bytes, release)) = self.encode_key(ks, held, terminal) {
-                return EditorIntent::Handoff(bytes, release);
-            }
+        if super::input::is_function_key(key)
+            && !m.platform
+            && let Some((bytes, release)) = self.encode_key(ks, held, terminal)
+        {
+            return EditorIntent::Handoff(bytes, release);
         }
 
         if m.control && !m.platform && !m.alt {
@@ -715,12 +716,13 @@ impl PromptInput {
             }
             "left" => self.editor_move_h(false, m.shift, m.alt),
             "right" => {
-                if !m.shift && self.cmd.selection().is_none() {
-                    if let Some(full) = completion.ghost_suggestion(&self.cmd, history) {
-                        self.cmd.set(&full);
+                if !m.shift
+                    && self.cmd.selection().is_none()
+                    && let Some(full) = completion.ghost_suggestion(&self.cmd, history)
+                {
+                    self.cmd.set(&full);
 
-                        return EditorIntent::Redraw;
-                    }
+                    return EditorIntent::Redraw;
                 }
                 self.editor_move_h(true, m.shift, m.alt);
             }
@@ -745,12 +747,14 @@ impl PromptInput {
                 return EditorIntent::Write(bytes, release);
             }
             _ => {
-                if !m.control && !m.platform && !m.alt {
-                    if let Some(ch) = ks.key_char.as_deref() {
-                        if !ch.is_empty() && ch.chars().all(|c| c >= '\u{20}' && c != '\u{7f}') {
-                            return EditorIntent::Commit(original.key_char.as_deref().unwrap());
-                        }
-                    }
+                if !m.control
+                    && !m.platform
+                    && !m.alt
+                    && let Some(ch) = ks.key_char.as_deref()
+                    && !ch.is_empty()
+                    && ch.chars().all(|c| c >= '\u{20}' && c != '\u{7f}')
+                {
+                    return EditorIntent::Commit(original.key_char.as_deref().unwrap());
                 }
                 if m.alt && !m.control && !m.platform && key.chars().count() == 1 {
                     let (bytes, release) =

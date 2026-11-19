@@ -235,6 +235,7 @@ fn graphics_fixture_build() -> PathBuf {
     let lock_path = profile_dir.join(".lyrel-graphics-fixture-build.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .open(&lock_path)
@@ -325,6 +326,7 @@ fn graphics_fixture_stage_conpty(fixture: &Path) {
     let lock_path = target_dir.join(".lyrel-graphics-fixture-conpty.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .open(&lock_path)

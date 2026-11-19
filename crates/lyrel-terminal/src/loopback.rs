@@ -68,10 +68,9 @@ pub fn parse_loopback_url(input: &str) -> Option<LoopbackUrl> {
         (LoopbackHost::Ipv6, rest)
     } else if let Some(rest) = strip_prefix_ignore_ascii_case(rest, "localhost") {
         (LoopbackHost::Localhost, rest)
-    } else if let Some(rest) = rest.strip_prefix("127.0.0.1") {
-        (LoopbackHost::Ipv4, rest)
     } else {
-        return None;
+        let rest = rest.strip_prefix("127.0.0.1")?;
+        (LoopbackHost::Ipv4, rest)
     };
 
     let after_colon = after_host.strip_prefix(':')?;

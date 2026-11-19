@@ -20,8 +20,10 @@ fn history_limit_changed_in_alternate_screen_applies_before_following_output() {
     lyrel_ui_base::config::pin_test_config_dir();
     let (client, mut daemon) = crate::view::test_stream_pair();
     let term = RemoteTerminal::from_stream(client, TermSize::new(40, 3)).unwrap();
-    let mut config = lyrel_ui_base::config::Config::default();
-    config.scrollback_limit = 2;
+    let mut config = lyrel_ui_base::config::Config(lyrel_ui_base::config::CoreConfig {
+        scrollback_limit: 2,
+        ..Default::default()
+    });
     term.apply_user_config(&config);
     for (limit, prefix) in [(10, "GROW"), (2, "SHRINK")] {
         DaemonMsg::Output(b"\x1b[?1049h".to_vec())

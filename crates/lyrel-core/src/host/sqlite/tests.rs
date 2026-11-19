@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::sqlite::SqliteCellRead;
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -165,7 +166,17 @@ fn every_storage_class_survives_the_wire_value() {
 
     // The complete value is raw bytes in bounded chunks, not a display string.
     let chunk = service
-        .value(view, &query, 2, 3, 0, VALUE_CHUNK_BYTES, &cancel)
+        .value(
+            view,
+            &query,
+            SqliteCellRead {
+                row: 2,
+                column: 3,
+                offset: 0,
+                max_bytes: VALUE_CHUNK_BYTES,
+            },
+            &cancel,
+        )
         .unwrap();
     let SqliteValue::Text { preview, total } = chunk else {
         panic!("expected text");
@@ -173,15 +184,25 @@ fn every_storage_class_survives_the_wire_value() {
     assert_eq!(total, long.len() as u64);
     assert_eq!(preview, long.as_bytes());
     let tail = service
-        .value(view, &query, 2, 3, TEXT_PREVIEW_BYTES, 8, &cancel)
+        .value(
+            view,
+            &query,
+            SqliteCellRead {
+                row: 2,
+                column: 3,
+                offset: TEXT_PREVIEW_BYTES,
+                max_bytes: 8,
+            },
+            &cancel,
+        )
         .unwrap();
     let SqliteValue::Text { preview, .. } = tail else {
         panic!("expected text");
     };
     assert_eq!(preview.len(), 8);
-    for row in 1..=3 {
+    for (row, cells) in page.rows.iter().enumerate().skip(1).take(3) {
         assert_eq!(
-            page.rows[row][4],
+            cells[4],
             SqliteValue::Blob {
                 preview: Vec::new(),
                 total: 0
@@ -189,7 +210,17 @@ fn every_storage_class_survives_the_wire_value() {
         );
         assert_eq!(
             service
-                .value(view, &query, row as u32, 4, 0, VALUE_CHUNK_BYTES, &cancel)
+                .value(
+                    view,
+                    &query,
+                    SqliteCellRead {
+                        row: row as u32,
+                        column: 4,
+                        offset: 0,
+                        max_bytes: VALUE_CHUNK_BYTES
+                    },
+                    &cancel
+                )
                 .unwrap(),
             SqliteValue::Blob {
                 preview: Vec::new(),

@@ -27,7 +27,7 @@ fn observed_facts_prefer_the_sessions_argv_and_carry_its_status() {
         ..Default::default()
     });
 
-    let facts = observed_facts(&(&st).facts);
+    let facts = observed_facts(&st.facts);
     assert_eq!(facts.cwd.as_deref(), Some("/work/api"));
     let agent = facts.agent.expect("an agent in the foreground is a fact");
     assert_eq!(agent.agent, CLIAgent::OhMyPi);
@@ -40,7 +40,7 @@ fn observed_facts_prefer_the_sessions_argv_and_carry_its_status() {
     assert_eq!(agent.status, Some(AgentStatus::Working));
 
     st.facts.agent_session = None;
-    let facts = observed_facts(&(&st).facts);
+    let facts = observed_facts(&st.facts);
     assert_eq!(
         facts.agent.unwrap().launch_argv.as_deref(),
         Some(&["omp".to_string()][..])
@@ -77,8 +77,10 @@ fn a_pane_title_reaches_the_machine_tree() {
             Arc::new(Mutex::new(state)),
             Arc::new(AtomicBool::new(false)),
             Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(output.to_vec())),
-            null_writer(),
+            ReaderEnds {
+                reader: Box::new(std::io::Cursor::new(output.to_vec())),
+                writer: null_writer(),
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(|| None),
@@ -124,8 +126,10 @@ fn output_readiness_cannot_overtake_its_osc_facts_or_wait_for_process_probes() {
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(std::io::Cursor::new(bytes)),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(std::io::Cursor::new(bytes)),
+            writer: null_writer(),
+        },
         move || {
             entered_tx.send(()).unwrap();
             release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -221,8 +225,10 @@ fn output_readiness_does_not_wait_for_machine_subscribers() {
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(std::io::Cursor::new(bytes)),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(std::io::Cursor::new(bytes)),
+            writer: null_writer(),
+        },
         || false,
         ForegroundProbes {
             group: Box::new(|| None),

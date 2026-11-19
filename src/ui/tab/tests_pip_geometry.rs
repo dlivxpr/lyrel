@@ -329,7 +329,7 @@ fn an_incoming_geometry_update_does_not_take_over_a_local_gesture_or_focus(
             .set_pip_geometry(PipGeometry::new(0., 0., 0.7, 0.7));
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: remote,
+                tab: Box::new(remote),
                 pane: None
             },
             window,

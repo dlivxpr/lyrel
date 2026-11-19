@@ -59,7 +59,7 @@ impl NamespaceHost {
     fn with_watch(id: HostId, root: &Path, watch: bool) -> Arc<Self> {
         Arc::new(Self {
             id,
-            root: lyrel_core::core::path_spelling::local_spelling_buf(root.to_path_buf()),
+            root: lyrel_core::core::path_spelling::local_spelling_buf(root),
             local: lyrel_core::host::local::LocalHost::new(),
             watch,
             paused: Mutex::new(Vec::new()),

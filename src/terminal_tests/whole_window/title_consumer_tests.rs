@@ -126,8 +126,10 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
-        let mut config = Config::default();
-        config.cursor_blink = false;
+        let config = Config(lyrel_ui_base::config::CoreConfig {
+            cursor_blink: false,
+            ..Default::default()
+        });
         cx.set_global(config);
     });
     let daemon = GraphicsDaemonProcess::start();
@@ -395,8 +397,10 @@ fn osc8_consumer_keeps_semicolons_ids_and_the_2047_byte_boundary(cx: &mut TestAp
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
-        let mut config = Config::default();
-        config.cursor_blink = false;
+        let config = Config(lyrel_ui_base::config::CoreConfig {
+            cursor_blink: false,
+            ..Default::default()
+        });
         cx.set_global(config);
     });
     let daemon = GraphicsDaemonProcess::start();

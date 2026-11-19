@@ -386,7 +386,7 @@ pub(crate) fn elide_keep_edges(
     let longest_tail = |head_n: usize| -> usize {
         let (mut lo, mut hi) = (0usize, cells.len() - head_n);
         while lo < hi {
-            let mid = (lo + hi + 1) / 2;
+            let mid = (lo + hi).div_ceil(2);
             if shaped(head_n, mid) <= max_width {
                 lo = mid;
             } else {
@@ -466,7 +466,7 @@ pub(crate) fn elide_end_clusters(
     let cells = clusters(text);
     let (mut lo, mut hi) = (0usize, cells.len());
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         if measure_text(text_system, font, size, &cells[..mid].concat()) <= budget {
             lo = mid;
         } else {
@@ -501,7 +501,7 @@ pub(crate) fn elide_tail_clusters(
     let cells = clusters(text);
     let (mut lo, mut hi) = (0usize, cells.len());
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let s = cells[cells.len() - mid..].concat();
         if measure_text(text_system, font, size, &s) <= budget {
             lo = mid;
@@ -1389,14 +1389,11 @@ impl LyrelApp {
     pub(crate) fn tab_avatar(
         &self,
         id: impl Into<gpui_kit::ElementId>,
-        agent: Option<crate::core::cli_agent::CLIAgent>,
-        status: Option<crate::core::cli_agent::AgentStatus>,
-        unread: usize,
-        ssh: Option<u32>,
+        avatar: crate::ui::search::Avatar,
         size: f32,
         cx: &App,
     ) -> gpui_kit::AnyElement {
-        self.tab_avatar_badged(id, agent, status, unread, ssh, size, true, cx)
+        self.tab_avatar_badged(id, avatar, size, true, cx)
     }
 
     /// The avatar without the agent's status badge, for a row that says the
@@ -1414,7 +1411,18 @@ impl LyrelApp {
         size: f32,
         cx: &App,
     ) -> gpui_kit::AnyElement {
-        self.tab_avatar_badged(id, agent, status, 0, ssh, size, false, cx)
+        self.tab_avatar_badged(
+            id,
+            crate::ui::search::Avatar {
+                agent,
+                status,
+                unread: 0,
+                ssh,
+            },
+            size,
+            false,
+            cx,
+        )
     }
 
     /// A row's trailing status mark: a 5px dot in the state's colour, hollow
@@ -1471,31 +1479,15 @@ impl LyrelApp {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn tab_avatar_badged(
         &self,
         id: impl Into<gpui_kit::ElementId>,
-        agent: Option<crate::core::cli_agent::CLIAgent>,
-        status: Option<crate::core::cli_agent::AgentStatus>,
-        unread: usize,
-        ssh: Option<u32>,
+        avatar: crate::ui::search::Avatar,
         size: f32,
         badge: bool,
         cx: &App,
     ) -> gpui_kit::AnyElement {
-        avatar_disc(
-            id,
-            crate::ui::search::Avatar {
-                agent,
-                status,
-                unread,
-                ssh,
-            },
-            size,
-            self.working_dot_on,
-            badge,
-            cx,
-        )
+        avatar_disc(id, avatar, size, self.working_dot_on, badge, cx)
     }
 
     /// The mark a tab wears while one of its panes is zoomed over the others
