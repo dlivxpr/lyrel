@@ -119,7 +119,7 @@ CLI 的 `-m` 复用本地 daemon 已连接的机器路由，不自行建立新�
 
 四次样本均只重新编译根 `lyrel`。样本说明现有失效范围，不能证明分包收益或把耗时差归因于解耦。现有 `SettingsWindow` GPUI 测试无需创建 `LyrelApp`，即可验证快捷键事件、主题预览／取消／确认及内存凭据往返。独立编译仍需迁移或注入窗口 chrome、主题与快捷键目录等依赖；目前没有实测收益证明值得新增第 14 个包，因此设置留在根包，不改变 CI 选包和发行边界。
 
-根 `LICENSE` 中的 Zorite／Glim MIT 和第三方通知未改动。Windows 安装器暂存目录与 ZIP、macOS app 与 ZIP 的打包校验使用完整根 `LICENSE`，不另维护精简副本。源码传递链核对不等于实物打包验收。
+根 `LICENSE` 中的 Zorite／Glim MIT 和第三方通知未改动。Windows x64 的 0.3.5 本地打包验收比对了 ZIP 解包内容和 Inno 暂存载荷，两个 `LICENSE.txt` 均与根 `LICENSE` 字节一致。macOS app 与 ZIP 使用相同的根许可证，实际 macOS 包未验收。
 
 <a id="host-boundary"></a>
 ## Host 与线程边界
