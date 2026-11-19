@@ -13198,10 +13198,10 @@ Glim-derived EPUB reader source import
 =====================================
 
 适用组件：`crates/lyrel-document` 的 `epub` 模块的 EPUB 容器、章节净化与阅读状态，以及
-`src/ui/code_editor/book_document.rs`／`book_view.rs` 的适用阅读交互。
+`crates/lyrel-workbench-editor/src/code_editor/book_document.rs`／`book_view.rs` 的适用阅读交互。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b。
 逐文件原始摘要、保留／适配／补齐／排除记录见 `crates/lyrel-document/UPSTREAM-epub.toml`
-与 `src/ui/code_editor/book_view/UPSTREAM.toml`。
+与 `crates/lyrel-workbench-editor/src/code_editor/book_view/UPSTREAM.toml`。
 许可：MIT；本附录前述 Glim MIT 全文与 `Copyright (c) 2026 Glim contributors`
 同样适用于本节列出的导入。原始许可副本另保留在
 `crates/lyrel-document/licenses/glim-MIT.txt`；不改变 Lyrel 原有 Apache-2.0 代码的许可。
@@ -13209,14 +13209,14 @@ Glim-derived EPUB reader source import
 Glim-derived SVG intrinsic dimensions
 ====================================
 
-适用组件：`src/ui/code_editor/markdown/images.rs` 中独立 SVG 文档的默认视口与绝对单位换算。
+适用组件：`crates/lyrel-workbench-editor/src/code_editor/markdown/images.rs` 中独立 SVG 文档的默认视口与绝对单位换算。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b，`crates/glim-services/src/svg_preview.rs`。
-Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、本地适配与未导入部分见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。
+Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、本地适配与未导入部分见 `crates/lyrel-workbench-editor/src/code_editor/svg_document/UPSTREAM.toml`。
 
 Glim-derived JSON structure inspection
 ======================================
 
-适用组件：`src/ui/code_editor/json_document.rs`、`crates/lyrel-document/src/json/projection.rs` 和 `crates/lyrel-document/src/tree.rs` 中适配的 JSONC 词法边界、结构树展开／选择／完整值交互。
+适用组件：`crates/lyrel-workbench-editor/src/code_editor/json_document.rs`、`crates/lyrel-document/src/json/projection.rs` 和 `crates/lyrel-document/src/tree.rs` 中适配的 JSONC 词法边界、结构树展开／选择／完整值交互。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b，`crates/glim-services/src/json.rs`、`crates/glim-core/src/structured.rs`、`crates/glim-app/src/views/reader/json.rs` 与 `json/view.rs`。
 Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文。上游 Value 树、lossy 数字／字符串、NDJSON 数组投影与整篇格式化均未被复制；逐文件摘要、保留与替换理由见 `crates/lyrel-document/src/json/UPSTREAM.toml`。
 
@@ -13277,7 +13277,7 @@ SOFTWARE.
 Glim-derived CSV / TSV reader
 ============================
 
-适用组件：`src/ui/code_editor/csv_document.rs` 与 `crates/lyrel-document/src/csv/table.rs`。
+适用组件：`crates/lyrel-workbench-editor/src/code_editor/csv_document.rs` 与 `crates/lyrel-document/src/csv/table.rs`。
 来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b 的 CSV reader、table 数据形状与 reader 交互。
 Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、保留行为与本地适配见 `crates/lyrel-document/src/csv/UPSTREAM.toml`。
 

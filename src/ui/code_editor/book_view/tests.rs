@@ -7,6 +7,8 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
+use lyrel_document::epub::ReaderTheme;
+use lyrel_workbench_editor::code_editor::book_document::BookState;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

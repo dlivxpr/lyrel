@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use lyrel_markdown_editor::EditorState as MarkdownEditor;
+use lyrel_workbench_editor::code_editor::markdown::EditorState as MarkdownEditor;
 
 use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::component::input::{EditorState, InputState, TextareaState};

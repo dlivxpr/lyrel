@@ -49,21 +49,21 @@ src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 
 # The editor's record of which files each tab had open is app state under the
 # local config dir, like the themes above — not a file in any workspace.
-src/ui/editor_session.rs|std::fs::read
+crates/lyrel-workbench-editor/src/editor_session.rs|std::fs::read
 
 # EPUB 章节与全书索引只打开 host.open_read 已复制出的 NamedTempFile；
 # 阅读记录只在本机 config_path("reader-state") 下，Host/path 仅用于记录键。
 # 保留逐调用模式，不能豁免此模块对未来工作区路径的其它本机操作。
-src/ui/code_editor/book_document.rs|std::fs::File::open(&temp)
-src/ui/code_editor/book_document.rs|std::fs::File::open(&path)
-src/ui/code_editor/book_document.rs|std::fs::read(path)
-src/ui/code_editor/book_document.rs|std::fs::create_dir_all(parent)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::File::open(&temp)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::File::open(&path)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::read(path)
+crates/lyrel-workbench-editor/src/code_editor/book_document.rs|std::fs::create_dir_all(parent)
 
 # draw.io 的 WebView2 profile 只由 private_data_dir() 在本机 temp_dir() 下
 # 用 128-bit 随机名称创建；Host::start 不接收工作区路径，Drop 仅清理该 profile。
 # 仅放行已核对的两个调用，不豁免模块中的其它文件系统操作。
-src/ui/code_editor/drawio_engine/surface.rs|std::fs::create_dir_all(&path)
-src/ui/code_editor/drawio_engine/surface.rs|std::fs::remove_dir_all(&self.data_dir)
+crates/lyrel-workbench-editor/src/code_editor/drawio_engine/surface.rs|std::fs::create_dir_all(&path)
+crates/lyrel-workbench-editor/src/code_editor/drawio_engine/surface.rs|std::fs::remove_dir_all(&self.data_dir)
 
 # 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
 # Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
@@ -141,7 +141,7 @@ crates/lyrel-terminal/src/test_support.rs|std::fs::read_to_string
 # Asking whether a file would be *launched* rather than shown before handing it
 # to the desktop opener. Only reachable behind `host_id.is_local()` — a path on
 # another machine takes the earlier arm and never gets here.
-src/ui/code_editor.rs|std::fs::metadata
+crates/lyrel-workbench-editor/src/code_editor.rs|std::fs::metadata
 
 # The source side of a file drop. What the desktop hands over is by
 # construction a path on the desktop's own machine, so reading it is a local
@@ -157,11 +157,11 @@ src/ui/file_copy.rs|std::fs::
 # looks for project markers above a file (`Cargo.toml`, `package.json`, …),
 # and checks a server binary is executable. A remote workspace gets language
 # servers by running them over there, not by routing these reads.
-src/ui/lsp/editor.rs|std::fs::read_to_string
-src/ui/lsp/locations.rs|std::fs::read_to_string
-src/ui/lsp/mod.rs|std::fs::read_to_string
-src/ui/lsp/servers.rs|std::fs::metadata
-src/ui/lsp/servers.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/editor.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/locations.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/mod.rs|std::fs::read_to_string
+crates/lyrel-workbench-editor/src/lsp/servers.rs|std::fs::metadata
+crates/lyrel-workbench-editor/src/lsp/servers.rs|std::fs::read_to_string
 # LSP fixtures are excluded through their actual cfg(test) module declaration.
 EOF
 )

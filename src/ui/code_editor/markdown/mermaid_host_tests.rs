@@ -1,10 +1,13 @@
 //! 原生字体消费者：生产 workbench 的 Mermaid 输入、派生图形、history 与 Host 保存。
-use super::super::super::*;
-use super::super::test_support::{active_editor_input, with_active_file};
+use super::super::*;
+use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_markdown_editor::MermaidPresentation;
+use lyrel_workbench_editor::code_editor::markdown::mermaid_host::completion_gate::{
+    COMPLETION_GATE, CompletionGate,
+};
 use std::time::{Duration, Instant};
 
 fn settle(context: &mut VisualTestContext) {
@@ -87,7 +90,7 @@ fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
 }
 
 pub(super) fn lifecycle(cx: &mut TestAppContext) {
-    use super::super::super::test_host::{FileHost, canonical_tempdir};
+    use crate::ui::code_editor::test_host::{FileHost, canonical_tempdir};
     let remote = canonical_tempdir();
     let path = remote.path().join("diagram.md");
     let original = "\u{feff}# Diagram\r\n\n```mermaid\r\nflowchart TD\nA[Start] --> B[Done]\r\n```\n\n# Next\nKEEP  \r\n";
@@ -275,13 +278,6 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
 }
 
-struct CompletionGate {
-    source: String,
-    arrived: smol::channel::Sender<()>,
-    release: smol::channel::Receiver<()>,
-    returned: smol::channel::Sender<()>,
-}
-static COMPLETION_GATE: std::sync::Mutex<Option<CompletionGate>> = std::sync::Mutex::new(None);
 struct Delayed {
     arrived: smol::channel::Receiver<()>,
     release: smol::channel::Sender<()>,
@@ -321,28 +317,9 @@ impl Drop for Delayed {
         *COMPLETION_GATE.lock().unwrap() = None;
     }
 }
-// The real native result is held only after rendering; no output is replaced.
-pub(super) fn hold_completion(key: &super::Key) {
-    let gate = {
-        let mut gate = COMPLETION_GATE.lock().unwrap();
-        if gate
-            .as_ref()
-            .is_some_and(|gate| key.source.contains(&gate.source))
-        {
-            gate.take()
-        } else {
-            None
-        }
-    };
-    if let Some(gate) = gate {
-        let _ = gate.arrived.send_blocking(());
-        let _ = gate.release.recv_blocking();
-        let _ = gate.returned.send_blocking(());
-    }
-}
 
 pub(super) fn stale_completion(cx: &mut TestAppContext) {
-    use super::super::super::test_host::canonical_tempdir;
+    use crate::ui::code_editor::test_host::canonical_tempdir;
     let root = canonical_tempdir();
     let path = root.path().join("stale.md");
     let other = root.path().join("other.md");
@@ -435,7 +412,7 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
 }
 
 pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
-    use super::super::super::test_host::canonical_tempdir;
+    use crate::ui::code_editor::test_host::canonical_tempdir;
     let root = canonical_tempdir();
     let path = root.path().join("geometry.md");
     let original = format!(

@@ -11,9 +11,10 @@ use super::super::*;
 use super::*;
 use crate::core::actions::CloseActiveTab;
 use crate::ui::app::test_window::harness_with_tabs;
-use crate::ui::code_editor::drawio_engine::surface::SurfaceEvent;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
+use lyrel_workbench_editor::code_editor::drawio_engine::bridge::Command;
+use lyrel_workbench_editor::code_editor::drawio_engine::surface::SurfaceEvent;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -539,8 +540,8 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
         let document = view_of(file).read(cx).document().read(cx);
         assert_eq!(document.edit_revision(), 1, "the commit landed");
         assert_eq!(
-            document.fingerprint(),
-            super::fingerprint(&committed),
+            document.bytes().as_deref(),
+            Some(committed.as_ref()),
             "the committed bytes are the document"
         );
         assert!(file.dirty, "a committed edit is unsaved work");
@@ -1315,7 +1316,10 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
             .buffers
             .get(id)
             .expect("still installed");
-        assert!(file.drawio_flush.is_none(), "the refusal settles the save");
+        assert!(
+            !file.is_waiting_for_drawio_save(),
+            "the refusal settles the save"
+        );
         assert!(file.dirty, "the refused model is still unsaved");
     });
     assert_eq!(
@@ -1425,7 +1429,7 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
                 .read(cx)
                 .buffers
                 .get(id)
-                .is_some_and(|file| file.dirty && file.drawio_flush.is_none())
+                .is_some_and(|file| file.dirty && !file.is_waiting_for_drawio_save())
         });
         if expired {
             break;
@@ -1451,7 +1455,7 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
             .expect("still installed");
         assert!(file.dirty, "the engine's model is still unsaved");
         assert!(
-            file.drawio_flush.is_none(),
+            !file.is_waiting_for_drawio_save(),
             "the failed flush is cleared for a retry"
         );
     });

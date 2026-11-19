@@ -52,13 +52,13 @@ impl DocumentChrome {
 /// Document header cells share the editor file strip's dimensions, so the
 /// terminal button looks the same beside file tabs and a diff's subject.
 /// Height of a header cell — a file, the `+N` button, the terminal pill.
-pub(crate) const HEADER_CELL_H: f32 = 28.;
-/// Their corner.
-pub(crate) const HEADER_CELL_RADIUS: f32 = 7.;
+pub(crate) use lyrel_ui_base::document_column::HEADER_CELL_H;
 /// The widest a name may make its cell before it is elided.
-pub(crate) const HEADER_CELL_MAX_W: f32 = 168.;
+pub(crate) use lyrel_ui_base::document_column::HEADER_CELL_MAX_W;
+/// Their corner.
+pub(crate) use lyrel_ui_base::document_column::HEADER_CELL_RADIUS;
 /// Header text: a half step under the body size, like the rail's rows.
-pub(crate) const HEADER_CELL_TEXT: f32 = 12.5 / 16.;
+pub(crate) use lyrel_ui_base::document_column::HEADER_CELL_TEXT;
 
 /// The two-cell icon switch a document header carries.
 ///

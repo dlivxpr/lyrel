@@ -3,6 +3,7 @@ pub mod app;
 pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
+#[cfg(any(test, feature = "native-markdown-tests"))]
 pub mod code_editor;
 pub mod desktop_file;
 pub mod desktop_lookups;
@@ -27,7 +28,6 @@ pub mod i18n;
 pub(crate) mod ime;
 pub mod keymap;
 pub mod local_link;
-pub mod lsp;
 pub mod machine_mirror;
 pub(crate) mod motion;
 #[cfg(test)]
@@ -92,13 +92,8 @@ pub mod worktree_prompt;
 ///
 /// gpui renders answer 0 rightmost, so the action goes first — `Ok(0)` is
 /// "they meant it" and everything else, including a dropped channel, is "leave
-/// it alone".
-pub(crate) fn confirm_answers(action: &str, keep: &str) -> [gpui_kit::PromptButton; 2] {
-    [
-        gpui_kit::PromptButton::ok(action),
-        gpui_kit::PromptButton::cancel(keep),
-    ]
-}
+/// it alone". The implementation lives in `lyrel-ui-base`.
+pub(crate) use lyrel_ui_base::dialog::confirm_answers;
 
 #[cfg(test)]
 mod tests {

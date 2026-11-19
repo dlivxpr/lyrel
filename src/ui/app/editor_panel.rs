@@ -14,15 +14,15 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use super::*;
-use crate::ui::code_editor::commands::{self, Command};
-use crate::ui::code_editor::problems::{Severity, collect, headline};
-use crate::ui::code_editor::{
+use crate::ui::host_ops::SharedHost;
+use gpui_kit::component::input::Position;
+use lyrel_workbench_editor::code_editor::commands::{self, Command};
+use lyrel_workbench_editor::code_editor::problems::{Severity, collect, headline};
+use lyrel_workbench_editor::code_editor::{
     AfterUnsaved, BarKind, BufferId, BufferKind, EditorPanelEvent, EditorPanelState,
     EditorStatusCommand, TabCode,
 };
-use crate::ui::host_ops::SharedHost;
-use crate::ui::lsp::LspStore;
-use gpui_kit::component::input::Position;
+use lyrel_workbench_editor::lsp::LspStore;
 
 /// The pane's height: a handful of rows, leaving the editor the rest.
 const PANE_HEIGHT: f32 = 180.;
@@ -105,10 +105,13 @@ impl LyrelApp {
         self.editor.read(cx).active_location(code)
     }
 
+    /// The front file when it is a saved local one — the question whole-window
+    /// tests ask; production readers go through the editor entity directly.
+    #[cfg(test)]
     pub(crate) fn editor_active_local_file(
         &self,
         cx: &gpui_kit::App,
-    ) -> Option<crate::ui::code_editor::LocalFile> {
+    ) -> Option<lyrel_workbench_editor::code_editor::LocalFile> {
         let code = self.tab_code()?;
         self.editor.read(cx).active_local_file(code)
     }
@@ -135,7 +138,8 @@ impl LyrelApp {
         self.editor.update(cx, |editor, cx| {
             editor.rebuild_watch(host, cx);
         });
-        self.lsp_sync_buffers(cx);
+        self.editor
+            .update(cx, |editor, cx| editor.lsp_sync_buffers(cx));
     }
 
     // ---- Opening ----
@@ -280,7 +284,7 @@ impl LyrelApp {
     pub(super) fn editor_show_open_target(
         &mut self,
         tab: TabId,
-        group: Option<crate::ui::code_editor::GroupId>,
+        group: Option<lyrel_workbench_editor::code_editor::GroupId>,
         id: BufferId,
         front: bool,
         window: &mut Window,
@@ -593,7 +597,7 @@ impl LyrelApp {
                     return;
                 }
                 this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToUppercase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToUppercase,
                     window,
                     cx,
                 );
@@ -606,7 +610,7 @@ impl LyrelApp {
                     return;
                 }
                 this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToLowercase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToLowercase,
                     window,
                     cx,
                 );
@@ -619,7 +623,7 @@ impl LyrelApp {
                     return;
                 }
                 this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToTitleCase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToTitleCase,
                     window,
                     cx,
                 );
@@ -634,7 +638,7 @@ impl LyrelApp {
                 // This handler already owns LyrelApp. Redispatching to its own
                 // command listener would try to update the same entity again.
                 this.editor_apply_command(
-                    crate::ui::code_editor::commands::Command::Trim,
+                    lyrel_workbench_editor::code_editor::commands::Command::Trim,
                     window,
                     cx,
                 );
@@ -645,7 +649,11 @@ impl LyrelApp {
                 cx.propagate();
                 return;
             }
-            this.editor_dispatch(&crate::ui::code_editor::commands::JoinLines, window, cx);
+            this.editor_dispatch(
+                &lyrel_workbench_editor::code_editor::commands::JoinLines,
+                window,
+                cx,
+            );
         }))
         .on_action(
             cx.listener(|this, _: &EditorRemoveSurroundingBrackets, window, cx| {
@@ -654,7 +662,7 @@ impl LyrelApp {
                     return;
                 }
                 this.editor_dispatch(
-                    &crate::ui::code_editor::commands::RemoveSurroundingBrackets,
+                    &lyrel_workbench_editor::code_editor::commands::RemoveSurroundingBrackets,
                     window,
                     cx,
                 );
@@ -727,7 +735,7 @@ impl LyrelApp {
     pub(crate) fn active_editor_input(
         &self,
         cx: &App,
-    ) -> Option<crate::ui::code_editor::EditorInput> {
+    ) -> Option<lyrel_workbench_editor::code_editor::EditorInput> {
         let tab = self.tabs.get(self.tabs.active_index())?.id();
         self.editor
             .read(cx)
@@ -796,6 +804,45 @@ impl LyrelApp {
         let root = self.editor_save_root();
         self.editor
             .update(cx, |editor, cx| editor.save_as(id, &root, window, cx));
+    }
+
+    // ---- Language servers: shell delegates ----
+    //
+    // The orchestration lives on `EditorPanelState` (`ui::lsp`); these thin
+    // delegates resolve the active tab's `TabCode` the panel methods take and
+    // keep the keymap's action handlers shell-side.
+
+    pub(crate) fn lsp_go_to_definition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = self.tab_code() else { return };
+        self.editor.update(cx, |editor, cx| {
+            editor.lsp_go_to_definition(&code, window, cx)
+        });
+    }
+
+    pub(crate) fn lsp_find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = self.tab_code() else { return };
+        self.editor.update(cx, |editor, cx| {
+            editor.lsp_find_references(&code, window, cx)
+        });
+    }
+
+    pub(crate) fn lsp_format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = self.tab_code() else { return };
+        self.editor.update(cx, |editor, cx| {
+            editor.lsp_format_document(&code, window, cx)
+        });
+    }
+
+    pub(crate) fn lsp_rename_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = self.tab_code() else { return };
+        self.editor
+            .update(cx, |editor, cx| editor.lsp_rename_start(&code, window, cx));
+    }
+
+    pub(crate) fn lsp_code_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = self.tab_code() else { return };
+        self.editor
+            .update(cx, |editor, cx| editor.lsp_code_actions(&code, window, cx));
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1260,7 +1307,7 @@ impl LyrelApp {
                 .read(cx)
                 .buffers()
                 .get(id)
-                .map(crate::ui::code_editor::OpenFile::label)
+                .map(lyrel_workbench_editor::code_editor::OpenFile::label)
                 .unwrap_or_default();
             self.editor_show_in_tab(tab, id, false, window, cx);
             window.notify_app(t_fmt(L10nKey::EditorOrphanAdopted, &[("name", &name)]), cx);
@@ -1409,21 +1456,25 @@ impl LyrelApp {
     ) {
         match event {
             EditorPanelEvent::BufferEdited { id } => {
-                self.lsp_buffer_edited(*id, cx);
+                self.editor
+                    .update(cx, |editor, cx| editor.lsp_buffer_edited(*id, cx));
             }
             EditorPanelEvent::BufferSaved {
                 id,
                 host,
                 directory,
             } => {
-                self.lsp_buffer_saved(*id, cx);
+                self.editor
+                    .update(cx, |editor, cx| editor.lsp_buffer_saved(*id, cx));
                 if let Some(directory) = directory {
                     self.scm_invalidate_cwd(*host, directory, cx);
                 }
             }
             EditorPanelEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
             EditorPanelEvent::RenameRequested { id, offset, name } => {
-                self.lsp_rename(*id, *offset, name.clone(), window, cx);
+                self.editor.update(cx, |editor, cx| {
+                    editor.lsp_rename(*id, *offset, name.clone(), window, cx)
+                });
             }
             EditorPanelEvent::Continue(intent) => self.editor_continue(intent.clone(), window, cx),
             EditorPanelEvent::BuffersDiscarded { ids } => {
@@ -1579,6 +1630,39 @@ impl LyrelApp {
             EditorPanelEvent::GoToLineRequested { id, line, column } => {
                 self.editor_go_to_line_landed(*id, *line, *column, window, cx);
             }
+            EditorPanelEvent::OpenLocationAt { path, line, column } => {
+                self.open_file_in_editor_at(path, Some(*line), Some(*column), window, cx);
+            }
+            EditorPanelEvent::ShowLocations {
+                heading,
+                root,
+                locations,
+            } => {
+                let items = locations
+                    .iter()
+                    .map(|found| super::editor_navigation::location_item(found, root))
+                    .collect();
+                self.open_search(crate::ui::search::SearchTab::Locations, "", window, cx);
+                self.editor_begin_preview(cx);
+                if let Some(view) = self.search.view() {
+                    view.update(cx, |view, cx| {
+                        view.set_locations(Some(crate::ui::i18n::t(*heading)), items, window, cx)
+                    });
+                }
+            }
+            EditorPanelEvent::ShowWorkspaceSymbols { root, hits } => {
+                if let Some(view) = self.search.view()
+                    && view.read(cx).tab() == crate::ui::search::SearchTab::Symbols
+                {
+                    let items = hits
+                        .iter()
+                        .map(|(found, symbol)| {
+                            super::editor_navigation::symbol_hit_item(found, symbol, root)
+                        })
+                        .collect();
+                    view.update(cx, |view, cx| view.set_project_symbols(items, window, cx));
+                }
+            }
             EditorPanelEvent::RebuildWatcher => self.editor_rebuild_watcher(cx),
         }
     }
@@ -1612,13 +1696,13 @@ impl LyrelApp {
         };
         let text = input.text().expect("checked text input");
         let lines = text.read(cx).text().lines_len().max(1) as u32;
-        crate::ui::code_editor::place_cursor(
+        lyrel_workbench_editor::code_editor::place_cursor(
             input,
             Position {
                 line: line.min(lines) - 1,
                 character: column - 1,
             },
-            crate::ui::code_editor::CURSOR_SCROLL_ATTEMPTS,
+            lyrel_workbench_editor::code_editor::CURSOR_SCROLL_ATTEMPTS,
             window,
             cx,
         );
@@ -1643,7 +1727,7 @@ impl LyrelApp {
     ) {
         if !host_id.is_local()
             || !self.can_spawn_locally(cx)
-            || crate::ui::code_editor::is_program(path)
+            || lyrel_workbench_editor::code_editor::is_program(path)
         {
             window.notify_app(
                 t_fmt(

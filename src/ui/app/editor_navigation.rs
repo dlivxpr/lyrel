@@ -15,16 +15,17 @@ use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Anchor, AnyElement, FontWeight, SharedString, anchored, deferred, div, px, rems};
 
 use super::*;
-use crate::ui::code_editor::outline::{self, SymbolKind};
-use crate::ui::code_editor::{
-    BreadcrumbFacts, BufferId, CURSOR_SCROLL_ATTEMPTS, NavOpen, PICKER_LIST_MAX_H, PICKER_ROW_H,
-    PICKER_W, TabCode, path_segments, place_cursor, symbol_command, symbol_rows,
-};
 use crate::ui::document_column::{
     DocumentChrome, HEADER_CELL_H as CELL_H, HEADER_CELL_RADIUS as CELL_RADIUS,
     HEADER_CELL_TEXT as CELL_TEXT,
 };
 use crate::ui::search::{CommandKind, Item, SearchTab};
+use lyrel_workbench_editor::code_editor::outline::{self, SymbolKind};
+use lyrel_workbench_editor::code_editor::{
+    BreadcrumbFacts, BufferId, CURSOR_SCROLL_ATTEMPTS, NavOpen, PICKER_LIST_MAX_H, PICKER_ROW_H,
+    PICKER_W, TabCode, path_segments, place_cursor,
+};
+use lyrel_workbench_editor::lsp::{Found, WorkspaceHit};
 
 impl LyrelApp {
     // ---- The active tab, and the code it shows ----
@@ -996,5 +997,231 @@ impl LyrelApp {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// The search command a symbol row runs: to the symbol's source position.
+pub(crate) fn symbol_command(symbol: &outline::Symbol) -> CommandKind {
+    CommandKind::GoToSymbol {
+        line: symbol.selection.line,
+        column: symbol.selection.character,
+    }
+}
+
+/// The symbol picker's rows, in document order, each with how deep it sits.
+pub(crate) fn symbol_rows(outline: &outline::Outline) -> Vec<(usize, Item)> {
+    outline
+        .symbols
+        .iter()
+        .enumerate()
+        .map(|(ix, s)| {
+            let mut item = Item::new(s.name.clone(), symbol_command(s)).with_note(s.kind.tag());
+            let path = outline.container_path(ix);
+            if !path.is_empty() {
+                item = item.with_subtitle(path.join(" › "));
+            }
+            (s.depth, item)
+        })
+        .collect()
+}
+
+/// A search row for `found`, its path shown relative to `root`.
+pub(crate) fn location_item(found: &Found, root: &std::path::Path) -> Item {
+    let shown = found.path.strip_prefix(root).unwrap_or(&found.path);
+    Item::new(
+        format!("{}:{}", shown.display(), found.line + 1),
+        CommandKind::GoToLocation {
+            path: found.path.clone(),
+            line: found.line,
+            column: found.column,
+        },
+    )
+    .with_subtitle(found.text.clone())
+    .with_alias(found.path.display().to_string())
+}
+
+/// A search row for a project symbol, named by where it lives.
+pub(crate) fn symbol_hit_item(
+    found: &Found,
+    symbol: &WorkspaceHit,
+    root: &std::path::Path,
+) -> Item {
+    let kind = serde_json::to_value(symbol.kind)
+        .ok()
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let shown = found.path.strip_prefix(root).unwrap_or(&found.path);
+    let place = format!("{}:{}", shown.display(), found.line + 1);
+    let subtitle = match symbol.container.as_deref().filter(|c| !c.is_empty()) {
+        Some(container) => format!("{container} · {place}"),
+        None => place,
+    };
+    Item::new(
+        symbol.name.clone(),
+        CommandKind::GoToLocation {
+            path: found.path.clone(),
+            line: found.line,
+            column: found.column,
+        },
+    )
+    .with_subtitle(subtitle)
+    .with_note(
+        lyrel_workbench_editor::code_editor::outline::SymbolKind::from_lsp(kind as u32).tag(),
+    )
+}
+
+impl LyrelApp {
+    /// What the Symbols tab asks as its query changes: the front file's
+    /// language server, for symbols anywhere in the project. `None` when
+    /// there is no such server, and the tab lists the file's own alone.
+    pub(crate) fn lsp_project_symbol_query(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::ui::search::LiveQuery> {
+        let code = self.tab_code()?;
+        if !self.editor.update(cx, |editor, cx| {
+            editor.lsp_project_symbols_available(&code, cx)
+        }) {
+            return None;
+        }
+        let editor = self.editor.downgrade();
+        let handle = window.window_handle();
+        let (path, requester) = self
+            .editor
+            .read(cx)
+            .active_local_file(&code)
+            .map(|f| (f.path().to_path_buf(), f.id()))?;
+        Some(std::rc::Rc::new(
+            move |query: &str, cx: &mut gpui_kit::App| {
+                let (editor, path, query) = (editor.clone(), path.clone(), query.to_owned());
+                // Deferred: the query arrives from inside the search's own
+                // update, and answering it updates the search.
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let _ = editor.update(cx, |editor, cx| {
+                            editor.lsp_workspace_query(&path, requester, query, window, cx)
+                        });
+                    });
+                });
+            },
+        ))
+    }
+
+    /// The Locations list moved onto a place: shown at once when it is in
+    /// the file in front, where the preview runs.
+    pub(crate) fn lsp_preview_location(
+        &mut self,
+        path: &std::path::Path,
+        line: u32,
+        column: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let in_front = self
+            .editor_preview_buffer(cx)
+            .and_then(|id| self.editor.read(cx).local_file(id))
+            .is_some_and(|f| f.path() == path);
+        if in_front {
+            self.editor_symbol_preview(line, column, cx);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::component::Rope;
+    use lsp_types::Position;
+
+    #[test]
+    fn symbol_rows_carry_their_containers_and_the_breadcrumb_chain_names_them() {
+        let src = "impl LyrelApp {\n    fn open_file(&self) {\n        let x = 1;\n    }\n}\n";
+        let outline = outline::outline_of_text("rust", &Rope::from(src));
+        let rows = symbol_rows(&outline);
+        let shown: Vec<_> = rows
+            .iter()
+            .map(|(d, i)| {
+                (
+                    *d,
+                    i.title.as_str(),
+                    i.subtitle.as_deref(),
+                    i.note.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (0, "impl LyrelApp", None, Some("impl")),
+                (1, "open_file", Some("impl LyrelApp"), Some("method")),
+            ]
+        );
+        assert_eq!(
+            rows[1].1.kind,
+            CommandKind::GoToSymbol { line: 1, column: 7 }
+        );
+        let chain: Vec<_> = outline
+            .chain_at(Position::new(2, 8))
+            .into_iter()
+            .map(|i| {
+                format!(
+                    "{} {}",
+                    outline.symbols[i].kind.tag(),
+                    outline.symbols[i].name
+                )
+            })
+            .collect();
+        assert_eq!(chain, ["impl impl LyrelApp", "method open_file"]);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn workspace_symbols_become_rows_naming_where_they_live() {
+        use lyrel_workbench_editor::lsp::locations::workspace_symbols;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let uri =
+            lyrel_workbench_editor::lsp::path_to_uri(&root.join("src").join("net.rs")).unwrap();
+        let hits = workspace_symbols(lsp_types::WorkspaceSymbolResponse::Flat(vec![
+            lsp_types::SymbolInformation {
+                name: "Server".into(),
+                kind: lsp_types::SymbolKind::STRUCT,
+                tags: None,
+                deprecated: None,
+                location: lsp_types::Location::new(
+                    uri,
+                    lsp_types::Range::new(Position::new(3, 11), Position::new(3, 17)),
+                ),
+                container_name: Some("net".into()),
+            },
+        ]));
+        assert_eq!(hits.len(), 1);
+        let found = Found {
+            path: hits[0].path.clone(),
+            line: 3,
+            column: 11,
+            text: String::new(),
+        };
+        let row = symbol_hit_item(&found, &hits[0], root);
+        assert_eq!(row.title, "Server");
+        let rel = std::path::Path::new("src").join("net.rs");
+        assert_eq!(
+            row.subtitle.as_deref(),
+            Some(format!("net · {}:4", rel.display()).as_str())
+        );
+        assert_eq!(row.note.as_deref(), Some("struct"));
+    }
+
+    #[test]
+    fn a_row_names_its_file_relative_to_the_project() {
+        let found = Found {
+            path: std::path::PathBuf::from("/p/src/lib.rs"),
+            line: 4,
+            column: 2,
+            text: "x".into(),
+        };
+        let row = location_item(&found, std::path::Path::new("/p"));
+        assert_eq!(row.title, "src/lib.rs:5");
+        assert_eq!(row.subtitle.as_deref(), Some("x"));
     }
 }

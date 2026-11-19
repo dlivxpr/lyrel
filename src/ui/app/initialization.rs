@@ -181,7 +181,8 @@ impl LyrelApp {
         };
         let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
-        let editor = cx.new(|cx| crate::ui::code_editor::EditorPanelState::new(window, cx));
+        let editor =
+            cx.new(|cx| lyrel_workbench_editor::code_editor::EditorPanelState::new(window, cx));
         let editor_events = Self::watch_editor_panel(&editor, window, cx);
         let editor_observer = cx.observe(&editor, |_, _, cx| cx.notify());
         let loopback_panel = Forwarding::new(window, cx);
@@ -441,8 +442,10 @@ impl LyrelApp {
         // Backstop for every other way a window goes away (a workspace
         // closed from elsewhere): its language-server documents go with it.
         let app_id = cx.entity_id();
-        cx.on_release(move |_, cx| crate::ui::lsp::LspStore::sync_window(app_id, Vec::new(), cx))
-            .detach();
+        cx.on_release(move |_, cx| {
+            lyrel_workbench_editor::lsp::LspStore::sync_window(app_id, Vec::new(), cx)
+        })
+        .detach();
         cx.on_release(move |_, cx| {
             if cx.has_global::<crate::ui::scm::data::ScmData>() {
                 cx.global_mut::<crate::ui::scm::data::ScmData>()
@@ -514,7 +517,7 @@ impl LyrelApp {
                 let unsaved = app.editor_unsaved(cx);
                 app.editor_guard_unsaved(
                     unsaved,
-                    crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
+                    lyrel_workbench_editor::code_editor::saving::AfterUnsaved::CloseWindow,
                     window,
                     cx,
                 )
@@ -524,7 +527,8 @@ impl LyrelApp {
             }
             app.update(cx, |app, cx| {
                 app.prepare_window_close(cx);
-                app.lsp_window_closed(cx);
+                app.editor
+                    .update(cx, |editor, cx| editor.lsp_window_closed(cx));
             });
             true
         });

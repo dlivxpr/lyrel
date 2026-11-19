@@ -1,5 +1,6 @@
 use super::super::super::test_host::{FileHost, canonical_tempdir};
 use super::*;
+use lyrel_document::text::{EditorConfig, TextFormat};
 use std::sync::atomic::Ordering;
 
 #[gpui_kit::test]

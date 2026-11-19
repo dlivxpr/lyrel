@@ -6,12 +6,18 @@
 //! 真实桌面、SSH、系统 IME 与性能仍由单独验收覆盖。
 
 use super::super::test_host::FileHost;
-use super::super::*;
-use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_document::pdf::fixtures;
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_workbench_editor::code_editor::BufferId;
+use lyrel_workbench_editor::code_editor::pdf_document::work_gate::{Work, pause_work};
+use lyrel_workbench_editor::code_editor::pdf_document::{
+    PdfActualSize, PdfContent, PdfCopy, PdfFitPage, PdfNextPage, PdfView, PdfZoomIn,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -821,71 +827,6 @@ fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext)
         12
     );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Work {
-    FirstPage,
-    Unlock,
-    /// 全文扫掠的后台解释阶段；`block` 在进入后台任务后等待，`finish`
-    /// 在收集完（或取消返回）时置位。
-    Search,
-}
-
-pub(super) struct WorkGate {
-    receiver: smol::channel::Receiver<()>,
-    entered: Arc<std::sync::atomic::AtomicBool>,
-    finished: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl WorkGate {
-    pub(super) async fn block(&self) {
-        self.entered
-            .store(true, std::sync::atomic::Ordering::Release);
-        self.receiver.recv().await.expect("release owned PDF work");
-    }
-
-    pub(super) fn finish(self) {
-        self.finished
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
-thread_local! {
-    static WORK_GATE: std::cell::RefCell<Option<(Work, WorkGate)>> = const { std::cell::RefCell::new(None) };
-}
-
-fn pause_work(
-    work: Work,
-) -> (
-    smol::channel::Sender<()>,
-    Arc<std::sync::atomic::AtomicBool>,
-    Arc<std::sync::atomic::AtomicBool>,
-) {
-    let (sender, receiver) = smol::channel::bounded(1);
-    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    WORK_GATE.with_borrow_mut(|slot| {
-        *slot = Some((
-            work,
-            WorkGate {
-                receiver,
-                entered: entered.clone(),
-                finished: finished.clone(),
-            },
-        ))
-    });
-    (sender, entered, finished)
-}
-
-pub(super) fn take_work(work: Work) -> Option<WorkGate> {
-    WORK_GATE.with_borrow_mut(|slot| {
-        if slot.as_ref().is_some_and(|(pending, _)| *pending == work) {
-            slot.take().map(|(_, gate)| gate)
-        } else {
-            None
-        }
-    })
 }
 
 // #285：大纲/链接跳转、选区复制与文档内查找的工作台行为。它们仍然只走真实

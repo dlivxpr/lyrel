@@ -3,7 +3,7 @@
 # 固定 Glim 树没有 TOML 结构编辑器或局部 mutation 实现；本模块没有复制
 # Glim 的 TOML 源文件。可保留的交互来自 #289 已移植的
 # `crates/lyrel-document/src/tree.rs`（Glim `structured.rs` 的可见行／
-# 导航语义），输入面板来自 #290 的 `src/ui/code_editor/structure_edit.rs`。
+# 导航语义），输入面板来自 #290 的 `crates/lyrel-workbench-editor/src/code_editor/structure_edit.rs`。
 # TOML 语义、原区间、table/AoT 语句归属和局部规划由 Lyrel 在正式 registry
 # 的 `toml_edit` 上补齐。下面逐文件固定上游 revision、原始 blob SHA-256
 # 与保留／替换范围；sha256 是上游原始字节摘要，不是本地文件摘要。Glim MIT
@@ -42,7 +42,7 @@ not_imported = "Glim Glim WorkingReservation、Tree Deref、JSON kind 字符串"
 upstream = "crates/glim-app/src/views/reader/json.rs"
 sha256 = "2ac9faeaaa08c43865b290a8428b1f42a97b931565658dff797286157b34c5e8"
 bytes = 5032
-local = "src/ui/code_editor/json_document.rs; src/ui/code_editor/toml_document.rs"
+local = "crates/lyrel-workbench-editor/src/code_editor/json_document.rs; crates/lyrel-workbench-editor/src/code_editor/toml_document.rs"
 status = "scheduling/failure interaction pattern retained by the existing structured views"
 retained = "同一输入不重复解析；加载与失败状态不摧毁源码；解析失败仍可切回源码；呈现状态独立"
 adapted = "TOML 使用同一每文档单 worker、revision／generation 校验、`host_ops::off_thread` 与不可变 Arc 投影；解析失败显示行列与错误，不安装部分树"
@@ -53,7 +53,7 @@ not_imported = "Glim reader session、文件读取和全局资源池"
 upstream = "crates/glim-app/src/views/reader/json/view.rs"
 sha256 = "bb7f7e5cf52fa64ae3ade9b9943dc5d57858eb028221308b9a6b5ea5d785e05b"
 bytes = 10632
-local = "src/ui/code_editor/toml_document.rs"
+local = "crates/lyrel-workbench-editor/src/code_editor/toml_document.rs"
 status = "tree/full-value interaction adapted; no TOML source existed upstream"
 retained = "展开向量、可见行重建、`UniformListScrollHandle` 行列表、双击完整值、折叠状态保留思路"
 adapted = "TOML 行标签／颜色、table/AoT entry、dotted key 与 datetime kind、源码定位、键盘选择和编辑工具栏；分屏每个 presentation 独立折叠／选择／滚动，共享同一 Document 与 history"

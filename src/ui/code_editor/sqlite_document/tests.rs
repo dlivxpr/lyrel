@@ -9,6 +9,7 @@ use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
+use gpui_kit::component::table::TableSelection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
@@ -1024,28 +1025,4 @@ fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppCo
         "no rollback journal appeared"
     );
     drop(writer);
-}
-
-/// A TEXT value that is not valid UTF-8 must not be shown through
-/// replacement characters: the viewer keeps the bytes visible as hex, and
-/// the panel says why.
-#[test]
-fn invalid_utf8_text_is_shown_as_its_bytes() {
-    let value = SqliteValue::Text {
-        preview: b"ok\xffA".to_vec(),
-        total: 4,
-    };
-    let text = super::detail_text(&value);
-    assert!(
-        !text.contains('\u{fffd}'),
-        "no replacement characters stood in for bytes: {text}"
-    );
-    assert!(
-        text.contains("ff"),
-        "the invalid byte stays visible as hex: {text}"
-    );
-    assert!(
-        text.contains("ok"),
-        "the printable bytes keep their ASCII column: {text}"
-    );
 }

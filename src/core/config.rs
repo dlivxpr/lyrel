@@ -20,5 +20,5 @@ pub use lyrel_core::core::config::{
     MouseZoomModifier, NewTabPosition, NotifyMode, ProfileUsage, PromptCursorStyle, RightPanelTab,
     SERVERS_FILE, ShellConfig, StartupMode, UI_FONT_SIZE_DEFAULT, UI_FONT_SIZE_MAX,
     UI_FONT_SIZE_MIN, WdStrategy, WindowBackdrop, config_dir_path, config_path, detection_aliases,
-    normalize_gui_language, set_config_dir, unix_now, write_atomic, write_atomic_private,
+    normalize_gui_language, platform_last_resort_fallbacks, set_config_dir, unix_now, write_atomic,
 };

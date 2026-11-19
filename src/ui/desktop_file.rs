@@ -1,5 +1,5 @@
-//! The shared file-open seam lives in `lyrel-ui-base`; this facade keeps
-//! `crate::ui::desktop_file::` working for the workbench while consumers move
-//! onto direct `lyrel_ui_base::desktop_file` imports.
+//! Shell callers share the foundation's typed file request and OS launchers.
 
-pub use lyrel_ui_base::desktop_file::*;
+pub use lyrel_ui_base::desktop_file::{
+    OpenFileRequested, drive_root, open_file_path, reveal_file_path, windows_spelling,
+};

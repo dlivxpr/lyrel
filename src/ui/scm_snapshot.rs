@@ -13,7 +13,7 @@ use lyrel_ui_base::scm_snapshot::ScmSnapshotSource;
 
 use crate::ui::host_ops::HostId;
 
-pub use lyrel_ui_base::scm_snapshot::{GIT_RETRY_GAP, OPPORTUNISTIC_GIT_GAP, epoch, index_of};
+pub use lyrel_ui_base::scm_snapshot::{GIT_RETRY_GAP, OPPORTUNISTIC_GIT_GAP, index_of};
 
 /// Install the snapshot source the seam forwards to. Startup calls this once;
 /// tests that install the controllers directly call it too.

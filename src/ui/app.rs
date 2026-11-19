@@ -268,7 +268,7 @@ pub struct LyrelApp {
         std::collections::HashSet<(crate::ui::host_ops::HostId, std::path::PathBuf)>,
     pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
-    pub(crate) editor: Entity<crate::ui::code_editor::EditorPanelState>,
+    pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
     _editor_events: Subscription,
     _editor_observer: Subscription,
     pub(crate) sidebar_width: Rc<Cell<f32>>,
@@ -573,14 +573,15 @@ impl LyrelApp {
         let unsaved = self.editor_unsaved(cx);
         if self.editor_guard_unsaved(
             unsaved,
-            crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
+            lyrel_workbench_editor::code_editor::saving::AfterUnsaved::CloseWindow,
             window,
             cx,
         ) {
             return;
         }
         self.prepare_window_close(cx);
-        self.lsp_window_closed(cx);
+        self.editor
+            .update(cx, |editor, cx| editor.lsp_window_closed(cx));
         window.remove_window();
     }
 
@@ -1021,7 +1022,7 @@ impl LyrelApp {
         let unsaved = self.editor_unsaved(cx);
         if self.editor_guard_unsaved(
             unsaved,
-            crate::ui::code_editor::saving::AfterUnsaved::Quit,
+            lyrel_workbench_editor::code_editor::saving::AfterUnsaved::Quit,
             window,
             cx,
         ) {
@@ -2482,7 +2483,7 @@ impl LyrelApp {
             let unsaved = self.editor_unsaved_in_tab(self.tabs.active_index(), cx);
             if self.editor_guard_unsaved(
                 unsaved,
-                crate::ui::code_editor::saving::AfterUnsaved::ClosePane(pane),
+                lyrel_workbench_editor::code_editor::saving::AfterUnsaved::ClosePane(pane),
                 window,
                 cx,
             ) {
@@ -3336,7 +3337,7 @@ impl LyrelApp {
             let unsaved = self.editor_unsaved_in_tab(index, cx);
             if self.editor_guard_unsaved(
                 unsaved,
-                crate::ui::code_editor::saving::AfterUnsaved::CloseTab(id),
+                lyrel_workbench_editor::code_editor::saving::AfterUnsaved::CloseTab(id),
                 window,
                 cx,
             ) {
@@ -4475,38 +4476,42 @@ impl LyrelApp {
             ToggleDocumentWrap => self.toggle_document_wrap(window, cx),
             EditorTransformUppercase => {
                 self.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToUppercase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToUppercase,
                     window,
                     cx,
                 );
             }
             EditorTransformLowercase => {
                 self.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToLowercase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToLowercase,
                     window,
                     cx,
                 );
             }
             EditorTransformTitleCase => {
                 self.editor_dispatch(
-                    &crate::ui::code_editor::commands::TransformToTitleCase,
+                    &lyrel_workbench_editor::code_editor::commands::TransformToTitleCase,
                     window,
                     cx,
                 );
             }
             EditorTrimTrailingWhitespace => {
                 self.editor_dispatch(
-                    &crate::ui::code_editor::commands::TrimTrailingWhitespace,
+                    &lyrel_workbench_editor::code_editor::commands::TrimTrailingWhitespace,
                     window,
                     cx,
                 );
             }
             EditorJoinLines => {
-                self.editor_dispatch(&crate::ui::code_editor::commands::JoinLines, window, cx);
+                self.editor_dispatch(
+                    &lyrel_workbench_editor::code_editor::commands::JoinLines,
+                    window,
+                    cx,
+                );
             }
             EditorRemoveSurroundingBrackets => {
                 self.editor_dispatch(
-                    &crate::ui::code_editor::commands::RemoveSurroundingBrackets,
+                    &lyrel_workbench_editor::code_editor::commands::RemoveSurroundingBrackets,
                     window,
                     cx,
                 );
@@ -5280,6 +5285,8 @@ pub(crate) mod test_window {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
+            #[cfg(test)]
+            lyrel_workbench_editor::code_editor::drawio_document::test_support::mark_automated(cx);
             cx.set_global(Config::default());
             lyrel_ui_base::host_registry::HostRegistry::insert(
                 cx,

@@ -22,7 +22,7 @@ pub(crate) struct Tab {
     /// while the tab is active: then the zoom lives in `LyrelApp::maximized`.
     zoomed: Option<Entity<TerminalView>>,
     pub(crate) diff_overlay: Option<crate::ui::diff_overlay::DiffOverlayState>,
-    pub(crate) code: Option<Box<crate::ui::code_editor::TabCode>>,
+    pub(crate) code: Option<Box<lyrel_workbench_editor::code_editor::TabCode>>,
     /// The pinned sidebar group this tab was put in, by id, or `None` to
     /// leave it to auto grouping. A `Cell` because the sidebar files a tab
     /// that walks into a pinned folder while it is working out where to draw

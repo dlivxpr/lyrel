@@ -14,7 +14,7 @@ use crate::ui::app::test_window::harness_with_tabs;
 #[rustfmt::skip]
 use ::gif;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{Point, TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 #[rustfmt::skip]

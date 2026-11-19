@@ -13,6 +13,7 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt as _};
 use gpui_kit::{TestAppContext, VisualTestContext, size};
 use lyrel_document::yaml::projection::{STRUCTURE_INPUT_BYTES, STRUCTURE_NODES};
+use lyrel_markdown_editor::Document;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

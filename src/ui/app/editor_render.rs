@@ -17,15 +17,15 @@ use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, KeyDownEvent, MouseButton, SharedString, Window, div, px, rems};
 
 use super::*;
-use crate::ui::code_editor::commands;
-use crate::ui::code_editor::strip::{self, StripCell};
-use crate::ui::code_editor::{
-    self, BookAddBookmark, BookNextChapter, BookNextPage, BookPreviousChapter, BookPreviousPage,
-    BookSearch, BookToggleBookmarks, BookToggleContents, BufferId, DiskConflict, OpenFile, TabCode,
-};
 use crate::ui::document_column::DocumentChrome;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
+use lyrel_workbench_editor::code_editor::commands;
+use lyrel_workbench_editor::code_editor::strip::{self, StripCell};
+use lyrel_workbench_editor::code_editor::{
+    self, BookAddBookmark, BookNextChapter, BookNextPage, BookPreviousChapter, BookPreviousPage,
+    BookSearch, BookToggleBookmarks, BookToggleContents, BufferId, DiskConflict, OpenFile, TabCode,
+};
 
 impl LyrelApp {
     pub(crate) fn render_code_overlay(
@@ -531,11 +531,11 @@ impl LyrelApp {
             position,
             count,
         } = cell;
-        let group: SharedString = format!("editor-file-tab-{}", id.0).into();
+        let group: SharedString = format!("editor-file-tab-{}", id.as_u64()).into();
         let slot = 16.;
         let muted = cx.theme().muted_foreground;
         let close = div()
-            .id(("editor-file-tab-close", id.0))
+            .id(("editor-file-tab-close", id.as_u64()))
             .role(gpui_kit::Role::Button)
             .aria_label(format!("{} {name}", t(L10nKey::Close)))
             .flex_none()
@@ -568,7 +568,7 @@ impl LyrelApp {
                 )
             });
         div()
-            .id(("editor-file-tab", id.0))
+            .id(("editor-file-tab", id.as_u64()))
             .role(gpui_kit::Role::Tab)
             .aria_label(match dirty {
                 true => format!("{name}, {}", t(L10nKey::SettingsUnsaved)),
@@ -686,7 +686,10 @@ impl LyrelApp {
             .id();
         // The LSP status element is shell-rendered (it reads the window's LSP
         // store); the document row itself renders on the editor entity.
-        let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
+        let lsp = self
+            .editor
+            .update(cx, |editor, cx| editor.render_lsp_status(&code, cx))
+            .map(|(element, _)| element);
         self.editor
             .update(cx, |editor, cx| editor.render_status(tab, code, lsp, cx))
     }
@@ -1167,7 +1170,7 @@ impl LyrelApp {
                 t(L10nKey::EditorGoToMatchingBracket),
                 Box::new(commands::MoveToMatchingBracket),
             );
-        let menu = this.lsp_menu_items(menu, id, cx);
+        let menu = this.editor.read(cx).lsp_menu_items(menu, id, cx);
         this.editor_file_menu_items(menu, id, app, cx)
     }
 

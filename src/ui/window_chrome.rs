@@ -107,7 +107,9 @@ pub(crate) const TILE_GLYPH_XS: f32 = 11.;
 
 const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
 
-pub(crate) const CONTENT_INSET: f32 = 12.;
+/// Horizontal inset between window-chrome content and the frame. Shared
+/// through `lyrel-ui-base` so the editor's chromeless surfaces agree.
+pub(crate) use lyrel_ui_base::display::CONTENT_INSET;
 
 const TILE_EDGE_GAP: f32 = 5.;
 

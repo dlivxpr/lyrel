@@ -1,6 +1,6 @@
 # The fixed offline draw.io engine bundle. Bytes are served unmodified; the
 # Lyrel-owned shell and engine page are separate files under
-# src/ui/code_editor/drawio_engine/web/.
+# crates/lyrel-workbench-editor/src/code_editor/drawio_engine/web/.
 repository = "https://github.com/jgraph/drawio"
 revision = "c72c9a98b7a6ce392556ed04c05e0ff19f43f5c3"
 tag = "v32.6.10"

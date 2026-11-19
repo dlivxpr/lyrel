@@ -823,7 +823,7 @@ pub fn run() {
         .detach();
         gpui_kit::init(cx);
         crate::ui::ime::install(cx);
-        crate::ui::lsp::popups::init(cx);
+        lyrel_workbench_editor::lsp::popups::init(cx);
         register_bundled_fonts(cx);
         crate::ui::prompt::install(cx);
         cx.activate(true);

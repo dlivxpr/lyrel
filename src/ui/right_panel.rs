@@ -79,7 +79,8 @@ pub(crate) const META_MONO: f32 = META - STEP;
 pub(crate) const HEADING: f32 = 11.5 * STEP;
 
 /// The word tabs at the top of the panel, a half step under body text.
-pub(crate) const TAB_TEXT: f32 = 12.5 * STEP;
+/// Shared through `lyrel-ui-base` so the editor's overlays use the same size.
+pub(crate) use lyrel_ui_base::display::TAB_TEXT;
 
 /// How tall a Session, section-heading or search row is.
 const INFO_ROW_H: f32 = 28.;

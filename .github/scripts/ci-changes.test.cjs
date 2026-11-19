@@ -94,6 +94,7 @@ for (const [name, files, expected] of [
   ['the standalone updater crate stays on the desktop platforms', { 'crates/lyrel-updater/src/windows.rs': 'pub fn run() {}' }, [true, false, false, false]],
   ['shared desktop foundation source stays on the desktop platforms', { 'crates/lyrel-ui-base/src/host_ops.rs': 'pub fn run() {}' }, [true, false, false, false]],
   ['future desktop UI sub-crates stay on the desktop platforms', { 'crates/lyrel-terminal/src/lib.rs': 'pub fn model() {}' }, [true, false, false, false]],
+  ['editor workbench source stays on the desktop platforms', { 'crates/lyrel-workbench-editor/src/lib.rs': 'pub fn model() {}' }, [true, false, false, false]],
   ['desktop foundation manifests can alter workspace resolution and require all Rust targets', { 'crates/lyrel-ui-base/Cargo.toml': '[package]\nname = "lyrel-ui-base"' }, [true, true, true, false]],
   ['shared test-support fixtures rebuild the headless consumers too', { 'crates/lyrel-test-support/src/pty.rs': 'pub fn pty_sender() {}' }, [true, true, false, false]],
   ['the GUI-free insights crate is validated on desktop and Linux headless', { 'crates/lyrel-insights/src/statistics/mod.rs': 'pub fn scan() {}' }, [true, true, false, false]],

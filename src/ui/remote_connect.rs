@@ -289,22 +289,7 @@ pub fn install_title(request: &InstallRequest) -> String {
     t_fmt(L10nKey::RemoteInstallTitle, &[("machine", &request.host)])
 }
 
-pub fn human_bytes(n: u64) -> String {
-    const KIB: f64 = 1024.0;
-    let n = n as f64;
-    if n < KIB {
-        return format!("{} {}", n as u64, t(L10nKey::RemoteInstallBytes));
-    }
-    let units = ["KiB", "MiB", "GiB"];
-    let mut value = n / KIB;
-    for (i, unit) in units.iter().enumerate() {
-        if value < KIB || i == units.len() - 1 {
-            return format!("{value:.1} {unit}");
-        }
-        value /= KIB;
-    }
-    unreachable!("the loop returns on its last iteration")
-}
+pub use lyrel_ui_base::display::human_bytes;
 
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(180);
 

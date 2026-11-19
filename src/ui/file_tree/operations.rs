@@ -26,7 +26,8 @@ impl LyrelApp {
             self.file_tree_searching(cx),
         );
         if let Some(code) = self.tab_code_mut() {
-            code.selected.click(
+            selection::click(
+                &mut code.selected,
                 host,
                 path,
                 selection::primary_modifier(modifiers),
@@ -185,8 +186,14 @@ impl LyrelApp {
                         code.selected.clear();
                         for row in rows.iter() {
                             if row.note.is_none() && !row.is_root {
-                                code.selected
-                                    .click(host, &row.entry.path, true, false, &rows);
+                                selection::click(
+                                    &mut code.selected,
+                                    host,
+                                    &row.entry.path,
+                                    true,
+                                    false,
+                                    &rows,
+                                );
                             }
                         }
                     }

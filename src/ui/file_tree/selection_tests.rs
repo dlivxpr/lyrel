@@ -588,8 +588,8 @@ fn context_copy_and_delete_preserve_the_set_and_deduplicate_descendants(cx: &mut
 
 #[test]
 fn tree_selection_is_tab_and_host_scoped_and_protects_roots() {
-    let mut first = crate::ui::code_editor::TabCode::new();
-    let second = crate::ui::code_editor::TabCode::new();
+    let mut first = lyrel_workbench_editor::code_editor::TabCode::new();
+    let second = lyrel_workbench_editor::code_editor::TabCode::new();
     let local = HostId::LOCAL;
     let remote = HostId(512);
     let path = PathBuf::from("/workspace/item");

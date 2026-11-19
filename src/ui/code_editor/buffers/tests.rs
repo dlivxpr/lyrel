@@ -1,10 +1,18 @@
 use super::super::test_host::{FileHost, canonical_tempdir};
-use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::editor_session;
+use gpui_kit::component::input::Position;
+use gpui_kit::prelude::*;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
+use lyrel_ui_base::host_ops::{HostId, MTime, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_workbench_editor::code_editor::{BufferId, DiskConflict, TabCode};
+use lyrel_workbench_editor::editor_session::TabEditor;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -1297,57 +1305,6 @@ fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut
         assert!(app.editor_active_location(cx).is_none());
         assert!(app.tab_code().is_none_or(|code| code.files.is_empty()));
     });
-}
-
-fn mt(secs: i64, nanos: u32) -> Option<MTime> {
-    Some(MTime { secs, nanos })
-}
-
-#[test]
-fn external_changes_are_told_apart_from_our_own_saves() {
-    let ours = mt(100, 0);
-    let seen = |m| Observed::Present(m);
-    assert_eq!(
-        classify_external_change(false, false, ours, seen(ours)),
-        ExternalChange::Ignore
-    );
-    assert_eq!(
-        classify_external_change(false, false, ours, seen(mt(101, 0))),
-        ExternalChange::Reload
-    );
-    assert_eq!(
-        classify_external_change(false, true, ours, seen(mt(101, 0))),
-        ExternalChange::Conflict
-    );
-    assert_eq!(
-        classify_external_change(false, false, mt(100, 0), seen(mt(100, 1))),
-        ExternalChange::Reload
-    );
-    assert_eq!(
-        classify_external_change(true, false, ours, seen(mt(101, 0))),
-        ExternalChange::Ignore
-    );
-    assert_eq!(
-        classify_external_change(false, false, None, seen(None)),
-        ExternalChange::Reload
-    );
-}
-
-#[test]
-fn a_file_that_vanished_is_reported_deleted_whether_or_not_it_was_edited() {
-    assert_eq!(
-        classify_external_change(false, false, mt(1, 0), Observed::Missing),
-        ExternalChange::Deleted
-    );
-    assert_eq!(
-        classify_external_change(false, true, mt(1, 0), Observed::Missing),
-        ExternalChange::Deleted
-    );
-    // Our save replaces by rename; the watcher can catch the gap between.
-    assert_eq!(
-        classify_external_change(true, false, mt(1, 0), Observed::Missing),
-        ExternalChange::Ignore
-    );
 }
 
 #[gpui_kit::test]

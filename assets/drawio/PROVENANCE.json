@@ -95,8 +95,8 @@
   "local_adaptation": {
     "viewer_bytes_modified": false,
     "served_by": "native WebView2 custom response handler over https://drawio.lyrel.invalid",
-    "shell": "src/ui/code_editor/drawio_engine/web/shell.html + shell.js + shell.css",
-    "engine_page": "src/ui/code_editor/drawio_engine/web/engine.html + engine-boot.js + engine-bridge.js + engine.css",
+    "shell": "crates/lyrel-workbench-editor/src/code_editor/drawio_engine/web/shell.html + shell.js + shell.css",
+    "engine_page": "crates/lyrel-workbench-editor/src/code_editor/drawio_engine/web/engine.html + engine-boot.js + engine-bridge.js + engine.css",
     "runtime_overrides": [
       "urlParams.pwa=0 (no service worker)",
       "urlParams.math=0 (no MathJax)",

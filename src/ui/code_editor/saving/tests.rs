@@ -2,7 +2,7 @@ use super::*;
 use crate::core::actions::{CloseActiveTab, EditorNewFile, EditorSaveAs};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext, px};
 use std::time::{Duration, Instant};
 
 #[path = "host_tests.rs"]

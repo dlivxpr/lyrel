@@ -1308,8 +1308,14 @@ impl LyrelApp {
                 let Some(next) = next else { return };
                 let path = rows[next].entry.path.clone();
                 if let Some(code) = self.tab_code_mut() {
-                    code.selected
-                        .click(host, &path, false, ev.keystroke.modifiers.shift, &rows);
+                    selection::click(
+                        &mut code.selected,
+                        host,
+                        &path,
+                        false,
+                        ev.keystroke.modifiers.shift,
+                        &rows,
+                    );
                 }
                 self.right_panel.tree_reveal =
                     Some((path, crate::ui::right_panel::TREE_REVEAL_RENDERS));

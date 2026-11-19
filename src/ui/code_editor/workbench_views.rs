@@ -1,9 +1,19 @@
 //! 生产工作台多 presentation 消费者；原生 registry 复用相同交互。
-use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
+use crate::ui::code_editor::test_host;
+use gpui_kit::component::input::Position;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{
+    Entity, EntityInputHandler as _, Focusable as _, TestAppContext, VisualTestContext, px,
+};
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
+#[cfg(test)]
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+#[cfg(test)]
+use lyrel_workbench_editor::code_editor::csv_document::CsvMode;
+#[cfg(test)]
+use lyrel_workbench_editor::code_editor::{BufferId, TabCode};
 use std::time::{Duration, Instant};
 
 fn settle(cx: &mut VisualTestContext) {
@@ -609,9 +619,9 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
 mod integrated_acceptance {
     use super::*;
     use crate::core::config::DocumentLayout;
-    use crate::ui::code_editor::image_document::ImageContent;
-    use crate::ui::code_editor::pdf_document::PdfContent;
-    use crate::ui::code_editor::svg_document::SvgMode;
+    use lyrel_workbench_editor::code_editor::image_document::ImageContent;
+    use lyrel_workbench_editor::code_editor::pdf_document::PdfContent;
+    use lyrel_workbench_editor::code_editor::svg_document::SvgMode;
     use std::io::Write as _;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
