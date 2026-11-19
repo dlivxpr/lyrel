@@ -11,7 +11,7 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
         std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
     );
     let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
-    crate::core::config::set_config_dir(fixture.local_config_dir());
+    lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     let spec = fixture.spec();
     let target = RemoteTarget::direct(&spec.user, &spec.host, spec.port);
     let host = fixture.connect_control_as(
@@ -48,18 +48,18 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
     let other_workspace = other.read_with(cx, |app, _| app.workspace);
     let handle = vcx.window_handle();
     cx.update(|cx| {
-        crate::ui::i18n::set_locale("en");
-        let mut remote_view = crate::core::session::WindowView::on_remote(
-            crate::core::session::RemoteRef::new(target.clone(), remote),
+        lyrel_ui_base::i18n::set_locale("en");
+        let mut remote_view = lyrel_ui_base::session::WindowView::on_remote(
+            lyrel_ui_base::session::RemoteRef::new(target.clone(), remote),
         );
         remote_view.id = workspace;
         remote_view.open = true;
-        let mut local = crate::core::session::WindowView::default();
+        let mut local = lyrel_ui_base::session::WindowView::default();
         local.id = other_workspace;
         local.open = true;
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![remote_view, local],
                 active: Some(workspace),
             },

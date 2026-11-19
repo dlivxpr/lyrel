@@ -2,7 +2,7 @@
 //! execute navigation; they never manipulate cache or operation bookkeeping.
 
 use super::*;
-use crate::ui::file_search::{FileList, IndexKey};
+use lyrel_ui_base::file_search::{FileList, IndexKey};
 use std::time::{Duration, Instant};
 
 const REVALIDATE_AFTER: Duration = std::time::Duration::from_secs(5);
@@ -336,8 +336,8 @@ impl FileTreeState {
 mod tests {
     use super::*;
     use crate::ui::app::test_window;
-    use crate::ui::file_search::searchable_roots;
     use gpui_kit::TestAppContext;
+    use lyrel_ui_base::file_search::searchable_roots;
 
     fn entry(name: &str) -> TreeEntry {
         TreeEntry {
@@ -438,7 +438,7 @@ mod tests {
             assert!(tree.begin_file_index(&local).is_none());
             let current = tree.begin_file_index(&remote).unwrap();
             assert!(!tree.finish_file_index(old, local.clone(), FileList::Failed));
-            let index = Arc::new(crate::ui::file_search::build_index(
+            let index = Arc::new(lyrel_ui_base::file_search::build_index(
                 &[PathBuf::from("/project")],
                 vec![PathBuf::from("/project/main.rs")],
                 false,

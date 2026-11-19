@@ -16,9 +16,9 @@ use super::desired::DesiredTab;
 use super::reconcile::{SyncScope, WsMirror, diff, unaccounted};
 use super::{Adopt, Arrival, ChosenName, ParkedOpen, Retiring};
 use crate::core::group_key::WorkspaceGroups;
-use crate::core::session::WorkspaceId;
 use lyrel_core::core::machine::{LayoutDelta, PaneNode, Tab as TreeTab, TabId};
 use lyrel_core::daemon::control::ControlRequest;
+use lyrel_ui_base::session::WorkspaceId;
 
 pub(super) enum SyncPhase {
     Unprimed { dirty: bool, priming: bool },

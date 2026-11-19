@@ -147,7 +147,7 @@ fn fixture(dir: &Path, name: &str, fixed: bool) -> PathBuf {
 
 #[gpui_kit::test]
 fn spine_navigation_and_full_book_search_reach_the_last_chapter(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "reference.epub", false);
     let original = std::fs::read(&path).unwrap();
@@ -202,7 +202,7 @@ fn spine_navigation_and_full_book_search_reach_the_last_chapter(tcx: &mut TestAp
 fn typography_theme_bookmarks_and_position_restore_without_writing_the_book(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "persistent.epub", false);
     let original = std::fs::read(&path).unwrap();
@@ -350,7 +350,7 @@ fn unsupported_and_corrupt_books_stay_visible_read_only_documents(tcx: &mut Test
 
 #[gpui_kit::test]
 fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "search-position.epub", false);
     let original = std::fs::read(&path).unwrap();

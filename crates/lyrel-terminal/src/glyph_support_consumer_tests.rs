@@ -153,10 +153,7 @@ fn glyph_send_parts(
     graphics_wait_fixture(view, cx, serial, input_bytes);
     let text = std::fs::read_to_string(reply_path)
         .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
-    text.trim()
-        .split(',')
-        .map(unhex)
-        .collect()
+    text.trim().split(',').map(unhex).collect()
 }
 
 /// The `s` probe must be answered in stream order, ahead of the DA1 the same
@@ -359,10 +356,7 @@ fn glyph_support_query_never_reaches_a_state_only_controller() {
 
     // The controller must be attached before its stream position is read:
     // input on the same connection cannot overtake Attach.
-    let request = format!(
-        "SEND_ANY 1 0 {} 0\n",
-        hex(b"\x1b_25a1;q;cp=100000\x1b\\")
-    );
+    let request = format!("SEND_ANY 1 0 {} 0\n", hex(b"\x1b_25a1;q;cp=100000\x1b\\"));
     ClientMsg::Input(request.into_bytes())
         .encode(&mut stream)
         .unwrap();
@@ -381,9 +375,7 @@ fn glyph_support_query_never_reaches_a_state_only_controller() {
             Ok(DaemonMsg::GlyphQuery { .. }) => {
                 panic!("a decode-only controller was handed the coverage query")
             }
-            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => {
-                seen.extend(bytes)
-            }
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => seen.extend(bytes),
             Ok(DaemonMsg::Exited { code }) => {
                 panic!("the producer exited before its marker: {code:?}")
             }

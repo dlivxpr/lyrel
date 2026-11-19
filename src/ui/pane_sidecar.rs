@@ -7,10 +7,10 @@ use lyrel_core::core::machine::{PaneNode, Tab as TreeTab, TabId, Workspace};
 use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 
-use crate::core::session::{RemoteRef, WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
 use crate::ui::pane::{Pane, PaneSlot};
 use crate::ui::tab::Tab;
+use lyrel_ui_base::session::{RemoteRef, WorkspaceId, WorkspaceStore};
 
 #[derive(Default)]
 struct SidecarState {

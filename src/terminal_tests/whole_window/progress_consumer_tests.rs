@@ -273,7 +273,7 @@ fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replac
         tab::Tab,
     };
     use gpui_kit::test::TestWindowExt as _;
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -473,11 +473,15 @@ fn progress_consumer_split_tab_reads_real_pty_producers(cx: &mut TestAppContext)
         [a, b]
     });
     graphics_send_fixture(&views[0], cx, 27201, b"\x1b]9;4;1;42\x07");
-    graphics_recovery_wait(cx, "split pane progress reached production consumer", |cx| {
-        views[0].read_with(cx, |view, _| {
-            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
-        })
-    });
+    graphics_recovery_wait(
+        cx,
+        "split pane progress reached production consumer",
+        |cx| {
+            views[0].read_with(cx, |view, _| {
+                view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+            })
+        },
+    );
     let (kind, label) = app
         .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
         .expect("a split tab reports its live pane's progress");
@@ -488,9 +492,7 @@ fn progress_consumer_split_tab_reads_real_pty_producers(cx: &mut TestAppContext)
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window
-                .find(("sidebar-progress-status", 0usize))
-                .label(),
+            window.find(("sidebar-progress-status", 0usize)).label(),
             Some(expected.as_str())
         );
     });
@@ -635,9 +637,7 @@ fn progress_consumer_split_tab_aggregates_real_pty_producers(cx: &mut TestAppCon
 
 /// Parked, unfocused and moved leaves remain tab members; closed ones leave.
 #[gpui_kit::test]
-fn progress_consumer_split_tab_membership_follows_park_close_and_move(
-    cx: &mut TestAppContext,
-) {
+fn progress_consumer_split_tab_membership_follows_park_close_and_move(cx: &mut TestAppContext) {
     use crate::daemon::protocol::{PaneProgress, ProgressKind};
     use crate::ui::{
         app::LyrelApp,
@@ -766,15 +766,19 @@ fn progress_consumer_split_tab_membership_follows_park_close_and_move(
         })
     });
     let _other_stream = app.update_in(&mut vcx, |app, window, cx| {
-        let (other, stream) = crate::terminal::view::quiet_test_pane(92, window, cx);
+        let (other, stream) = lyrel_terminal::view::quiet_test_pane(92, window, cx);
         LyrelApp::watch_terminal(&other, window, cx);
-        app.tabs
-            .push(Tab::new(Pane::leaf(PaneSlot::Ready(other))));
+        app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(other))));
         app.tabs.select(0);
         let moved = Pane::Leaf(PaneSlot::Ready(views[2].clone()));
         app.tabs[0].pane.close_leaf(views[2].entity_id());
         let dst = app.tabs[1].pane.first_leaf().expect("destination pane");
-        assert!(app.tabs[1].pane.graft_beside(moved, &dst, Dir::Right).is_ok());
+        assert!(
+            app.tabs[1]
+                .pane
+                .graft_beside(moved, &dst, Dir::Right)
+                .is_ok()
+        );
         cx.notify();
         stream
     });
@@ -794,9 +798,7 @@ fn progress_consumer_split_tab_membership_follows_park_close_and_move(
 /// A sleeping tab has no live leaves; waking it against the same daemon
 /// restores each pane's authoritative state into the reconstructed tab.
 #[gpui_kit::test]
-fn progress_consumer_split_tab_restores_after_sleep_reconstruction(
-    cx: &mut TestAppContext,
-) {
+fn progress_consumer_split_tab_restores_after_sleep_reconstruction(cx: &mut TestAppContext) {
     use crate::daemon::protocol::{PaneProgress, ProgressKind};
     use crate::ui::{
         app::LyrelApp,
@@ -869,7 +871,11 @@ fn progress_consumer_split_tab_restores_after_sleep_reconstruction(
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find(("sidebar-progress-status", 0usize)).is_none());
+        assert!(
+            window
+                .try_find(("sidebar-progress-status", 0usize))
+                .is_none()
+        );
     });
     drop(views);
 
@@ -901,13 +907,17 @@ fn progress_consumer_split_tab_restores_after_sleep_reconstruction(
         cx.notify();
         views
     });
-    graphics_recovery_wait(cx, "the reconstructed split restored daemon progress", |cx| {
-        views[0].read_with(cx, |view, _| {
-            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
-        }) && views[1].read_with(cx, |view, _| {
-            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
-        })
-    });
+    graphics_recovery_wait(
+        cx,
+        "the reconstructed split restored daemon progress",
+        |cx| {
+            views[0].read_with(cx, |view, _| {
+                view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+            }) && views[1].read_with(cx, |view, _| {
+                view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+            })
+        },
+    );
     let (kind, label) = app
         .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
         .expect("the reconstructed tab summarizes its leaves");

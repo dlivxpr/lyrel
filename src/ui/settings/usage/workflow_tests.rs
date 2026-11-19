@@ -941,7 +941,7 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
         ("en", 14., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 18., gpui_kit::component::ThemeMode::Dark),
     ] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         app.update_in(&mut vcx, |_, window, cx| {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
             gpui_kit::component::Theme::update(cx, |theme| {
@@ -997,5 +997,5 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
             .name,
         "Renamed at narrow zoom"
     );
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }

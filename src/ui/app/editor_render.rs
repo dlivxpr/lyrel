@@ -18,7 +18,6 @@ use gpui_kit::{AnyElement, KeyDownEvent, MouseButton, SharedString, Window, div,
 
 use super::*;
 use crate::ui::document_column::DocumentChrome;
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use lyrel_workbench_editor::code_editor::commands;
 use lyrel_workbench_editor::code_editor::strip::{self, StripCell};
@@ -607,7 +606,9 @@ impl LyrelApp {
                     .bg(cx.theme().sidebar_accent),
                 false => d.text_color(muted).hover(|s| {
                     s.bg(gpui_kit::rgb(
-                        cx.global::<crate::ui::presets::Surfaces>().sidebar.hover,
+                        cx.global::<lyrel_ui_base::presets::Surfaces>()
+                            .sidebar
+                            .hover,
                     ))
                 }),
             })
@@ -801,7 +802,7 @@ impl LyrelApp {
         element: E,
         cx: &mut Context<Self>,
     ) -> E {
-        use crate::core::actions::*;
+        use lyrel_ui_base::actions::*;
         macro_rules! before {
             ($el:expr, $($action:ty),+ $(,)?) => {
                 $el$(.capture_action(cx.listener(|this, _: &$action, window, cx| {
@@ -1091,14 +1092,14 @@ impl LyrelApp {
                 .action_context(markdown.read(cx).focus_handle(cx))
                 .menu(
                     t(L10nKey::EditorGoToLineAction),
-                    Box::new(crate::core::actions::EditorGoToLine),
+                    Box::new(lyrel_ui_base::actions::EditorGoToLine),
                 );
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         if let Some(svg) = input.svg() {
             let menu = menu.action_context(svg.read(cx).focus_handle(cx)).menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             );
             let menu = code_editor::svg_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
@@ -1106,7 +1107,7 @@ impl LyrelApp {
         if let Some(json) = input.json() {
             let menu = menu.action_context(json.read(cx).focus_handle(cx)).menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             );
             let menu = code_editor::json_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
@@ -1114,7 +1115,7 @@ impl LyrelApp {
         if let Some(yaml) = input.yaml() {
             let menu = menu.action_context(yaml.read(cx).focus_handle(cx)).menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             );
             let menu = code_editor::yaml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
@@ -1122,7 +1123,7 @@ impl LyrelApp {
         if let Some(toml) = input.toml() {
             let menu = menu.action_context(toml.read(cx).focus_handle(cx)).menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             );
             let menu = code_editor::toml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
@@ -1130,7 +1131,7 @@ impl LyrelApp {
         if let Some(xml) = input.xml() {
             let menu = menu.action_context(xml.read(cx).focus_handle(cx)).menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             );
             let menu = code_editor::xml_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
@@ -1159,11 +1160,11 @@ impl LyrelApp {
             .menu(t(L10nKey::AppMenuFind), Box::new(edit::Search))
             .menu(
                 t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
+                Box::new(lyrel_ui_base::actions::EditorGoToLine),
             )
             .menu_with_disabled(
                 t(L10nKey::EditorGitRevertChange),
-                Box::new(crate::core::actions::EditorRevertChange),
+                Box::new(lyrel_ui_base::actions::EditorRevertChange),
                 !this.editor_gutter_can_revert(id, cx),
             )
             .menu(
@@ -1251,7 +1252,7 @@ impl LyrelApp {
             };
             let opener: fn(&Path) -> std::io::Result<()> = match browser {
                 true => code_editor::open_in_browser,
-                false => crate::ui::desktop_file::open_file_path,
+                false => lyrel_ui_base::desktop_file::open_file_path,
             };
             menu = menu.item(PopupMenuItem::new(label).on_click({
                 let app = app.clone();
@@ -1266,7 +1267,7 @@ impl LyrelApp {
                 PopupMenuItem::new(crate::ui::right_panel::reveal_label()).on_click({
                     let path = path.clone();
                     move |_, _window, cx| {
-                        cx.reveal_path(&crate::ui::path_display::native_separators(&path));
+                        cx.reveal_path(&lyrel_ui_base::path_display::native_separators(&path));
                     }
                 }),
             );
@@ -1279,7 +1280,7 @@ impl LyrelApp {
         // A remote host's paths are already spelled its own way; only one on
         // this machine is re-spelled with its separators.
         let full = match local {
-            true => crate::ui::path_display::native_separators(&path)
+            true => lyrel_ui_base::path_display::native_separators(&path)
                 .display()
                 .to_string(),
             false => path.display().to_string(),
@@ -1287,7 +1288,7 @@ impl LyrelApp {
         menu = menu.item(copy(L10nKey::FileTreeContextCopyPath, full));
         if let Some(rel) = self.path_under_tree_root(&path) {
             let rel = match local {
-                true => crate::ui::path_display::native_separators(&rel)
+                true => lyrel_ui_base::path_display::native_separators(&rel)
                     .display()
                     .to_string(),
                 false => rel.display().to_string(),

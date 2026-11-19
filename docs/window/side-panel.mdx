@@ -147,7 +147,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 状态栏、行列跳转、查找／替换与文档大纲跟随真正取得输入焦点的文档和编辑组；查找框也属于它所在的组。查找关闭后焦点回到该 presentation。切换组会结束原输入所有者的预编辑，迟到的旧输入回调不能改写新所有者的内容。`.mdx` 始终只编辑源码；Markdown 文档改名或另存为 `.mdx` 后同步限制所有展示，不重建文档或清空历史。普通 code 不因改名而隐式转换成另一种编辑器。
 
-实现中，`src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 持有 buffer registry、Host-aware 打开、待定位光标、外部监视和重载规则；标签页只保留展示关系。每个文档分配独立的 `BufferId`，不再借用 `EditorState` 的 entity identity；保存、关闭等待、导航、Git gutter 与 LSP 请求均携带该文档身份，路径或编辑呈现不构成另一条身份通道。普通代码仍由原来的 `EditorState` 编辑。`src/ui/code_editor/saving.rs` 将保存规则、Host 写入、另存为、行内输入条、提示生命周期和 save waiters 的转换集中到 `EditorPanelState`；工作台只通过 `EditorBridge` 取得编辑器所有者并接收 `EditorEvent`，负责文件树／LSP、导航、有效内容焦点及最终窗口操作，不向保存实现交出整个工作台。
+实现中，`lyrel-workbench-editor` 的 `code_editor/buffers.rs` 持有 buffer registry、Host-aware 打开、待定位光标、外部监视和重载规则；标签页只保留展示关系。每个文档分配独立的 `BufferId`，不再借用 `EditorState` 的 entity identity；保存、关闭等待、导航、Git gutter 与 LSP 请求均携带该文档身份，路径或编辑呈现不构成另一条身份通道。普通代码仍由原来的 `EditorState` 编辑。同 crate 的 `code_editor/saving.rs` 将保存规则、Host 写入、另存为、行内输入条、提示生命周期和 save waiters 的转换集中到 `EditorPanelState`。窗口订阅 `EditorPanelEvent` 并处理文件树、导航、有效内容焦点及最终窗口操作，不向保存实现交出整个工作台。
 
 编辑后更新前后导航位置时，普通代码按借用的 Rope 分块比较未变化前后缀，避免逐 Unicode 字符扫描大文档。不同分块布局与 UTF-8 边界分别处理，多行差异仍使用原有精确算法；这不改变撤销／重做、外部刷新或文档容量。
 
@@ -281,8 +281,8 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 内容与失败：`Loaded` 从单一文本结构改为 `Text` / `Image` 两种内容。图片内容 `ImageContent::{Ready, Loading, Failed}` 把损坏字节、伪装扩展名、超预算与尚未解码的 TIFF 页都变成文档里可见的状态与状态行文字，不退回文本编辑器、不静默截断，也不把失败写成空文件。
 - GIF：`image_document/gif.rs` 移植 Glim `GifPlayback`，保留帧合成、Keep／Background／Previous disposal、透明、interlace、finite／infinite repeat、0/1 centisecond 延时与逐行增量解码。输入是 owning Host 读到的字节；打开时一次核准 canvas＋restore＋输出帧＋行的 64 MiB 合成预算，超出就拒绝，不按上游预览路径降低分辨率。只有 presentation 真的在画时才推进帧；隐藏标签页停止帧工作，关闭释放文档与任务。
 - TIFF：用正式 registry `tiff` 解码器枚举 IFD 页表，像素只在该 presentation 请求某页时后台解码；页选择属于 presentation，分屏两边可以停在不同的页。单页上限 8192 边／1600 万像素，页数与单页解码缓冲另有显式预算；迟到页结果只装回自己的页，不能替换当前页。页身份显示为“第 N 页，共 M 页”，翻页可用工具栏、右键菜单与 PageUp／PageDown。
-- 复用与许可：GIF 移植的固定来源、原始 blob 摘要与本地适配见 `src/ui/code_editor/image_document/UPSTREAM.toml`；Glim MIT notice 进入根 `LICENSE` 附录。`gif`／`tiff` 是正式 registry 依赖，不是 Git 或 path 覆盖。
-- 呈现：`src/ui/code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份文档。
+- 复用与许可：GIF 移植的固定来源、原始 blob 摘要与本地适配见 `crates/lyrel-document/src/image/UPSTREAM.toml`；Glim MIT notice 进入根 `LICENSE` 附录。`gif`／`tiff` 是正式 registry 依赖，不是 Git 或 path 覆盖。
+- 呈现：`lyrel-workbench-editor` 的 `code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份文档。
 - 缩放尺寸：居中滚动区域可以大于图片；图像自身按原始像素宽高乘取景比例，再除显示缩放系数换算为逻辑点。fit 不放大小图片；1:1 表示一个原像素对应一个显示物理像素。状态百分比与实际图像 bounds 使用同一比例，不把图片拉伸到整块视口。
 - 文本契约不变：保存、另存为、未保存关闭、撤销、行号跳转、符号、查找、Git gutter 与 LSP 都经 `EditorInput::is_text()` 保持原有行为；对图片执行这些命令不写盘、不弹永久无效的输入条。
 - 证据边界：本轮 `pwsh scripts/cargo-windows.ps1 test --locked -p lyrel --lib image_document` 的 lib test 编译为零 warning；对该次构建的测试二进制执行 `image_document` 过滤，34/34 通过（GIF 6、TIFF 8、工作台 20）。覆盖五种静态格式、GIF 合成与有限循环、可见性暂停与关闭、异尺寸 TIFF 页、迟到页、分屏不同页、缓存淘汰不收回仍在显示的纹理、损坏／截断／字节与像素／单边预算、外部重写、异 Host 与映射 Host 的字节归属、读取迟到时标签页已关闭，以及文本命令隔离。真实产品窗口、SSH、DPI、macOS 与性能尚未由这些测试或编译成功覆盖。
@@ -312,13 +312,13 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 `.svg` 打开为可编辑的源码文档和同一文档的安全原生预览，不再交给系统浏览器或浏览器文档。
 
 - 权威与保真：`Document`（`lyrel-markdown-editor`）仍是唯一源码、逐行行尾、编码／BOM、revision 与 history 所有者；源码呈现是 `set_plain_source` 的 `EditorState`，不再是 Markdown。未触及的字节、注释与混合 CRLF/LF 在普通保存中保持原样，显式编辑只改目标 range；普通保存、另存为、外部重载、冲突与未保存关闭仍由 owning Host 的既有工作台生命周期负责。
-- 预览：`src/ui/code_editor/svg_document.rs` 持有每文件唯一的 `SvgDocument` 与按分组独立的 `SvgView`。短暂 debounce 后取得同一 Document 的共享快照，在 UI 线程外解析、栅格化；每文件最多一个在途解析，期间修改只保留最新请求。关闭后取消未开始的解析；Document 身份、revision 或请求代次不匹配的结果一律丢弃，失败不会覆盖源码。
-- 安全与预算：复用 `src/ui/code_editor/markdown/images.rs` 的 usvg/resvg 安全选项与纹理租约；两个资源 resolver 均关闭，脚本没有运行时，嵌套 file／network／data image 均被拒绝，远端文档不会读本机同名文件。预览沿用单边 8192 px、1600 万像素的预算；超限或解析失败显示具体错误，修正源码后重新请求。
+- 预览：`lyrel-workbench-editor` 的 `code_editor/svg_document.rs` 持有每文件唯一的 `SvgDocument` 与按分组独立的 `SvgView`。短暂 debounce 后取得同一 Document 的共享快照，在 UI 线程外解析、栅格化；每文件最多一个在途解析，期间修改只保留最新请求。关闭后取消未开始的解析；Document 身份、revision 或请求代次不匹配的结果一律丢弃，失败不会覆盖源码。
+- 安全与预算：复用同 crate 的 `code_editor/markdown/images.rs` 的 usvg/resvg 安全选项与纹理租约；两个资源 resolver 均关闭，脚本没有运行时，嵌套 file／network／data image 均被拒绝，远端文档不会读本机同名文件。预览沿用单边 8192 px、1600 万像素的预算；超限或解析失败显示具体错误，修正源码后重新请求。
 - 呈现：默认显示源码；工具栏和状态行提供 Source／Preview 切换，`ToggleDocumentPreview` 保留原 Action。分屏的新分组默认显示另一面，两个分组共享 Document、history 与预览实体，各自保留模式、源码光标和预览取景；预览提供适应窗口、1:1、缩放与方向键平移。
 - SVG 取景尺寸按文档固有 CSS 像素计算，1:1 不把小图拉伸到居中视口；缩放改变图像本身的实际宽高，适应窗口只缩小过大的图形，不放大小图。SVG 的用户单位不按光栅位图的物理像素／显示缩放因子换算。
 - 入口：`.svg` 不再命中浏览器打开判定；打开失败或源码无效时仍留在编辑器内，系统关联不再是隐式回退。
 
-**复用记录与边界**：固定复用 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `crates/glim-services/src/svg_preview.rs`（原始 14,001 字节，SHA-256 `ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7`）中的默认视口与绝对单位换算，见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。属性读取适配为 usvg 重导出的 roxmltree；无 viewBox 时明确保留 300×150 默认视口，百分比按该视口换算，避免 usvg 随后按内容包围盒收缩尺寸。只调整光栅目标尺寸，不改原始源码或已解析几何；viewBox 尺寸仍由 usvg 负责。Glim 的流式净化、data-image 重编码、`qlmanage`／`sips`、临时文件与浏览器图像文档均未导入。渲染、纹理租约、保存与关闭所有者全部复用 Lyrel 现有模块。
+**复用记录与边界**：固定复用 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `crates/glim-services/src/svg_preview.rs`（原始 14,001 字节，SHA-256 `ab4339d6f153c82bef5c2dd142b4dfb6f19edff55dd8ccfd88ec1db41df7ddb7`）中的默认视口与绝对单位换算，见 `crates/lyrel-workbench-editor/src/code_editor/svg_document/UPSTREAM.toml`。属性读取适配为 usvg 重导出的 roxmltree；无 viewBox 时明确保留 300×150 默认视口，百分比按该视口换算，避免 usvg 随后按内容包围盒收缩尺寸。只调整光栅目标尺寸，不改原始源码或已解析几何；viewBox 尺寸仍由 usvg 负责。Glim 的流式净化、data-image 重编码、`qlmanage`／`sips`、临时文件与浏览器图像文档均未导入。渲染、纹理租约、保存与关闭所有者全部复用 Lyrel 现有模块。
 
 **证据边界**：工作台接缝回归覆盖源码输入、预览刷新、跨呈现 Undo、普通保存／另存为／外部重载／冲突／未保存关闭、独立重开、恶意脚本／嵌套文件／network／data image、超预算与失效迟到结果；夹具在测试内生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试、编译成功或位图存在代替。
 
@@ -335,7 +335,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 呈现：默认显示结构树／记录列表；工具栏与状态行提供 Structure／Source 切换、节点或记录计数、选中节点行列、Reveal in source、Full value 与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该属性或记录的精确 occurrence；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值、编辑面板和结构滚动，同时共享同一 Document 与 history。
 - 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 20,000 节点、JSONL 最多 19,999 条记录（记录根计入节点预算），完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。投影为不可变共享结果，分屏同步不复制整棵树。短暂无效源码显示解析错误并保留全部内容；修正后重新投影。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision；记录编辑在写入前校验目标行仍是恰好一个 JSON 值。结构变化后仍打开的编辑面板会显示“文档已变化”并拒绝写入，不偷焦点。
 
-**复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；#291 在同一投影上补 JSONL／NDJSON 的逐行记录层，明确不使用 Glim 的 NDJSON-to-`Value::Array` 投影作为存储或写回权威。`src/ui/code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，`src/ui/code_editor/structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
+**复用记录与边界**：见 `crates/lyrel-document/src/json/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；#291 在同一投影上补 JSONL／NDJSON 的逐行记录层，明确不使用 Glim 的 NDJSON-to-`Value::Array` 投影作为存储或写回权威。`lyrel-workbench-editor` 的 `code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，同目录的 `structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果；#290 另覆盖选中重复 occurrence 的改值／改名、空 object／array 插入、删除成员、JSONC 注释与尾随逗号保真、保存／另存为／失败写入／外部冲突／取消关闭、分屏中的迟到命令拒绝、关闭后回调不写原件，树焦点下的普通撤销／重做（键盘留在树上、另一呈现源码与独立保存字节一致），以及真实远端路由下的保存回读。#291 覆盖 JSONL／NDJSON 的嵌套值／键／数组编辑、记录整行改值、插入与删除记录、无效邻居不阻塞、空白行与混合行尾／BOM 未触及字节保留、记录预算边界、迟到解析与过期记录命令拒绝、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭与独立重开，并新增映射 Host 同名诱饵和真实远端路由保存回读消费者。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
 <a id="yaml-documents"></a>
@@ -351,7 +351,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 预算与迟到：输入最多 1 MiB、结构最多 20,000 节点、完整路径文本合计最多 8 MiB、嵌套最多 512 层；超限时结构视图明确报错，源码仍可编辑与保存。无效 YAML 显示解析错误并保留全部内容；修正后重新投影。Document revision 或请求代次不匹配的迟到结果一律丢弃；结构变化后仍打开的编辑面板拒绝写入。
 - 呈现与历史：默认显示结构树；工具栏与状态行提供 Structure／Source 切换、文档与节点计数、源码定位与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 或双击在源码中选中该 occurrence；树持有键盘时 `Ctrl`／`Cmd`+`Z` 与 `Ctrl`／`Cmd`+`Shift`+`Z`（Windows／Linux 另含 `Ctrl`+`Y`）经同一 `EditorState::undo_document`／`redo_document` 撤销／重做，不切换源码、不另建 history。分屏每个分组有独立模式、折叠、选择、编辑面板和结构滚动，同时共享同一 Document 与 history。
 
-**复用记录与边界**：见 `src/ui/code_editor/yaml_document/UPSTREAM.toml`。没有复制 Glim 源文件：固定 `fc2183f2` 的 `glim-services/src/graph.rs` YAML 分支是 `serde_yaml_ng` → `serde_json::Value` 的有损只读投影，会丢锚点／别名／tag／注释／标量样式并把多文档压成数组，因此明确拒绝。#289 的 `Treelike`／可见行／源码行列与 #290 的 `StructureEditPanel` 继续复用；`structure_rows.rs` 的共享行呈现由 JSON、TOML 与本格式共同消费，格式语义和可写范围仍归 `yaml_document/projection.rs` 与 `mutation.rs`。registry 依赖与拒绝原因见同一 `UPSTREAM.toml`，根 `LICENSE` 增加 `yaml-edit`、`rowan` 等条目。
+**复用记录与边界**：见 `crates/lyrel-document/src/yaml/UPSTREAM.toml`。没有复制 Glim 源文件：固定 `fc2183f2` 的 `glim-services/src/graph.rs` YAML 分支是 `serde_yaml_ng` → `serde_json::Value` 的有损只读投影，会丢锚点／别名／tag／注释／标量样式并把多文档压成数组，因此明确拒绝。#289 的 `Treelike`／可见行／源码行列与 #290 的 `StructureEditPanel` 继续复用；`structure_rows.rs` 的共享行呈现由 JSON、TOML 与本格式共同消费。格式语义和可写范围归 `lyrel-document` 的 `yaml/projection.rs` 与 `yaml/mutation.rs`。registry 依赖与拒绝原因见同一 `UPSTREAM.toml`，根 `LICENSE` 增加 `yaml-edit`、`rowan` 等条目。
 
 **证据边界**：生产工作台回归覆盖映射 Host 与同名本机诱饵、BOM／混合行尾／UTF16LE／多文档／中文／锚点／别名／tag／block scalar／complex key 的可见树与精确保存、编辑带锚点值后别名仍为引用且可见影响说明、block scalar 多行原始片段编辑、flow 复杂键局部替换、键值／flow 与 block mapping／sequence 的插入与删除、树焦点与跨呈现 Undo／Redo、过期节点与无效源码拒绝写入、输入／节点预算、暂停后迟到解析、另存为／失败写入／外部冲突／取消关闭、独立重开，以及真实 SSH 路由下的保存回读。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍须按最终候选单独记录。
 
@@ -364,7 +364,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 解析：使用正式 registry 的 `toml_edit = 0.25.19`（MIT OR Apache-2.0）。原范围来自只读 `Document::parse`；`DocumentMut::from_str`→`into_mut()` 会无条件 `despan()`，不能当原源码区间权威。解析失败时显示行列与错误，源码仍可编辑修复。
 - 语句归属与局部编辑：选中键值可改原值片段；选中键、显式表或整个表数组可重命名；可向表／根／AoT entry／inline table 添加键，向表添加子表／表数组，向表数组添加 entry；可删除键值、表子树、entry 或整个表数组。`Table::span()` 只覆盖该表 header，`ArrayOfTables::span()` 可能跨过交错无关表，因此删除只收集目标自己的 header 行、直接 key/value 行与显式后代行并合并区间；`[a]`、交错 `[b]`、稍后 `[a.child]` 以及两个 `[[jobs]]` 之间的无关表不会被容器 span 误删。新键与新值先由同一解析器校验，写入前再解析整个结果并核对目标结构；revision／目标 occurrence 过期时拒绝写入。
 - 呈现：默认结构树支持真实指针选择／展开、方向键／Home／End／PageUp／PageDown、Space 折叠、Enter 在源码中定位键值或 header；工具栏与状态行提供 Structure／Source、节点计数、行列、Reveal in source、Full value 与树内编辑。分屏每个分组独立折叠／选择／滚动／焦点，共享同一 Document 与 history。输入最多 1 MiB、结构最多 20,000 节点、路径合计最多 8 MiB；超限时结构明确报错，源码仍可编辑保存。
-- 复用记录：见 `src/ui/code_editor/toml_document/UPSTREAM.toml`。固定 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 没有 TOML 结构编辑器或 mutation；本切片复用 #289 的 `structure_view`、#290 的 `structure_edit` 与共享 `structure_rows` 行呈现（TOML 只保留自身格式节点 kind／key／value／color／badge 与编辑语义），TOML 语义／原区间／语句归属／局部规划由 Lyrel 在 `toml_edit` 上补齐，没有把不存在的上游能力伪装成移植。
+- 复用记录：见 `crates/lyrel-document/src/toml/UPSTREAM.toml`。固定 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 没有 TOML 结构编辑器或 mutation；本切片复用 #289 的 `structure_view`、#290 的 `structure_edit` 与共享 `structure_rows` 行呈现（TOML 只保留自身格式节点 kind／key／value／color／badge 与编辑语义），TOML 语义／原区间／语句归属／局部规划由 Lyrel 在 `toml_edit` 上补齐，没有把不存在的上游能力伪装成移植。
 - 证据边界：隔离工作台回归覆盖映射 Host／同名本机诱饵、BOM／混合行尾、交错表与 AoT、指针／键盘、完整值、保存／另存为／失败写入／进行中旧保存不清新 dirty／外部冲突／取消关闭／独立重开、invalid／预算／迟到结果、分屏 stale 拒绝，以及显式私有 fixture 的真实远端保存回读。原生 OS 窗口、系统 IME、macOS 与性能仍按最终候选分别验收。
 
 <a id="xml-documents"></a>
@@ -379,7 +379,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 失效与预算：每份文档一个后台 worker，输入最多 1 MiB、结构最多 40,000 节点、完整路径文本合计最多 8 MiB；超限时结构视图明确报错，源码仍可编辑与保存。Document 身份、revision 或请求代次不匹配的迟到结果一律丢弃，不会覆盖新 revision；结构变化后仍打开的编辑面板会显示“文档已变化”并拒绝写入，不偷焦点。
 - 呈现：默认显示结构树；工具栏与状态行提供 Structure／Source 切换、元素／属性计数、选中行列、Reveal in source、Full value 与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 在源码中选中该节点的精确范围；完整值面板显示原始源码切片并可复制。分屏的每个分组有独立模式、折叠、选择、完整值、编辑面板和结构滚动，同时共享同一 Document 与 history。
 
-**复用记录与边界**：见 `src/ui/code_editor/xml_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/graph.rs` XML 分支与 `glim-services/src/xml.rs` 仅作参考：前者用 local name、属性先序与文本合并，丢限定名／命名空间／mixed-content 顺序；后者只是 `quick-xml` 事件文本的解码，没有 span 或可写 occurrence。两者均明确拒绝、未导入。可保留的树展开、导航、源码定位与编辑面板来自 #289／#290 的共享实现；XML 语义与 mutation 层是本票在正式 registry 解析器上补齐的缺失部分。根 `LICENSE` 记录 `xmlparser 0.13.6`／`roxmltree 0.21.2` 的 MIT OR Apache-2.0 通知。
+**复用记录与边界**：见 `crates/lyrel-document/src/xml/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/graph.rs` XML 分支与 `glim-services/src/xml.rs` 仅作参考：前者用 local name、属性先序与文本合并，丢限定名／命名空间／mixed-content 顺序；后者只是 `quick-xml` 事件文本的解码，没有 span 或可写 occurrence。两者均明确拒绝、未导入。可保留的树展开、导航、源码定位与编辑面板来自 #289／#290 的共享实现；XML 语义与 mutation 层是本票在正式 registry 解析器上补齐的缺失部分。根 `LICENSE` 记录 `xmlparser 0.13.6`／`roxmltree 0.21.2` 的 MIT OR Apache-2.0 通知。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、声明／PI／注释／CDATA／元素／属性的源码顺序、命名空间解析与重命名拒绝、属性值／文本／CDATA／注释的局部编辑、加属性／子元素／文本、删除属性／元素、共享 Undo／Redo、普通保存与原字节、长混合内容、无效源码修复、DTD／外部实体的可见拒绝与原件不变、输入／节点／路径预算、暂停后迟到结果、分屏独立状态、另存为／失败写入／外部冲突／取消关闭与独立重开；另有忽略测试经严格 pin 的真实 Linux SSH 私有 fixture 验证远端保存。测试夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试、编译成功或解析器成功代替。
 
@@ -395,7 +395,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 保存、另存为、失败／在途写入、外部冲突与未保存关闭沿用既有工作台 lifecycle；表格编辑只经共享 Document 进入保存与 dirty 比较，完成较早的保存不会把更新的编辑标记为已保存。所属 Host 的路径身份不变，同名本机文件不是保存目标。
 - 当前完整表格的工作边界为 8 MiB 源文、200,000 条逻辑记录、4,096 列、1,000,000 个实际字段；任一超限均明确拒绝表格，而非截断源文。单元格摘录为 64 字符，详情一次排版为 8,192 字符，完整复制不受这两个显示预算限制。这些是实现边界，尚不是实测性能结论。
 
-复用记录见 `src/ui/code_editor/csv_document/UPSTREAM.toml`：读取沿用固定 Glim `fc2183f2…` 的 `glim-services/src/csv.rs`、`glim-core/src/table.rs` 与 reader `csv.rs`／`view.rs`；记录／字段源区间、稳定身份、视图查询与 `edit.rs` 的局部 mutation 层是 Lyrel 补缺，上游没有保真写回。许可与原件摘要见该清单和根 `LICENSE`。
+复用记录见 `crates/lyrel-document/src/csv/UPSTREAM.toml`：读取沿用固定 Glim `fc2183f2…` 的 `glim-services/src/csv.rs`、`glim-core/src/table.rs` 与 reader `csv.rs`／`view.rs`；记录／字段源区间、稳定身份、视图查询与 `edit.rs` 的局部 mutation 层是 Lyrel 补缺，上游没有保真写回。许可与原件摘要见该清单和根 `LICENSE`。
 
 证据范围：生产工作台回归覆盖映射 Host 与同名本机诱饵、真实双击／文本输入／回车提交、Unicode 粘贴、矩形复制、行列增删与共享 Undo／Redo、分屏选择与焦点隔离、在途解析拒绝写回、另存为／在途保存／失败保存／外部冲突／取消关闭，以及保存后独立重开与原字节核对；另有 GUI-free 的逐字节局部编辑回归。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、真实 SSH、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
 
@@ -417,7 +417,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 | 全书搜索文本 | 32 MiB | 索引明确报告预算失败 |
 | 单次查询命中 | 5,000 条 | 明示结果受限，不宣称完整 |
 
-完整解析预算见 `crates/lyrel-document/src/epub/limits.rs`。解析／阅读状态的固定来源与原始摘要见 crate 根部的 `UPSTREAM-epub.toml`，GUI 交互的适配记录见 `src/ui/code_editor/book_view/UPSTREAM.toml`；Glim MIT notice 随根 `LICENSE` 分发。
+完整解析预算见 `crates/lyrel-document/src/epub/limits.rs`。解析／阅读状态的固定来源与原始摘要见 crate 根部的 `UPSTREAM-epub.toml`，GUI 交互的适配记录见 `crates/lyrel-workbench-editor/src/code_editor/book_view/UPSTREAM.toml`；Glim MIT notice 随根 `LICENSE` 分发。
 
 证据范围：Windows 生产工作台的完整章节末尾搜索、偏好／书签／阅读位置保存重开和损坏／不支持状态三项通过，原件未写；同次编译零 warning。另由 GUI-free 消费者通过新增的 Unicode 搜索范围与有界上下文回归。上述不代替最终组合候选的原生窗口、真实 SSH、macOS、显示缩放、系统 IME 或性能验收。
 
@@ -429,7 +429,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 身份与打开：打开请求发给实际所属 Host。本机 `LocalHost` 在进程内打开，远端 `RemoteHost` 经 control v18 的 `sqlite-browse-v1` 请求；映射 Host 把路径解析到自己的根目录，测试中使用同路径本机替身证明数据仍来自该 Host。数据库字节不下载到桌面，分页与值请求都限制在 Host 侧。
 - 读取视图：每次打开建立一条只读连接与 `BEGIN DEFERRED` 读取事务，schema、列与页共享同一数据库版本。视图有 30 秒闲置上限、180 秒绝对上限与单 Host 64 个视图上限；过期后显示刷新提示，刷新打开新身份。只读打开不得写数据／schema、改变 journal 模式、checkpoint 源库或加载扩展；可能改变 `-shm` 的正常 SQLite 协调与禁止的数据写入分开表述，需要恢复才能打开的 WAL 被明确拒绝。
 - 值与取消：NULL、精确 INTEGER、非有限 REAL、原始 TEXT 与 BLOB 都以类型化值穿过 wire；页面携带页号、列窗与 `more`。取消绑定到具体请求，旧取消不会停止同一视图上的新页；查询有秒预算、行数／行宽与返回大小上限。
-- 呈现：`src/ui/code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、筛选输入、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。筛选经 Glim 250 ms 防抖把单个绑定参数送入受限 predicate（对所有列做 `instr` 子串匹配），排序经表头循环 降序→升序→还原、名指向 schema 列并随列窗映射，切表清空排序、刷新保留筛选与排序；状态行如实显示当前筛选与排序。完整值检查器（双击或选中单元格 Enter）经同一 query 快照与 `sqlite_value` 按精确字节偏移分块读取，BLOB 显示偏移十六进制转储、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 并标注原因，NULL 不置剪贴板，超过 8 MiB 的值保持可翻页但拒绝部分复制并说明限额；`secondary-f` 聚焦筛选、`escape` 关闭检查器。检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。
+- 呈现：`lyrel-workbench-editor` 的 `code_editor/sqlite_document.rs` 与 `sqlite_grid.rs` 提供架构列表、SQL 定义、加载／空／失败／刷新／取消状态、只读状态行与 Kit 数据表。分屏每个分组有自己的焦点、筛选输入、表格滚动与选择，共享文档的读取视图与页数据；关闭文档、替换视图或迟到结果都不会留下未声称的读取事务。筛选经 Glim 250 ms 防抖把单个绑定参数送入受限 predicate（对所有列做 `instr` 子串匹配），排序经表头循环 降序→升序→还原、名指向 schema 列并随列窗映射，切表清空排序、刷新保留筛选与排序；状态行如实显示当前筛选与排序。完整值检查器（双击或选中单元格 Enter）经同一 query 快照与 `sqlite_value` 按精确字节偏移分块读取，BLOB 显示偏移十六进制转储、复制为连续 hex，非 UTF-8 文本的显示与复制都走原始字节 hex 并标注原因，NULL 不置剪贴板，超过 8 MiB 的值保持可翻页但拒绝部分复制并说明限额；`secondary-f` 聚焦筛选、`escape` 关闭检查器。检查器在切表、筛选、排序或刷新使该 cell 身份失效时关闭。
 - 局部滚动：SQLite `DataTable` 单独使用 `ScrollbarMode::Always`，溢出前即可发现滚动条，全局滚动条策略和其他视图不变。滚动条只遍历当前已加载的行页与列窗，其他数据仍经既有分页和列窗控件到达。每个分屏保留自己的焦点、选择与本地滚动偏移；查询、筛选、排序、行页、列窗及已加载数据仍归共享 `SqliteDocument`，共享数据变化可以重置两边呈现，不为分屏建立独立分页或第二套滚动模型。
 - 依赖与许可：`lyrel-core` 新增 registry `rusqlite`（`bundled` + `hooks`），逐文件 Glim 来源与 MIT notice、拒绝的 `Snapshot` 范围记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。生产工作台回归覆盖类型化值、筛选/排序可见行为、完整值分块与剪贴板、WAL writer 快照、原件不变与分屏独立焦点；Linux 私有回环 SSH 复用同一 fixture 执行共享读取契约，#296 新增的筛选／排序／分块值契约已进入同一套例、其实际 SSH 执行按交付记录单独说明，不把本地结果记为远端通过。该客户端与远端共享测试文件系统，不代替 Windows 远端、独立物理主机、native 窗口、系统 IME、macOS 或性能验收。
 
@@ -486,7 +486,7 @@ Mermaid fenced block 使用正式 Merman `0.9.2`、安全 SVG 管线和 Kit/Fast
 
 primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document。未修改提交、取消和普通呈现不序列化原文；显式提交只替换公式正文，对齐另以同一 batch 修改必要标记。普通 Undo/Redo、source/live 和所属 Host 保存使用原历史与文件生命周期。文档 revision、原 range/选区或模式失效时拒绝过期编辑；结构模型无法保留的字体、颜色、间距或其他语法显示原因，原文仍可在源码模式编辑，不以 best-effort 丢弃 wrapper。
 
-生产消费者位于 `src/ui/code_editor/markdown_formula/tests.rs`，原生入口包括完整 `400034 B` mixed-tall fixture、hard-break/fragment、双视图、提交/取消、普通历史及 mapped Host 保存重开。源码交付不表示新 renderer、系统 IME、固定 Zorite 实窗对照或 macOS 已通过；这些由本轮集中验收另行记录。
+根包 `native_markdown` 套件通过生产工作台验证公式，入口包括完整 `400034 B` mixed-tall fixture、hard-break/fragment、双视图、提交/取消、普通历史及 mapped Host 保存重开。源码交付不表示新 renderer、系统 IME、固定 Zorite 实窗对照或 macOS 已通过。
 
 #### 图片与普通链接
 

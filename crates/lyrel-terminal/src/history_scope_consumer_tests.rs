@@ -182,40 +182,85 @@ fn submitted_command_backfills_its_exit_code(cx: &mut TestAppContext) {
 fn a_late_history_load_cannot_replace_a_restored_scope(cx: &mut TestAppContext) {
     use crate::history::Scope;
     let (window, _daemon) = harness(cx);
-    window.update(cx, |view, _, cx| {
-        seed_history(view, vec!["echo local".into()]);
-        let prompt = view.history_prompt();
-        let remote = view.history.change_scope(Scope::remote("late-history-box"), view.host_id, prompt).unwrap();
-        view.history.change_scope(Scope::Local, view.host_id, prompt).unwrap();
-        assert!(!view.history.accept_load(remote, view.host_id, history_fixture(vec!["echo wrong-host".into()])));
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo local");
-    }).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            seed_history(view, vec!["echo local".into()]);
+            let prompt = view.history_prompt();
+            let remote = view
+                .history
+                .change_scope(Scope::remote("late-history-box"), view.host_id, prompt)
+                .unwrap();
+            view.history
+                .change_scope(Scope::Local, view.host_id, prompt)
+                .unwrap();
+            assert!(!view.history.accept_load(
+                remote,
+                view.host_id,
+                history_fixture(vec!["echo wrong-host".into()])
+            ));
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo local");
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
 fn a_scope_round_trip_rejects_the_previous_load_and_never_caches_a_placeholder(cx: &mut TestAppContext) {
     use crate::history::Scope;
     let (window, _daemon) = harness(cx);
-    window.update(cx, |view, _, cx| {
-        seed_history(view, vec!["echo local".into()]);
-        let prompt = view.history_prompt();
-        let scope = Scope::remote("round-trip-history-box");
-        let retired = view.history.change_scope(scope.clone(), view.host_id, prompt).unwrap();
-        view.history.change_scope(Scope::Local, view.host_id, prompt).unwrap();
-        let current = view.history.change_scope(scope, view.host_id, prompt).unwrap();
-        assert!(!view.history.accept_load(retired, view.host_id, history_fixture(vec!["echo retired".into()])));
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "", "the incomplete remote list did not inherit local commands");
-        assert!(view.history.accept_load(current, view.host_id, history_fixture(vec!["echo current".into()])));
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo current");
-        view.history.change_scope(Scope::Local, view.host_id, prompt).unwrap();
-        view.history.change_scope(Scope::remote("round-trip-history-box"), view.host_id, prompt).unwrap();
-        view.input.editor_mut().clear();
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo current", "a complete scope is recalled immediately");
-    }).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            seed_history(view, vec!["echo local".into()]);
+            let prompt = view.history_prompt();
+            let scope = Scope::remote("round-trip-history-box");
+            let retired = view
+                .history
+                .change_scope(scope.clone(), view.host_id, prompt)
+                .unwrap();
+            view.history
+                .change_scope(Scope::Local, view.host_id, prompt)
+                .unwrap();
+            let current = view
+                .history
+                .change_scope(scope, view.host_id, prompt)
+                .unwrap();
+            assert!(!view.history.accept_load(
+                retired,
+                view.host_id,
+                history_fixture(vec!["echo retired".into()])
+            ));
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "the incomplete remote list did not inherit local commands"
+            );
+            assert!(view.history.accept_load(
+                current,
+                view.host_id,
+                history_fixture(vec!["echo current".into()])
+            ));
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo current");
+            view.history
+                .change_scope(Scope::Local, view.host_id, prompt)
+                .unwrap();
+            view.history
+                .change_scope(
+                    Scope::remote("round-trip-history-box"),
+                    view.host_id,
+                    prompt,
+                )
+                .unwrap();
+            view.input.editor_mut().clear();
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "echo current",
+                "a complete scope is recalled immediately"
+            );
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -223,17 +268,33 @@ fn a_history_load_is_fenced_when_the_host_changes_before_the_next_poll(cx: &mut 
     use crate::history::Scope;
     use lyrel_ui_base::host_ops::HostId;
     let (window, _daemon) = harness(cx);
-    window.update(cx, |view, _, cx| {
-        let prompt = view.history_prompt();
-        let scope = Scope::remote("shared-label-history-box");
-        let retired = view.history.change_scope(scope.clone(), view.host_id, prompt).unwrap();
-        view.host_id = HostId::from_connection_key("ssh-direct:other-history-box:22");
-        assert!(!view.history.accept_load(retired, view.host_id, history_fixture(vec!["echo old-host".into()])));
-        let current = view.history.change_scope(scope, view.host_id, prompt).unwrap();
-        assert!(view.history.accept_load(current, view.host_id, history_fixture(vec!["echo new-host".into()])));
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo new-host");
-    }).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            let prompt = view.history_prompt();
+            let scope = Scope::remote("shared-label-history-box");
+            let retired = view
+                .history
+                .change_scope(scope.clone(), view.host_id, prompt)
+                .unwrap();
+            view.host_id = HostId::from_connection_key("ssh-direct:other-history-box:22");
+            assert!(!view.history.accept_load(
+                retired,
+                view.host_id,
+                history_fixture(vec!["echo old-host".into()])
+            ));
+            let current = view
+                .history
+                .change_scope(scope, view.host_id, prompt)
+                .unwrap();
+            assert!(view.history.accept_load(
+                current,
+                view.host_id,
+                history_fixture(vec!["echo new-host".into()])
+            ));
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo new-host");
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -241,22 +302,48 @@ fn equally_named_history_scopes_never_restore_another_hosts_commands(cx: &mut Te
     use crate::history::Scope;
     use lyrel_ui_base::host_ops::HostId;
     let (window, _daemon) = harness(cx);
-    window.update(cx, |view, _, cx| {
-        let prompt = view.history_prompt();
-        let scope = Scope::remote("equal-label-history-box");
-        let first_host = view.host_id;
-        let first = view.history.change_scope(scope.clone(), first_host, prompt).unwrap();
-        assert!(view.history.accept_load(first, first_host, history_fixture(vec!["echo first-host".into()])));
-        view.host_id = HostId::from_connection_key("ssh-direct:second-history-box:22");
-        let second = view.history.change_scope(scope.clone(), view.host_id, prompt).unwrap();
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "", "scope labels alone cannot authorize a cached Host");
-        assert!(view.history.accept_load(second, view.host_id, history_fixture(vec!["echo second-host".into()])));
-        view.host_id = first_host;
-        view.history.change_scope(scope, first_host, prompt).unwrap();
-        view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo first-host", "the original Host still has its own cached list");
-    }).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            let prompt = view.history_prompt();
+            let scope = Scope::remote("equal-label-history-box");
+            let first_host = view.host_id;
+            let first = view
+                .history
+                .change_scope(scope.clone(), first_host, prompt)
+                .unwrap();
+            assert!(view.history.accept_load(
+                first,
+                first_host,
+                history_fixture(vec!["echo first-host".into()])
+            ));
+            view.host_id = HostId::from_connection_key("ssh-direct:second-history-box:22");
+            let second = view
+                .history
+                .change_scope(scope.clone(), view.host_id, prompt)
+                .unwrap();
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "scope labels alone cannot authorize a cached Host"
+            );
+            assert!(view.history.accept_load(
+                second,
+                view.host_id,
+                history_fixture(vec!["echo second-host".into()])
+            ));
+            view.host_id = first_host;
+            view.history
+                .change_scope(scope, first_host, prompt)
+                .unwrap();
+            view.handle_editor_key(&key("up"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "echo first-host",
+                "the original Host still has its own cached list"
+            );
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -265,18 +352,28 @@ fn a_command_recorded_while_history_loads_remains_searchable(cx: &mut TestAppCon
     let (_window, view, _daemon) = rooted_harness(cx);
     view.update(cx, |view, cx| {
         let scope = Scope::remote("history-loading-fixture");
-        let load = view.history.change_scope(scope.clone(), view.host_id, view.history_prompt()).unwrap();
-        view.input.editor_mut().set("echo recorded_during_history_load");
+        let load = view
+            .history
+            .change_scope(scope.clone(), view.host_id, view.history_prompt())
+            .unwrap();
+        view.input
+            .editor_mut()
+            .set("echo recorded_during_history_load");
         view.submit_command(cx);
         let loaded = crate::history::load_with_shell_files(
             &scope,
-            vec![(".bash_history".into(), b"echo seeded_before_load\n".to_vec())],
+            vec![(
+                ".bash_history".into(),
+                b"echo seeded_before_load\n".to_vec(),
+            )],
         );
         assert!(view.history.accept_load(load, view.host_id, loaded));
         view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("recorded_during_history_load", cx);
         assert_eq!(
-            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
             Some("echo recorded_during_history_load"),
             "a completed load must not erase commands submitted while it was reading",
         );

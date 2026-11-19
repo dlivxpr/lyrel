@@ -10,14 +10,14 @@ fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut 
     let (window, view, mut daemon) = rooted_harness(cx);
     let bytes = METAFIED_ZSH_HISTORY;
     let command = "echo '读取令牌失败ー🙂'";
-    let loaded = crate::terminal::history::load_with_shell_files(
-        &crate::terminal::history::Scope::remote("metafied-zsh-consumer"),
+    let loaded = lyrel_terminal::history::load_with_shell_files(
+        &lyrel_terminal::history::Scope::remote("metafied-zsh-consumer"),
         vec![(".zsh_history".into(), bytes.to_vec())],
     );
     assert_eq!(loaded.entries, [command]);
     assert_eq!(
         loaded.meta.get(command),
-        Some(&crate::terminal::history::EntryMeta {
+        Some(&lyrel_terminal::history::EntryMeta {
             ts: Some(1_700_000_000),
             exit: None,
         }),
@@ -57,8 +57,8 @@ fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut 
 /// native macOS acceptance.
 #[gpui_kit::test]
 fn reverse_search_cmd_enter_owns_dispatch_only_while_searching(cx: &mut TestAppContext) {
-    use crate::core::config::KeybindingOverride;
     use gpui_kit::{OperatingSystem, PlatformInfo, PlatformTarget};
+    use lyrel_core::core::config::KeybindingOverride;
 
     cx.set_platform_info(PlatformInfo {
         os: OperatingSystem::Mac,
@@ -291,7 +291,7 @@ fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
 
     let (window, mut daemon) = harness(cx);
     window
@@ -365,7 +365,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
 
             history.meta.insert(
                 "cargo build --release".into(),
-                crate::terminal::history::EntryMeta {
+                lyrel_terminal::history::EntryMeta {
                     ts: Some(unix_now().saturating_sub(7200)),
                     exit: Some(1),
                 },
@@ -403,7 +403,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
 fn a_press_on_the_history_menu_never_reaches_the_grid(cx: &mut TestAppContext) {
     use gpui_kit::{MouseMoveEvent, PlatformInput};
 
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     wait_for_input_active(&window, cx);
@@ -533,7 +533,7 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
     cx.update(|cx| {
         let config = cx.global_mut::<Config>();
         config.per_pane_history = true;
-        config.shell = Some(crate::core::config::ShellConfig {
+        config.shell = Some(lyrel_core::core::config::ShellConfig {
             program: "/usr/bin/zsh".into(),
             args: Vec::new(),
         });

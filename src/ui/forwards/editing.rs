@@ -3,9 +3,9 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Window};
 
 use super::{ForwardFields, Forwarding, rule_of};
 use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind, SshForwardRule};
-use crate::terminal::forward_client::ForwardClient;
-use crate::ui::i18n::{L10nKey, t};
-use crate::ui::route::{ForwardOwnerKey, ForwardRoute};
+use lyrel_terminal::forward_client::ForwardClient;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::route::{ForwardOwnerKey, ForwardRoute};
 
 /// Rejection permits the short form's alternate port; no answer never does.
 enum PlaceOutcome {

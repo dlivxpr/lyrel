@@ -18,11 +18,11 @@ use lyrel_insights::github::{
 use crate::ui::app::LyrelApp;
 use crate::ui::github::rows::{GLYPH, ROW_H, stack_glyph, stack_trunk};
 use crate::ui::github::{GhTarget, now_unix};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_INSET, TAB_TEXT, TEXT, TEXT_INSET};
 use crate::ui::scm::path::relative_time;
 use crate::ui::scm::state::RepoKey;
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// How many label chips a hovered row shows before the age.
 const MAX_ROW_LABELS: usize = 3;
@@ -172,7 +172,7 @@ impl LyrelApp {
             .min_h_0()
             .child(title)
             .children(pinned)
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "panel-github-scrollbar",
                 scroller,
                 scroll,
@@ -329,7 +329,7 @@ impl LyrelApp {
         item: &Item,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let muted = cx.theme().muted_foreground;
         let mono = cx.theme().mono_font_family.clone();
         let number = item.number;
@@ -612,7 +612,7 @@ impl LyrelApp {
         now: i64,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let muted = cx.theme().muted_foreground;
         let mono = cx.theme().mono_font_family.clone();
         let number = item.number;
@@ -779,7 +779,7 @@ fn switch_cell(
     live: bool,
     cx: &gpui_kit::App,
 ) -> impl IntoElement + gpui_kit::StatefulInteractiveElement + use<> {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     h_flex()
         .id(id)
         .test_support()
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_signed_out_rate_limit_says_when_and_how_to_raise_it() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let reset = now_unix() + 10 * 60;
         let (text, hint) = describe_error(&ApiError::RateLimited { reset: Some(reset) }, false);
         assert_eq!(text, t(L10nKey::GitHubRateLimited));
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn a_404_is_explained_by_whether_the_request_was_signed_in() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let (out, hint) = describe_error(&ApiError::NotFound, false);
         assert_eq!(out, t(L10nKey::GitHubNotFoundSignedOut));
         assert!(hint.unwrap().contains("gh auth login"));
@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn every_error_has_something_to_say() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for err in [
             ApiError::Unauthorized,
             ApiError::NotFound,
@@ -1170,7 +1170,7 @@ mod gpui_tests {
             assert!(app.scm.pane_repo().is_none(), "Changes was never opened");
             assert!(
                 cx.global::<crate::ui::scm::data::ScmData>()
-                    .status_for(crate::ui::host_ops::HostId::LOCAL, &root)
+                    .status_for(lyrel_ui_base::host_ops::HostId::LOCAL, &root)
                     .is_none(),
                 "GitHub metadata must not trigger a full working-tree status read"
             );

@@ -42,7 +42,7 @@ impl Management {
             busy: false,
             error: None,
             status: None,
-            path: crate::core::config::config_path("statistics-settings.json"),
+            path: lyrel_core::core::config::config_path("statistics-settings.json"),
             surface: None,
             scroll: gpui_kit::ScrollHandle::new(),
             editor: None,
@@ -1169,7 +1169,7 @@ impl SettingsWindow {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "statistics-management-scrollbar",
                 body,
                 &state.scroll,

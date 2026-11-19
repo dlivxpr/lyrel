@@ -19,9 +19,9 @@ use gpui_kit::{App, AppContext as _, Entity, Window};
 use lyrel_core::core::git::log::{Commit, CommitFile, CommitPage, GraphScope};
 use lyrel_core::core::git::status::{HeadState, WorkingTreeStatus};
 
-use crate::ui::host_ops::{HostId, SharedHost};
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 mod branches;
 mod history;

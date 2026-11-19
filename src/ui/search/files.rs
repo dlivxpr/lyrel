@@ -18,9 +18,9 @@ use super::SearchTab;
 use super::command::{CommandKind, Item};
 use super::sources::{Row, Section, Source};
 use crate::ui::app::LyrelApp;
-use crate::ui::file_search::{FileList, IndexKey, IndexedFile, parse_query, rank, walk};
-use crate::ui::host_ops::HostOps;
-use crate::ui::i18n::{L10nKey, t_fmt};
+use lyrel_ui_base::file_search::{FileList, IndexKey, IndexedFile, parse_query, rank, walk};
+use lyrel_ui_base::host_ops::HostOps;
+use lyrel_ui_base::i18n::{L10nKey, t_fmt};
 
 #[cfg(test)]
 use crate::ui::file_tree::read_probe::{InstanceTicket, ReadKind};
@@ -35,7 +35,7 @@ const SEARCH_ROWS: usize = 200;
 
 /// One row of the Files tab, built from the shared index the terminal's
 /// composer also ranks against — the values themselves live in
-/// `crate::ui::file_search`.
+/// `lyrel_ui_base::file_search`.
 fn file_item(file: &IndexedFile, line: Option<u32>, column: Option<u32>) -> Item {
     let mut item = Item::new(
         file.name(),
@@ -232,7 +232,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::ui::file_search::{
+    use lyrel_ui_base::file_search::{
         FileIndex, FileQuery, INDEX_LIMIT, build_index, searchable_roots,
     };
 

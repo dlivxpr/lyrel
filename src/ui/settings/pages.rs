@@ -13,13 +13,13 @@ impl SettingsWindow {
         let current_lang = Self::normalize_gui_language(&cfg.gui_language);
         let language = self.settings_dropdown(
             "settings-language",
-            t(crate::ui::i18n::language_mode_label(current_lang)),
+            t(lyrel_ui_base::i18n::language_mode_label(current_lang)),
             None,
-            crate::ui::i18n::LANGUAGE_MODES
+            lyrel_ui_base::i18n::LANGUAGE_MODES
                 .iter()
                 .map(|&code| {
                     MenuEntry::item(
-                        t(crate::ui::i18n::language_mode_label(code)),
+                        t(lyrel_ui_base::i18n::language_mode_label(code)),
                         code == current_lang,
                         move |this, window, cx| this.set_gui_language(code, window, cx),
                     )
@@ -68,9 +68,9 @@ impl SettingsWindow {
 
         let cfg = cx.global::<Config>();
         let startup_idx = match cfg.startup_mode {
-            crate::core::config::StartupMode::Normal => 0,
-            crate::core::config::StartupMode::Maximized => 1,
-            crate::core::config::StartupMode::Fullscreen => 2,
+            lyrel_core::core::config::StartupMode::Normal => 0,
+            lyrel_core::core::config::StartupMode::Maximized => 1,
+            lyrel_core::core::config::StartupMode::Fullscreen => 2,
         };
         let restore_session = cfg.restore_session;
         let remember_window_size = cfg.remember_window_size;
@@ -99,9 +99,9 @@ impl SettingsWindow {
             cx,
             |this, ix, _w, cx| {
                 let mode = match ix {
-                    0 => crate::core::config::StartupMode::Normal,
-                    1 => crate::core::config::StartupMode::Maximized,
-                    _ => crate::core::config::StartupMode::Fullscreen,
+                    0 => lyrel_core::core::config::StartupMode::Normal,
+                    1 => lyrel_core::core::config::StartupMode::Maximized,
+                    _ => lyrel_core::core::config::StartupMode::Fullscreen,
                 };
                 this.set_startup_mode(mode, cx);
             },
@@ -294,7 +294,7 @@ impl SettingsWindow {
     }
 
     pub(crate) fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::core::config::{
+        use lyrel_core::core::config::{
             FONT_SIZE_MAX, FONT_SIZE_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN, UI_FONT_SIZE_MAX,
             UI_FONT_SIZE_MIN,
         };
@@ -827,7 +827,7 @@ impl SettingsWindow {
             .then(|| t(L10nKey::SettingsArgumentsInvalid).to_string());
         let args_control = self.settings_checked_input(&args_input, FIELD_W, args_error, cx);
 
-        use crate::core::config::WdStrategy;
+        use lyrel_core::core::config::WdStrategy;
         let wd_idx = match wd_strategy {
             WdStrategy::Inherit => 0,
             WdStrategy::Home => 1,
@@ -1653,7 +1653,7 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
-        let settings_file = crate::core::config::config_path("config.json");
+        let settings_file = lyrel_core::core::config::config_path("config.json");
         if let Some(path) = settings_file {
             let shown = tildify(&path.to_string_lossy());
             let reveal = self

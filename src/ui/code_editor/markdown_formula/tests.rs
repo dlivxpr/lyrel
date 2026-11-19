@@ -31,7 +31,7 @@ fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestC
     }
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
-    context.dispatch_action(crate::core::actions::EditorSave);
+    context.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(context, |context| {
         app.read_with(context, |app, cx| {
             app.active_buffer(cx)
@@ -126,7 +126,7 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     app.read_with(&context, |app, cx| {
         assert!(app.active_buffer(cx).unwrap().dirty)
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     first.read_with(&context, |view, cx| {
@@ -136,7 +136,7 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Redo);
     save(&app, &mut context);
     assert_eq!(std::fs::read(&file).unwrap(), expected);
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     // The second presentation gets its own structural seat, with the same Document/history.
     app.update_in(&mut context, |app, window, cx| {
         assert!(app.editor_split(window, cx))

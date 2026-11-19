@@ -209,7 +209,7 @@ fn type_source(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -356,7 +356,7 @@ fn assert_original(remote_file: &Path, local_file: &Path) {
 
 #[gpui_kit::test]
 fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     // The mapped Host's file and a same-named local decoy: only the owning
@@ -573,7 +573,7 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 
 #[gpui_kit::test]
 fn table_aot_inline_and_key_commands_preserve_interleaved_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "structures.toml", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(2930));
@@ -797,7 +797,7 @@ fn table_aot_inline_and_key_commands_preserve_interleaved_bytes(tcx: &mut TestAp
 fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_structure(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(2931));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -911,7 +911,7 @@ fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_struc
 
 #[gpui_kit::test]
 fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "split.toml", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(2932));
@@ -1121,7 +1121,7 @@ fn split_presentations_share_document_and_reject_stale_tree_edits(tcx: &mut Test
 fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.toml", ORIGINAL);
     let target = dir.path().join("persisted.toml");
@@ -1139,7 +1139,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"changed\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
@@ -1156,7 +1156,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     // completes. Pause the write, edit the tree again, then let the old save
     // finish: the target keeps the old bytes and the document stays dirty.
     let release = host.pause_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx).is_some_and(|file| file.saving)
@@ -1188,7 +1188,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -1267,13 +1267,13 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.update_in(&mut cx, |app, window, cx| app.editor_has_focus(window, cx)),
         "the applied tree edit returns focus to the editor panel"
     );
-    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    cx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut cx);
     assert!(
         cx.has_pending_prompt(),
         "an unsaved tree edit must prompt before close"
     );
-    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    cx.simulate_prompt_answer(lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
         app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
@@ -1307,7 +1307,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
 fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );

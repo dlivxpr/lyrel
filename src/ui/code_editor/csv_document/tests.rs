@@ -74,7 +74,7 @@ fn source(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> String {
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -106,7 +106,7 @@ fn enter_path(cx: &mut VisualTestContext, path: &Path) {
 fn mapped_csv_sort_filter_full_value_and_source_save_preserve_original_bytes(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let root = canonical_tempdir();
     let remote = canonical_tempdir();
     let path = Path::new("/owned.csv");
@@ -396,7 +396,7 @@ fn table_state(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<(usize,
 
 #[gpui_kit::test]
 fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let root = canonical_tempdir();
     let remote = canonical_tempdir();
     let path = Path::new("/editable.csv");
@@ -474,7 +474,7 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
 fn tabular_paste_uses_file_record_identity_under_sort_and_is_one_history_step(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("order.csv");
     let original = b"c,b\nc,a\na,b\n";
@@ -551,7 +551,7 @@ fn tabular_paste_uses_file_record_identity_under_sort_and_is_one_history_step(
 
 #[gpui_kit::test]
 fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("rows.csv");
     let original = "a,b\nc,d\ne\n";
@@ -702,7 +702,7 @@ fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("split.csv");
     std::fs::write(&path, "a,b\nc,d\n").unwrap();
@@ -815,7 +815,7 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut T
 
 #[gpui_kit::test]
 fn a_stale_table_cannot_write_back_while_the_source_is_reparsing(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("stale.csv");
     let original = b"a,b\nc,d\n";
@@ -864,7 +864,7 @@ fn a_stale_table_cannot_write_back_while_the_source_is_reparsing(tcx: &mut TestA
 
 #[gpui_kit::test]
 fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let root = canonical_tempdir();
     let remote = canonical_tempdir();
     let path = Path::new("/owned.csv");
@@ -887,7 +887,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
         value(&app, cx, 0, 0).as_deref() == Some("first")
             && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
     });
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     enter_path(&mut cx, copy);
     until(&mut cx, |cx| {
@@ -908,7 +908,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
             && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
     });
     let release = host.pause_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |_| host.entered.load(Ordering::SeqCst));
     edit_cell(&mut cx, id, 0, 1, "third");
     until(&mut cx, |cx| {
@@ -959,7 +959,7 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
 fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("guard.csv");
     let original = b"a,b\nc,d\n";
@@ -993,7 +993,7 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     cx.update(|window, cx| window.click(cell_id(id, 0, 0), cx));
     settle(&mut cx);
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
         host.entered.load(Ordering::SeqCst)
             && app.read_with(cx, |app, cx| {
@@ -1022,7 +1022,7 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
 
 #[gpui_kit::test]
 fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("reload.csv");
     std::fs::write(&path, "a,b\nc,d\n").unwrap();
@@ -1102,7 +1102,7 @@ fn open_remote(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedH
 #[gpui_kit::test]
 #[ignore = "requires the explicit private pinned SSH fixture and a same-commit local server; run alone with --ignored"]
 fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     use lyrel_core::host::Host as _;
     let binary = std::path::PathBuf::from(
         std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER")

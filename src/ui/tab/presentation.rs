@@ -1,10 +1,10 @@
 use super::{Tab, TabSet};
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::daemon::protocol::ShellSpec;
 use crate::ui::pane::{Dir, Pane, PaneSlot};
 use crate::ui::tree_sync::projection::{logical_node, slot_pane_id};
 use gpui_kit::{App, Axis, EntityId, Window};
 use lyrel_core::core::machine::{Axis as TreeAxis, PaneNode, Tab as TreeTab, TabPresentation};
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 use std::collections::HashMap;
 fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
     match node {
@@ -372,7 +372,7 @@ impl Tab {
     /// The active zoom is a window rendering handle; the tab owns its transition.
     pub(crate) fn toggle_zoom(
         &mut self,
-        zoom: &mut Option<gpui_kit::Entity<crate::terminal::view::TerminalView>>,
+        zoom: &mut Option<gpui_kit::Entity<lyrel_terminal::view::TerminalView>>,
         window: &Window,
         cx: &App,
     ) -> Option<PaneSlot> {
@@ -596,7 +596,7 @@ pub(crate) struct SplitRequest {
     target: EntityId,
     spawn: SpawnAs,
     cwd: Option<std::path::PathBuf>,
-    workspace: Option<crate::ui::route::PaneWorkspace>,
+    workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
 }
 
 impl SplitRequest {
@@ -607,7 +607,7 @@ impl SplitRequest {
         EntityId,
         SpawnAs,
         Option<std::path::PathBuf>,
-        Option<crate::ui::route::PaneWorkspace>,
+        Option<lyrel_ui_base::route::PaneWorkspace>,
     ) {
         (self.tab, self.target, self.spawn, self.cwd, self.workspace)
     }

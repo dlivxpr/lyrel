@@ -128,6 +128,9 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
       - run: bash .github/scripts/check-host-boundary.sh
+      - name: Check production dependency graph
+        if: steps.diff.outputs.desktop == 'true' || steps.diff.outputs.linux == 'true' || steps.diff.outputs.server == 'true'
+        run: node .github/scripts/workspace-graph.cjs
 
   build:
     name: build & test (${{ matrix.target }})

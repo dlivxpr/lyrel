@@ -65,7 +65,7 @@ impl SettingsWindow {
             }),
         );
         let settings_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchSettings))
+            InputState::new(window, cx).placeholder(t(lyrel_ui_base::i18n::L10nKey::SearchSettings))
         });
         subs.push(
             cx.subscribe_in(&settings_search, window, |this, input, ev, _w, cx| {
@@ -114,7 +114,7 @@ impl SettingsWindow {
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
             ssh: ssh::SshSettings::new(window, cx),
-            agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
+            agent_hooks_host: lyrel_ui_base::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,
             agent_hooks_note: None,

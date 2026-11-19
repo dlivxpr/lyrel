@@ -271,7 +271,7 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
     let source = format!("# Heading {prose}\n\n{prose}\n\n- {prose}\n\n> {prose}\n\nend");
     let (_directory, _path, app, mut context, view, _streams) = open(cx, &source);
     if !view.read_with(&context, |view, _| view.is_soft_wrap()) {
-        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+        context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentWrap);
     }
     for font_size in [16., 20., 14.] {
         context.update(|_, cx| Theme::update(cx, |theme| theme.font_size = px(font_size)));
@@ -367,7 +367,7 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
 
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppContext) {
-    use crate::core::config::Config;
+    use lyrel_ui_base::config::Config;
     let (_directory, _path, app, mut context, first, _streams) = open(cx, "body text\n");
     app.update_in(&mut context, |app, window, cx| {
         assert!(app.editor_split(window, cx))
@@ -385,7 +385,7 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
         ("en", "Cut", "Copy", "Paste"),
     ] {
         context.update(|_, cx| {
-            crate::ui::i18n::set_locale(locale);
+            lyrel_ui_base::i18n::set_locale(locale);
             let mut config = cx.global::<Config>().clone();
             config.gui_language = locale.into();
             cx.set_global(config);
@@ -426,7 +426,7 @@ pub(super) fn native_wrapped_code_background(cx: &mut TestAppContext) {
     let source = format!("```rust\nlet value = \"{long}\";\nlet after = true;\n```\n");
     let (_directory, _path, _app, mut context, view, _streams) = open(cx, &source);
     if !view.read_with(&context, |view, _| view.is_soft_wrap()) {
-        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+        context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentWrap);
     }
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(source.len()..source.len(), cx)

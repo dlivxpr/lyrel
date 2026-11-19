@@ -145,7 +145,7 @@ fn secondary(chord: &str) -> String {
 
 #[gpui_kit::test]
 fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -234,7 +234,7 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn all_five_static_formats_decode_as_themselves(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let cases: [(&str, Vec<u8>, ImageFormat); 5] = [
         (
@@ -288,7 +288,7 @@ fn all_five_static_formats_decode_as_themselves(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -341,7 +341,7 @@ fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -384,7 +384,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn keyboard_and_controls_frame_the_picture_and_pan_it(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -471,7 +471,7 @@ fn keyboard_and_controls_frame_the_picture_and_pan_it(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = solid(image::ImageFormat::Png, 40, 30);
     let path = fixture(dir.path(), "read-only.png", &before);
@@ -485,10 +485,13 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        let wrap_before = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let wrap_before = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .editor_soft_wrap;
         app.toggle_document_wrap(window, cx);
         assert_eq!(
-            cx.global::<crate::core::config::Config>().editor_soft_wrap,
+            cx.global::<lyrel_ui_base::config::Config>()
+                .editor_soft_wrap,
             wrap_before,
             "wrap stays a text preference"
         );
@@ -530,7 +533,7 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -555,7 +558,7 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -594,7 +597,7 @@ fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_bytes = solid(image::ImageFormat::Png, 10, 10);
     let path = fixture(dir.path(), "pic.png", &local_bytes);
@@ -675,7 +678,7 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -742,7 +745,7 @@ fn split_groups_keep_their_own_framing_over_one_document(tcx: &mut TestAppContex
 fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -883,7 +886,7 @@ fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
 #[gpui_kit::test]
 fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppContext) {
     use self::gif::DisposalMethod::{Background, Keep, Previous};
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = gif_fixture(
         &[
@@ -967,7 +970,7 @@ fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = gif_fixture(
         &[
@@ -1022,7 +1025,7 @@ fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut Tes
 
 #[gpui_kit::test]
 fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (900, 600, [200, 10, 10]),
@@ -1117,7 +1120,7 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
 
 #[gpui_kit::test]
 fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (40, 20, [200, 10, 10]),
@@ -1156,7 +1159,7 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
         (40, 20, [200, 10, 10]),
@@ -1230,7 +1233,7 @@ fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -1317,7 +1320,7 @@ fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let local = super::super::test_host::canonical_tempdir();
     let decoy = super::super::test_host::canonical_tempdir();
     let local_gif = gif_fixture(
@@ -1391,7 +1394,7 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
 /// owning Host's versioned segments, not a raised whole-file limit.
 #[gpui_kit::test]
 fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = super::super::test_host::noise_png(1400, 1000);
     assert!(
@@ -1432,7 +1435,7 @@ fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
     use lyrel_core::host::server::{Services, serve_with};
     use std::net::{TcpListener, TcpStream};
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = super::super::test_host::noise_png(1400, 1000);
     assert!(bytes.len() > 4 * 1024 * 1024);

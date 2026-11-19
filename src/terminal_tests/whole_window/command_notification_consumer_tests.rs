@@ -72,9 +72,9 @@ fn command_notification_cycle(
     command_notification_pump(cx);
 }
 
-fn command_notification_take() -> Vec<crate::terminal::desktop_notification::DeliveredNotification>
+fn command_notification_take() -> Vec<lyrel_terminal::desktop_notification::DeliveredNotification>
 {
-    crate::terminal::desktop_notification::take_test_notifications()
+    lyrel_terminal::desktop_notification::take_test_notifications()
 }
 
 fn command_notification_attach(
@@ -123,10 +123,7 @@ fn command_notification_prime_prompt(daemon: &GraphicsDaemonProcess, pane: u64) 
     // The fixture echoes a complete SEND request, not raw bytes: its line
     // reader needs the newline and its graphics barrier keeps the real daemon
     // reply path exercised before the GUI joins.
-    let request = format!(
-        "SEND 1 0 {} 0\n",
-        hex(COMMAND_NOTIFICATION_PROMPT)
-    );
+    let request = format!("SEND 1 0 {} 0\n", hex(COMMAND_NOTIFICATION_PROMPT));
     ClientMsg::Input(request.into_bytes())
         .encode(&mut stream)
         .unwrap();
@@ -170,7 +167,7 @@ fn command_notification_wait_replayed_prompt(
 
 #[gpui_kit::test]
 fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestAppContext) {
-    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _capture = lyrel_terminal::desktop_notification::capture_test_notifications();
     let _ = command_notification_take();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
@@ -179,14 +176,14 @@ fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestA
     vcx.update(|_, cx| {
         let mut cfg = cx.global::<Config>().clone();
         cfg.cursor_blink = false;
-        cfg.notify_on_command_finish = crate::core::config::NotifyMode::Always;
+        cfg.notify_on_command_finish = lyrel_core::core::config::NotifyMode::Always;
         cfg.notify_threshold_secs = 0;
         cx.set_global(cfg);
     });
     let view = command_notification_attach(&daemon, pane, &app, &mut vcx);
     command_notification_wait_replayed_prompt(&view, cx);
     let pane_entity = view.entity_id();
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     // The primer used serial 1, so the first command cycle starts above it:
     // a reused marker would already be in the replayed scrollback.
     let mut serial = 1;
@@ -266,7 +263,7 @@ fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestA
     // `never` remains a hard gate, independent of the delivery path.
     vcx.update(|_, cx| {
         let mut cfg = cx.global::<Config>().clone();
-        cfg.notify_on_command_finish = crate::core::config::NotifyMode::Never;
+        cfg.notify_on_command_finish = lyrel_core::core::config::NotifyMode::Never;
         cfg.notify_threshold_secs = 0;
         cx.set_global(cfg);
     });
@@ -281,7 +278,7 @@ fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestA
     vcx.update(|window, cx| {
         window.activate_window();
         let mut cfg = cx.global::<Config>().clone();
-        cfg.notify_on_command_finish = crate::core::config::NotifyMode::Unfocused;
+        cfg.notify_on_command_finish = lyrel_core::core::config::NotifyMode::Unfocused;
         cx.set_global(cfg);
     });
     let active = vcx.update(|window, _| window.is_window_active());
@@ -298,10 +295,10 @@ fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestA
     // The ordinary path stands on its own and follows the existing locale.
     vcx.update(|_, cx| {
         let mut cfg = cx.global::<Config>().clone();
-        cfg.notify_on_command_finish = crate::core::config::NotifyMode::Always;
+        cfg.notify_on_command_finish = lyrel_core::core::config::NotifyMode::Always;
         cx.set_global(cfg);
     });
-    crate::ui::i18n::set_locale("zh-CN");
+    lyrel_ui_base::i18n::set_locale("zh-CN");
     command_notification_cycle(&view, cx, &mut serial, Some(0));
     let notes = command_notification_take();
     assert_eq!(
@@ -314,5 +311,5 @@ fn real_pty_command_results_notify_with_existing_policy(cx: &mut gpui_kit::TestA
         "the same path uses the Simplified Chinese wording: {:?}",
         notes[0].body
     );
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }

@@ -11,22 +11,12 @@ use lyrel_core::core::machine::TabId;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::core::actions::*;
-use crate::core::config::{
-    Config, CursorStyle as ConfigCursorStyle, NewTabPosition, RightPanelTab,
-};
-use crate::core::session::{Session, SessionTab, WorkspaceId, WorkspaceStore};
 use crate::core::shells::ShellInventory;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteKind, ShellSpec};
 use crate::daemon::spawn::DaemonMismatch;
-use crate::terminal::forward_client::ForwardClient;
-use crate::terminal::view::{ChildExited, TerminalView};
 use crate::ui::forwards::Forwarding;
-use crate::ui::host_registry::HostId;
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
-use crate::ui::route::ForwardRoute;
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
     ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,
@@ -38,6 +28,15 @@ use crate::ui::session_lifecycle::{
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings_window::SettingsWindow;
 use crate::ui::tab::presentation::{OpenedFrom, SpawnAs, inherited_start_dir};
+use lyrel_core::core::config::{CursorStyle as ConfigCursorStyle, NewTabPosition, RightPanelTab};
+use lyrel_terminal::forward_client::ForwardClient;
+use lyrel_terminal::view::{ChildExited, TerminalView};
+use lyrel_ui_base::actions::*;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::host_registry::HostId;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::route::ForwardRoute;
+use lyrel_ui_base::session::{Session, SessionTab, WorkspaceId, WorkspaceStore};
 mod actions;
 mod composition;
 mod editor_links;
@@ -83,7 +82,7 @@ impl SpawnWhere {
 // lyrel-core next to the validation: a local, narrower pair used to push a
 // config-legal value the wrong way — `font_size: 50` shrank to 48 on "+",
 // and the result was written back to the file (#550).
-pub(crate) use crate::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
+pub(crate) use lyrel_core::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
 
 pub(crate) const FONT_SIZE_STEP: f32 = 1.0;
 
@@ -263,9 +262,9 @@ pub struct LyrelApp {
     pub(crate) scm: crate::ui::scm::ScmPanelState,
     pub(crate) github: crate::ui::github::GitHubPanelState,
     pub(crate) diff_probes_inflight:
-        std::collections::HashSet<(crate::ui::host_ops::HostId, std::path::PathBuf)>,
+        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
     pub(crate) diff_probes_restale:
-        std::collections::HashSet<(crate::ui::host_ops::HostId, std::path::PathBuf)>,
+        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
     pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
@@ -365,7 +364,7 @@ pub struct LyrelApp {
     pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
-        crate::ui::host_registry::HostId,
+        lyrel_ui_base::host_registry::HostId,
         crate::ui::switcher::HostSnapshot,
     >,
     /// Errors reported for a remote host that should be shown inside that host's
@@ -399,9 +398,9 @@ pub(crate) enum CloseTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CloseReason {
     LiveSsh,
-    Busy(crate::terminal::view::PaneBusy),
+    Busy(lyrel_terminal::view::PaneBusy),
     /// Nothing is running; the user asked to be asked anyway
-    /// ([`ConfirmClose::Always`](crate::core::config::ConfirmClose::Always)).
+    /// ([`ConfirmClose::Always`](lyrel_core::core::config::ConfirmClose::Always)).
     Idle,
     /// A bulk close of this many tabs, asked about once for all of them.
     Tabs(usize),
@@ -412,11 +411,11 @@ pub(crate) enum CloseReason {
 /// The SSH warning comes first and is not governed by `mode`: it is an opt-in
 /// of its own, and `Never` must not quietly switch it off.
 fn close_reason(
-    mode: crate::core::config::ConfirmClose,
+    mode: lyrel_core::core::config::ConfirmClose,
     warn_ssh: bool,
-    busy: Option<crate::terminal::view::PaneBusy>,
+    busy: Option<lyrel_terminal::view::PaneBusy>,
 ) -> Option<CloseReason> {
-    use crate::core::config::ConfirmClose;
+    use lyrel_core::core::config::ConfirmClose;
     if warn_ssh {
         return Some(CloseReason::LiveSsh);
     }
@@ -429,8 +428,8 @@ fn close_reason(
 
 /// The question to put to the user before ending work that is still going on.
 fn close_prompt(ends_the_tab: bool, reason: &CloseReason) -> (String, String) {
-    use crate::terminal::view::PaneBusy;
-    use crate::ui::i18n::L10nKey;
+    use lyrel_terminal::view::PaneBusy;
+    use lyrel_ui_base::i18n::L10nKey;
     match reason {
         CloseReason::LiveSsh => (
             t(L10nKey::CloseSshConnectionTitle).to_string(),
@@ -455,7 +454,7 @@ fn close_prompt(ends_the_tab: bool, reason: &CloseReason) -> (String, String) {
             (title.to_string(), t(L10nKey::CloseIdleBody).to_string())
         }
         CloseReason::Tabs(count) => (
-            crate::ui::i18n::t_plural(L10nKey::CloseTabsTitle, *count, &[]),
+            lyrel_ui_base::i18n::t_plural(L10nKey::CloseTabsTitle, *count, &[]),
             t(L10nKey::CloseTabsBody).to_string(),
         ),
     }
@@ -508,7 +507,7 @@ pub(crate) fn overlay_surface_layers(cx: &App) -> Vec<gpui_kit::Div> {
 /// The theme's background image as a full-bleed layer.
 pub(crate) fn window_background_image_layer(cx: &App) -> Option<gpui_kit::Div> {
     let image = cx
-        .try_global::<crate::ui::presets::ActiveBackground>()?
+        .try_global::<lyrel_ui_base::presets::ActiveBackground>()?
         .image
         .clone()?;
     Some(
@@ -871,7 +870,7 @@ impl LyrelApp {
 
     pub(crate) fn agent_rows(&self, cx: &App) -> Vec<crate::ui::tray::AgentRow> {
         use crate::core::cli_agent::AgentStatus;
-        let now_ms = crate::core::config::unix_now().saturating_mul(1000);
+        let now_ms = lyrel_core::core::config::unix_now().saturating_mul(1000);
         let mut agents = Vec::new();
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
@@ -1045,11 +1044,11 @@ impl LyrelApp {
         }
         let answer = window.prompt(
             PromptLevel::Warning,
-            t(crate::ui::i18n::L10nKey::QuitStopServerTitle),
-            Some(t(crate::ui::i18n::L10nKey::QuitStopServerBody)),
+            t(lyrel_ui_base::i18n::L10nKey::QuitStopServerTitle),
+            Some(t(lyrel_ui_base::i18n::L10nKey::QuitStopServerBody)),
             &crate::ui::confirm_answers(
-                t(crate::ui::i18n::L10nKey::QuitAndStop),
-                t(crate::ui::i18n::L10nKey::Cancel),
+                t(lyrel_ui_base::i18n::L10nKey::QuitAndStop),
+                t(lyrel_ui_base::i18n::L10nKey::Cancel),
             ),
             cx,
         );
@@ -1156,7 +1155,7 @@ impl LyrelApp {
             })),
             &crate::ui::confirm_answers(
                 t(L10nKey::AppRestart),
-                t(crate::ui::i18n::L10nKey::Cancel),
+                t(lyrel_ui_base::i18n::L10nKey::Cancel),
             ),
             cx,
         );
@@ -1411,7 +1410,7 @@ impl LyrelApp {
             Ok(Some(forward)) => self.remember_forward_enabled(pane_id, &forward, enabled, cx),
             Ok(None) => {}
             Err(e) => window.notify_app(
-                crate::ui::host_ops::failure(
+                lyrel_ui_base::host_ops::failure(
                     t_fmt(L10nKey::ForwardSwitchFailed, &[("error", &e.to_string())]),
                     &e,
                 ),
@@ -1472,7 +1471,7 @@ impl LyrelApp {
         if ctx.route.is_none() {
             return;
         }
-        self.set_right_panel_tab(crate::core::config::RightPanelTab::Info, window, cx);
+        self.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Info, window, cx);
         if !self.loopback_panel.is_open_for(ctx.pane_id) {
             self.toggle_managed_forward_form(ctx.pane_id, window, cx);
         }
@@ -1992,7 +1991,7 @@ impl LyrelApp {
         let entries: [(L10nKey, Option<Box<dyn gpui_kit::Action>>, bool, bool); 15] = [
             (
                 L10nKey::AppMenuPaste,
-                Some(Box::new(crate::terminal::view::PasteText)),
+                Some(Box::new(lyrel_terminal::view::PasteText)),
                 !live,
                 false,
             ),
@@ -2034,7 +2033,7 @@ impl LyrelApp {
             (L10nKey::PaneMenuTitle, None, false, false),
             (
                 L10nKey::PaneFindScrollback,
-                Some(Box::new(crate::core::actions::FindInTerminal)),
+                Some(Box::new(lyrel_ui_base::actions::FindInTerminal)),
                 !ready,
                 false,
             ),
@@ -2052,7 +2051,7 @@ impl LyrelApp {
             ),
             (
                 L10nKey::PaneClearAll,
-                Some(Box::new(crate::terminal::view::ClearScrollback)),
+                Some(Box::new(lyrel_terminal::view::ClearScrollback)),
                 !ready,
                 false,
             ),
@@ -2083,7 +2082,7 @@ impl LyrelApp {
                 && crate::ui::keymap::effective_key("PasteText", cx).is_none()
             {
                 // macOS handles Cmd+V in the terminal's raw command-key path.
-                PopupMenuItem::element(crate::terminal::view::menus::menu_row_with_hint(
+                PopupMenuItem::element(lyrel_terminal::view::menus::menu_row_with_hint(
                     t(label),
                     Some("secondary-v"),
                 ))
@@ -3080,7 +3079,7 @@ impl LyrelApp {
     /// processing output, but their wakeups must not dirty the whole window.
     fn declare_displayed_panes(&self, cx: &App) {
         let active = self.tabs.active_index();
-        crate::terminal::lifecycle::declare_displayed(
+        lyrel_terminal::lifecycle::declare_displayed(
             cx,
             self.tabs.iter().enumerate().flat_map(|(i, tab)| {
                 tab.pane.leaves().into_iter().filter_map(move |slot| {
@@ -3359,7 +3358,7 @@ impl LyrelApp {
         self.editor_forget_tab(closing, cx);
         let worktree_cwd = self.tab_host_cwd(index, window, cx);
         let snapshot = tab_to_session(&self.tabs[index], cx);
-        let leaves: Vec<(u64, crate::ui::route::PaneRoute, bool)> = self.tabs[index]
+        let leaves: Vec<(u64, lyrel_ui_base::route::PaneRoute, bool)> = self.tabs[index]
             .pane
             .terminals()
             .iter()
@@ -3382,7 +3381,7 @@ impl LyrelApp {
             let retiring = crate::ui::tree_sync::Retiring {
                 tab: closing,
                 panes: held.iter().map(|(id, _)| *id).collect(),
-                route: crate::ui::route::PaneRoute::for_workspace(
+                route: lyrel_ui_base::route::PaneRoute::for_workspace(
                     self.window_workspace(cx).as_ref(),
                 ),
             };
@@ -3448,7 +3447,7 @@ impl LyrelApp {
 
     fn offer_worktree_cleanup(
         &mut self,
-        cwd: Option<(crate::ui::host_ops::SharedHost, std::path::PathBuf)>,
+        cwd: Option<(lyrel_ui_base::host_ops::SharedHost, std::path::PathBuf)>,
         cx: &mut Context<Self>,
     ) {
         let Some((host, cwd)) = cwd else { return };
@@ -3463,7 +3462,7 @@ impl LyrelApp {
             })
             .collect();
         let remove_host = host.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| {
@@ -3515,7 +3514,7 @@ impl LyrelApp {
                     let force = wt.dirty;
                     let branch = wt.branch.clone();
                     let _ = this.update_in(cx, |_, window, cx| {
-                        crate::ui::host_ops::HostOps::run_in(
+                        lyrel_ui_base::host_ops::HostOps::run_in(
                             remove_host,
                             window,
                             cx,
@@ -3533,7 +3532,7 @@ impl LyrelApp {
                                     cx,
                                 ),
                                 Err(e) => window.notify_app(
-                                    crate::ui::host_ops::failure(
+                                    lyrel_ui_base::host_ops::failure(
                                         t_fmt(
                                             L10nKey::AppWorktreeRemoveFailed,
                                             &[("error", &e.to_string())],
@@ -3571,7 +3570,7 @@ impl LyrelApp {
             .collect()
     }
 
-    /// Under [`ConfirmClose::Always`](crate::core::config::ConfirmClose::Always)
+    /// Under [`ConfirmClose::Always`](lyrel_core::core::config::ConfirmClose::Always)
     /// a bulk close is asked about once, for all the tabs it takes; one dialog
     /// per tab would be a question nobody can answer. Answers whether the
     /// question went up, in which case the close waits for it.
@@ -3583,7 +3582,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let always =
-            cx.global::<Config>().confirm_close == crate::core::config::ConfirmClose::Always;
+            cx.global::<Config>().confirm_close == lyrel_core::core::config::ConfirmClose::Always;
         if !always || count == 0 {
             return false;
         }
@@ -3695,7 +3694,7 @@ impl LyrelApp {
         let view = leaf.read(cx);
         let cwd = view.cwd()?;
         Some(match view.local_cwd().is_some() {
-            true => crate::ui::path_display::native_separators(&cwd)
+            true => lyrel_ui_base::path_display::native_separators(&cwd)
                 .display()
                 .to_string(),
             false => cwd.display().to_string(),
@@ -3800,7 +3799,7 @@ impl LyrelApp {
             launch_argv,
             scope,
         };
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -3948,7 +3947,7 @@ impl LyrelApp {
         index: usize,
         window: &Window,
         cx: &App,
-    ) -> Option<(crate::ui::host_ops::SharedHost, std::path::PathBuf)> {
+    ) -> Option<(lyrel_ui_base::host_ops::SharedHost, std::path::PathBuf)> {
         let leaf = self.tabs.get(index)?.pane.focused_or_first(window, cx)?;
         let view = leaf.read(cx);
         Some((view.host(cx)?, view.host_cwd()?))
@@ -3984,7 +3983,7 @@ impl LyrelApp {
         };
         let sheet_host = host.clone();
         let probe_cwd = cwd.clone();
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -3992,7 +3991,7 @@ impl LyrelApp {
             move |this, result, window, cx| match result {
                 Ok(defaults) => this.open_worktree_prompt(sheet_host, cwd, defaults, window, cx),
                 Err(e) => window.notify_app(
-                    crate::ui::host_ops::failure(
+                    lyrel_ui_base::host_ops::failure(
                         t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
                         &e,
                     ),
@@ -4139,7 +4138,7 @@ impl LyrelApp {
                 rail_collapsed: self.sidebar_collapsed,
                 right_panel_visible: self.right_panel_visible,
                 document_filled: self.document_layout(cx)
-                    == crate::core::config::DocumentLayout::Fill,
+                    == lyrel_core::core::config::DocumentLayout::Fill,
                 remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
                     .filter(|remote| remote.target.hosts_our_server())
                     .map(|remote| crate::ui::desktop_lookups::route_label(cx, &remote)),
@@ -4253,7 +4252,10 @@ impl LyrelApp {
                 self.notify_session_operation_error(error.clone(), window, cx)
             }
             SearchEvent::PreviewTheme(i) => {
-                if let Some(id) = crate::ui::presets::all(cx).get(*i).map(|t| t.id.clone()) {
+                if let Some(id) = lyrel_ui_base::presets::all(cx)
+                    .get(*i)
+                    .map(|t| t.id.clone())
+                {
                     self.preview_preset(&id, window, cx);
                 }
             }
@@ -4306,7 +4308,7 @@ impl LyrelApp {
         self.update_config(cx, |cfg| {
             let entry = cfg.command_frecency.entry(id.to_string()).or_default();
             entry.count = entry.count.saturating_add(1);
-            entry.last_used = crate::core::config::unix_now();
+            entry.last_used = lyrel_core::core::config::unix_now();
         });
     }
 
@@ -4464,13 +4466,13 @@ impl LyrelApp {
             EditorNewMarkdownFile => self.editor_new_markdown_file(window, cx),
             ToggleDocumentFill => self.toggle_document_fill(cx),
             DocumentWidthThird => {
-                self.set_document_ratio(crate::core::config::DOCUMENT_RATIO_THIRD, cx)
+                self.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_THIRD, cx)
             }
             DocumentWidthHalf => {
-                self.set_document_ratio(crate::core::config::DOCUMENT_RATIO_HALF, cx)
+                self.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_HALF, cx)
             }
             DocumentWidthTwoThirds => {
-                self.set_document_ratio(crate::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
+                self.set_document_ratio(lyrel_core::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
             }
             ToggleDocumentPreview => self.toggle_document_preview(window, cx),
             ToggleDocumentWrap => self.toggle_document_wrap(window, cx),
@@ -4536,7 +4538,7 @@ impl LyrelApp {
             }
             RestartSshSession => self.restart_ssh_session(window, cx),
             SetTheme(i) => {
-                if let Some(id) = crate::ui::presets::all(cx).get(i).map(|t| t.id.clone()) {
+                if let Some(id) = lyrel_ui_base::presets::all(cx).get(i).map(|t| t.id.clone()) {
                     self.set_preset(&id, window, cx);
                 }
             }
@@ -4620,7 +4622,7 @@ impl LyrelApp {
 
     fn deliver_agent_prompt(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::desktop_notification::notify_desktop(
+            lyrel_terminal::desktop_notification::notify_desktop(
                 Some("lyrel"),
                 t(L10nKey::AppNoRunningCodingAgent),
             );
@@ -4646,7 +4648,7 @@ impl LyrelApp {
             None => (None, None),
         };
         let Some(selection) = selection else {
-            crate::terminal::desktop_notification::notify_desktop(
+            lyrel_terminal::desktop_notification::notify_desktop(
                 Some("lyrel"),
                 t(L10nKey::AppNothingSelected),
             );
@@ -4670,13 +4672,13 @@ impl LyrelApp {
             Some((view.host(cx)?, view.host_cwd()?))
         });
         let Some((host, cwd)) = target else {
-            crate::terminal::desktop_notification::notify_desktop(
+            lyrel_terminal::desktop_notification::notify_desktop(
                 Some("lyrel"),
                 t(L10nKey::AppPaneNoKnownDirectory),
             );
             return;
         };
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -4694,7 +4696,7 @@ impl LyrelApp {
             move |this, (diff, cwd_s), window, cx| {
                 match crate::core::agent_prompt::build_diff_review_prompt(&diff, Some(&cwd_s)) {
                     Some(prompt) => this.deliver_agent_prompt(&prompt, window, cx),
-                    None => crate::terminal::desktop_notification::notify_desktop(
+                    None => lyrel_terminal::desktop_notification::notify_desktop(
                         Some("lyrel"),
                         &t_fmt(L10nKey::AppNoUncommittedChanges, &[("cwd", &cwd_s)]),
                     ),
@@ -4754,7 +4756,7 @@ impl LyrelApp {
                 cfg.font_fallbacks.clone(),
                 cfg.font_features
                     .as_ref()
-                    .map(crate::core::config::gpui_font_features),
+                    .map(lyrel_ui_base::config::gpui_font_features),
             )
         };
         self.sidebar_width.set(cx.global::<Config>().sidebar_width);
@@ -4929,8 +4931,8 @@ impl LyrelApp {
             &title,
             Some(&body),
             &crate::ui::confirm_answers(
-                t(crate::ui::i18n::L10nKey::Close),
-                t(crate::ui::i18n::L10nKey::Keep),
+                t(lyrel_ui_base::i18n::L10nKey::Close),
+                t(lyrel_ui_base::i18n::L10nKey::Keep),
             ),
             cx,
         );
@@ -4980,7 +4982,7 @@ impl LyrelApp {
 
     fn leaf_close_reason_as(
         &self,
-        mode: crate::core::config::ConfirmClose,
+        mode: lyrel_core::core::config::ConfirmClose,
         leaf: &Entity<TerminalView>,
         cx: &App,
     ) -> Option<CloseReason> {
@@ -5003,7 +5005,7 @@ impl LyrelApp {
     /// or a warned connection still names itself — the idle question is only
     /// what is left when no pane has anything more specific to say.
     fn tab_close_reason(&self, index: usize, cx: &App) -> Option<CloseReason> {
-        use crate::core::config::ConfirmClose;
+        use lyrel_core::core::config::ConfirmClose;
         let mode = cx.global::<Config>().confirm_close;
         let asked_as = match mode {
             ConfirmClose::Always => ConfirmClose::WhenBusy,
@@ -5171,8 +5173,8 @@ mod tests {
 
     #[test]
     fn the_close_question_names_what_it_is_about_to_end() {
-        use crate::terminal::view::PaneBusy;
-        crate::ui::i18n::set_locale("en");
+        use lyrel_terminal::view::PaneBusy;
+        lyrel_ui_base::i18n::set_locale("en");
 
         let build = CloseReason::Busy(PaneBusy::Command("cargo build".into()));
         // The command is in the body, not a generic "are you sure".
@@ -5204,8 +5206,8 @@ mod tests {
     /// user turned on separately.
     #[test]
     fn each_confirm_mode_asks_what_it_says_and_the_ssh_warning_always_stands() {
-        use crate::core::config::ConfirmClose::{Always, Never, WhenBusy};
-        use crate::terminal::view::PaneBusy;
+        use lyrel_core::core::config::ConfirmClose::{Always, Never, WhenBusy};
+        use lyrel_terminal::view::PaneBusy;
         let build = || Some(PaneBusy::Command("cargo build".into()));
 
         assert_eq!(close_reason(WhenBusy, false, None), None);
@@ -5230,7 +5232,7 @@ mod tests {
 
     #[test]
     fn the_idle_and_bulk_questions_say_what_goes() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let (tab_title, body) = close_prompt(true, &CloseReason::Idle);
         assert!(tab_title.contains("tab"), "{tab_title}");
         assert!(!body.is_empty());
@@ -5272,15 +5274,15 @@ mod attention_tests;
 
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) mod test_window {
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     #[cfg(test)]
     use gpui_kit::Focusable;
     use gpui_kit::{AppContext, Entity, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
 
         cx.executor().allow_parking();
         cx.update(|cx| {
@@ -5333,8 +5335,8 @@ pub(crate) mod test_window {
         VisualTestContext,
         Vec<crate::daemon::transport::Stream>,
     ) {
-        use crate::terminal::view::quiet_test_pane;
         use crate::ui::pane::{Pane, PaneSlot};
+        use lyrel_terminal::view::quiet_test_pane;
 
         let (app, mut vcx) = harness(cx);
         vcx.update(|_, cx| {
@@ -5367,8 +5369,8 @@ pub(crate) mod test_window {
         VisualTestContext,
         crate::daemon::transport::Stream,
     ) {
-        use crate::terminal::view::quiet_test_pane;
         use crate::ui::pane::{Pane, PaneSlot};
+        use lyrel_terminal::view::quiet_test_pane;
 
         let (app, mut vcx) = harness(cx);
         vcx.update(|_, cx| {
@@ -5419,9 +5421,9 @@ pub(crate) mod test_window {
     /// still open is a frame already owed.
     pub(crate) fn quiesce(vcx: &mut VisualTestContext, cwd: Option<&std::path::Path>) {
         use crate::ui::app::render_probe;
-        use crate::ui::host_ops::HostId;
         use crate::ui::scm::data::ScmData;
         use crate::ui::scm::status_cache::GitStatusCache;
+        use lyrel_ui_base::host_ops::HostId;
 
         /// How long quiet has to hold before it counts as quiet.
         ///
@@ -5476,10 +5478,10 @@ pub(crate) mod test_window {
 #[cfg(test)]
 mod cursor_blink_gpui_tests {
     use super::test_window::harness;
-    use crate::core::config::Config;
-    use crate::terminal::view::quiet_test_pane;
     use crate::ui::pane::{Pane, PaneSlot};
     use gpui_kit::TestAppContext;
+    use lyrel_terminal::view::quiet_test_pane;
+    use lyrel_ui_base::config::Config;
 
     #[gpui_kit::test]
     fn only_the_focused_pane_advances_its_blink_phase(cx: &mut TestAppContext) {
@@ -5534,11 +5536,11 @@ mod ssh_rebuild_gpui_tests;
 
 #[cfg(test)]
 mod ui_font_gpui_tests {
-    use crate::core::config::Config;
     use crate::ui::settings::test_window::harness;
     use crate::ui::settings::ui_font_default_label;
     use gpui_kit::TestAppContext;
     use gpui_kit::component::Theme;
+    use lyrel_ui_base::config::Config;
 
     /// Picking a face and picking Default back are the same rule read in both
     /// directions. Only one of them used to be spelled: the chrome took the
@@ -5577,10 +5579,10 @@ mod ui_font_gpui_tests {
 
 #[cfg(test)]
 mod restart_server_gpui_tests {
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use gpui_kit::{AppContext, TestAppContext};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     /// Clicking Restart Server made the whole app disappear.
     ///
@@ -5597,7 +5599,7 @@ mod restart_server_gpui_tests {
     /// restart itself.
     #[gpui_kit::test]
     async fn settling_after_a_restart_does_not_lease_the_window_twice(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -5641,15 +5643,15 @@ mod restart_server_gpui_tests {
 
 #[cfg(test)]
 mod shell_menu_gpui_tests {
-    use crate::core::config::Config;
-    use crate::core::session::{
-        RemoteRef, RemoteTarget, Session, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
-    };
     use crate::ui::app::LyrelApp;
     use gpui_kit::{AppContext, Entity, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::{
+        RemoteRef, RemoteTarget, Session, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
+    };
 
     fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);

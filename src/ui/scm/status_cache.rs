@@ -2,8 +2,8 @@
 //! counts a tab wears, probed on cwd changes and command boundaries.
 //!
 //! This is the pane-facing half of SCM state. Panes ask for probes with typed
-//! events ([`crate::terminal::view::ScmStatusRefreshRequested`] and
-//! [`crate::terminal::view::ScmRootRecheckRequested`]); the shell wiring in
+//! events ([`lyrel_terminal::view::ScmStatusRefreshRequested`] and
+//! [`lyrel_terminal::view::ScmRootRecheckRequested`]); the shell wiring in
 //! [`super::status_cache`]'s `impl LyrelApp` claims against this cache,
 //! dispatches the `HostOps` work and lands the answer. Reads during render
 //! and the pane's poll gates go through the read-only seam
@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 pub use crate::core::git::{GitStatus, RepoProbe, RepoSnapshot, probe_repo};
 use gpui_kit::{BorrowAppContext as _, Context, WeakEntity};
 
-use crate::terminal::view::{GitRefresh, TerminalView};
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight};
 use crate::ui::scm_snapshot;
+use lyrel_terminal::view::{GitRefresh, TerminalView};
+use lyrel_ui_base::host_ops::{ByHost, Host, HostId, HostOps, InFlight};
 
 /// The spelling a directory is keyed by in here.
 ///
@@ -401,7 +401,7 @@ impl LyrelApp {
         pane: WeakEntity<TerminalView>,
         cx: &mut Context<Self>,
     ) {
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
             return;
         };
         if !host.is_connected() {
@@ -460,7 +460,7 @@ impl LyrelApp {
         pane: WeakEntity<TerminalView>,
         cx: &mut Context<Self>,
     ) {
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
             return;
         };
         if !host.is_connected() {

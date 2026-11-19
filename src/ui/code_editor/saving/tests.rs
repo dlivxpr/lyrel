@@ -1,8 +1,8 @@
 use super::*;
-use crate::core::actions::{CloseActiveTab, EditorNewFile, EditorSaveAs};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px};
+use lyrel_ui_base::actions::{CloseActiveTab, EditorNewFile, EditorSaveAs};
 use std::time::{Duration, Instant};
 
 #[path = "host_tests.rs"]
@@ -234,7 +234,7 @@ fn stale_native_save_as_cannot_write_a_replacement_buffer(cx: &mut TestAppContex
 }
 #[gpui_kit::test]
 fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppContext) {
-    use crate::core::actions::{EditorNewFile, EditorSaveAs, ToggleDocumentFill};
+    use lyrel_ui_base::actions::{EditorNewFile, EditorSaveAs, ToggleDocumentFill};
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
     vcx.dispatch_action(EditorNewFile);
@@ -304,7 +304,7 @@ fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn file_save_before_close_keeps_a_later_focused_editor_group(cx: &mut TestAppContext) {
-    use crate::core::actions::EditorSplitRight;
+    use lyrel_ui_base::actions::EditorSplitRight;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("original-group.txt");
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);

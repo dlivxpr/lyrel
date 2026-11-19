@@ -12,8 +12,8 @@ use gpui_kit::{App, IntoElement, ParentElement as _, SharedString, Styled as _, 
 
 use crate::core::proc::compact_bytes;
 use crate::daemon::protocol::ProcEntry;
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::right_panel::{META, META_MONO};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 const CPU_W: f32 = 40.;
 const MEM_W: f32 = 52.;

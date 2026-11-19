@@ -113,7 +113,7 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
         assert_eq!(view.document().read(cx).encode().unwrap(), source)
     });
     vcx.dispatch_action(gpui_kit::component::input::Redo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
             with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
@@ -804,7 +804,7 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
 fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut TestAppContext) {
     use std::io::{Read as _, Write as _};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    crate::ui::i18n::set_locale("zh-CN");
+    lyrel_ui_base::i18n::set_locale("zh-CN");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -973,7 +973,7 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         assert!(view.is_live());
         assert_eq!(view.text(), expected);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
             with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
@@ -984,7 +984,7 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         expected.as_bytes()
     );
     vcx.dispatch_action(gpui_kit::component::input::Undo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
             with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
@@ -1007,7 +1007,7 @@ fn a_large_preview_image_streams_on_its_owning_host(cx: &mut TestAppContext) {
     use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
     use std::sync::atomic::Ordering;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let directory = canonical_tempdir();
     std::fs::write(directory.path().join("picture.md"), "![large](large.png)\n").unwrap();
     let bytes = noise_png(1400, 1000);
@@ -1046,7 +1046,7 @@ fn closing_a_document_cancels_its_picture_transfer(cx: &mut TestAppContext) {
     use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
     use std::sync::atomic::Ordering;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let directory = canonical_tempdir();
     std::fs::write(directory.path().join("gated.md"), "![gated](gated.png)\n").unwrap();
     let bytes = noise_png(1000, 800);

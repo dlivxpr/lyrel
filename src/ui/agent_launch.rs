@@ -21,13 +21,14 @@ use std::sync::LazyLock;
 use gpui_kit::{App, Axis, Context, Window};
 
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
-use crate::core::config::{Config, ProfileUsage, unix_now};
-use crate::core::session::WorkspaceStore;
 use crate::ui::app::{LyrelApp, SpawnWhere};
-use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
 use crate::ui::settings::arguments::join_shell_args;
 use crate::ui::tab::presentation::SpawnAs;
+use lyrel_core::core::config::{ProfileUsage, unix_now};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t_fmt};
+use lyrel_ui_base::session::WorkspaceStore;
 
 /// How the keymap spells "launch this agent": `LaunchAgent:omp`.
 const LAUNCH_ACTION_PREFIX: &str = "LaunchAgent:";
@@ -138,7 +139,8 @@ const PROMPT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 /// integration to say when that is.
 pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
     let cfg = cx.global::<Config>();
-    let aliases = crate::core::config::detection_aliases(&cfg.agent_commands, &cfg.agent_launch);
+    let aliases =
+        lyrel_core::core::config::detection_aliases(&cfg.agent_commands, &cfg.agent_launch);
     // Only the executable or an explicit mapping selects an agent. Do not
     // search interpreter arguments or inspect arbitrary wrapper contents.
     let agent = crate::core::cli_agent::parse_command_argv(&command)
@@ -175,7 +177,7 @@ pub(crate) fn run_prepared_when_ready(slot: &PaneSlot, command: String, cx: &mut
 }
 
 async fn wait_for_prompt(
-    view: &gpui_kit::WeakEntity<crate::terminal::view::TerminalView>,
+    view: &gpui_kit::WeakEntity<lyrel_terminal::view::TerminalView>,
     cx: &mut gpui_kit::AsyncApp,
 ) {
     let deadline = std::time::Instant::now() + PROMPT_WAIT;
@@ -230,7 +232,7 @@ pub(crate) fn run_known_agent_when_ready(
                         );
                         return;
                     };
-                    crate::ui::host_ops::HostOps::run_in(
+                    lyrel_ui_base::host_ops::HostOps::run_in(
                         host,
                         window,
                         cx,
@@ -346,7 +348,7 @@ impl LyrelApp {
         agent: CLIAgent,
         session_id: &str,
         cwd: Option<std::path::PathBuf>,
-        host_id: crate::ui::host_ops::HostId,
+        host_id: lyrel_ui_base::host_ops::HostId,
         scope: Option<lyrel_core::host::session_operations::SessionScope>,
         fork: bool,
         window: &mut Window,
@@ -354,7 +356,7 @@ impl LyrelApp {
     ) {
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
         let Some(cwd) = cwd else {
-            window.notify_app(crate::ui::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
+            window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
         };
         if self.spawn_host(cx) != host_id {
@@ -366,8 +368,11 @@ impl LyrelApp {
             );
             return;
         }
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
-            window.notify_app(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            window.notify_app(
+                lyrel_ui_base::i18n::t(L10nKey::RemoteNoticeDisconnected),
+                cx,
+            );
             return;
         };
         let launch = agent.launch_command(&cx.global::<Config>().agent_launch);
@@ -410,7 +415,7 @@ impl LyrelApp {
             launch_argv,
             scope,
         };
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -488,7 +493,7 @@ impl LyrelApp {
         let mut note = Notification::error(error.to_string()).autohide(false);
         if let Some(prepared) = error.retained {
             note = note
-                .title(crate::ui::i18n::t(L10nKey::TryAgain))
+                .title(lyrel_ui_base::i18n::t(L10nKey::TryAgain))
                 .on_click(cx.listener(move |app, _, window, cx| {
                     app.retry_prepared_session((*prepared).clone(), window, cx);
                 }));
@@ -506,11 +511,14 @@ impl LyrelApp {
         let Some(target_id) = prepared.target_id else {
             return;
         };
-        let Some(host) = crate::ui::host_registry::HostRegistry::lookup(
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(
             cx,
-            crate::ui::host_ops::HostId(prepared.host_id),
+            lyrel_ui_base::host_ops::HostId(prepared.host_id),
         ) else {
-            window.notify_app(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
+            window.notify_app(
+                lyrel_ui_base::i18n::t(L10nKey::RemoteNoticeDisconnected),
+                cx,
+            );
             return;
         };
         let mut scope = prepared.scope;
@@ -524,7 +532,7 @@ impl LyrelApp {
             launch_argv: prepared.launch_argv,
             scope,
         };
-        crate::ui::host_ops::HostOps::run_in(
+        lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
@@ -544,7 +552,7 @@ impl LyrelApp {
             None => {
                 let remote = WorkspaceStore::remote_ref(cx, self.workspace).is_some();
                 window.notify_app(
-                    crate::ui::i18n::t(if remote {
+                    lyrel_ui_base::i18n::t(if remote {
                         L10nKey::AppNoAgentSeenHere
                     } else {
                         L10nKey::AppNoAgentOnPath
@@ -582,7 +590,7 @@ impl LyrelApp {
         };
         let view = view.read(cx);
         let Some(agent) = view.agent() else {
-            window.notify_app(crate::ui::i18n::t(L10nKey::AppPaneNoCodingAgent), cx);
+            window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
         let name = agent.display_name();

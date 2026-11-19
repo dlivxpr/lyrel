@@ -25,10 +25,10 @@ use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use lyrel_core::host::HostId;
 
 use crate::core::group_key::WorkspaceGroups;
-use crate::core::session::{Session, SessionPane, SessionTab, WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::session::{Session, SessionPane, SessionTab, WorkspaceId, WorkspaceStore};
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
@@ -118,7 +118,7 @@ pub(crate) struct Retiring {
     pub tab: TabId,
     /// The tab's panes on the window's machine.
     pub panes: Vec<u64>,
-    pub route: crate::ui::route::PaneRoute,
+    pub route: lyrel_ui_base::route::PaneRoute,
 }
 
 /// Records that the user closed `tab` in this window, which is what lets the
@@ -254,7 +254,7 @@ fn end_unsent_retirements(cx: &mut App, retired: &mut Vec<Retiring>, dropped: &[
         cx.background_executor()
             .spawn(async move {
                 for pane in panes {
-                    crate::terminal::RemoteTerminal::kill_pane_on(&route, pane);
+                    lyrel_terminal::RemoteTerminal::kill_pane_on(&route, pane);
                 }
             })
             .detach();
@@ -322,7 +322,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
 
 fn coordinate_window(app: &LyrelApp, cx: &mut App) {
     let client_ws = app.workspace;
-    if !cx.has_global::<crate::core::session::WorkspaceStore>() {
+    if !cx.has_global::<lyrel_ui_base::session::WorkspaceStore>() {
         return;
     }
     crate::ui::pane_sidecar::sync_window(app, cx);
@@ -486,7 +486,7 @@ pub(crate) fn fire_workspace_op(
     client_ws: WorkspaceId,
     op: impl FnOnce(WorkspaceId) -> ControlRequest,
 ) {
-    if !cx.has_global::<crate::core::session::WorkspaceStore>() {
+    if !cx.has_global::<lyrel_ui_base::session::WorkspaceStore>() {
         return;
     }
     let host = WorkspaceStore::host_of(cx, client_ws);
@@ -822,7 +822,7 @@ fn finish_prime(
 /// on instead of overwriting it — otherwise a pin made in the first moments
 /// of a window's life would be undone by the tree that arrives after it.
 pub(crate) fn push_groups(cx: &mut App, client_ws: WorkspaceId, groups: WorkspaceGroups) {
-    if !cx.has_global::<crate::core::session::WorkspaceStore>() {
+    if !cx.has_global::<lyrel_ui_base::session::WorkspaceStore>() {
         return;
     }
     let machine_ws = tree_workspace_id(cx, client_ws);
@@ -1031,8 +1031,8 @@ fn session_pane_from_node(node: &PaneNode, panes: &[PaneRecord]) -> SessionPane 
         }
         PaneNode::Split { axis, ratio, a, b } => SessionPane::Split {
             axis: match axis {
-                TreeAxis::Horizontal => crate::core::session::SessionAxis::Horizontal,
-                TreeAxis::Vertical => crate::core::session::SessionAxis::Vertical,
+                TreeAxis::Horizontal => lyrel_ui_base::session::SessionAxis::Horizontal,
+                TreeAxis::Vertical => lyrel_ui_base::session::SessionAxis::Vertical,
             },
             ratio: *ratio,
             a: Box::new(session_pane_from_node(a, panes)),
@@ -1761,7 +1761,7 @@ fn on_workspace_deleted(cx: &mut App, client_ws: WorkspaceId) {
     if crate::ui::windows::WindowRegistry::window_for(cx, client_ws).is_none() {
         log::info!("workspace {client_ws} was deleted on its machine; forgetting it here too");
         forget(cx, client_ws);
-        crate::core::session::WorkspaceStore::remove(cx, client_ws);
+        lyrel_ui_base::session::WorkspaceStore::remove(cx, client_ws);
         crate::ui::windows::refresh_menu(cx);
         cx.refresh_windows();
         return;

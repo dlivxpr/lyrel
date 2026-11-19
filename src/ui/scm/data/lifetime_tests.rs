@@ -239,7 +239,7 @@ fn global_stage_works_after_the_hidden_panel_releases_its_status(cx: &mut TestAp
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     let host = GatedHost::new(HostId::LOCAL);
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
     });
     subscribe(&mut vcx, 1050, ScmWatcher::Panel, host.id(), &root);
     app.update_in(&mut vcx, |app, _, cx| {
@@ -314,7 +314,7 @@ fn hidden_global_commit_and_push_reaches_the_remote_without_retaining_status(
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     let host = GatedHost::new(HostId::LOCAL);
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
     });
     subscribe(&mut vcx, 1051, ScmWatcher::Panel, host.id(), &root);
     app.update_in(&mut vcx, |app, _, cx| {
@@ -385,7 +385,7 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
     let id = HostId::from_connection_key("scm-lifetime-gated");
     let host = GatedHost::new(id);
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
     });
     subscribe(&mut vcx, 2001, ScmWatcher::Panel, id, &root);
     let old = host.pause_status();
@@ -543,7 +543,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
             root,
         );
     }
-    use crate::core::session::{
+    use lyrel_ui_base::session::{
         RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
     };
     let target = RemoteTarget::Alias {
@@ -566,7 +566,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
         assert_eq!(app.spawn_host(cx), host.id());
     });
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, remote.clone());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, remote.clone());
     });
     subscribe(&mut vcx, 4004, ScmWatcher::Panel, remote.id(), &second);
     app.update_in(&mut vcx, |app, _, cx| {
@@ -577,7 +577,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
     // 4001 moved between projects; the first root is held by 4002.
     app.update_in(&mut vcx, |app, window, cx| {
         app.right_panel_visible = true;
-        app.right_panel_tab = crate::core::config::RightPanelTab::Files;
+        app.right_panel_tab = lyrel_core::core::config::RightPanelTab::Files;
         app.tab_code_mut_or_init().unwrap().roots = vec![first.clone(), second.clone()];
         app.scm_sync_watchers(window, cx);
         let data = cx.global_mut::<ScmData>();
@@ -668,7 +668,7 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
     let dead = HostId::from_connection_key("scm-retired-host");
     let live = HostId::LOCAL;
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, GatedHost::new(dead));
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, GatedHost::new(dead));
     });
     subscribe(&mut vcx, 8300, ScmWatcher::Panel, dead, &root);
     app.update_in(&mut vcx, |app, _, cx| {
@@ -691,7 +691,7 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
         }
         cx.global_mut::<ScmData>().release_window(8300);
         assert!(cx.global::<ScmData>().hosts().is_empty());
-        crate::ui::host_registry::HostRegistry::remove(cx, dead);
+        lyrel_ui_base::host_registry::HostRegistry::remove(cx, dead);
         app.scm_forget_lost_hosts(cx);
         assert!(!app.scm.roots.contains_key(&(dead, root.clone())));
         assert!(!app.scm.root_lookups.contains(&(dead, root.clone())));
@@ -732,7 +732,7 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     let host = GatedHost::new(HostId::LOCAL);
     let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
     vcx.update(|_, cx| {
-        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
     });
     for known_negative in [false, true] {
         app.update_in(&mut vcx, |app, window, cx| {
@@ -741,7 +741,7 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
                     .finish_probe(host.id(), &root, None);
             }
             app.right_panel_visible = true;
-            app.right_panel_tab = crate::core::config::RightPanelTab::Files;
+            app.right_panel_tab = lyrel_core::core::config::RightPanelTab::Files;
             app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
             app.scm_sync_watchers(window, cx);
             assert!(

@@ -1,6 +1,6 @@
 #[cfg(windows)]
 fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let events = prior_mode == "events";
     // A private fixture may use a real Git Bash installed outside the product
@@ -175,7 +175,7 @@ fn keyboard_boundary_real_pty_negotiated_press_repeat_release(cx: &mut TestAppCo
 fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(
     cx: &mut TestAppContext,
 ) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -229,7 +229,7 @@ fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(
                         view.adopt_relink(
                             client,
                             Vec::new(),
-                            &crate::ui::route::PaneRoute::Local,
+                            &lyrel_ui_base::route::PaneRoute::Local,
                             TermSize::new(80, 24),
                             10,
                             20,

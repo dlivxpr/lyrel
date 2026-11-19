@@ -11,12 +11,12 @@ use gpui_kit::{
     Action, App, Entity, Global, KeyBinding, Keystroke, KeystrokeEvent, Subscription, Window,
 };
 
-use crate::core::actions::{
-    EditorGoToSymbol, HideApp, MinimizeWindow, QuickOpenFile, Quit, TogglePalette,
-};
 use crate::ui::app::LyrelApp;
 use crate::ui::search::{KEY_CONTEXT, SearchTab};
 use crate::ui::settings_window::SettingsWindow;
+use lyrel_ui_base::actions::{
+    EditorGoToSymbol, HideApp, MinimizeWindow, QuickOpenFile, Quit, TogglePalette,
+};
 
 struct Interceptor {
     _sub: Subscription,
@@ -154,12 +154,12 @@ mod tests {
     use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext};
 
     use super::*;
-    use crate::core::config::RightPanelTab;
     use crate::daemon::protocol::ClientMsg;
     use crate::daemon::transport::Stream;
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::keymap::effective_key;
     use crate::ui::settings::test_window::open;
+    use lyrel_core::core::config::RightPanelTab;
 
     fn key(action: &str, vcx: &mut VisualTestContext) -> String {
         vcx.update(|_, cx| effective_key(action, cx))
@@ -260,7 +260,7 @@ mod tests {
         vcx.update(|_, cx| {
             cx.bind_keys([KeyBinding::load(
                 "secondary-shift-a",
-                Box::new(crate::core::actions::ActivateTab2),
+                Box::new(lyrel_ui_base::actions::ActivateTab2),
                 None,
                 false,
                 None,

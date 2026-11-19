@@ -2,11 +2,11 @@
 //! stop a completed backing read before its UI callback, not an executor queue.
 use super::host::{NamespaceHost, ReadKind};
 use super::*;
-use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
 use crate::ui::app::test_window::harness_with_pane;
-use crate::ui::file_search::FileList;
 use crate::ui::file_tree::read_probe::{InstanceTicket, Landing};
-use crate::ui::route::PaneWorkspace;
+use lyrel_ui_base::file_search::FileList;
+use lyrel_ui_base::route::PaneWorkspace;
+use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
 use std::time::{Duration, Instant};
 
 fn backing(name: &str) -> tempfile::TempDir {

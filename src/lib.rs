@@ -2,11 +2,6 @@ mod core;
 mod daemon;
 mod ui;
 
-// The desktop terminal client crate. Re-exported under its old in-crate name
-// so workbench modules keep their `crate::terminal::` paths while the crate
-// boundary settles; new code imports `lyrel_terminal` directly.
-pub use lyrel_terminal as terminal;
-
 #[cfg(test)]
 pub use lyrel_test_support::native_ssh as native_ssh_graphics_fixture;
 
@@ -44,11 +39,11 @@ pub fn init_native_terminal_test(cx: &mut App) {
 #[cfg(test)]
 pub(crate) mod terminal_tests;
 
-use crate::core::config::Config;
 use crate::ui::assets::Assets;
 use crate::ui::keymap;
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::*;
+use lyrel_ui_base::config::Config;
 
 fn register_bundled_fonts(cx: &mut App) {
     use std::borrow::Cow;
@@ -66,10 +61,10 @@ fn register_bundled_fonts(cx: &mut App) {
 fn spawn_config_watcher(cx: &mut App) {
     use notify::{RecursiveMode, Watcher};
 
-    let Some(config_file) = crate::core::config::config_path("config.json") else {
+    let Some(config_file) = lyrel_core::core::config::config_path("config.json") else {
         return;
     };
-    let Some(dir) = crate::core::config::config_dir_path() else {
+    let Some(dir) = lyrel_core::core::config::config_dir_path() else {
         return;
     };
     let _ = std::fs::create_dir_all(&dir);
@@ -89,7 +84,8 @@ fn spawn_config_watcher(cx: &mut App) {
         // (#911), and a hand edit there has to land the same way.
         let hit = event.paths.iter().any(|p| {
             p.file_name() == watched_file.file_name()
-                || p.file_name() == Some(std::ffi::OsStr::new(crate::core::config::SERVERS_FILE))
+                || p.file_name()
+                    == Some(std::ffi::OsStr::new(lyrel_core::core::config::SERVERS_FILE))
                 || is_theme_file(p)
         });
         if hit {
@@ -139,7 +135,7 @@ fn spawn_config_watcher(cx: &mut App) {
 /// use for that; it is how a test asks which branch ran.
 fn apply_reloaded_config(
     cx: &mut App,
-    load: (Config, crate::core::config::LoadOutcome),
+    load: (Config, lyrel_ui_base::config::LoadOutcome),
     announced: &mut bool,
 ) -> bool {
     let (config, outcome) = load;
@@ -178,7 +174,7 @@ fn apply_reloaded_config(
     let language_changed = cx.global::<Config>().gui_language != config.gui_language;
     let motion_changed = cx.global::<Config>().motion_preference != config.motion_preference;
     if language_changed {
-        crate::ui::i18n::set_locale(&config.gui_language);
+        lyrel_ui_base::i18n::set_locale(&config.gui_language);
     }
     cx.set_global(config);
     if motion_changed {
@@ -224,7 +220,7 @@ fn is_theme_file(p: &std::path::Path) -> bool {
 /// themes directory too, so this has to run even when config.json itself did
 /// not load — editing a theme cannot go dead because of a typo elsewhere.
 fn reload_themes(cx: &mut App) {
-    crate::ui::presets::load_registry(cx);
+    lyrel_ui_base::presets::load_registry(cx);
     crate::ui::theme::apply_theme(None, cx);
 }
 
@@ -234,11 +230,11 @@ fn reload_themes(cx: &mut App) {
 /// and neither points at the file that needs fixing.
 fn notify_config_load_failed(
     cx: &mut App,
-    outcome: crate::core::config::LoadOutcome,
+    outcome: lyrel_ui_base::config::LoadOutcome,
     startup: bool,
 ) {
-    use crate::core::config::LoadOutcome;
-    use crate::ui::i18n::L10nKey;
+    use lyrel_ui_base::config::LoadOutcome;
+    use lyrel_ui_base::i18n::L10nKey;
 
     // Only an unparseable file leaves a copy behind; an unreadable one had
     // nothing to copy, so it must not send the user after a `.corrupt` file
@@ -256,7 +252,7 @@ fn notify_config_load_failed(
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        window.notify_app(crate::ui::i18n::t(key), cx);
+        window.notify_app(lyrel_ui_base::i18n::t(key), cx);
     });
 }
 
@@ -284,7 +280,7 @@ fn config_dir_from(
 
 fn apply_config_dir_arg(args: &[std::ffi::OsString]) {
     if let Some(path) = config_dir_from(args.iter().cloned()) {
-        crate::core::config::set_config_dir(path);
+        lyrel_core::core::config::set_config_dir(path);
     }
 }
 
@@ -670,7 +666,7 @@ pub fn run() {
             // `return` below — it never reaches the `set_locale` on the GUI
             // path. Without this read every install would write English
             // entries, whatever language the user runs lyrel in.
-            crate::ui::i18n::set_locale(&Config::load().gui_language);
+            lyrel_ui_base::i18n::set_locale(&Config::load().gui_language);
             crate::core::explorer_context_menu::register()
         } else {
             crate::core::explorer_context_menu::unregister()
@@ -743,7 +739,7 @@ pub fn run() {
     // reads it. Also covers the recovery relaunch after a failed install.
     crate::core::update::absorb_update_outcome_at_launch();
 
-    let (config, config_outcome) = crate::core::config::Config::load_with_outcome();
+    let (config, config_outcome) = lyrel_ui_base::config::Config::load_with_outcome();
     let gui_language = config.gui_language.clone();
     // macOS: `font_thicken` is not applied here — it is baked into the
     // platform wrapper when the Application is built below, before any text
@@ -829,7 +825,7 @@ pub fn run() {
         cx.activate(true);
         #[cfg(target_os = "macos")]
         set_dock_icon_for_bare_binary();
-        crate::ui::i18n::set_locale(&gui_language);
+        lyrel_ui_base::i18n::set_locale(&gui_language);
         crate::core::explorer_context_menu::refresh_labels();
         // The load above is reused rather than re-read: reading the same
         // file twice at launch would report the same failure twice.
@@ -837,7 +833,7 @@ pub fn run() {
         lyrel_ui_base::host_registry::HostRegistry::insert(cx, lyrel_core::host::local::shared());
         crate::ui::motion::apply(cx);
         crate::ui::theme::refresh_system_appearance(cx);
-        crate::core::session::WorkspaceStore::init(cx);
+        lyrel_ui_base::session::WorkspaceStore::init(cx);
         lyrel_ui_base::session::install_workspace_store_hooks(
             cx,
             lyrel_ui_base::session::WorkspaceStoreHooks::new()
@@ -845,7 +841,7 @@ pub fn run() {
         );
         crate::ui::notification_history::install_source_resolver(cx);
         crate::ui::windows::WindowRegistry::init(cx);
-        crate::ui::presets::load_registry(cx);
+        lyrel_ui_base::presets::load_registry(cx);
         crate::ui::theme::apply_cursor_hide_mode(cx);
         spawn_config_watcher(cx);
         crate::core::update::spawn_check(cx);
@@ -885,9 +881,9 @@ pub fn run() {
 #[cfg(test)]
 mod config_reload_tests {
     use super::{apply_reloaded_config, is_theme_file};
-    use crate::core::actions::SplitRight;
-    use crate::core::config::{Config, LoadOutcome};
     use gpui_kit::{Action as _, App, KeyContext, Keystroke, TestAppContext};
+    use lyrel_ui_base::actions::SplitRight;
+    use lyrel_ui_base::config::{Config, LoadOutcome};
 
     /// What the live keymap — the one gpui dispatches against — does with
     /// `keys` typed in a terminal.
@@ -909,19 +905,19 @@ mod config_reload_tests {
     fn running_on(cx: &mut App, config: Config) {
         let dir = std::env::temp_dir().join(format!("lyrel-reload-{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
-        crate::core::config::set_config_dir(dir);
+        lyrel_core::core::config::set_config_dir(dir);
 
         gpui_kit::init(cx);
         cx.set_global(config);
         crate::ui::windows::WindowRegistry::init(cx);
-        crate::ui::presets::load_registry(cx);
+        lyrel_ui_base::presets::load_registry(cx);
         crate::ui::keymap::init(cx);
     }
 
     fn bound_to_split_right(config: &mut Config, key: &str) {
         config.keybindings.insert(
             "SplitRight".to_string(),
-            crate::core::config::KeybindingOverride::Add(key.to_string()),
+            lyrel_core::core::config::KeybindingOverride::Add(key.to_string()),
         );
     }
 
@@ -1000,7 +996,7 @@ mod config_reload_tests {
             assert!(announced, "the breakage is announced");
             assert_eq!(
                 cx.global::<Config>().keybindings.get("SplitRight"),
-                Some(&crate::core::config::KeybindingOverride::Add(
+                Some(&lyrel_core::core::config::KeybindingOverride::Add(
                     "ctrl-alt-9".to_string()
                 )),
                 "the running config survives the broken file"
@@ -1064,9 +1060,9 @@ mod config_reload_tests {
         );
         let original = r#"{"font_size":15,"keybindings":{"SplitRight":["ctrl-alt-9"]},"fixture_owned":"keep"}"#;
         std::fs::write(target.join("config.json"), original).unwrap();
-        crate::core::config::set_config_dir(linked.clone());
+        lyrel_core::core::config::set_config_dir(linked.clone());
         assert_eq!(
-            crate::core::config::config_dir_path(),
+            lyrel_core::core::config::config_dir_path(),
             Some(linked.clone()),
             "run with --exact --ignored so no other test pins the config directory first"
         );
@@ -1128,7 +1124,11 @@ mod config_reload_tests {
             "ssh_profiles": [profile]
         }))
         .unwrap();
-        std::fs::write(target.join(crate::core::config::SERVERS_FILE), &servers).unwrap();
+        std::fs::write(
+            target.join(lyrel_core::core::config::SERVERS_FILE),
+            &servers,
+        )
+        .unwrap();
         wait_for(cx, &|cx| {
             cx.global::<Config>()
                 .ssh_profiles
@@ -1138,15 +1138,15 @@ mod config_reload_tests {
 
         let themes = target.join("themes");
         std::fs::create_dir(&themes).unwrap();
-        let mut theme = crate::ui::presets::builtins().remove(0);
+        let mut theme = lyrel_ui_base::presets::builtins().remove(0);
         theme.name = "Symlink theme".to_string();
         std::fs::write(
             themes.join("symlink-fixture.yaml"),
-            crate::ui::presets::to_yaml(&theme),
+            lyrel_ui_base::presets::to_yaml(&theme),
         )
         .unwrap();
         wait_for(cx, &|cx| {
-            crate::ui::presets::all(cx)
+            lyrel_ui_base::presets::all(cx)
                 .iter()
                 .any(|theme| theme.id == "symlink-fixture" && theme.name == "Symlink theme")
         });
@@ -1157,11 +1157,11 @@ mod config_reload_tests {
         theme.name = "Theme while config is broken".to_string();
         std::fs::write(
             themes.join("symlink-fixture.yaml"),
-            crate::ui::presets::to_yaml(&theme),
+            lyrel_ui_base::presets::to_yaml(&theme),
         )
         .unwrap();
         wait_for(cx, &|cx| {
-            crate::ui::presets::all(cx).iter().any(|theme| {
+            lyrel_ui_base::presets::all(cx).iter().any(|theme| {
                 theme.id == "symlink-fixture" && theme.name == "Theme while config is broken"
             })
         });
@@ -1182,7 +1182,7 @@ mod config_reload_tests {
             broken
         );
         assert_eq!(
-            std::fs::read_to_string(target.join(crate::core::config::SERVERS_FILE)).unwrap(),
+            std::fs::read_to_string(target.join(lyrel_core::core::config::SERVERS_FILE)).unwrap(),
             servers
         );
 

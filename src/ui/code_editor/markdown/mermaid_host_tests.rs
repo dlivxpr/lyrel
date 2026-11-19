@@ -81,7 +81,7 @@ fn ready_after(
     ready(view, context)
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
-    context.dispatch_action(crate::core::actions::EditorSave);
+    context.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(context, |context| {
         app.read_with(context, |app, cx| {
             with_active_file(app, cx, |file, _| !file.dirty && !file.saving).unwrap_or(false)
@@ -151,7 +151,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     ready(&view, &mut context);
     let previous_image = image(&view, &context);
     // The production go-to command enters the source of the rendered block.
-    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.dispatch_action(lyrel_ui_base::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input("5:22", cx);
         window.press("enter", cx);
@@ -182,13 +182,13 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     first.read_with(&context, |first, cx| {
         assert_eq!(first.text(), view.read(cx).text())
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let undone = ready(&view, &mut context);
     assert_eq!(undone, before);
     context.dispatch_action(gpui_kit::component::input::Redo);
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     assert_eq!(ready(&view, &mut context), changed);
     save(&app, &mut context);
@@ -471,13 +471,14 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         use gpui_kit::component::ActiveTheme as _;
         (
             cx.theme().font_size,
-            cx.global::<crate::core::config::Config>().ui_font_size,
+            cx.global::<lyrel_ui_base::config::Config>().ui_font_size,
         )
     });
     let zoom_size = prior_ui_size * 1.25;
     // 与 SettingsWindow::set_ui_font_size 相同：配置负责工作台 rem，Theme 负责 provider。
     app.update_in(&mut context, |_, _, cx| {
-        cx.global_mut::<crate::core::config::Config>().ui_font_size = zoom_size;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = zoom_size;
         gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(zoom_size));
         cx.notify();
     });
@@ -500,7 +501,7 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         .filter(|&byte| byte == b'\n')
         .count()
         + 1;
-    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.dispatch_action(lyrel_ui_base::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input(&format!("{tail_line}:1"), cx);
         window.press("enter", cx);
@@ -532,7 +533,8 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
     app.update_in(&mut context, |_, _, cx| {
-        cx.global_mut::<crate::core::config::Config>().ui_font_size = prior_ui_size;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = prior_ui_size;
         gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size);
         cx.notify();
     });

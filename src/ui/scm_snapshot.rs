@@ -11,7 +11,7 @@ use lyrel_core::core::git::GitStatus;
 use lyrel_core::core::git::status::StatusIndex;
 use lyrel_ui_base::scm_snapshot::ScmSnapshotSource;
 
-use crate::ui::host_ops::HostId;
+use lyrel_ui_base::host_ops::HostId;
 
 pub use lyrel_ui_base::scm_snapshot::{GIT_RETRY_GAP, OPPORTUNISTIC_GIT_GAP, index_of};
 

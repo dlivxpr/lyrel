@@ -4,14 +4,15 @@ use gpui_kit::{
     WindowBackgroundAppearance, linear_color_stop, linear_gradient, rgb,
 };
 
-use crate::core::actions::*;
-use crate::core::config::{Config, WindowBackdrop};
-use crate::terminal::view::{
+use lyrel_core::core::config::WindowBackdrop;
+use lyrel_terminal::view::{
     ClearScrollback, CopyText, CutText, PasteText, RedoEdit, SelectAll, UndoEdit,
 };
-use crate::ui::i18n::{L10nKey, t};
-use crate::ui::presets;
-use crate::ui::presets::Fill;
+use lyrel_ui_base::actions::*;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::presets;
+use lyrel_ui_base::presets::Fill;
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 
@@ -185,7 +186,7 @@ fn window_menu_items(cx: &App) -> Vec<MenuItem> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let order = crate::ui::windows::menu_order(cx);
-    let store = crate::core::session::WorkspaceStore::all(cx);
+    let store = lyrel_ui_base::session::WorkspaceStore::all(cx);
 
     let slot_action = crate::ui::tab_strip::select_workspace_action;
 
@@ -1001,7 +1002,7 @@ mod tests {
     #[gpui_kit::test]
     fn effective_preset_follows_the_cached_system_appearance(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            cx.set_global(Config(crate::core::config::CoreConfig {
+            cx.set_global(Config(lyrel_ui_base::config::CoreConfig {
                 theme_follow_system: true,
                 theme_preset_light: "light-slot".into(),
                 theme_preset_dark: "dark-slot".into(),
@@ -1209,9 +1210,12 @@ mod tests {
         }
         // The untouched default — Auto, no blur, no opacity override — is the
         // case the report hit: it must come out opaque.
-        let resolved =
-            windows_background_appearance(crate::core::config::WindowBackdrop::Auto, false, 22_621);
-        let opacity = default_window_opacity(crate::core::config::WindowBackdrop::Auto, false);
+        let resolved = windows_background_appearance(
+            lyrel_core::core::config::WindowBackdrop::Auto,
+            false,
+            22_621,
+        );
+        let opacity = default_window_opacity(lyrel_core::core::config::WindowBackdrop::Auto, false);
         assert_eq!(windows_window_appearance(resolved, opacity), Opaque);
     }
 
@@ -1316,7 +1320,7 @@ mod tests {
 
     #[test]
     fn windows_background_appearance_falls_back_by_build() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         let a = |b: WindowBackdrop, blur: bool, build: u32| {
             windows_background_appearance(b, blur, build)
         };
@@ -1417,7 +1421,7 @@ mod tests {
 
     #[test]
     fn auto_never_counts_as_a_material() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // Every config written before this setting existed carries `Auto`,
         // and many of them carry `window_blur: true` from the old switch.
         // Those windows were opaque, with opaque sidebars — an update must
@@ -1435,7 +1439,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn an_explicitly_picked_material_lowers_the_default_opacity() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // The counterpart to the check above: opting in through the dropdown
         // is what buys the translucent default, on a build that supports it.
         if windows_build_number() < 22_621 {
@@ -1459,7 +1463,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_windows_backdrop_defers_to_the_local_blur_toggle() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         // On non-Windows, `window_backdrop` is a Windows-only setting with
         // no local UI to clear it; every variant must defer to the local
         // blur toggle so the switch's checked state always matches what is
@@ -1487,7 +1491,7 @@ mod tests {
 
     #[test]
     fn supported_backdrops_follow_the_build() {
-        use crate::core::config::WindowBackdrop;
+        use lyrel_core::core::config::WindowBackdrop;
         assert_eq!(
             supported_backdrops_for(22_621),
             &[

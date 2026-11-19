@@ -39,7 +39,6 @@ fn graphics_layout_wait_image(view: &Entity<TerminalView>, cx: &mut TestAppConte
     );
 }
 
-
 #[gpui_kit::test]
 fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut TestAppContext) {
     let (daemon, pane, view, window) = graphics_layout_harness(cx);

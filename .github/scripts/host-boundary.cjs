@@ -1,15 +1,12 @@
 // Host boundary module traversal. Invoked by check-host-boundary.sh, not a test harness.
 const fs = require('node:fs');
 const path = require('node:path').posix;
-// Single scan-root policy. The root package's desktop sources must always be
-// present; a known desktop UI sub-crate is scanned in full whenever its
-// extraction has landed, and skipped loudly (never fatal) while it has not.
+// The shell and each desktop capability crate are required scan roots.
 const SCAN_ROOTS = [
-    {root: 'src/ui', required: true},
-    {root: 'src/terminal', required: false},
-    {root: 'crates/lyrel-ui-base/src', required: false},
-    {root: 'crates/lyrel-terminal/src', required: true},
-    {root: 'crates/lyrel-workbench-editor/src', required: false},
+    'src/ui',
+    'crates/lyrel-ui-base/src',
+    'crates/lyrel-terminal/src',
+    'crates/lyrel-workbench-editor/src',
 ];
 const files = new Set();
 function collect(root) {
@@ -19,17 +16,15 @@ function collect(root) {
         else if (file.endsWith('.rs')) files.add(file);
     }
 }
-for (const {root, required} of SCAN_ROOTS) {
-    if (fs.existsSync(root)) {
-        collect(root);
-        continue;
-    }
-    if (required) {
+for (const root of SCAN_ROOTS) {
+    if (!fs.existsSync(root)) {
         console.error(`check-host-boundary: scan root '${root}' does not exist (moved? renamed?)`);
         process.exit(2);
     }
-    console.error(`check-host-boundary: scan root '${root}' not extracted yet; skipping`);
+    collect(root);
 }
+// Retained whole-window terminal consumers live in the shell's test module.
+if (fs.existsSync('src/terminal_tests')) collect('src/terminal_tests');
 if (files.size < 10) throw Error('check-host-boundary: fewer than 10 files; scan roots look wrong');
 
 // Strings/comments are units: fixture braces cannot manufacture Rust modules.

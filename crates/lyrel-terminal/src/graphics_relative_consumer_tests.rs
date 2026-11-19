@@ -135,10 +135,7 @@ fn graphics_consumer_relative_validation_is_correlated_quiet_and_atomic(cx: &mut
                 let placement = [10, 1, 11, 12][index];
                 let reply = format!("\x1b_Gi=51,p={placement};{status}\x1b\\");
                 assert!(
-                    text.contains(&format!(
-                        "KITTY_REPLY {serial} {}",
-                        hex(reply.as_bytes())
-                    )),
+                    text.contains(&format!("KITTY_REPLY {serial} {}", hex(reply.as_bytes()))),
                     "{text}"
                 );
             }
@@ -161,36 +158,67 @@ fn graphics_consumer_relative_validation_is_correlated_quiet_and_atomic(cx: &mut
 }
 
 #[gpui_kit::test]
-fn graphics_consumer_relative_numbered_replacements_reject_direct_and_indirect_cycles(cx: &mut TestAppContext) {
+fn graphics_consumer_relative_numbered_replacements_reject_direct_and_indirect_cycles(
+    cx: &mut TestAppContext,
+) {
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
-    graphics_send_fixture_with_replies(&view, cx, 652,
-        b"\x1b[6;5H\x1b_Ga=T,I=73,p=1,c=1,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
+    graphics_send_fixture_with_replies(
+        &view,
+        cx,
+        652,
+        b"\x1b[6;5H\x1b_Ga=T,I=73,p=1,c=1,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\",
+        1,
+    );
     graphics_recovery_wait(cx, "numbered image must decode", |cx| {
         view.read_with(cx, |view, _| graphics_visible_images(view).len() == 1)
     });
-    let image_id = view.read_with(cx, |view, _| graphics_visible_images(view)[0].placement.image_id);
+    let image_id = view.read_with(cx, |view, _| {
+        graphics_visible_images(view)[0].placement.image_id
+    });
     let child = format!("\x1b_Ga=p,I=73,p=2,P={image_id},Q=1,H=2,V=1,c=1,r=1\x1b\\");
     graphics_send_fixture_with_replies(&view, cx, 653, child.as_bytes(), 1);
     graphics_recovery_wait(cx, "numbered child must be projected", |cx| {
         view.read_with(cx, |view, _| graphics_visible_images(view).len() == 2)
     });
-    let anchors = |cx: &mut TestAppContext| view.read_with(cx, |view, _| {
-        graphics_visible_images(view).into_iter().map(|image| {
-            (image.placement.placement_id, image.anchor_row, image.anchor_col)
-        }).collect::<Vec<_>>()
-    });
+    let anchors = |cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| {
+            graphics_visible_images(view)
+                .into_iter()
+                .map(|image| {
+                    (
+                        image.placement.placement_id,
+                        image.anchor_row,
+                        image.anchor_col,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    };
     let before = anchors(cx);
     for (index, parent) in [1, 2].into_iter().enumerate() {
         let serial = 654 + index;
         let request = format!("\x1b_Ga=p,I=73,p=1,P={image_id},Q={parent},H=3,V=4,c=1,r=1\x1b\\");
-        let (text, _) = graphics_recovery_exchange(&daemon, pane, "SEND", serial, request.as_bytes(), 1);
+        let (text, _) =
+            graphics_recovery_exchange(&daemon, pane, "SEND", serial, request.as_bytes(), 1);
         // Admission errors correlate by the requested public number, not an
         // invented image id; the exact protocol status must not become OK.
         let reply = b"\x1b_GI=73,p=1;ECYCLE:Placement cycle\x1b\\";
-        assert!(text.contains(&format!("KITTY_REPLY {serial} {}", hex(reply))), "{text}");
+        assert!(
+            text.contains(&format!("KITTY_REPLY {serial} {}", hex(reply))),
+            "{text}"
+        );
         for pass in 0..3 {
-            graphics_send_fixture(&view, cx, 660 + index * 3 + pass, b"\x1b[1;1Hcycle rejected");
-            assert_eq!(anchors(cx), before, "rejected cycles must not accumulate relative offsets");
+            graphics_send_fixture(
+                &view,
+                cx,
+                660 + index * 3 + pass,
+                b"\x1b[1;1Hcycle rejected",
+            );
+            assert_eq!(
+                anchors(cx),
+                before,
+                "rejected cycles must not accumulate relative offsets"
+            );
             graphics_assert_production_paint(window, &view, cx);
         }
     }
@@ -421,8 +449,14 @@ fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
             assert_eq!(images.len(), 2);
             let parent = images.iter().find(|p| p.placement.image_id == 81).unwrap();
             let child = images.iter().find(|p| p.placement.image_id == 82).unwrap();
-            assert_eq!((parent.placement.key, parent.placement.resource), (parent_key, parent_root));
-            assert_eq!((child.placement.key, child.placement.resource), (child_key, child_root));
+            assert_eq!(
+                (parent.placement.key, parent.placement.resource),
+                (parent_key, parent_root)
+            );
+            assert_eq!(
+                (child.placement.key, child.placement.resource),
+                (child_key, child_root)
+            );
             assert_eq!(child.placement.parent, Some(parent_key));
             assert_eq!(graphics_resize_text_row(view, "ANIMATED-PARENT"), Some(5));
             let (crop, _) = child.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
@@ -444,7 +478,8 @@ fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
             _ => unreachable!(),
         };
         graphics_recovery_detached_request(&daemon, pane, "SEND", serial + 3, &mutation);
-        let statistics = graphics_recovery_detached_request(&daemon, pane, "STAT", serial + 4, b"\0");
+        let statistics =
+            graphics_recovery_detached_request(&daemon, pane, "STAT", serial + 4, b"\0");
         let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, serial + 5);
         if lifecycle == "replace" {
             graphics_recovery_pixels(&fresh, cx, 81, &[255, 255, 0, 255]);
@@ -453,22 +488,35 @@ fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
         fresh.read_with(cx, |view, _| {
             let images = graphics_visible_images(view);
             if lifecycle == "replace" {
-                assert_eq!(images.len(), 1, "retransmission must retire the old parent graph and every selected child frame");
+                assert_eq!(
+                    images.len(),
+                    1,
+                    "retransmission must retire the old parent graph and every selected child frame"
+                );
                 let parent = &images[0];
-                assert_eq!((parent.placement.image_id, parent.placement.placement_id), (81, 9));
+                assert_eq!(
+                    (parent.placement.image_id, parent.placement.placement_id),
+                    (81, 9)
+                );
                 assert_ne!(parent.placement.resource, parent_root);
                 assert_ne!(parent.placement.key, parent_key);
                 assert_eq!(parent.placement.parent, None);
                 assert_eq!(graphics_resize_text_row(view, "REPLACED-PARENT"), Some(9));
-                let (crop, _) = parent.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
+                let (crop, _) =
+                    parent.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
                 assert_eq!(crop.origin, point(px(40.), px(90.)));
             } else {
-                assert!(images.is_empty(), "{lifecycle} must not revive either selected frame on fresh attach");
+                assert!(
+                    images.is_empty(),
+                    "{lifecycle} must not revive either selected frame on fresh attach"
+                );
             }
         });
         let recovered_stats = graphics_recovery_stats(&fresh, cx, serial + 6);
-        assert!(statistics.contains(&format!("KITTY_STATS_{} {recovered_stats}", serial + 4)),
-            "fresh recovery must not request sender retransmission: {statistics}");
+        assert!(
+            statistics.contains(&format!("KITTY_STATS_{} {recovered_stats}", serial + 4)),
+            "fresh recovery must not request sender retransmission: {statistics}"
+        );
         graphics_recovery_destroy(fresh, fresh_window, cx);
 
         // No remaining child placement means its whole animation is gone,
@@ -485,7 +533,10 @@ fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
             b"\x1b_Gi=82,p=3;ENOENT:Image not found\x1b\\".as_slice(),
             b"\x1b_Gi=82;ENOENT:Image not found\x1b\\".as_slice(),
         ] {
-            assert!(text.contains(&format!("KITTY_REPLY {} {}", serial + 7, hex(reply))), "{lifecycle}: {text}");
+            assert!(
+                text.contains(&format!("KITTY_REPLY {} {}", serial + 7, hex(reply))),
+                "{lifecycle}: {text}"
+            );
         }
         daemon.panes().kill(pane).unwrap();
     }

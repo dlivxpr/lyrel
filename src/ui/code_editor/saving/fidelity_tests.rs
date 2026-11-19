@@ -32,7 +32,7 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
     }
 }
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -105,7 +105,7 @@ fn encodings(cx: &mut TestAppContext) {
         });
         let presentation = view(&app, &vcx);
         for _ in 0..2 {
-            vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            vcx.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
             settle(&mut vcx);
             save(&app, &mut vcx);
             assert_eq!(std::fs::read(&path).unwrap(), *original, "untouched {name}");
@@ -164,7 +164,7 @@ fn explicit_policy(cx: &mut TestAppContext) {
     settle(&mut vcx);
     save(&app, &mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), original);
-    vcx.dispatch_action(crate::core::actions::EditorTrimTrailingWhitespace);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorTrimTrailingWhitespace);
     settle(&mut vcx);
     save(&app, &mut vcx);
     assert_eq!(
@@ -218,7 +218,7 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
     app.update_in(&mut vcx, |app, _, cx| app.toggle_line_ending(cx));
     settle(&mut vcx);
     app.update_in(&mut vcx, |app, window, cx| app.activate(1, window, cx));
-    vcx.dispatch_action(crate::core::actions::EditorNewMarkdownFile);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorNewMarkdownFile);
     settle(&mut vcx);
     vcx.update(|window, cx| window.input("different target", cx));
     release.send(()).unwrap();
@@ -336,7 +336,7 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
         );
     });
     assert!(!stored.exists());
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &path);
     until(&mut vcx, |vcx| {
@@ -411,14 +411,14 @@ fn encoding_cancel_recover(cx: &mut TestAppContext) {
     });
     vcx.update(|window, cx| window.input("中", cx));
     settle(&mut vcx);
-    vcx.dispatch_action(crate::core::actions::CloseActiveTab);
+    vcx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut vcx);
     vcx.simulate_prompt_answer(t(L10nKey::Save));
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     settle(&mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), original);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
@@ -472,7 +472,7 @@ fn save_as_conflict_and_rename(cx: &mut TestAppContext) {
     });
     vcx.update(|window, cx| window.input("!", cx));
     settle(&mut vcx);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &occupied);
     until(&mut vcx, |vcx| vcx.has_pending_prompt());
@@ -491,7 +491,7 @@ fn save_as_conflict_and_rename(cx: &mut TestAppContext) {
     });
     settle(&mut vcx);
     let second = view(&app, &vcx);
-    vcx.dispatch_action(crate::core::actions::EditorSaveAs);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut vcx);
     enter_path(&mut vcx, &target);
     until(&mut vcx, |vcx| {

@@ -4,8 +4,8 @@
 //! the pairing logic lives here — outside either renderer — and is unit tested
 //! without a window.
 
-use crate::core::config::DiffViewMode;
 use crate::ui::scm::diff::{DiffLine, Hunk, LineKind};
+use lyrel_core::core::config::DiffViewMode;
 
 /// A tab is worth this many columns. Not configurable: a diff is read next to
 /// the file's other lines, not on its own, and the grid has to line up.

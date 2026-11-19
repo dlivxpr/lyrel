@@ -255,7 +255,7 @@ impl LyrelApp {
         element: E,
         cx: &mut Context<Self>,
     ) -> E {
-        use crate::core::actions::{
+        use lyrel_ui_base::actions::{
             EditorDocumentOverflow, EditorFocusLeftGroup, EditorFocusRightGroup, EditorGoToSymbol,
             EditorNavigateBack, EditorNavigateForward, EditorSplitRight,
             FocusDocumentTabNavigation,
@@ -781,7 +781,11 @@ impl LyrelApp {
         let hi = self.editor.read(cx).strip_picker_highlight(rows.len());
         let theme = cx.theme();
         let (fg, muted) = (theme.foreground, theme.muted_foreground);
-        let row_hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.hover);
+        let row_hover = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .popover
+                .hover,
+        );
 
         let heading = |label: SharedString| {
             div()

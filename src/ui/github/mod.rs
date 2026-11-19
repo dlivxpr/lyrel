@@ -43,9 +43,9 @@ use lyrel_insights::github::{
 };
 
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::scm::panel::RepoLookup;
 use crate::ui::scm::state::RepoKey;
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
 
 /// How old a cached list or detail may get before a render revalidates it.
 pub(crate) const STALE_AFTER: Duration = Duration::from_secs(120);
@@ -419,7 +419,7 @@ impl LyrelApp {
             .remotes
             .insert(repo.clone(), RemoteLookup::Loading { request });
         let root = repo.root.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| lyrel_core::core::git::git(h, &root, &["remote", "-v"]),
@@ -463,7 +463,7 @@ impl LyrelApp {
         self.github.connecting = true;
         let connector = self.github.connector.clone().unwrap_or_else(|| {
             system_connector(
-                cx.global::<crate::core::config::Config>()
+                cx.global::<lyrel_ui_base::config::Config>()
                     .http_proxy
                     .clone(),
             )
@@ -733,7 +733,7 @@ impl LyrelApp {
             entry.loading = true;
             let root = repo.root.clone();
             let repo = repo.clone();
-            crate::ui::host_ops::HostOps::run(
+            lyrel_ui_base::host_ops::HostOps::run(
                 host,
                 cx,
                 move |h| {

@@ -1,10 +1,10 @@
 //! Presentation of daemon-authored program records; no lifecycle or agent inference.
-use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::component::{ActiveTheme as _, tooltip::Tooltip};
 use gpui_kit::{AnyElement, App, SharedString, TestSupportExt as _, div, prelude::*, rems};
 use lyrel_core::core::program_status::{
     BlockedKind, ProgramRecord, ProgramState, plain_program_text,
 };
+use lyrel_ui_base::i18n::{L10nKey, t};
 use std::fmt::Write as _;
 
 pub(crate) fn state_label(record: &ProgramRecord) -> &'static str {

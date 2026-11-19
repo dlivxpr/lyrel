@@ -1,6 +1,6 @@
-use crate::core::session::RemoteTarget;
 use crate::ui::desktop_lookups::HostChoice;
 use crate::ui::remote_connect::Connected;
+use lyrel_ui_base::session::RemoteTarget;
 
 /// One window's manual connection and creation flow, not machine authority.
 #[derive(Default)]
@@ -210,10 +210,10 @@ use gpui_kit::{Context, Window};
 use lyrel_core::host::HostId;
 
 use super::{RemoteLinks, pump_auth_sheets};
-use crate::core::config::Config;
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
 use crate::ui::remote_connect;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 
 impl LyrelApp {
     pub(crate) fn connect_to_host(&mut self, choice: HostChoice, cx: &mut Context<Self>) {

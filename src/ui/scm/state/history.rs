@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::HostOps;
 use gpui_kit::{Context, Focusable as _};
 use lyrel_core::core::git::log::{self, GRAPH_PAGE, MAX_GRAPH_COMMITS};
+use lyrel_ui_base::host_ops::HostOps;
 
 type GraphKey = (RepoKey, u64, GraphScope);
 

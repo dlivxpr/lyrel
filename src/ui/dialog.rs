@@ -13,8 +13,8 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{App, Div, ElementId, Hsla, SharedString, Stateful, div, prelude::*, px, rems};
 
-use crate::ui::presets::Surface;
 use crate::ui::right_panel::{HEADING, TEXT};
+use lyrel_ui_base::presets::Surface;
 
 // The shared card grid and button live in `lyrel-ui-base` so the workbench
 // editor's overlays and this shell chrome cannot drift apart; the composed
@@ -31,7 +31,7 @@ const FIELD_GAP: f32 = 14.;
 /// The ladder a dialog's hovers are taken from. Cards sit on the popover
 /// surface; the home page passes the window's own.
 pub(crate) fn popover_rungs(cx: &App) -> Surface {
-    cx.global::<crate::ui::presets::Surfaces>().popover
+    cx.global::<lyrel_ui_base::presets::Surfaces>().popover
 }
 
 /// The card itself, opaque and occluding. Callers add the header, body and
@@ -127,7 +127,7 @@ pub(crate) fn field(input: Input, cx: &App) -> Div {
     h_flex()
         .items_center()
         .h(px(FIELD_H))
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
         .child(
             div()
@@ -168,7 +168,7 @@ pub(crate) fn select_well(
         .pr(px(9.))
         .gap(px(8.))
         .items_center()
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
         .cursor_pointer()
         .child(div().flex_1().min_w_0().truncate().child(value.into()))
@@ -182,7 +182,7 @@ pub(crate) fn well(cx: &App) -> Div {
         .gap(px(4.))
         .px(px(10.))
         .py(px(8.))
-        .rounded(crate::ui::rounding::ROW_RADIUS)
+        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
         .bg(well_fill(cx))
 }
 

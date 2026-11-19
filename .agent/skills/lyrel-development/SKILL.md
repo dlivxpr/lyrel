@@ -25,6 +25,7 @@ description: >-
 - 默认输入为 `.conpty/`，`LYREL_CONPTY_DIR` 可覆盖；离线准备与缓存语义按上述 README。Windows MSVC 保留 `+crt-static`，不要用 `RUSTFLAGS` 意外覆盖。
 - 当前 Windows ConPTY 与 Windows server 仅支持 x86_64；远端 ARM64 Windows 明确拒绝。安装器的 x64 仿真兼容不等于发布了 ARM64 目标。
 - daemon 创建 pane 前对配对文件、许可、架构和版本 fail-closed；缺失或损坏不能静默回退到系统 ConPTY。发行包还需核对包内 `ConPTY-manifest.json`，不能用现有安装旁的独立清单替换信任来源。
+- 终端真实 PTY 回归在非标准 Git Bash 安装（如 Scoop）下需指定 `LYREL_TEST_GIT_BASH`。自定义 Cargo 产物目录若无法自动识别，可先经 wrapper 构建 `--locked -p lyrel-test-support --bin lyrel-graphics-fixture`，再以 `LYREL_GRAPHICS_FIXTURE_BIN` 指定实际 exe；测试仍会验证源码身份。
 - 保留必需的 `.conpty/` 构建资产，不把它当作本次可随手清理的临时目录。
 
 ## 常用命令
@@ -39,21 +40,22 @@ description: >-
 | 同步 wire／Host 协议 | `cargo t-protocol`（Windows：`pwsh scripts/cargo-windows.ps1 t-protocol`） |
 | core / CLI E2E | `cargo test --locked -p lyrel-core` / `cargo test --locked -p lyrel-cli --test cli_e2e` |
 | 文本 codec / 文档格式引擎 | `cargo test --locked -p lyrel-document --no-default-features` / `cargo test --locked -p lyrel-document --all-features` |
-| 桌面 library 测试 | `cargo test --locked -p lyrel -p lyrel-ui-base --lib` |
+| 桌面 library 测试 | `cargo test --locked -p lyrel -p lyrel-ui-base -p lyrel-terminal -p lyrel-workbench-editor --lib` |
 | 桌面 updater 测试 | `cargo test --locked -p lyrel-updater --lib` |
 | native Markdown / 终端 | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` / `cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal` |
 | 格式检查 / 写回 | `cargo fmt --check` / `cargo fmt` |
 | Host 边界 | `bash .github/scripts/check-host-boundary.sh` |
+| Workspace 生产依赖图 | `node .github/scripts/workspace-graph.cjs` |
 | 补充 lint | `cargo clippy --workspace --all-targets --locked` |
 
-Windows/macOS 默认构建包含桌面应用、独立 updater 和 Markdown editor；桌面应用依赖共享 `lyrel-ui-base`。两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
+Windows/macOS 默认构建包含桌面应用、独立 updater 和 Markdown editor；桌面应用由 `lyrel-ui-base`、`lyrel-terminal` 与 `lyrel-workbench-editor` 支撑。两个 native 字形消费者属于非默认 `native-markdown-tests`，不能由默认测试替代。CI 覆盖范围及超时以 `.github/workflows/ci.yml` 为准，补充 Clippy 不冒称 CI 必跑项；仓库未设覆盖率百分比门槛。
 
 Host 边界脚本要求 LF；遇到 `$'\r': command not found` 或 `invalid option name` 时先核对行尾，不能扩大 allowlist 掩盖。补全生成读 `scripts/fig-convert/README.md`；性能验证读 `scripts/bench/README.md`，后者依赖 macOS/zsh。
 
 ## Linux
 
 - 优先使用兼容目标 libc、依赖和运行时的轻量 Docker Linux 容器，参照 CI 准备完整环境。仅在 Docker 不可用或容器不能覆盖目标行为（如 WSL 专项）时回退 WSL，并记录原因。
-- 构建使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --exclude lyrel-ui-base --all-features`；测试使用对应 `cargo test`。文档格式引擎、insights 的 skills／统计／GitHub 查询及共享测试夹具均参与 headless 验证；用量账户与浏览器读取器仅在桌面构建。
+- Linux headless 的 `cargo build/test --locked --workspace --all-features` 排除 `lyrel`、`lyrel-markdown-editor`、`lyrel-updater`、`lyrel-ui-base`、`lyrel-terminal` 与 `lyrel-workbench-editor`；完整命令见安装指南。文档格式引擎、insights 的 skills／统计／GitHub 查询及共享测试夹具参与 headless 验证；用量账户与浏览器读取器只在桌面构建。
 - 完整 features 需要 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。Pi 桥契约需要当前平台 Node 22.19+ 在 `PATH`，不能用 Windows 的 `node.exe` 替代 Linux Node。
 - 很多 server 集成用例受 `cfg(unix)` 限制，Windows 通过不能替代 Unix 验证；联网及真实 SSH/LSP 的 ignored 用例只在具备前提时显式执行。
 

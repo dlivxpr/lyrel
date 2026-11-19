@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::core::config::Config;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 const REPO: &str = "dlivxpr/lyrel";
 
@@ -1488,7 +1488,7 @@ struct UpdateState {
 
 impl UpdateState {
     fn path() -> Option<std::path::PathBuf> {
-        crate::core::config::config_path("update.json")
+        lyrel_core::core::config::config_path("update.json")
     }
 
     fn load() -> Self {
@@ -1515,7 +1515,7 @@ impl UpdateState {
                 return;
             }
         };
-        if let Err(e) = crate::core::config::write_atomic(&path, json.as_bytes()) {
+        if let Err(e) = lyrel_core::core::config::write_atomic(&path, json.as_bytes()) {
             log::warn!("failed to write {}: {e}", path.display());
         }
     }
@@ -2005,7 +2005,7 @@ impl PreparedUpdate {
 /// Where the updater records how the install ended; the next launch merges it
 /// into the update state (`absorb_update_outcome_at_launch`).
 fn update_outcome_path() -> Option<PathBuf> {
-    crate::core::config::config_path(lyrel_updater::outcome::OUTCOME_FILE_NAME)
+    lyrel_core::core::config::config_path(lyrel_updater::outcome::OUTCOME_FILE_NAME)
 }
 
 /// The file the privileged first stage writes its pid into so the de-elevated
@@ -2016,7 +2016,7 @@ fn update_outcome_path() -> Option<PathBuf> {
 /// shape, including over-the-shoulder (#504).
 #[cfg(target_os = "windows")]
 fn update_elevation_status_path() -> Option<PathBuf> {
-    crate::core::config::config_path("update-elevation.status")
+    lyrel_core::core::config::config_path("update-elevation.status")
 }
 
 /// The named options after the positional arguments. Everything the updater
@@ -2087,7 +2087,7 @@ fn prepare_macos_update(
         stage: dir.clone(),
         expected_version: version.to_string(),
         log,
-        config_dir: crate::core::config::config_dir_path(),
+        config_dir: lyrel_core::core::config::config_dir_path(),
         result_file: None,
     };
     run_updater(&updater, plan.verify_plan().argv())?;
@@ -2156,7 +2156,7 @@ fn prepare_windows_update(
     // update modes repeat their archive checks after the parent exits. One
     // plan per layout drives the pre-flight argv and the persisted install
     // plan; the layouts live in lyrel_updater (see `lyrel_updater::windows`).
-    let config_dir = crate::core::config::config_dir_path();
+    let config_dir = lyrel_core::core::config::config_dir_path();
     let (command, rest) = match &layout {
         WindowsUpdateLayout::Inno(_) => {
             let verify = lyrel_updater::windows::VerifyPlan::Installer {
@@ -2231,8 +2231,8 @@ fn prepare_windows_update(
 /// is resolvable, else the staging directory.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn log_path(stage: &Path) -> Result<PathBuf> {
-    let log =
-        crate::core::config::config_path("update.log").unwrap_or_else(|| stage.join("update.log"));
+    let log = lyrel_core::core::config::config_path("update.log")
+        .unwrap_or_else(|| stage.join("update.log"));
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent).context("creating the update log directory")?;
     }
@@ -2927,7 +2927,7 @@ mod tests {
     #[test]
     fn update_state_round_trips_and_defaults() {
         let _lock = UPDATE_STATE_LOCK.lock().unwrap();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let path = UpdateState::path().expect("config dir pinned");
 
         let _ = std::fs::remove_file(&path);
@@ -3056,7 +3056,7 @@ mod tests {
         use lyrel_updater::outcome::{UpdateOutcome, write_outcome};
 
         let _lock = UPDATE_STATE_LOCK.lock().unwrap();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let state_path = UpdateState::path().expect("config dir pinned");
         let outcome_path = update_outcome_path().expect("config dir pinned");
         let _ = std::fs::remove_file(&state_path);

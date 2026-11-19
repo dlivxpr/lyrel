@@ -1,7 +1,6 @@
 use super::super::test_host::{FileHost, canonical_tempdir};
 use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
-use crate::ui::editor_session;
 use gpui_kit::component::input::Position;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
@@ -9,6 +8,7 @@ use lyrel_core::host::Host as _;
 use lyrel_ui_base::host_ops::{HostId, MTime, SharedHost};
 use lyrel_ui_base::i18n::{L10nKey, t};
 use lyrel_workbench_editor::code_editor::{BufferId, DiskConflict, TabCode};
+use lyrel_workbench_editor::editor_session;
 use lyrel_workbench_editor::editor_session::TabEditor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,11 +90,11 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
     let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
     let pane = app.read_with(&vcx, |app, _| app.tabs[0].pane.terminals()[0].clone());
     let (cwd, expected_path, expected_host) = if remote {
-        use crate::core::session::{
+        use lyrel_ui_base::host_registry::HostRegistry;
+        use lyrel_ui_base::route::PaneWorkspace;
+        use lyrel_ui_base::session::{
             RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore,
         };
-        use crate::ui::host_registry::HostRegistry;
-        use crate::ui::route::PaneWorkspace;
 
         let target = RemoteTarget::Alias {
             alias: "range-citation-fixture".into(),
@@ -175,7 +175,7 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
 
 #[gpui_kit::test]
 fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &mut TestAppContext) {
-    use crate::core::actions::{EditorNewFile, EditorNewMarkdownFile};
+    use lyrel_ui_base::actions::{EditorNewFile, EditorNewMarkdownFile};
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     for extension in ["md", "MARKDOWN", "MDX"] {
@@ -327,7 +327,7 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     });
     app.update_in(&mut vcx, |app, window, cx| app.focus_editor(window, cx));
     vcx.update(|window, cx| window.render_frame(cx));
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx)
@@ -354,8 +354,8 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
 
 #[gpui_kit::test]
 fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut TestAppContext) {
-    use crate::core::actions::EditorSave;
     use gpui_kit::component::input::{MoveToStart, Redo, Undo};
+    use lyrel_ui_base::actions::EditorSave;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fidelity.mdx");
     // The first three terminators reproduce the observed majority-CRLF bug.
@@ -445,7 +445,7 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
         start_active_markdown_in_source(&app, &mut vcx);
         let save = |vcx: &mut VisualTestContext| {
-            vcx.dispatch_action(crate::core::actions::EditorSave);
+            vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
             wait_until(vcx, |vcx| {
                 app.read_with(vcx, |app, cx| {
                     app.active_buffer(cx)
@@ -512,7 +512,7 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
         window.render_frame(cx);
         window.input("🎉", cx);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     vcx.run_until_parked();
@@ -527,7 +527,7 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
         );
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx)
@@ -769,7 +769,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         app.focus_editor(window, cx);
     });
     vcx.update(|window, cx| window.render_frame(cx));
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx)
@@ -1173,7 +1173,7 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
             external
         );
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx)
@@ -1205,7 +1205,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         window.render_frame(cx);
         window.input("NEW161", cx);
     });
-    vcx.dispatch_action(crate::core::actions::EditorSave);
+    vcx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx)
@@ -1358,10 +1358,10 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
 fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
     cx: &mut TestAppContext,
 ) {
-    use crate::core::session::{Session, WorkspaceStore};
-    use crate::terminal::view::quiet_test_pane;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::tab::Tab;
+    use lyrel_terminal::view::quiet_test_pane;
+    use lyrel_ui_base::session::{Session, WorkspaceStore};
 
     let old_root = canonical_tempdir();
     let new_root = canonical_tempdir();
@@ -1481,7 +1481,7 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
 fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
     cx: &mut TestAppContext,
 ) {
-    use crate::ui::host_registry::HostRegistry;
+    use lyrel_ui_base::host_registry::HostRegistry;
 
     let old_root = canonical_tempdir();
     let new_root = canonical_tempdir();

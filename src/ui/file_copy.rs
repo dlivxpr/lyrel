@@ -14,8 +14,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ui::host_ops::Host;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::host_ops::Host;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// How deep a dropped folder is followed before the copy gives up.
 ///

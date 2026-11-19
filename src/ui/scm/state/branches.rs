@@ -2,9 +2,9 @@
 
 use super::*;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::HostOps;
 use gpui_kit::{Context, Focusable as _};
 use lyrel_core::core::git::ops::GitOp;
+use lyrel_ui_base::host_ops::HostOps;
 
 #[derive(Clone, Copy)]
 pub(crate) enum BranchInput {

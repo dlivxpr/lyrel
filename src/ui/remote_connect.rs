@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use gpui_kit::App;
 
-use crate::core::config::Config;
-use crate::core::session::{RemoteTarget, WorkspaceId};
 use crate::daemon::control::{ControlHello, ControlRequest, ReplyOk};
 use crate::daemon::install::{
     InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
@@ -15,18 +13,21 @@ use crate::daemon::install::{
 use crate::daemon::protocol::{AuthPromptKind, AuthResponse, NativeSshSpec};
 use crate::daemon::router::RouteHeader;
 use crate::ui::desktop_lookups::HostLinks;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use lyrel_core::host::remote::RemoteHost;
 use lyrel_core::host::{Host as _, HostId};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
 /// Whether a route can still be turned into a connection: a `Profile` target
 /// dangles once the profile leaves the config, an `Alias` once the name
 /// leaves `~/.ssh/config` (#485). The route supervisor asks this four times a
 /// second; the alias half is mtime-cached in `ssh_config`.
 pub fn route_resolvable(cx: &App, target: &RemoteTarget) -> bool {
-    target.resolvable(&cx.global::<Config>().ssh_profiles, |alias| {
-        crate::core::ssh_config::alias_still_resolves(alias)
-    })
+    target.resolvable(
+        &cx.global::<Config>().ssh_profiles,
+        lyrel_ui_base::ssh_config::alias_still_resolves,
+    )
 }
 
 pub fn spec_for(target: &RemoteTarget, cx: &App) -> Result<NativeSshSpec, String> {
@@ -61,7 +62,7 @@ fn spec_from(
             ))
         }
         RemoteTarget::Alias { alias } => {
-            let resolved = crate::core::ssh_config::resolve_alias_to_profile(alias)
+            let resolved = lyrel_ui_base::ssh_config::resolve_alias_to_profile(alias)
                 .ok_or_else(|| t_fmt(L10nKey::RemoteAliasMissing, &[("alias", alias)]))?;
             Ok(crate::ui::ssh_connect::native_spec_from_transient_profile(
                 &resolved.profile,
@@ -675,7 +676,7 @@ mod tests {
 
     #[test]
     fn the_install_prompt_states_every_field_of_the_request() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let request = request();
         let detail = install_detail(&request);
         for needle in [
@@ -702,7 +703,7 @@ mod tests {
 
     #[test]
     fn human_bytes_reads_in_binary_units() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert_eq!(
             human_bytes(512),
             format!("512 {}", t(L10nKey::RemoteInstallBytes))
@@ -961,7 +962,7 @@ mod tests {
 
     #[test]
     fn the_mismatch_prompt_names_the_host_and_both_versions() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let m = MismatchedRemoteDaemon {
             host: "me@build-box:22".into(),
             running_version: Some("0.8.0".into()),
@@ -993,7 +994,7 @@ mod tests {
 
     #[test]
     fn the_mismatch_detail_explains_every_answer_the_prompt_offers() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let detail = mismatch_detail(&MismatchedRemoteDaemon {
             host: "me@build-box:22".into(),
             running_version: Some("0.8.0".into()),

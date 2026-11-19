@@ -86,8 +86,8 @@ fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mu
     });
 
     vcx.update(|_, cx| {
-        cx.global_mut::<crate::core::config::Config>()
-            .motion_preference = crate::core::config::MotionPreference::Reduce;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .motion_preference = lyrel_core::core::config::MotionPreference::Reduce;
         crate::ui::motion::apply(cx);
     });
     vcx.run_until_parked();
@@ -236,7 +236,7 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     vcx.run_until_parked();
     test_window::quiesce(&mut vcx, None);
     let displayed = app.update_in(&mut vcx, |_, _, cx| {
-        crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id())
+        lyrel_terminal::lifecycle::displayed_for_test(cx, pane.entity_id())
     });
     assert_eq!(displayed, Some(false));
     render_probe::arm(200);
@@ -261,7 +261,7 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
-            crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id()),
+            lyrel_terminal::lifecycle::displayed_for_test(cx, pane.entity_id()),
             Some(true)
         );
     });

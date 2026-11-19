@@ -18,9 +18,9 @@ use gpui_kit::{
 use super::command::{CommandKind, Item};
 use super::sources::{Catalog, Row, Section, plain};
 use super::{FileList, SearchTab};
-use crate::core::actions::{SearchNextTab, SearchPrevTab};
 use crate::ui::dialog::{CARD_RADIUS, FOOTER_H, keycap};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::actions::{SearchNextTab, SearchPrevTab};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// What the list is showing: one of the tabs, or a list a row opens — the
 /// theme picker one of the Actions rows opens, or what can be done with a
@@ -1000,7 +1000,7 @@ impl SearchView {
     /// on the popover's selected step. Go to File has no pill of its own —
     /// it is a chord, not a scope — so there none is lit.
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let (active_bg, hover_bg) = (gpui_kit::rgb(sf.selected), gpui_kit::rgb(sf.hover));
         let theme = cx.theme();
         let (fg, muted) = (theme.foreground, theme.muted_foreground);
@@ -1222,7 +1222,7 @@ pub(crate) const KEY_CONTEXT: &str = "Search";
 
 impl Render for SearchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let scrim = crate::ui::presets::scrim_fill(cx);
+        let scrim = lyrel_ui_base::presets::scrim_fill(cx);
         let tabs = !self.in_sub_list();
 
         let viewport = window.viewport_size();
@@ -1328,7 +1328,7 @@ impl Render for SearchView {
             // Go to Symbol's chord puts Go to Symbol away, as Go to File's
             // does; anywhere else in the search it is the switcher's.
             .on_action(cx.listener(
-                |this, _: &crate::core::actions::EditorGoToSymbol, _window, cx| {
+                |this, _: &lyrel_ui_base::actions::EditorGoToSymbol, _window, cx| {
                     if this.tab == SearchTab::Symbols && !this.in_sub_list() {
                         cx.emit(SearchEvent::Dismiss);
                     } else {
@@ -1391,7 +1391,7 @@ impl Selectable for SearchRow {
 
 impl RenderOnce for SearchRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let (hover, picked) = (gpui_kit::rgb(sf.hover), gpui_kit::rgb(sf.selected));
         h_flex()
             .id(self.id)
@@ -1446,7 +1446,8 @@ mod tests {
             vcx.simulate_resize(gpui_kit::size(px(width), px(height)));
             vcx.simulate_scale_factor_change(scale);
             vcx.update(|_, cx| {
-                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                cx.global_mut::<lyrel_ui_base::config::Config>()
+                    .ui_font_size = font_size;
             });
             vcx.run_until_parked();
             vcx.update(|window, cx| {
@@ -1539,7 +1540,7 @@ mod tests {
     #[gpui_kit::test]
     fn tab_walks_the_tabs_and_keeps_what_was_typed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::All, "split right", window, cx)
         });
@@ -1608,7 +1609,7 @@ mod tests {
     #[gpui_kit::test]
     fn add_connection_moves_to_an_empty_hosts_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Actions, "ssh-add-connection", window, cx)
         });
@@ -1629,7 +1630,7 @@ mod tests {
     #[gpui_kit::test]
     fn quick_open_goes_to_the_files_tab_and_back_out(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
         vcx.run_until_parked();
         let view = open(&app, &mut vcx);
@@ -1652,7 +1653,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_standalone_tab_keeps_its_list_on_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for tab in [SearchTab::Files, SearchTab::Symbols, SearchTab::Locations] {
             app.update_in(&mut vcx, |app, window, cx| {
                 app.open_search(tab, "", window, cx)
@@ -1674,7 +1675,7 @@ mod tests {
     #[gpui_kit::test]
     fn go_to_file_moves_to_an_empty_files_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Actions, "go-to-file", window, cx)
         });
@@ -1697,7 +1698,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_file_list_that_lands_late_fills_the_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Files, "lib", window, cx)
         });
@@ -1706,7 +1707,7 @@ mod tests {
         assert_eq!(first_kind(&view, &mut vcx), None);
 
         let root = std::path::PathBuf::from("/repo");
-        let index = crate::ui::file_search::build_index(
+        let index = lyrel_ui_base::file_search::build_index(
             std::slice::from_ref(&root),
             vec![root.join("src/lib.rs")],
             false,
@@ -1779,8 +1780,8 @@ mod tests {
                 app.open_search(SearchTab::Sessions, "", window, cx);
                 let old = app.search.view().unwrap();
                 if change_workspace {
-                    let id = crate::core::session::WorkspaceStore::claim(cx, None);
-                    app.adopt_workspace(id, crate::core::session::Session::default(), window, cx);
+                    let id = lyrel_ui_base::session::WorkspaceStore::claim(cx, None);
+                    app.adopt_workspace(id, lyrel_ui_base::session::Session::default(), window, cx);
                 }
                 app.open_search(SearchTab::Sessions, "", window, cx);
                 old
@@ -1809,7 +1810,7 @@ mod tests {
                 agent: crate::core::cli_agent::CLIAgent::OhMyPi,
                 session_id: id.into(),
                 cwd: None,
-                host: crate::ui::host_ops::HostId::LOCAL,
+                host: lyrel_ui_base::host_ops::HostId::LOCAL,
                 scope: None,
             },
         )
@@ -1834,7 +1835,7 @@ mod tests {
     fn a_past_session_opens_its_actions_and_can_be_removed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         let _home = isolate_history(&app, &mut vcx);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Sessions, "", window, cx)
         });
@@ -1857,7 +1858,7 @@ mod tests {
                 agent: crate::core::cli_agent::CLIAgent::OhMyPi,
                 session_id: "a".into(),
                 cwd: None,
-                host: crate::ui::host_ops::HostId::LOCAL,
+                host: lyrel_ui_base::host_ops::HostId::LOCAL,
                 scope: None,
             },
             CommandKind::CopySessionId("a".into()),
@@ -1885,7 +1886,7 @@ mod tests {
         );
         app.read_with(&vcx, |_, cx| {
             assert!(
-                cx.global::<crate::core::config::Config>()
+                cx.global::<lyrel_ui_base::config::Config>()
                     .hidden_agent_sessions
                     .contains("omp:a")
             );
@@ -1898,7 +1899,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_query_after_one_that_found_nothing_still_arms_its_first_row(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Actions, "", window, cx)
         });

@@ -122,7 +122,7 @@ fn pty_source() -> PtySource {
 /// pane hidden at the time the title arrives.
 #[gpui_kit::test]
 fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -141,7 +141,7 @@ fn title_consumer_real_pty_daemon_and_window_agree_and_reattach_replays(cx: &mut
     cx.update(|cx| {
         declare_displayed(cx, [(view.entity_id(), false)]);
         assert_eq!(
-            crate::terminal::lifecycle::displayed_for_test(cx, view.entity_id()),
+            lyrel_terminal::lifecycle::displayed_for_test(cx, view.entity_id()),
             Some(false),
             "the pane consumer is actually hidden for this title"
         );
@@ -391,7 +391,7 @@ fn hyperlink_at(
 /// URI without one closes.
 #[gpui_kit::test]
 fn osc8_consumer_keeps_semicolons_ids_and_the_2047_byte_boundary(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);

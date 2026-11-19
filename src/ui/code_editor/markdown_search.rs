@@ -43,7 +43,7 @@ mod tests {
                 .read(cx)
                 .is_live()
         }) {
-            vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            vcx.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
         }
         settle(&mut vcx);
         vcx.dispatch_action(gpui_kit::component::input::Replace);
@@ -143,7 +143,7 @@ mod tests {
         });
         vcx.update(|window, cx| {
             assert_eq!(window.find("markdown-match-count").label(), Some("1/3"));
-            window.dispatch_action(Box::new(crate::core::actions::FindNext), cx);
+            window.dispatch_action(Box::new(lyrel_ui_base::actions::FindNext), cx);
         });
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
@@ -158,7 +158,7 @@ mod tests {
             )
         });
         vcx.update(|window, cx| {
-            window.dispatch_action(Box::new(crate::core::actions::FindPrevious), cx);
+            window.dispatch_action(Box::new(lyrel_ui_base::actions::FindPrevious), cx);
             window.click("markdown-match-case", cx);
         });
         settle(&mut vcx);

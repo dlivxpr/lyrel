@@ -18,9 +18,9 @@ use lyrel_core::host::ShellInventory;
 
 use crate::daemon::protocol::{SftpEntry, SftpEntryKind, SftpOp, SftpOpResult};
 use crate::daemon::ssh::sftp::remote_parent;
-use crate::terminal::sftp_client::SftpClient;
-use crate::ui::host_ops::{Entry, Host, HostId, MTime, Meta, Output, SearchHit, WatchSub};
-use crate::ui::route::SftpRoute;
+use lyrel_terminal::sftp_client::SftpClient;
+use lyrel_ui_base::host_ops::{Entry, Host, HostId, MTime, Meta, Output, SearchHit, WatchSub};
+use lyrel_ui_base::route::SftpRoute;
 
 pub(crate) struct SftpHost {
     id: HostId,

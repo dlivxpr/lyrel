@@ -174,7 +174,7 @@ impl LyrelApp {
                 cfg.font_fallbacks.clone(),
                 cfg.font_features
                     .as_ref()
-                    .map(crate::core::config::gpui_font_features),
+                    .map(lyrel_ui_base::config::gpui_font_features),
                 cfg.cursor_style,
                 cfg.scrollback_limit,
             )
@@ -328,7 +328,7 @@ impl LyrelApp {
             },
         );
         let file_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchFiles))
+            InputState::new(window, cx).placeholder(t(lyrel_ui_base::i18n::L10nKey::SearchFiles))
         });
         let file_search_sub = cx.subscribe_in(&file_search, window, |_this, _i, ev, _w, cx| {
             if matches!(ev, InputEvent::Change) {

@@ -50,7 +50,7 @@ fn program_consumer_real_pty_current_state_and_reattach_use_daemon_records(
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let view = program_consumer_attach(&daemon, pane, &app, &mut vcx);
     graphics_send_fixture(
         &view,

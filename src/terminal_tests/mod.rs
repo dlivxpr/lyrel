@@ -23,12 +23,12 @@ mod whole_window {
     use lyrel_terminal::view::*;
     use lyrel_terminal::{RemoteTerminal, TermSize};
     // The workbench fixtures they additionally need.
-    use crate::core::config::unix_now;
     use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::{
         AppContext, ClipboardItem, Entity, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
         Rgba, TestAppContext, point, px,
     };
+    use lyrel_core::core::config::unix_now;
     use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
     use lyrel_core::daemon::transport::Stream;
     use lyrel_test_support::graphics_fixture::{GraphicsDaemonProcess, graphics_fixture_shell};

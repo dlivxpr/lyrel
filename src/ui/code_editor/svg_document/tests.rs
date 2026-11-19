@@ -167,7 +167,7 @@ fn type_source(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -205,7 +205,7 @@ fn replace_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 #[gpui_kit::test]
 fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     // The mapped Host's file and a same-named local decoy: only the owning
@@ -380,7 +380,7 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
 
 #[gpui_kit::test]
 fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "split.svg", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(284));
@@ -470,7 +470,7 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(285));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -569,7 +569,7 @@ fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(286));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -645,7 +645,7 @@ fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let remote_file = fixture(dir.path(), "original.svg", ORIGINAL);
     let host = FileHost::new(HostId(287));
@@ -657,7 +657,7 @@ fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
     let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"64\"");
     wait_preview(&app, &mut cx, (64., 30.));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     let target = dir.path().join("renamed.svg");
     cx.update(|window, cx| {
@@ -691,7 +691,7 @@ fn save_as_and_external_reload_keep_the_owning_host(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "watched.svg", ORIGINAL);
     let host: SharedHost = lyrel_core::host::local::LocalHost::new();
@@ -741,7 +741,7 @@ fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn a_late_preview_never_overwrites_a_newer_revision(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "late.svg", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(288));

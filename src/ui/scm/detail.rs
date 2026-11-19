@@ -42,7 +42,6 @@ use lyrel_core::core::git::log::{Commit, CommitFile, RefKind};
 use lyrel_core::core::git::status::DecoStatus;
 
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_plural};
 use crate::ui::right_panel::{
     HEADING, META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, git_badge, info_chip,
 };
@@ -51,6 +50,7 @@ use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::CommitDetailView;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::CONTENT_INSET;
+use lyrel_ui_base::i18n::{L10nKey, t, t_plural};
 
 // A file row, the same height as the working tree's, and inset the same way:
 // the two lists sit in one column and have to read as one grid, so a reader who
@@ -704,8 +704,8 @@ impl LyrelApp {
 /// The sidebar's, because the right panel is the sidebar and this view paints
 /// nothing under itself. A fill derived from `window` would be a step off a
 /// base that is not there, and `list_hover` is the popover's.
-fn panel_surface(cx: &gpui_kit::App) -> crate::ui::presets::Surface {
-    cx.global::<crate::ui::presets::Surfaces>().sidebar
+fn panel_surface(cx: &gpui_kit::App) -> lyrel_ui_base::presets::Surface {
+    cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar
 }
 
 /// One unemphasised ref, as bare text.
@@ -912,11 +912,11 @@ mod detail_gpui_tests {
     use super::*;
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{render_probe, test_window};
-    use crate::ui::host_ops::HostId;
     use crate::ui::scm::state::RepoKey;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
+    use lyrel_ui_base::host_ops::HostId;
     use std::path::{Path, PathBuf};
 
     fn scratch(name: &str) -> PathBuf {
@@ -1039,7 +1039,7 @@ mod detail_gpui_tests {
 
     #[gpui_kit::test]
     fn a_commit_detail_reads_its_own_files_and_draws_them(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = two_commit_repo("draws");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
@@ -1140,7 +1140,7 @@ mod detail_gpui_tests {
 
     #[gpui_kit::test]
     fn following_a_parent_swaps_the_commit_and_going_back_clears_it(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = two_commit_repo("parent");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let parent = git(&root, &["rev-parse", "HEAD^"]);
@@ -1223,7 +1223,7 @@ mod detail_gpui_tests {
     /// proves nothing.
     #[gpui_kit::test]
     fn the_fold_shortens_the_body_and_the_second_click_puts_it_back(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = two_commit_repo("fold");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
@@ -1292,7 +1292,7 @@ mod detail_gpui_tests {
     /// a second-level view of anything.
     #[gpui_kit::test]
     fn a_detail_from_another_repository_gives_the_body_back(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = two_commit_repo("elsewhere");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
@@ -1314,7 +1314,7 @@ mod detail_gpui_tests {
     fn an_unresolvable_commit_finishes_loading_and_draws_the_missing_state(
         cx: &mut TestAppContext,
     ) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = two_commit_repo("missing");
         let (app, mut vcx, _pane) = panel_on(cx, &root);
         let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());

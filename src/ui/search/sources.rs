@@ -10,10 +10,10 @@ use super::SearchTab;
 use super::command::{CommandGroup, CommandKind, Item};
 use super::files::Files;
 use super::score::{frecency_bonus, item_score};
-use crate::core::config::Config;
 use crate::core::ssh_profile::parse_quick_connect;
-use crate::ui::file_search::FileList;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::file_search::FileList;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// How many recently used actions lead the Actions tab.
 const RECENT_ROWS: usize = 5;
@@ -343,7 +343,7 @@ fn action_usage(item: &Item, cx: &App) -> f64 {
     item.kind
         .id()
         .and_then(|id| cfg.command_frecency.get(id))
-        .map(|u| u.score(crate::core::config::unix_now()))
+        .map(|u| u.score(lyrel_core::core::config::unix_now()))
         .unwrap_or(0.0)
 }
 
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn an_address_offers_to_connect_and_to_save() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for q in [
             "deploy@10.0.0.5",
             "host.example.com",
@@ -715,10 +715,10 @@ mod tests {
     }
 
     fn with_config(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         cx.update(|cx| {
             cx.set_global(Config::default());
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
         });
     }
 
@@ -927,11 +927,9 @@ mod tests {
         );
         let root = std::path::PathBuf::from("/repo");
         let files = paths.iter().map(|p| root.join(p)).collect();
-        catalog.files = FileList::Ready(std::sync::Arc::new(crate::ui::file_search::build_index(
-            &[root],
-            files,
-            false,
-        )));
+        catalog.files = FileList::Ready(std::sync::Arc::new(
+            lyrel_ui_base::file_search::build_index(&[root], files, false),
+        ));
         catalog
     }
 
@@ -986,7 +984,7 @@ mod tests {
                 agent: crate::core::cli_agent::CLIAgent::OhMyPi,
                 session_id: title.into(),
                 cwd: None,
-                host: crate::ui::host_ops::HostId::LOCAL,
+                host: lyrel_ui_base::host_ops::HostId::LOCAL,
                 scope: None,
             },
         )

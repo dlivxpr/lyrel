@@ -59,10 +59,10 @@
 
 - editor 全部回归：`cargo test --locked -p lyrel-markdown-editor`，包含 upstream-derived unit、结构公式和 `--test foundation`；只跑 foundation 不代表整个 crate。
 - GUI-free codec：`cargo test --locked -p lyrel-document`（default features 只编译 text 模块）。
-- 工作台：`cargo test --locked -p lyrel --lib`；`src/ui/code_editor/markdown/foundation.rs` 经生产 lifecycle 运行 shared Host 与 composition 场景，不依赖旧 Markdown 内核。
+- 工作台局部测试：`cargo test --locked -p lyrel-workbench-editor --lib`。整窗生命周期与装配回归仍用 `cargo test --locked -p lyrel --lib`；`src/ui/code_editor/markdown/foundation.rs` 经生产生命周期覆盖共享 Host 与 composition 场景。
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
 - #238 工作台窄入口：`cargo test --locked -p lyrel --lib ui::code_editor::markdown::resources_tests`；native registry 包含 owning-Host paste/history/save-reopen、三项 wrapped link 消费者、native preview/zoom/resize/drop，以及完整3768 B resources fixture（固定SHA）live尾部输入/保存/Undo。插图由#244的插入命令/slash派发真实`InsertImage`，不增加常驻整行图片工具栏。`#241` 的完整400034 B mixed-tall 及 hard-break formula 消费者同时使用真实 ImageHost，不能以无bitmap源文测试代替。所有新命令在分票阶段按约定未执行，Windows实窗、真实local/SSH、macOS与最终checks由集成者验收。
-- Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-document` 可参与，GUI crate 不被选入 headless 范围。
+- Linux：按[安装指南](../../docs/getting-started/installation.mdx)的 headless 矩阵运行；`lyrel-document` 参与 GUI-free 验证，桌面包不进入 Linux 选包。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
 - 文件保真专项：`cargo test --locked -p lyrel --lib ui::code_editor::saving`；native selector `saving::fidelity` 包括编码往返、显式策略、第二视图在途快照、首次保存失败、编码取消/转换和目标冲突/重命名。Markdown普通保存不执行EditorConfig代码清理；显式去尾空白只删对应字节，Undo恢复原表示。另存为写入失败不改变原path/untitled，转换到MDX仅改变各view源码策略，不重建Document。
 
@@ -165,7 +165,7 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 
 ## 默认路由与 provider 聚合入口
 
-- `src/ui/code_editor/buffers.rs::create` 按扩展名创建唯一 native Document，`EditorNewMarkdownFile` 从未命名阶段就选择该路线；普通新建/scrollback 保留 code 路线，不做破坏性类型转换。
+- `lyrel-workbench-editor` 的 `code_editor/buffers.rs::create` 按扩展名创建唯一 native Document，`EditorNewMarkdownFile` 从未命名阶段就选择该路线；普通新建/scrollback 保留 code 路线，不做破坏性类型转换。
 - `markdown::configure` 为 primary/secondary 安装语义样式、writing、Mermaid 和 table/code；`markdown_formula::install` 在两种创建入口安装独立 seat；`editor_buffer_created` 建立 owning-Host ImageHost，`render_editor_body` 为每个 presentation 附着真实图片/链接订阅。
 - `MarkdownPresentations::set_source_only` 同时更新 primary 与所有已创建 view。rename/save-as 成功后只更新身份和能力，不重建 Document/history；已有 code buffer 另存为 Markdown 也保留自己的历史，释放后重开才按新扩展名路由。
 - 首次保存与 MDX：`saving::host_tests::native_untitled_save_as_suggests_markdown_and_keeps_its_document`、`foundation::mdx_source_only_survives_mode_action_split_history_save_reopen`、`workbench_views::active_markdown_rename_to_mdx_retains_each_view_and_history` 及 `saving::fidelity_tests::markdown_save_as_target_conflict_and_extension_rename_keep_document_history`。这些仍通过生产工作台 seam 验证，不检查源码拼写。
@@ -175,7 +175,7 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 
 ### #283 SVG 文档：共享 Document 的第二个消费者
 
-`.svg` 由应用层 `src/ui/code_editor/svg_document.rs` 打开，不在本 crate 内建立 SVG 视图或渲染 provider。它复用同一个 `Document` 所有权：源码、逐行行尾、编码/BOM、revision 与 Undo/Redo 仍由 `Document` 持有；呈现使用 `EditorState::for_document` 后调用 `set_plain_source(true)`，关闭 Markdown 样式、列表/引用/表格延续、格式/高亮/writing 菜单与 caret 标记隐藏，保留 caret、选择、IME、滚动和普通文本输入。
+`.svg` 由 `lyrel-workbench-editor` 的 `code_editor/svg_document.rs` 打开，不在本 crate 内建立 SVG 视图或渲染 provider。它复用同一个 `Document` 所有权：源码、逐行行尾、编码/BOM、revision 与 Undo/Redo 仍由 `Document` 持有；呈现使用 `EditorState::for_document` 后调用 `set_plain_source(true)`，关闭 Markdown 样式、列表/引用/表格延续、格式/高亮/writing 菜单与 caret 标记隐藏，保留 caret、选择、IME、滚动和普通文本输入。
 
 - 每文件一个 `SvgDocument`（共享 `Document` 与唯一预览），每标签页/分组一个 `SvgView`；分屏新组默认显示另一面，源码选择与预览取景由各自 view 持有。`EditorInput::Svg` 的文本能力仍从本 crate 的 presentation 读写，`TextSnapshot` 只持有相同 revision 的 `Arc<String>` 快照。
 - 保存、dirty、reload、conflict 与 close 仍由工作台 `saving.rs`/`buffers.rs` 负责。`source_document(cx)` 让 SVG 与 Markdown 共用逐行 `snapshot.encode()`、representation 指纹和 revision 校验；普通 Code 的 codec 分支不复用于 SVG。

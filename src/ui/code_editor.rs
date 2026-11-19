@@ -90,8 +90,8 @@ mod close_gpui_tests {
 
     use super::nav::gpui_tests::open_rs;
     use super::*;
-    use crate::core::actions::CloseActiveTab;
     use crate::ui::app::test_window::harness_with_tabs;
+    use lyrel_ui_base::actions::CloseActiveTab;
     use std::sync::Arc;
 
     fn panel(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> (bool, usize) {
@@ -126,7 +126,7 @@ mod close_gpui_tests {
     #[gpui_kit::test]
     fn closing_the_last_file_keeps_close_on_the_editor(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/close/a.rs");
         settle(&mut vcx);
         assert_eq!(panel(&app, &mut vcx), (true, 1));
@@ -158,7 +158,7 @@ mod close_gpui_tests {
     #[gpui_kit::test]
     fn switching_to_an_empty_editor_leaves_the_focus_alone(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, _, _| {
             app.tabs.select(1);
             app.tab_code_mut_or_init().unwrap().visible = true;
@@ -180,7 +180,7 @@ mod close_gpui_tests {
     #[gpui_kit::test]
     fn close_from_the_terminal_is_still_the_terminals(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             app.tab_code_mut_or_init().unwrap().visible = true;
             app.focus_active(window, cx);
@@ -195,10 +195,10 @@ mod close_gpui_tests {
 
     #[gpui_kit::test]
     fn document_dock_fill_and_close_keep_the_same_editor_and_terminal(cx: &mut TestAppContext) {
-        use crate::core::actions::{
+        use gpui_kit::size;
+        use lyrel_ui_base::actions::{
             ActivateTab1, ActivateTab2, EditorNewFile, ToggleCodePanel, ToggleDocumentFill,
         };
-        use gpui_kit::size;
 
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1600.), px(900.)));
@@ -286,7 +286,7 @@ mod close_gpui_tests {
 
     #[gpui_kit::test]
     fn docked_status_follows_terminal_focus_and_recovers_document_actions(cx: &mut TestAppContext) {
-        use crate::core::actions::EditorNewFile;
+        use lyrel_ui_base::actions::EditorNewFile;
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
         vcx.dispatch_action(EditorNewFile);
@@ -319,8 +319,8 @@ mod close_gpui_tests {
 
     #[gpui_kit::test]
     fn diff_status_uses_its_host_path_not_the_covered_document(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, ToggleCodePanel};
         use crate::ui::scm::diff::{DiffSnapshot, DiffSource};
+        use lyrel_ui_base::actions::{EditorNewFile, ToggleCodePanel};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
         vcx.dispatch_action(EditorNewFile);
@@ -359,7 +359,7 @@ mod close_gpui_tests {
 
     #[gpui_kit::test]
     fn settings_escape_restores_the_current_document_or_docked_terminal(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+        use lyrel_ui_base::actions::{EditorNewFile, ToggleDocumentFill};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
         vcx.dispatch_action(EditorNewFile);
@@ -427,7 +427,7 @@ mod pane_scrollback_tests {
             window.focus(&focus, cx);
             pane
         });
-        vcx.dispatch_action(crate::core::actions::OpenScrollbackInEditor);
+        vcx.dispatch_action(lyrel_ui_base::actions::OpenScrollbackInEditor);
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             let file = app

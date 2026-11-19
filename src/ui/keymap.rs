@@ -1,16 +1,17 @@
 use gpui_kit::{App, Global, KeyBinding, Keystroke, Modifiers};
 
-use crate::core::actions::*;
-use crate::core::config::{Config, KeybindingOverride};
-use crate::terminal::view::{
-    AlternatePaste, ClearScrollback, CopyText, InsertNewline, InsertNewlineFallback, PasteText,
-    RunReverseSearchSelection, ToggleComposer,
-};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::palette;
 use crate::ui::search::CommandGroup;
 use crate::ui::settings::humanize_action;
 use crate::ui::theme::set_menus;
+use lyrel_core::core::config::KeybindingOverride;
+use lyrel_terminal::view::{
+    AlternatePaste, ClearScrollback, CopyText, InsertNewline, InsertNewlineFallback, PasteText,
+    RunReverseSearchSelection, ToggleComposer,
+};
+use lyrel_ui_base::actions::*;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// 原生桌面配置的纯解析路径遵循编译目标的键盘约定。
 fn native_os() -> gpui_kit::OperatingSystem {
@@ -2441,7 +2442,7 @@ mod tests {
             ("en", "New Markdown Document"),
             ("zh-CN", "新建 Markdown 文档"),
         ] {
-            crate::ui::i18n::set_locale(locale);
+            lyrel_ui_base::i18n::set_locale(locale);
             assert_eq!(action_entry("EditorNewMarkdownFile").1, label);
         }
         let binding = make_binding("EditorNewMarkdownFile", "ctrl-alt-m")
@@ -2451,7 +2452,7 @@ mod tests {
 
     #[test]
     fn every_action_has_an_authored_name() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let missing: Vec<&str> = default_bindings()
             .into_iter()
             .map(|(a, _)| a)
@@ -2466,7 +2467,7 @@ mod tests {
 
     #[test]
     fn the_page_speaks_the_same_words_as_the_rest_of_the_app() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         // The four names the critique found for one action; the menu bar, the
         // palette and the docs all say Zoom Pane.
         assert_eq!(action_entry("ToggleMaximizePane").1, "Zoom Pane");
@@ -2945,7 +2946,7 @@ mod tests {
             for chord in spec.split_whitespace() {
                 let ks =
                     Keystroke::parse_with_os(chord, native_os()).expect("default chords parse");
-                if crate::terminal::input::is_function_key(&ks.key) {
+                if lyrel_terminal::input::is_function_key(&ks.key) {
                     bound.push((action, chord));
                 }
             }
@@ -3272,8 +3273,8 @@ mod tests {
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
-    use crate::core::config::Config;
     use gpui_kit::TestAppContext;
+    use lyrel_ui_base::config::Config;
 
     #[gpui_kit::test]
     fn init_then_rebind_installs_the_merged_table(cx: &mut TestAppContext) {

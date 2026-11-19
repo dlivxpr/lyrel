@@ -100,8 +100,8 @@ fn program_summary_row(vcx: &mut gpui_kit::VisualTestContext) -> Option<String> 
     })
 }
 
-fn program_summary_expected(key: crate::ui::i18n::L10nKey) -> String {
-    use crate::ui::i18n::{L10nKey, t};
+fn program_summary_expected(key: lyrel_ui_base::i18n::L10nKey) -> String {
+    use lyrel_ui_base::i18n::{L10nKey, t};
     format!("{} · {}", t(L10nKey::ProgramSource), t(key))
 }
 
@@ -117,10 +117,10 @@ fn program_summary_of(
 fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach(
     cx: &mut TestAppContext,
 ) {
-    use crate::ui::i18n::L10nKey;
     use gpui_kit::test::TestWindowExt as _;
     use lyrel_core::core::program_status::ProgramState;
-    crate::ui::i18n::set_locale("en");
+    use lyrel_ui_base::i18n::L10nKey;
+    lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let left = daemon.spawn();
     let right = daemon.spawn();
@@ -218,8 +218,11 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
         assert_eq!(
             progress.label(),
             Some(
-                crate::ui::i18n::t_fmt(L10nKey::TabProgressRunningPercent, &[("percent", "42")])
-                    .as_str()
+                lyrel_ui_base::i18n::t_fmt(
+                    L10nKey::TabProgressRunningPercent,
+                    &[("percent", "42")]
+                )
+                .as_str()
             )
         );
         let program = window.find(("sidebar-program-status", 0usize));
@@ -327,8 +330,8 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
 fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
     cx: &mut TestAppContext,
 ) {
-    use crate::ui::i18n::L10nKey;
-    crate::ui::i18n::set_locale("en");
+    use lyrel_ui_base::i18n::L10nKey;
+    lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
@@ -443,8 +446,8 @@ fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
 fn program_summary_consumer_same_pane_representative_refresh_beats_another_pane(
     cx: &mut TestAppContext,
 ) {
-    use crate::ui::i18n::L10nKey;
-    crate::ui::i18n::set_locale("en");
+    use lyrel_ui_base::i18n::L10nKey;
+    lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let left = daemon.spawn();
     let right = daemon.spawn();
@@ -513,15 +516,15 @@ fn program_summary_consumer_same_pane_representative_refresh_beats_another_pane(
 #[gpui_kit::test]
 fn program_summary_consumer_keeps_agent_authority_beside_program_state(cx: &mut TestAppContext) {
     use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
-    use crate::ui::i18n::L10nKey;
     use lyrel_core::core::program_status::ProgramState;
-    crate::ui::i18n::set_locale("en");
+    use lyrel_ui_base::i18n::L10nKey;
+    lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     let program = program_summary_attach(&daemon, pane, &app, &mut vcx);
     let (agent, mut agent_daemon) = app.update_in(&mut vcx, |_app, window, cx| {
-        let (view, stream) = crate::terminal::view::quiet_test_pane(9_315, window, cx);
+        let (view, stream) = lyrel_terminal::view::quiet_test_pane(9_315, window, cx);
         crate::ui::app::LyrelApp::watch_terminal(&view, window, cx);
         (view, stream)
     });

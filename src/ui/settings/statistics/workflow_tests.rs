@@ -89,7 +89,7 @@ fn tab_to(cx: &mut VisualTestContext, id: &'static str) {
 
 #[gpui_kit::test]
 fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("omp");
@@ -119,7 +119,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         let app = cx.new(|cx| {
             LyrelApp::with_session(
                 None,
-                Some(crate::core::session::Session::default()),
+                Some(lyrel_ui_base::session::Session::default()),
                 window,
                 cx,
             )
@@ -314,7 +314,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         ("en", 1120., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
     ] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         vcx.simulate_resize(gpui_kit::size(px(width), px(800.)));
         app.update_in(&mut vcx, |_, window, cx| {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
@@ -343,7 +343,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
             window.find("statistics-manage-prices").focused() == Some(true)
         }));
     }
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     click(&app, &mut vcx, "statistics-manage-prices");
     click(&app, &mut vcx, "statistics-add-price");
     for (index, value) in [

@@ -1,10 +1,6 @@
 //! Explicit-machine skill browsing and reviewed shared installation. The settings
 //! session owns target, selection and async generation independently of workspace focus.
 use super::{shell::MenuEntry, *};
-use crate::ui::{
-    host_ops::{Entry, HostOps},
-    host_registry::HostRegistry,
-};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _,
@@ -13,6 +9,8 @@ use gpui_kit::component::{
 use lyrel_insights::skills::{
     self, DiscoveryState, ScanRequest, ScanSnapshot, SkillInstallation, SourceKind,
 };
+use lyrel_ui_base::host_ops::{Entry, HostOps};
+use lyrel_ui_base::host_registry::HostRegistry;
 use std::{
     io,
     path::{Path, PathBuf},

@@ -1,8 +1,8 @@
 use gpui_kit::TestAppContext;
 
-use crate::core::session::SessionPane;
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::pane::Pane;
+use lyrel_ui_base::session::SessionPane;
 
 fn leaf_pane_id(pane: &SessionPane) -> Option<u64> {
     match pane {

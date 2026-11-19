@@ -35,12 +35,12 @@ use gpui_kit::{AnyElement, Context, Div, Entity, FontWeight, Stateful, div, prel
 
 use crate::core::ssh_profile::ForwardRule;
 use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind, SshForwardRule};
-use crate::terminal::view::TerminalView;
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, TEXT_MONO};
 use crate::ui::settings::kit::{Tk, fs};
 use gpui_kit::{ElementId, SharedString, Window};
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use std::rc::Rc;
 
 impl LyrelApp {
@@ -318,7 +318,9 @@ impl LyrelApp {
                 // the popover fill the pill floats on. The red is the edge
                 // and the reason; the button does not repeat it.
                 Button::new("ssh-reconnect")
-                    .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Reconnect))
+                    .label(lyrel_ui_base::i18n::t(
+                        lyrel_ui_base::i18n::L10nKey::Reconnect,
+                    ))
                     .custom(crate::ui::theme::inverted_button(theme_popover, cx))
                     .small()
                     .on_click(
@@ -327,7 +329,9 @@ impl LyrelApp {
             )
             .children(profile.map(|id| {
                 Button::new("ssh-edit-profile")
-                    .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::SshEditProfile))
+                    .label(lyrel_ui_base::i18n::t(
+                        lyrel_ui_base::i18n::L10nKey::SshEditProfile,
+                    ))
                     .ghost()
                     .small()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -348,7 +352,7 @@ impl LyrelApp {
     ) -> Stateful<Div> {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let letter = match forward.kind {
             SshForwardKind::Local => "L",
             SshForwardKind::Remote => "R",
@@ -511,7 +515,7 @@ impl LyrelApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let danger = theme.danger;
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let kind = self.loopback_panel.mf_kind;
         let editing = self.loopback_panel.mf_editing.is_some();
         let advanced = self.loopback_panel.mf_advanced;

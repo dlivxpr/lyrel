@@ -53,17 +53,17 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     cx: &mut TestAppContext,
 ) {
     use lyrel_core::core::program_status::ProgramState;
-    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _capture = lyrel_terminal::desktop_notification::capture_test_notifications();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (first, mut av) = crate::ui::app::test_window::harness(cx);
     let (second, mut bv) = crate::ui::app::test_window::harness(cx);
     av.update(|_, cx| {
         cx.global_mut::<Config>().notify_on_command_finish =
-            crate::core::config::NotifyMode::Always;
+            lyrel_core::core::config::NotifyMode::Always;
         cx.global_mut::<Config>().notify_threshold_secs = 3600;
     });
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let a = program_consumer_attach(&daemon, pane, &first, &mut av);
     let b = program_consumer_attach_stream(
         program_observer_stream(&daemon, pane),
@@ -222,13 +222,14 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
 fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_results_are_new(
     cx: &mut TestAppContext,
 ) {
-    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _capture = lyrel_terminal::desktop_notification::capture_test_notifications();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (first, mut av) = crate::ui::app::test_window::harness(cx);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     av.update(|window, cx| {
-        cx.global_mut::<Config>().notify_on_command_finish = crate::core::config::NotifyMode::Never;
+        cx.global_mut::<Config>().notify_on_command_finish =
+            lyrel_core::core::config::NotifyMode::Never;
         window.activate_window();
     });
     let a = program_consumer_attach(&daemon, pane, &first, &mut av);
@@ -335,15 +336,15 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
 
 #[gpui_kit::test]
 fn program_attention_budget_is_per_source_not_a_same_pane_mute(cx: &mut TestAppContext) {
-    let _capture = crate::terminal::desktop_notification::capture_test_notifications();
+    let _capture = lyrel_terminal::desktop_notification::capture_test_notifications();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     command_notification_prime_prompt(&daemon, pane);
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     vcx.update(|_, cx| {
         cx.global_mut::<Config>().notify_on_command_finish =
-            crate::core::config::NotifyMode::Always;
+            lyrel_core::core::config::NotifyMode::Always;
         cx.global_mut::<Config>().notify_threshold_secs = 0;
     });
     let view = program_consumer_attach(&daemon, pane, &app, &mut vcx);

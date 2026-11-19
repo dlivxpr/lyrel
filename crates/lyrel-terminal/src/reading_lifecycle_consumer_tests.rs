@@ -17,16 +17,20 @@ fn reading_lifecycle_clear_reset_and_same_batch_alt_release_normal_rows(cx: &mut
             view.smooth_scroll(1., cx);
         });
         graphics_assert_production_paint(window, &view, cx);
-        assert!(reading_painted_rows(&view, cx)
-            .iter()
-            .any(|row| row == "FROZEN-ROW"));
+        assert!(
+            reading_painted_rows(&view, cx)
+                .iter()
+                .any(|row| row == "FROZEN-ROW")
+        );
         view.read_with(cx, |view, _| {
             let images = &view.grid_snap.as_ref().unwrap().images;
             assert_eq!(images.len(), 2);
-            assert!(images
-                .iter()
-                .all(|image| reading_rgba_pixel(image) == [0, 0, 255, 255]
-                    && image.painted.load(std::sync::atomic::Ordering::Acquire)));
+            assert!(
+                images
+                    .iter()
+                    .all(|image| reading_rgba_pixel(image) == [0, 0, 255, 255]
+                        && image.painted.load(std::sync::atomic::Ordering::Acquire))
+            );
         });
         // CSI 3J preserves lines_evicted + history_size. Only the explicit
         // parse transition can distinguish it from ordinary history eviction.
@@ -39,9 +43,11 @@ fn reading_lifecycle_clear_reset_and_same_batch_alt_release_normal_rows(cx: &mut
         graphics_assert_production_paint(window, &view, cx);
         let shown = reading_painted_rows(&view, cx);
         assert_eq!(shown[7], marker);
-        assert!(!shown
-            .iter()
-            .any(|row| row.contains("FROZEN-ROW") || row.contains("ALT-TRANSCRIPT")));
+        assert!(
+            !shown
+                .iter()
+                .any(|row| row.contains("FROZEN-ROW") || row.contains("ALT-TRANSCRIPT"))
+        );
         view.read_with(cx, |view, _| {
             assert!(
                 view.grid_snap.as_ref().unwrap().images.is_empty(),
@@ -104,9 +110,11 @@ fn reading_lifecycle_replay_and_relink_publish_fresh_content(cx: &mut TestAppCon
         view.smooth_scroll(1., cx);
     });
     graphics_assert_production_paint(window, &view, cx);
-    assert!(reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("OLD-BASELINE")));
+    assert!(
+        reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("OLD-BASELINE"))
+    );
     // A snapshot is a discontinuous baseline even when absolute origin sums
     // happen to agree. It is not ordinary append output.
     DaemonMsg::Snapshot(b"\x1b[H\x1b[2JNEW-SNAPSHOT".to_vec())
@@ -147,9 +155,11 @@ fn reading_lifecycle_replay_and_relink_publish_fresh_content(cx: &mut TestAppCon
     graphics_assert_production_paint(window, &view, cx);
     let shown = reading_painted_rows(&view, cx);
     assert_eq!(shown[0], "RELINKED-BASELINE");
-    assert!(!shown
-        .iter()
-        .any(|row| row.contains("OLD-BASELINE") || row.contains("NEW-SNAPSHOT")));
+    assert!(
+        !shown
+            .iter()
+            .any(|row| row.contains("OLD-BASELINE") || row.contains("NEW-SNAPSHOT"))
+    );
     assert!(
         view.read_with(cx, |view, _| presentation_allocation_observation(view))["reading"]
             .is_null()
@@ -166,9 +176,11 @@ fn reading_lifecycle_replay_and_relink_publish_fresh_content(cx: &mut TestAppCon
         view.smooth_scroll(1., cx);
     });
     graphics_assert_production_paint(window, &view, cx);
-    assert!(reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("RETAINED-AFTER-EOF")));
+    assert!(
+        reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("RETAINED-AFTER-EOF"))
+    );
     drop(fresh_sender);
     graphics_recovery_wait(cx, "retained pane did not observe EOF", |cx| {
         view.read_with(cx, |view, _| view.terminal.exited)
@@ -202,11 +214,13 @@ fn reading_lifecycle_history_pressure_clamps_rows_and_releases_expired_images(
     graphics_assert_production_paint(window, &view, cx);
     let old = view.read_with(cx, |view, _| {
         let frame = view.grid_snap.as_ref().unwrap();
-        assert!(frame
-            .images
-            .iter()
-            .any(|image| image.placement.image_id == 7
-                && image.painted.load(std::sync::atomic::Ordering::Acquire)));
+        assert!(
+            frame
+                .images
+                .iter()
+                .any(|image| image.placement.image_id == 7
+                    && image.painted.load(std::sync::atomic::Ordering::Acquire))
+        );
         Arc::downgrade(frame.images[0].data.as_ref().unwrap())
     });
     // Both daemon and mirror retain 10,000 history rows. Pressure exceeds that
@@ -225,9 +239,11 @@ fn reading_lifecycle_history_pressure_clamps_rows_and_releases_expired_images(
         );
     }
     let shown = reading_painted_rows(&view, cx);
-    assert!(shown
-        .iter()
-        .all(|row| !row.contains("EXPIRED-TEXT") && !row.contains("BEFORE-EVICTION")));
+    assert!(
+        shown
+            .iter()
+            .all(|row| !row.contains("EXPIRED-TEXT") && !row.contains("BEFORE-EVICTION"))
+    );
     assert!(shown.iter().any(|row| row == "PRESSURE"));
     view.read_with(cx, |view, _| {
         assert!(view.grid_snap.as_ref().unwrap().images.is_empty())
@@ -249,9 +265,11 @@ fn reading_lifecycle_history_pressure_clamps_rows_and_releases_expired_images(
     graphics_send_fixture(&view, cx, 254, b"\x1b[0m");
     view.update(cx, |view, _| view.jump_to_prompt());
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
-    assert!(!reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("EXPIRED-TEXT")));
+    assert!(
+        !reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("EXPIRED-TEXT"))
+    );
     view.read_with(cx, |view, _| {
         assert!(view.grid_snap.as_ref().unwrap().images.is_empty())
     });
@@ -369,9 +387,11 @@ fn reading_lifecycle_hidden_output_releases_pixels_without_window_notifications(
     });
     view.update(cx, |view, _| view.jump_to_prompt());
     graphics_assert_production_paint(window, &view, cx);
-    assert!(reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("LIVE-WHILE-HIDDEN")));
+    assert!(
+        reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("LIVE-WHILE-HIDDEN"))
+    );
     view.read_with(cx, |view, _| {
         let image = &view.grid_snap.as_ref().unwrap().images[0];
         assert_eq!(reading_rgba_pixel(image), [255, 0, 0, 255]);
@@ -512,12 +532,16 @@ fn reading_lifecycle_wheel_uses_live_agent_modes_and_shift_local_escape(cx: &mut
     wheel(cx, false, true);
     assert!(reading_wheel_checkpoint(cx, &view, &dir, 6).is_empty());
     graphics_assert_production_paint(window, &view, cx);
-    assert!(reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("NORMAL-WHEEL-READY")));
-    assert!(!reading_painted_rows(&view, cx)
-        .iter()
-        .any(|row| row.contains("ALT-WHEEL-READY")));
+    assert!(
+        reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("NORMAL-WHEEL-READY"))
+    );
+    assert!(
+        !reading_painted_rows(&view, cx)
+            .iter()
+            .any(|row| row.contains("ALT-WHEEL-READY"))
+    );
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }

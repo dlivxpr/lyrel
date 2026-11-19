@@ -6,14 +6,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
 use crate::ui::app::LyrelApp;
 use crate::ui::file_copy;
-use crate::ui::file_drag::RemotePathDrag;
-use crate::ui::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
-use crate::ui::host_registry::HostRegistry;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, git_badge};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm_snapshot::index_of;
@@ -26,6 +21,11 @@ use gpui_kit::{
     AnyElement, App, Context, Entity, ExternalPaths, FocusHandle, KeyDownEvent, MouseButton,
     PromptLevel, SharedString, Subscription, Window, div, px,
 };
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_ui_base::file_drag::RemotePathDrag;
+use lyrel_ui_base::host_ops::{ByHost, HostId, HostOps, InFlight, SharedHost, WatchSub};
+use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 mod lifecycle;
 mod operations;
@@ -1224,10 +1224,10 @@ impl LyrelApp {
             if self.can_spawn_locally(cx) {
                 // The OS association can fail to spawn like any other opener
                 // (#542): say so with the same words a failed file link uses.
-                if let Err(e) = crate::ui::desktop_file::open_file_path(path) {
+                if let Err(e) = lyrel_ui_base::desktop_file::open_file_path(path) {
                     log::warn!("failed to open {}: {e}", path.display());
                     window.notify_app(
-                        crate::ui::host_ops::failure(
+                        lyrel_ui_base::host_ops::failure(
                             t_fmt(
                                 L10nKey::LinkFileOpenFailed,
                                 &[
@@ -1566,7 +1566,7 @@ impl LyrelApp {
                         L10nKey::FileTreeDownloaded,
                         &[(
                             "path",
-                            &crate::ui::path_display::native_separators(&local)
+                            &lyrel_ui_base::path_display::native_separators(&local)
                                 .display()
                                 .to_string(),
                         )],
@@ -1741,7 +1741,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::desktop_notification::notify_desktop(
+            lyrel_terminal::desktop_notification::notify_desktop(
                 Some("lyrel"),
                 t(L10nKey::AppNoRunningCodingAgent),
             );
@@ -1944,7 +1944,7 @@ impl LyrelApp {
                     },
                 ))
             });
-        crate::ui::scrollbar::with_vertical_scrollbar(
+        lyrel_ui_base::scrollbar::with_vertical_scrollbar(
             "right-panel-tree-scrollbar",
             column,
             &self.file_tree.list,
@@ -2045,7 +2045,7 @@ impl LyrelApp {
             ];
         }
 
-        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
         let tree_host = self.spawn_host(cx);
         let dirty = self.editor.read(cx).is_dirty(tree_host, &path);
 
@@ -2467,7 +2467,7 @@ impl LyrelApp {
                 // them this OS's separators would copy something that names
                 // nothing on either machine.
                 let text = match paths_are_local {
-                    true => crate::ui::path_display::native_separators(&p)
+                    true => lyrel_ui_base::path_display::native_separators(&p)
                         .display()
                         .to_string(),
                     false => p.display().to_string(),
@@ -2482,7 +2482,7 @@ impl LyrelApp {
                 PopupMenuItem::new(crate::ui::right_panel::reveal_label()).on_click({
                     let p = p.clone();
                     move |_, _window, cx| {
-                        cx.reveal_path(&crate::ui::path_display::native_separators(&p));
+                        cx.reveal_path(&lyrel_ui_base::path_display::native_separators(&p));
                     }
                 }),
             );
@@ -3600,7 +3600,7 @@ mod render_idle_gpui_tests {
     #[gpui_kit::test]
     fn a_decorated_tree_settles_and_then_reaches_render_idle(cx: &mut TestAppContext) {
         let _serial = serial();
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let root = scratch("decorated");
         if !git(&root, &["init", "--quiet"]) {
             return; // no git on this machine

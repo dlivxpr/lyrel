@@ -157,10 +157,13 @@ fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppConte
 
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "ls", "make"]
-                .into_iter()
-                .map(String::from)
-                .collect());
+            seed_history(
+                view,
+                ["git status", "ls", "make"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
             view.input.editor_mut().set("git status");
             view.submit_command(cx);
             assert_eq!(
@@ -173,7 +176,11 @@ fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppConte
             view.handle_editor_key(&key("up"), false, cx);
             assert_eq!(view.input.editor().text(), "git status");
             view.handle_editor_key(&key("up"), false, cx);
-            assert_eq!(view.input.editor().text(), "make", "↑ never lands on a command twice");
+            assert_eq!(
+                view.input.editor().text(),
+                "make",
+                "↑ never lands on a command twice"
+            );
         })
         .unwrap();
 }

@@ -4,10 +4,10 @@
 
 use gpui_kit::{App, Entity, Window};
 
-use crate::core::session::WorkspaceStore;
 use crate::ui::app::LyrelApp;
-use crate::ui::host_registry::HostId;
 use crate::ui::pane::PaneSlot;
+use lyrel_ui_base::host_registry::HostId;
+use lyrel_ui_base::session::WorkspaceStore;
 
 mod inbox_view;
 pub(crate) use inbox_view::NotificationBell;

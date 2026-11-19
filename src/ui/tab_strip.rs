@@ -12,23 +12,24 @@ use gpui_kit::{
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use crate::core::actions::{
-    CloseActiveTab, CloseOtherTabs, CloseTabsToTheRight, CopyAgentSessionId, CopyWorkingDirectory,
-    ForkAgentSession, HibernateTab, MarkTabUnread, NewWorktreeTab, RenameTab, SelectWorkspace1,
-    SelectWorkspace2, SelectWorkspace3, SelectWorkspace4, SelectWorkspace5, SelectWorkspace6,
-    SelectWorkspace7, SelectWorkspace8, SelectWorkspace9, SplitDown, SplitRight,
-};
 use crate::core::cli_agent::CLIAgent;
-use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
 use crate::ui::app::{LyrelApp, SpawnWhere};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 use crate::ui::tab::Tab;
 use crate::ui::window_chrome::{
     BUTTON_ICON_SCALE, TILE_GLYPH, chrome_tile_sized, chrome_tile_variant,
 };
+use lyrel_core::core::config::RightPanelTab;
+use lyrel_ui_base::actions::{
+    CloseActiveTab, CloseOtherTabs, CloseTabsToTheRight, CopyAgentSessionId, CopyWorkingDirectory,
+    ForkAgentSession, HibernateTab, MarkTabUnread, NewWorktreeTab, RenameTab, SelectWorkspace1,
+    SelectWorkspace2, SelectWorkspace3, SelectWorkspace4, SelectWorkspace5, SelectWorkspace6,
+    SelectWorkspace7, SelectWorkspace8, SelectWorkspace9, SplitDown, SplitRight,
+};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// One duration and one curve for every transition the app runs, so a fade and
 /// a slide read as the same hand. Long enough to be seen as movement, short
@@ -68,7 +69,7 @@ pub(crate) fn abbreviate_home<'a>(
     // The shared comparison: separators normalized, case folded — a Windows
     // pane whose cwd spells itself `C:/Users/…` shortens under a
     // `C:\Users\…` home too (#544).
-    crate::ui::path_display::abbreviate_home(path, home)
+    lyrel_ui_base::path_display::abbreviate_home(path, home)
 }
 
 /// The separator a path spells itself with. A path carrying a single `\` is
@@ -183,7 +184,7 @@ pub(crate) fn label_of(
     // number, which is what the strip showed before it shared this renderer.
     let shortened = |raw: &str| match short_title(raw, home) {
         shortened if !shortened.is_empty() => shortened,
-        _ => match crate::terminal::view::stated_title(&view.title) {
+        _ => match lyrel_terminal::view::stated_title(&view.title) {
             Some(title) => title.to_string(),
             None => unnamed(),
         },
@@ -908,7 +909,7 @@ impl NewTabMenu {
 pub(crate) fn shells_by_frecency<'a>(
     shells: &'a [DetectedShell],
     default: &str,
-    usage: &std::collections::HashMap<String, crate::core::config::ProfileUsage>,
+    usage: &std::collections::HashMap<String, lyrel_core::core::config::ProfileUsage>,
     now: u64,
 ) -> Vec<&'a DetectedShell> {
     let score = |s: &DetectedShell| usage.get(&s.label).map_or(0.0, |u| u.score(now));
@@ -936,7 +937,7 @@ pub(crate) fn shells_by_frecency<'a>(
 fn menu_shells<'a>(
     sorted: &[&'a DetectedShell],
     default: &str,
-    usage: &std::collections::HashMap<String, crate::core::config::ProfileUsage>,
+    usage: &std::collections::HashMap<String, lyrel_core::core::config::ProfileUsage>,
     now: u64,
 ) -> Vec<&'a DetectedShell> {
     sorted
@@ -960,7 +961,7 @@ fn menu_shells<'a>(
 /// really ran. `offered` is already most-used-first; this does not reorder.
 fn menu_agents(
     offered: &[CLIAgent],
-    usage: &std::collections::HashMap<String, crate::core::config::ProfileUsage>,
+    usage: &std::collections::HashMap<String, lyrel_core::core::config::ProfileUsage>,
     now: u64,
 ) -> Vec<CLIAgent> {
     offered
@@ -1202,7 +1203,7 @@ impl LyrelApp {
                     .accessibility_label(t(L10nKey::HomeSwitchWorkspace))
                     .tooltip_with_action(
                         t(L10nKey::HomeSwitchWorkspace),
-                        &crate::core::actions::ToggleSwitcher,
+                        &lyrel_ui_base::actions::ToggleSwitcher,
                         None,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1231,7 +1232,7 @@ impl LyrelApp {
             NavTab::new(right_panel_tab_id(tab))
                 .selected(current)
                 .accessibility_label(t(label_key))
-                .line_height(gpui_kit::relative(1.618_034))
+                .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
                 // Pointer activation keeps the established content focus:
                 // the framework would otherwise focus the tab on mouse down.
                 .capture_any_mouse_down(|_, window, _| window.prevent_default())
@@ -1335,7 +1336,7 @@ impl LyrelApp {
         // notch bitten out of the avatar rather than a badge sitting on it.
         // Light themes already ring the dot in white; give the dark ones the
         // same white edge, and the hollow Waiting dot the same white hole.
-        let bg = match crate::ui::presets::surface_is_dark(ring) {
+        let bg = match lyrel_ui_base::presets::surface_is_dark(ring) {
             true => gpui_kit::white(),
             false => ring,
         };
@@ -1646,7 +1647,7 @@ impl LyrelApp {
         .accessibility_label(t(L10nKey::AppMenuNewTab))
         .tooltip_with_action(
             t(L10nKey::AppMenuNewTab),
-            &crate::core::actions::NewTab,
+            &lyrel_ui_base::actions::NewTab,
             None,
         )
         // Built when the menu opens, not when the strip draws: this
@@ -1666,7 +1667,7 @@ impl LyrelApp {
     fn new_tab_menu_rows(&self, app: gpui_kit::WeakEntity<Self>, cx: &App) -> NewTabMenu {
         let default_shell = self.default_shell_label(cx);
         let usage = &cx.global::<Config>().shell_frecency;
-        let now = crate::core::config::unix_now();
+        let now = lyrel_core::core::config::unix_now();
         let sorted = shells_by_frecency(&self.shells.shells, &default_shell, usage, now);
         let shells = menu_shells(&sorted, &default_shell, usage, now);
         let offered = self.offered_agents(cx);
@@ -1707,7 +1708,7 @@ impl LyrelApp {
         self.update_config(cx, |cfg| {
             let entry = cfg.shell_frecency.entry(label.to_string()).or_default();
             entry.count = entry.count.saturating_add(1);
-            entry.last_used = crate::core::config::unix_now();
+            entry.last_used = lyrel_core::core::config::unix_now();
         });
         self.open_shell(Some(spec), at, window, cx);
     }
@@ -2112,7 +2113,7 @@ fn avatar_disc(
                     // window fill on a dark theme — the disc dissolves and
                     // leaves the glyph floating. A hairline keeps it a disc
                     // in any theme.
-                    .when(crate::ui::presets::needs_edge(accent, surface), |d| {
+                    .when(lyrel_ui_base::presets::needs_edge(accent, surface), |d| {
                         d.border_1().border_color(cx.theme().border)
                     })
                     .child(
@@ -2152,19 +2153,19 @@ fn avatar_disc(
 
 #[cfg(test)]
 mod ssh_host_row_tests {
-    use crate::core::config::Config;
-    use crate::core::session::RemoteTarget;
     use crate::core::ssh_profile::SshProfile;
     use crate::daemon::protocol::SshProxy;
-    use crate::terminal::view::{
-        quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
-    };
     use crate::ui::app::test_window::harness;
-    use crate::ui::i18n::{L10nKey, set_locale, t};
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::ssh_connect::TabHostForm;
     use crate::ui::tab::Tab;
     use gpui_kit::TestAppContext;
+    use lyrel_terminal::view::{
+        quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
+    };
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::i18n::{L10nKey, set_locale, t};
+    use lyrel_ui_base::session::RemoteTarget;
 
     #[gpui_kit::test]
     fn only_a_tab_on_an_ssh_host_is_offered_the_host_form(cx: &mut TestAppContext) {
@@ -2397,7 +2398,7 @@ mod tests {
     #[test]
     fn every_visible_agent_state_has_words_for_it() {
         use crate::core::cli_agent::AgentStatus;
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         // Idle draws no dot, so it has nothing to name.
         assert_eq!(agent_status_label(None), None);
         assert_eq!(agent_status_label(Some(AgentStatus::Idle)), None);
@@ -2880,7 +2881,7 @@ mod tests {
         crate::ui::machine_mirror::TabView {
             id: lyrel_core::core::machine::TabId::new(),
             name: None,
-            title: crate::terminal::view::DEFAULT_TITLE.to_string(),
+            title: lyrel_terminal::view::DEFAULT_TITLE.to_string(),
             osc_title: None,
             cwd: None,
             agent: None,
@@ -2963,7 +2964,7 @@ mod tests {
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
         let _stream = app.update_in(&mut vcx, |app, window, cx| {
-            let (view, stream) = crate::terminal::view::quiet_test_pane(1, window, cx);
+            let (view, stream) = lyrel_terminal::view::quiet_test_pane(1, window, cx);
             // A pane that has reported where it is over OSC 7 and has never
             // titled itself — every shell lyrel ships integration for except
             // PowerShell.
@@ -2988,7 +2989,7 @@ mod tests {
             assert_eq!(strip, "/work/repo");
             assert_ne!(
                 strip,
-                crate::terminal::view::DEFAULT_TITLE,
+                lyrel_terminal::view::DEFAULT_TITLE,
                 "and is not named after the app any more"
             );
 
@@ -3038,7 +3039,7 @@ mod tests {
         strip.osc_title = Some("user@host:".into());
         assert_ne!(
             label_of(&strip, 0, Some(home())),
-            crate::terminal::view::DEFAULT_TITLE
+            lyrel_terminal::view::DEFAULT_TITLE
         );
         assert!(
             label_of(&strip, 0, Some(home())).contains('1'),
@@ -3106,13 +3107,13 @@ mod tests {
 
     fn used(
         entries: &[(&str, u32, u64)],
-    ) -> std::collections::HashMap<String, crate::core::config::ProfileUsage> {
+    ) -> std::collections::HashMap<String, lyrel_core::core::config::ProfileUsage> {
         entries
             .iter()
             .map(|(l, count, last_used)| {
                 (
                     l.to_string(),
-                    crate::core::config::ProfileUsage {
+                    lyrel_core::core::config::ProfileUsage {
                         count: *count,
                         last_used: *last_used,
                     },

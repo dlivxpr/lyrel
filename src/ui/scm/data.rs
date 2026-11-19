@@ -9,9 +9,9 @@
 //! would put the expensive probe on the cheap trigger.
 //!
 //! The pane-side half of the cheap probe is told, not asked: the production
-//! terminal emits typed events ([`crate::terminal::view::ScmStatusRefreshRequested`],
-//! [`crate::terminal::view::ScmRootRecheckRequested`],
-//! [`crate::terminal::view::ScmRepoChanged`]) and the shell wiring answers
+//! terminal emits typed events ([`lyrel_terminal::view::ScmStatusRefreshRequested`],
+//! [`lyrel_terminal::view::ScmRootRecheckRequested`],
+//! [`lyrel_terminal::view::ScmRepoChanged`]) and the shell wiring answers
 //! them here and in [`super::status_cache`], so the terminal never imports
 //! the controller.
 //!
@@ -30,7 +30,7 @@ use gpui_kit::{Context, Window};
 use crate::core::git::ops::{GitOp, GitOpError, GitOpErrorKind, GitOpOutcome, run_op};
 use crate::core::git::status::{StatusIndex, StatusProbe, WorkingTreeStatus, probe_status};
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, WatchSub};
+use lyrel_ui_base::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, WatchSub};
 
 use super::status_cache::GitStatusCache;
 
@@ -911,7 +911,7 @@ impl LyrelApp {
                 if data.generation(host, &root) != sub_gen || !data.needs_status(host, &root) {
                     return;
                 }
-                let Some(shared) = crate::ui::host_registry::HostRegistry::get(cx, host) else {
+                let Some(shared) = lyrel_ui_base::host_registry::HostRegistry::get(cx, host) else {
                     return;
                 };
                 app.scm_refresh(shared, root, cx);
@@ -1021,7 +1021,7 @@ impl LyrelApp {
             .map(|data| data.unwatched(Instant::now()))
             .unwrap_or_default();
         for (host, root) in unwatched {
-            let Some(shared) = crate::ui::host_registry::HostRegistry::get(cx, host) else {
+            let Some(shared) = lyrel_ui_base::host_registry::HostRegistry::get(cx, host) else {
                 continue;
             };
             self.scm_open_watch(shared.clone(), root.clone(), cx);
@@ -1037,7 +1037,7 @@ impl LyrelApp {
     /// the active pane is sitting in, which is what the panel will pick anyway
     /// and is already known from the cheap tab-badge probe.
     fn scm_panel_target(&self, window: &Window, cx: &gpui_kit::App) -> Option<(HostId, PathBuf)> {
-        use crate::core::config::RightPanelTab;
+        use lyrel_core::core::config::RightPanelTab;
 
         if !self.right_panel_visible || self.right_panel_tab != RightPanelTab::Scm {
             return None;
@@ -1088,7 +1088,7 @@ impl LyrelApp {
     /// keeps showing the branch and the file list the machine had at the
     /// moment it fell off, with no way to tell that from live data.
     fn scm_forget_lost_hosts(&mut self, cx: &mut Context<Self>) {
-        let live = crate::ui::host_registry::HostRegistry::ids(cx);
+        let live = lyrel_ui_base::host_registry::HostRegistry::ids(cx);
         let held = cx
             .try_global::<ScmData>()
             .map(ScmData::hosts)
@@ -1226,7 +1226,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !crate::ui::host_registry::HostRegistry::lookup(cx, host.id())
+        if !lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host.id())
             .is_some_and(|current| Arc::ptr_eq(&current, &host))
         {
             return;
@@ -1244,9 +1244,9 @@ impl LyrelApp {
                     // like a push that finished instantly.
                     crate::ui::notification_history::NotificationWindowExt::notify_app(
                         window,
-                        crate::ui::notification_history::Notification::info(crate::ui::i18n::t(
-                            crate::ui::i18n::L10nKey::ScmNetworkBusy,
-                        )),
+                        crate::ui::notification_history::Notification::info(
+                            lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::ScmNetworkBusy),
+                        ),
                         cx,
                     );
                     return;
@@ -1326,7 +1326,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::i18n::{L10nKey, t_fmt};
+        use lyrel_ui_base::i18n::{L10nKey, t_fmt};
         // A title that says which command failed, over git's own reason. As one
         // bare line — `push: fatal: 'origin' does not appear to be a git
         // repository` — it read as a stderr dump that had escaped onto the

@@ -6,11 +6,7 @@ fn xtgettcap_consumer_exchange(
     bytes: &[u8],
     expected: &[&[u8]],
 ) {
-    let request = format!(
-        "SEND {serial} {} {} 1\n",
-        expected.len(),
-        hex(bytes)
-    );
+    let request = format!("SEND {serial} {} {} 1\n", expected.len(), hex(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     // The fixture deliberately rewrites one screen row for each reply. Read
@@ -48,10 +44,7 @@ fn xtgettcap_consumer_exchange(
     let text = String::from_utf8_lossy(&output);
     for reply in expected {
         assert!(
-            text.contains(&format!(
-                "KITTY_REPLY {serial} {}",
-                hex(reply)
-            )),
+            text.contains(&format!("KITTY_REPLY {serial} {}", hex(reply))),
             "actual application reply: {text}"
         );
     }

@@ -560,11 +560,11 @@ impl SettingsWindow {
     ) -> Vec<crate::ui::settings::AgentHooksMachine> {
         use crate::ui::settings::AgentHooksMachine;
         let mut out = vec![AgentHooksMachine {
-            host: crate::ui::host_ops::HostId::LOCAL,
+            host: lyrel_ui_base::host_ops::HostId::LOCAL,
             label: t(L10nKey::AppAgentHooksThisComputer).to_string(),
         }];
         let configured = crate::ui::desktop_lookups::available_hosts(cx);
-        for id in crate::ui::host_registry::HostRegistry::ids(cx) {
+        for id in lyrel_ui_base::host_registry::HostRegistry::ids(cx) {
             if id.is_local() {
                 continue;
             }
@@ -579,20 +579,20 @@ impl SettingsWindow {
     }
 
     pub(crate) fn agent_hooks_offline_count(&self, cx: &mut App) -> usize {
-        let connected = crate::ui::host_registry::HostRegistry::ids(cx);
+        let connected = lyrel_ui_base::host_registry::HostRegistry::ids(cx);
         cx.global::<Config>()
             .ssh_profiles
             .iter()
             .filter(|p| {
                 !connected
-                    .contains(&crate::core::session::RemoteTarget::Profile { id: p.id }.host_id())
+                    .contains(&lyrel_ui_base::session::RemoteTarget::Profile { id: p.id }.host_id())
             })
             .count()
     }
 
     pub(crate) fn select_agent_hooks_host(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         cx: &mut Context<Self>,
     ) {
         if let Some(s) = self.settings.as_mut() {
@@ -630,7 +630,7 @@ impl SettingsWindow {
         };
         let launch_commands = cx.global::<Config>().agent_launch.clone();
 
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| {
@@ -673,10 +673,13 @@ impl SettingsWindow {
 
     fn agent_hooks_link(
         &self,
-        host_id: crate::ui::host_ops::HostId,
+        host_id: lyrel_ui_base::host_ops::HostId,
         cx: &mut App,
-    ) -> Option<(crate::ui::host_ops::SharedHost, Option<std::path::PathBuf>)> {
-        let host = crate::ui::host_registry::HostRegistry::get(cx, host_id)?;
+    ) -> Option<(
+        lyrel_ui_base::host_ops::SharedHost,
+        Option<std::path::PathBuf>,
+    )> {
+        let host = lyrel_ui_base::host_registry::HostRegistry::get(cx, host_id)?;
         if host_id.is_local() {
             return Some((host, None));
         }
@@ -746,7 +749,7 @@ impl SettingsWindow {
         }
         cx.notify();
         let launch_commands = cx.global::<Config>().agent_launch.clone();
-        crate::ui::host_ops::HostOps::run(
+        lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
             move |h| {

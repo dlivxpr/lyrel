@@ -27,7 +27,7 @@ fn enter_on_a_shortcut_search_result_opens_its_local_filter(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn search_reuses_rows_and_reset_changes_only_the_selected_setting(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_settings_section(SettingsSection::General, window, cx);
@@ -42,7 +42,7 @@ fn search_reuses_rows_and_reset_changes_only_the_selected_setting(cx: &mut TestA
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.active_settings().unwrap().navigation.is_searching());
         app.reset_settings_value(
-            crate::ui::i18n::L10nKey::SettingsNotifyThreshold,
+            lyrel_ui_base::i18n::L10nKey::SettingsNotifyThreshold,
             window,
             cx,
         );
@@ -94,7 +94,7 @@ fn clearing_search_preserves_the_category_and_target_navigation_clears_search(
         assert!(!app.active_settings().unwrap().navigation.is_searching());
         app.navigate_settings(
             SettingsSection::KeyboardMouse,
-            Some(crate::ui::i18n::L10nKey::SettingsMouseZoom),
+            Some(lyrel_ui_base::i18n::L10nKey::SettingsMouseZoom),
             window,
             cx,
         );

@@ -148,7 +148,7 @@ impl SettingsWindow {
         // hosts each keyword was set on.
         const OPTIONS_SHOWN: usize = 5;
 
-        let report = crate::core::ssh_config::import_report();
+        let report = lyrel_ui_base::ssh_config::import_report();
         let source = report.source.display().to_string();
 
         if !report.source_read {
@@ -173,7 +173,7 @@ impl SettingsWindow {
 
         let read = report.profiles.len();
         let ignored = report.ignored;
-        let mut stats = crate::core::ssh_config::MergeStats::default();
+        let mut stats = lyrel_ui_base::ssh_config::MergeStats::default();
         self.update_config(cx, |cfg| {
             stats = SshSettings::import_profiles(cfg, report.profiles);
         });

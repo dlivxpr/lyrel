@@ -199,7 +199,7 @@ fn type_source(
 }
 
 fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -228,7 +228,7 @@ fn replace_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 #[gpui_kit::test]
 fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     // The mapped Host's file and a same-named local decoy: only the owning
@@ -464,7 +464,7 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 fn split_presentations_share_document_and_keep_folds_selection_and_full_value(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "split.jsonc", ORIGINAL);
     let host: SharedHost = FileHost::new(HostId(290));
@@ -590,7 +590,7 @@ fn split_presentations_share_document_and_keep_folds_selection_and_full_value(
 fn tree_focused_undo_redo_reverses_the_tree_command_and_saves_exact_bytes(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     let remote_file = fixture(remote.path(), "history.jsonc", ORIGINAL);
@@ -728,7 +728,7 @@ fn tree_focused_undo_redo_reverses_the_tree_command_and_saves_exact_bytes(
 
 #[gpui_kit::test]
 fn jsonl_records_keep_line_identity_invalid_lines_and_exact_save(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = b"\xef\xbb\xbf{\"id\": 1, \"name\": \"one\"}\r\n{\"id\": 2, \"name\": \"two\"}\n{\"id\": 3,}\n{\"id\": 4, \"name\": \"four\"}\r\n";
     let path = fixture(dir.path(), "records.jsonl", original);
@@ -823,7 +823,7 @@ fn jsonl_records_keep_line_identity_invalid_lines_and_exact_save(tcx: &mut TestA
 fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_structure(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(292));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1025,7 +1025,7 @@ fn cancel_panel(view: &Entity<JsonView>, cx: &mut VisualTestContext) {
 
 #[gpui_kit::test]
 fn tree_value_edit_targets_the_selected_duplicate_and_saves_exact_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     let remote_file = fixture(remote.path(), "edit.jsonc", ORIGINAL);
@@ -1128,7 +1128,7 @@ const EDITABLE: &[u8] = b"{\n  // keep this comment\n  \"empty\": {},\n  \"items
 
 #[gpui_kit::test]
 fn add_rename_and_remove_keep_jsonc_comments_and_empty_containers(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = fixture(dir.path(), "editable.jsonc", EDITABLE);
     let host: SharedHost = FileHost::new(HostId(2901));
@@ -1208,7 +1208,7 @@ fn add_rename_and_remove_keep_jsonc_comments_and_empty_containers(tcx: &mut Test
 fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "persist.jsonc", EDITABLE);
     let target = dir.path().join("persisted.jsonc");
@@ -1226,7 +1226,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"changed\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
@@ -1247,7 +1247,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -1324,13 +1324,13 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
         app.update_in(&mut cx, |app, window, cx| app.editor_has_focus(window, cx)),
         "the applied tree edit returns focus to the editor panel"
     );
-    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    cx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut cx);
     assert!(
         cx.has_pending_prompt(),
         "an unsaved tree edit must prompt before close"
     );
-    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    cx.simulate_prompt_answer(lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
         app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
@@ -1363,7 +1363,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
 fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = fixture(dir.path(), "split-edit.jsonc", EDITABLE);
     let host: SharedHost = FileHost::new(HostId(2903));
@@ -1536,7 +1536,7 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
 
 #[gpui_kit::test]
 fn jsonl_records_edit_values_keys_arrays_and_add_remove_lines(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     let original: &[u8] = b"\xef\xbb\xbf{\"id\": 1, \"name\": \"one\", \"big\": 184467440737095516170, \"dup\": 1, \"dup\": 2}\r\n\n{\"id\": 2, \"items\": [1e2, -0, \"\\u4e2d\"]}\n{\"id\": 3,}\r\n42\r\n";
@@ -1769,7 +1769,7 @@ fn jsonl_records_edit_values_keys_arrays_and_add_remove_lines(tcx: &mut TestAppC
 
 #[gpui_kit::test]
 fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original_bytes = b"{\"id\":1,\"name\":\"one\"}\n{\"id\":2,\"name\":\"two\"}\n";
     let original = fixture(dir.path(), "lifecycle.ndjson", original_bytes);
@@ -1797,7 +1797,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
         view.read_with(&cx, |view, cx| view.record_count(cx)),
         Some(3)
     );
-    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSaveAs);
     settle(&mut cx);
     cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
@@ -1818,7 +1818,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
     host.fail_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer(cx)
@@ -1880,13 +1880,13 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
         source_text(&app, &cx).contains("\"关闭\""),
         "the record edit must reach the shared source"
     );
-    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    cx.dispatch_action(lyrel_ui_base::actions::CloseActiveTab);
     settle(&mut cx);
     assert!(
         cx.has_pending_prompt(),
         "an unsaved record edit must prompt before close"
     );
-    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    cx.simulate_prompt_answer(lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
         app.read_with(&cx, |app, cx| app.active_buffer(cx).is_some()),
@@ -1937,7 +1937,7 @@ fn jsonl_record_edits_share_history_save_as_conflict_and_cancelled_close(tcx: &m
 
 #[gpui_kit::test]
 fn jsonl_record_budget_is_explicit_and_source_stays_editable(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let host: SharedHost = FileHost::new(HostId(2912));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1988,7 +1988,7 @@ fn jsonl_record_budget_is_explicit_and_source_stays_editable(tcx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn jsonl_late_parse_and_stale_record_actions_never_write(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let original = b"{\"id\":1,\"name\":\"first\"}\n{\"id\":2,\"name\":\"two\"}\n";
     let path = fixture(dir.path(), "late.jsonl", original);
@@ -2084,8 +2084,8 @@ fn jsonl_late_parse_and_stale_record_actions_never_write(tcx: &mut TestAppContex
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
-        Some(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::EditorJsonEditStale
+        Some(lyrel_ui_base::i18n::t(
+            lyrel_ui_base::i18n::L10nKey::EditorJsonEditStale
         ))
     );
     apply_panel(&other, &mut cx);
@@ -2113,7 +2113,7 @@ fn jsonl_late_parse_and_stale_record_actions_never_write(tcx: &mut TestAppContex
 fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );
@@ -2160,7 +2160,7 @@ fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
 fn jsonl_record_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );

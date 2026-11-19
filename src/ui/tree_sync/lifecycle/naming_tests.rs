@@ -284,15 +284,15 @@ fn a_window_owing_no_name_still_reads_the_machines(cx: &mut gpui_kit::TestAppCon
 fn primed_window(
     cx: &mut App,
     chosen: Option<&str>,
-) -> (WorkspaceId, crate::core::session::WindowView) {
+) -> (WorkspaceId, lyrel_ui_base::session::WindowView) {
     lyrel_core::core::config::set_config_dir(
         std::env::temp_dir().join(format!("lyrel-chosen-name-{}", std::process::id())),
     );
-    let view = crate::core::session::WindowView::default();
+    let view = lyrel_ui_base::session::WindowView::default();
     let ws = view.id;
     WorkspaceStore::install_for_test(
         cx,
-        crate::core::session::WindowViews {
+        lyrel_ui_base::session::WindowViews {
             views: vec![view.clone()],
             active: Some(ws),
         },
@@ -373,11 +373,11 @@ fn priming_teaches_the_mirror_the_name_the_machine_gave_the_workspace(
         lyrel_core::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-prime-name-{}", std::process::id())),
         );
-        let view = crate::core::session::WindowView::default();
+        let view = lyrel_ui_base::session::WindowView::default();
         let ws = view.id;
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![view.clone()],
                 active: Some(ws),
             },

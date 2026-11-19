@@ -1,10 +1,10 @@
 pub(crate) mod presentation;
 mod progress;
 
-use crate::core::session::{SessionPane, SessionTab};
-use crate::terminal::view::TerminalView;
 use crate::ui::pane::{Dir, Pane, PaneSlot};
 use gpui_kit::{App, Entity, IntoElement, TestSupportExt as _, Window, div, prelude::*};
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::session::{SessionPane, SessionTab};
 use std::rc::Rc;
 
 pub(crate) struct Tab {
@@ -46,7 +46,7 @@ pub(crate) struct Tab {
     /// tab: reading a long file in one while an agent works in another wants
     /// the whole window here and half of it there, and a global switch made
     /// each of those flip the other.
-    document_layout: Option<crate::core::config::DocumentLayout>,
+    document_layout: Option<lyrel_core::core::config::DocumentLayout>,
     id: std::cell::Cell<lyrel_core::core::machine::TabId>,
     /// Monotonic stamp of when this tab was last activated, used to order the
     /// switcher's tab column most-recently-used first. Zero means never.
@@ -355,11 +355,14 @@ impl Tab {
         }
     }
 
-    pub(crate) fn document_layout(&self) -> Option<crate::core::config::DocumentLayout> {
+    pub(crate) fn document_layout(&self) -> Option<lyrel_core::core::config::DocumentLayout> {
         self.document_layout
     }
 
-    pub(crate) fn choose_document_layout(&mut self, layout: crate::core::config::DocumentLayout) {
+    pub(crate) fn choose_document_layout(
+        &mut self,
+        layout: lyrel_core::core::config::DocumentLayout,
+    ) {
         self.document_layout = Some(layout);
     }
 
@@ -641,7 +644,7 @@ impl Tab {
             // *other* default it was given (an SSH host, a workspace name) is a
             // name lyrel chose for it deliberately, and `stated_title` hands
             // those up as the title the pane is showing.
-            title: crate::terminal::view::DEFAULT_TITLE.to_string(),
+            title: lyrel_terminal::view::DEFAULT_TITLE.to_string(),
             osc_title: leaf.stated_title().map(str::to_string),
             cwd: leaf.cwd().map(|p| p.display().to_string()),
             agent: leaf.agent(),

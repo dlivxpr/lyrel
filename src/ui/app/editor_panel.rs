@@ -14,8 +14,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use super::*;
-use crate::ui::host_ops::SharedHost;
 use gpui_kit::component::input::Position;
+use lyrel_ui_base::host_ops::SharedHost;
 use lyrel_workbench_editor::code_editor::commands::{self, Command};
 use lyrel_workbench_editor::code_editor::problems::{Severity, collect, headline};
 use lyrel_workbench_editor::code_editor::{
@@ -426,7 +426,11 @@ impl LyrelApp {
             // pointing at a panel the reader could not see or reach from
             // there. Reveal it, then focus it.
             if !self.file_tree_on_screen(cx) {
-                self.set_right_panel_tab(crate::core::config::RightPanelTab::Files, window, cx);
+                self.set_right_panel_tab(
+                    lyrel_core::core::config::RightPanelTab::Files,
+                    window,
+                    cx,
+                );
             }
             self.file_tree.focus_handle.focus(window, cx);
         }
@@ -586,7 +590,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let root = install_editor_commands(root, cx);
-        use crate::core::actions::{
+        use lyrel_ui_base::actions::{
             EditorJoinLines, EditorRemoveSurroundingBrackets, EditorTransformLowercase,
             EditorTransformTitleCase, EditorTransformUppercase, EditorTrimTrailingWhitespace,
         };
@@ -1175,7 +1179,7 @@ impl LyrelApp {
     /// save wrote a second copy there.
     pub(crate) fn editor_path_moved(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         from: &Path,
         to: &Path,
         cx: &mut Context<Self>,
@@ -1189,7 +1193,7 @@ impl LyrelApp {
     /// than waiting for the watcher, which a remote host may not have.
     pub(crate) fn editor_path_removed(
         &mut self,
-        host: crate::ui::host_ops::HostId,
+        host: lyrel_ui_base::host_ops::HostId,
         path: &Path,
         cx: &mut Context<Self>,
     ) {
@@ -1340,7 +1344,8 @@ impl LyrelApp {
 
     pub(crate) fn editor_record_sessions(&mut self, cx: &mut Context<Self>) {
         let spawn_host = self.spawn_host(cx);
-        let mut changed: Vec<(TabId, crate::ui::editor_session::TabEditor)> = Vec::new();
+        let mut changed: Vec<(TabId, lyrel_workbench_editor::editor_session::TabEditor)> =
+            Vec::new();
         for tab in &self.tabs {
             let Some(code) = tab.code.as_deref() else {
                 continue;
@@ -1374,13 +1379,13 @@ impl LyrelApp {
             let (files, active) = group(&sides[0].files, sides[0].active);
             let split = sides.get(1).and_then(|right| {
                 let (files, active) = group(&right.files, right.active);
-                (!files.is_empty()).then_some(crate::ui::editor_session::SplitEditor {
+                (!files.is_empty()).then_some(lyrel_workbench_editor::editor_session::SplitEditor {
                     files,
                     active,
                     focused: right.focused,
                 })
             });
-            let state = crate::ui::editor_session::TabEditor {
+            let state = lyrel_workbench_editor::editor_session::TabEditor {
                 files,
                 active,
                 visible: code.visible,
@@ -1394,7 +1399,7 @@ impl LyrelApp {
             self.editor.update(cx, |editor, _| {
                 editor.record_session(tab_id, state.clone());
             });
-            crate::ui::editor_session::put(cx, tab_id, state);
+            lyrel_workbench_editor::editor_session::put(cx, tab_id, state);
         }
     }
 
@@ -1431,7 +1436,7 @@ impl LyrelApp {
         self.editor.update(cx, |editor, _| {
             editor.forget_tab(tab);
         });
-        crate::ui::editor_session::remove(cx, tab);
+        lyrel_workbench_editor::editor_session::remove(cx, tab);
     }
 
     // ---- The panel's cross-panel intents ----
@@ -1646,7 +1651,12 @@ impl LyrelApp {
                 self.editor_begin_preview(cx);
                 if let Some(view) = self.search.view() {
                     view.update(cx, |view, cx| {
-                        view.set_locations(Some(crate::ui::i18n::t(*heading)), items, window, cx)
+                        view.set_locations(
+                            Some(lyrel_ui_base::i18n::t(*heading)),
+                            items,
+                            window,
+                            cx,
+                        )
                     });
                 }
             }
@@ -1720,7 +1730,7 @@ impl LyrelApp {
     /// must not be a way to execute one, so those keep the words too.
     fn open_outside_the_editor(
         &mut self,
-        host_id: crate::ui::host_ops::HostId,
+        host_id: lyrel_ui_base::host_ops::HostId,
         path: &Path,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1738,7 +1748,12 @@ impl LyrelApp {
             );
             return;
         }
-        Self::open_with(path, crate::ui::desktop_file::open_file_path, window, cx);
+        Self::open_with(
+            path,
+            lyrel_ui_base::desktop_file::open_file_path,
+            window,
+            cx,
+        );
     }
 
     /// Runs one of the desktop openers on a local file, and says so when it
@@ -1752,7 +1767,7 @@ impl LyrelApp {
         if let Err(e) = opener(path) {
             log::warn!("failed to open {}: {e}", path.display());
             window.notify_app(
-                crate::ui::host_ops::failure(
+                lyrel_ui_base::host_ops::failure(
                     t_fmt(
                         L10nKey::LinkFileOpenFailed,
                         &[
@@ -1982,7 +1997,7 @@ impl LyrelApp {
                 .into_any_element()
         } else {
             let scroll = self.editor.read(cx).problems_scroll();
-            crate::ui::scrollbar::with_vertical_scrollbar(
+            lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "editor-problems-scrollbar",
                 v_flex()
                     .id("editor-problems-list")
@@ -2045,24 +2060,24 @@ fn install_editor_commands(
         }),
     )
     .on_action(cx.listener(
-        |app, _: &crate::core::actions::FindInTerminal, window, cx| {
+        |app, _: &lyrel_ui_base::actions::FindInTerminal, window, cx| {
             if !app.editor_markdown_search(false, window, cx) {
                 cx.propagate();
             }
         },
     ))
     .on_action(
-        cx.listener(|app, _: &crate::core::actions::FindNext, window, cx| {
+        cx.listener(|app, _: &lyrel_ui_base::actions::FindNext, window, cx| {
             if !app.editor_markdown_find_step(true, window, cx) {
                 cx.propagate();
             }
         }),
     )
-    .on_action(
-        cx.listener(|app, _: &crate::core::actions::FindPrevious, window, cx| {
+    .on_action(cx.listener(
+        |app, _: &lyrel_ui_base::actions::FindPrevious, window, cx| {
             if !app.editor_markdown_find_step(false, window, cx) {
                 cx.propagate();
             }
-        }),
-    )
+        },
+    ))
 }

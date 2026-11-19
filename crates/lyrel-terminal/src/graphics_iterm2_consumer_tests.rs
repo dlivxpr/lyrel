@@ -30,10 +30,7 @@ fn iterm2_send_fragmented(
     bytes: &[u8],
     fragment: usize,
 ) {
-    let request = format!(
-        "SEND {serial} 0 {} {fragment}\n",
-        hex(bytes)
-    );
+    let request = format!("SEND {serial} 0 {} {fragment}\n", hex(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     graphics_wait_fixture(view, cx, serial, input_bytes);

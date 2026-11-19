@@ -2,13 +2,13 @@
 #[cfg(windows)]
 #[gpui_kit::test]
 fn reverse_search_cmd_enter_runs_selected_command_in_real_pty(cx: &mut TestAppContext) {
-    use crate::core::config::KeybindingOverride;
     use crate::daemon::protocol::{ShellSpec, WinSize};
     use crate::ui::pane::{Pane, PaneSlot};
     use gpui_kit::{OperatingSystem, PlatformInfo, PlatformTarget};
+    use lyrel_core::core::config::KeybindingOverride;
     use std::time::{Duration, Instant};
 
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     cx.set_platform_info(PlatformInfo {
         os: OperatingSystem::Mac,
         target: PlatformTarget::Native,

@@ -7,9 +7,9 @@ use std::time::Duration;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, ForwardStatus, ShellSpec, SshPhase};
-use crate::terminal::forward_client::ForwardClient;
 use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
-use crate::ui::route::{ForwardOwnerKey, ForwardRoute, PaneWorkspace};
+use lyrel_terminal::forward_client::ForwardClient;
+use lyrel_ui_base::route::{ForwardOwnerKey, ForwardRoute, PaneWorkspace};
 
 use crate::native_ssh_graphics_fixture as native_fixture;
 
@@ -281,7 +281,7 @@ fn managed_forward_real_routes_reject_recover_and_continue_editing(cx: &mut Test
         std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit lyrel-server required"),
     );
     let fixture = native_fixture::NativeSshFixture::start(&binary);
-    crate::core::config::set_config_dir(fixture.local_config_dir());
+    lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     // Config overrides are process-wide and write-once. Pin the real fixture
     // before the GUI harness attempts to install its generic scratch path.
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
@@ -289,8 +289,8 @@ fn managed_forward_real_routes_reject_recover_and_continue_editing(cx: &mut Test
     let native = native_pane(&fixture);
     let spec = fixture.spec();
     let workspace = PaneWorkspace {
-        workspace: crate::core::session::WorkspaceId::new(),
-        target: crate::core::session::RemoteTarget::direct(&spec.user, &spec.host, spec.port),
+        workspace: lyrel_ui_base::session::WorkspaceId::new(),
+        target: lyrel_ui_base::session::RemoteTarget::direct(&spec.user, &spec.host, spec.port),
         spec: Some(Box::new(spec)),
         label: None,
         resize_echo: false,

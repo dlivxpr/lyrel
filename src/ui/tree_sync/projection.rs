@@ -2,9 +2,9 @@
 use gpui_kit::App;
 use lyrel_core::core::machine::{AgentFacts, Axis as TreeAxis, PaneNode, PaneSeed, TabId};
 
-use crate::core::session::{SessionPane, WorkspaceId, WorkspaceStore};
 use crate::ui::pane::{Pane, PaneSlot};
 use crate::ui::tab::Tab;
+use lyrel_ui_base::session::{SessionPane, WorkspaceId, WorkspaceStore};
 
 use super::desired::{DesiredNode, DesiredTab};
 pub(crate) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
@@ -150,8 +150,8 @@ fn desired_node_from_session(layout: &SessionPane, remote_window: bool) -> Optio
             match (left, right) {
                 (Some(a), Some(b)) => Some(DesiredNode::Split {
                     axis: match axis {
-                        crate::core::session::SessionAxis::Horizontal => TreeAxis::Horizontal,
-                        crate::core::session::SessionAxis::Vertical => TreeAxis::Vertical,
+                        lyrel_ui_base::session::SessionAxis::Horizontal => TreeAxis::Horizontal,
+                        lyrel_ui_base::session::SessionAxis::Vertical => TreeAxis::Vertical,
                     },
                     ratio: *ratio,
                     a: Box::new(a),
@@ -218,7 +218,7 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
         }
         Pane::Leaf(PaneSlot::Connecting(pending)) => {
             pending.read(cx).restore_pane()?;
-            let crate::core::session::SessionPane::Leaf {
+            let lyrel_ui_base::session::SessionPane::Leaf {
                 pane_id,
                 cwd,
                 ssh_spec,
@@ -281,7 +281,7 @@ mod tests {
     /// ids, same seeds, same shape.
     #[test]
     fn a_sleeping_layout_reads_back_as_the_tree_it_came_from() {
-        use crate::core::session::SessionAxis;
+        use lyrel_ui_base::session::SessionAxis;
         let leaf_of = |pane: u64, cwd: &str| SessionPane::Leaf {
             cwd: Some(std::path::PathBuf::from(cwd)),
             pane_id: Some(pane),

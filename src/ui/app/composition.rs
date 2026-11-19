@@ -513,9 +513,9 @@ impl LyrelApp {
 mod displayed_gpui_tests {
     use gpui_kit::TestAppContext;
 
-    use crate::terminal::lifecycle::{declare_displayed, displayed_for_test};
-    use crate::terminal::view::quiet_test_pane;
     use crate::ui::app::test_window::harness_with_tabs;
+    use lyrel_terminal::lifecycle::{declare_displayed, displayed_for_test};
+    use lyrel_terminal::view::quiet_test_pane;
 
     fn pane_id(app: &super::LyrelApp, tab: usize) -> gpui_kit::EntityId {
         app.tabs[tab]

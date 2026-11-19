@@ -22,7 +22,6 @@ use lyrel_insights::github::{
 
 use crate::ui::app::LyrelApp;
 use crate::ui::github::{Fold, now_unix};
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::panel_github::{
     check_glyph, check_label, describe_error, github_tile, label_chip, state_glyph, state_label,
 };
@@ -33,6 +32,7 @@ use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::RepoKey;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::CONTENT_INSET;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 
 const ROW_H: f32 = 26.;
 const SECTION_GAP: f32 = 16.;
@@ -172,7 +172,7 @@ impl LyrelApp {
         url: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let muted = cx.theme().muted_foreground;
         h_flex()
             .flex_none()
@@ -569,7 +569,7 @@ impl LyrelApp {
         files: &Arc<Vec<PrFile>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
         let mono = cx.theme().mono_font_family.clone();
         let deco = crate::ui::diff_overlay::deco_status(file.status);
         let (name, dir) = split_display_path(&file.path);
@@ -758,7 +758,7 @@ fn checks_section(
     let theme = cx.theme();
     let muted = theme.muted_foreground;
     let mono = theme.mono_font_family.clone();
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let now = now_unix();
     let counted = checks.counted();
     let summary = if counted == 0 {
@@ -884,7 +884,7 @@ fn fold_row(
     unfolded: bool,
     cx: &gpui_kit::App,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let muted = cx.theme().muted_foreground;
     h_flex()
         .id(id)
@@ -926,7 +926,7 @@ fn reviews_section(
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
     let foldable = reviewers.len() > REVIEWERS_FOLD_AT;
     let shown = if foldable && !unfolded {
         REVIEWERS_FOLD_AT - 1

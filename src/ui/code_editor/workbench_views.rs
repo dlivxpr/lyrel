@@ -259,7 +259,7 @@ fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext
         let end = view.text().len();
         view.select_range(end..end, cx);
     });
-    context.dispatch_action(crate::core::actions::EditorTrimTrailingWhitespace);
+    context.dispatch_action(lyrel_ui_base::actions::EditorTrimTrailingWhitespace);
     settle(&mut context);
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
@@ -297,7 +297,7 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
     cx.update(|window, cx| window.input("注", cx));
     settle(&mut cx);
     let release = host.pause_next_write();
-    cx.dispatch_action(crate::core::actions::EditorSave);
+    cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until(&mut cx, |_| host.entered.load(Ordering::SeqCst));
     app.update_in(&mut cx, |app, window, cx| {
         app.tabs.select(1);
@@ -335,15 +335,15 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
 }
 
 pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
-    use crate::core::config::DocumentLayout;
     use gpui_kit::component::{Theme, ThemeMode};
+    use lyrel_core::core::config::DocumentLayout;
     let dir = test_host::canonical_tempdir();
     let path = dir.path().join("focus.md");
     let other = dir.path().join("other.md");
     std::fs::write(&path, b"# First\nalpha\n## Target\nbeta\n").unwrap();
     std::fs::write(&other, b"# Other\nuntouched\n").unwrap();
     let (app, mut cx, _streams) = harness_with_tabs(cx, 1);
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     cx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
     app.update_in(&mut cx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
@@ -368,7 +368,7 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         first.read(cx).focus_handle(cx).focus(window, cx);
         window.focused(cx).unwrap().dispatch_action(
-            &crate::core::actions::EditorGoToLine,
+            &lyrel_ui_base::actions::EditorGoToLine,
             window,
             cx,
         );
@@ -531,7 +531,7 @@ fn active_markdown_rename_to_mdx_retains_each_view_and_history(cx: &mut TestAppC
             assert!(view.text().starts_with("注---"));
         });
     }
-    cx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    cx.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     cx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut cx);
     second.read_with(&cx, |view, cx| {
@@ -618,7 +618,7 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
 #[cfg(test)]
 mod integrated_acceptance {
     use super::*;
-    use crate::core::config::DocumentLayout;
+    use lyrel_core::core::config::DocumentLayout;
     use lyrel_workbench_editor::code_editor::image_document::ImageContent;
     use lyrel_workbench_editor::code_editor::pdf_document::PdfContent;
     use lyrel_workbench_editor::code_editor::svg_document::SvgMode;
@@ -1167,7 +1167,7 @@ mod integrated_acceptance {
     fn mixed_workspace_keeps_every_selected_format_distinct_through_navigation_split_and_close(
         tcx: &mut TestAppContext,
     ) {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let dir = test_host::canonical_tempdir();
         let paths = mixed_fixtures(dir.path());
         let (app, mut cx, _streams) = harness_with_tabs(tcx, 2);
@@ -1371,7 +1371,7 @@ mod integrated_acceptance {
     fn same_named_documents_on_two_hosts_never_cross_save_or_focus_targets(
         tcx: &mut TestAppContext,
     ) {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let local_root = test_host::canonical_tempdir();
         let remote_root = test_host::canonical_tempdir();
         let remote_work = remote_root.path().join("work");
@@ -1438,7 +1438,7 @@ mod integrated_acceptance {
         // Hold the mapped Host's write, then switch to a same-named local
         // document before the write lands.
         let release = mapped.pause_next_write();
-        cx.dispatch_action(crate::core::actions::EditorSave);
+        cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
         until(&mut cx, |_| mapped.entered.load(Ordering::SeqCst));
         let local_id = open_local(&app, &mut cx, &local_csv);
         until(&mut cx, |cx| {
@@ -1510,7 +1510,7 @@ mod integrated_acceptance {
                 editor.text().to_string().contains("desktop")
             }) && !local_view.read_with(cx, |view, cx| view.is_parsing(cx))
         });
-        cx.dispatch_action(crate::core::actions::EditorSave);
+        cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
         until(&mut cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
@@ -1619,7 +1619,7 @@ mod integrated_acceptance {
     }
 
     fn save_active(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: BufferId) {
-        cx.dispatch_action(crate::core::actions::EditorSave);
+        cx.dispatch_action(lyrel_ui_base::actions::EditorSave);
         until(cx, |cx| {
             app.read_with(cx, |app, cx| {
                 app.editor
@@ -1640,7 +1640,7 @@ mod integrated_acceptance {
     fn mixed_formats_edit_save_and_reopen_through_real_native_ssh(tcx: &mut TestAppContext) {
         use lyrel_core::host::Host as _;
 
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
             "real SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER names the same-commit router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
         );

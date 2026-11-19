@@ -78,7 +78,9 @@ test('release build workflow changes select real packaging validation, not unrel
 for (const [name, files, expected] of [
   ['GUI changes keep both desktop platforms', { 'src/ui/app.rs': 'fn ui() {}' }, [true, false, false, false]],
   ['core integration tests still run on all test platforms', { 'crates/lyrel-core/tests/session.rs': 'fn test() {}' }, [true, true, false, false]],
+  ['core daemon changes rebuild the headless deliverable and test consumers', { 'crates/lyrel-core/src/daemon/mod.rs': 'pub struct Daemon;' }, [true, true, true, false]],
   ['protocol source changes rebuild the standalone server and all test consumers', { 'crates/lyrel-protocol/src/daemon/protocol.rs': 'pub const PROTOCOL_VERSION: u32 = 19;' }, [true, true, true, false]],
+  ['server source changes rebuild the headless deliverable and test consumers', { 'crates/lyrel-server/src/main.rs': 'fn main() {}' }, [true, true, true, false]],
   ['CLI changes do not rebuild the standalone server', { 'crates/lyrel-cli/src/main.rs': 'fn main() {}' }, [true, true, false, false]],
   ['pure documentation pushes retain only preflight', { 'docs/start.mdx': '# Guide', 'CHANGELOG.md': '# Changes' }, [false, false, false, false]],
   ['embedded license changes rebuild every Rust target', { LICENSE: 'license' }, [true, true, true, false]],

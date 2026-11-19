@@ -1,10 +1,10 @@
 use super::test_window::harness_with_pane;
-use crate::core::session::{
-    RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
-};
 use crate::ui::pane::{Pane, PaneSlot};
 use gpui_kit::TestAppContext;
 use lyrel_core::core::machine::{LayoutDelta, PaneNode, Tab as TreeTab};
+use lyrel_ui_base::session::{
+    RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
+};
 
 #[gpui_kit::test]
 fn a_tree_rebuild_keeps_the_native_ssh_split_a_remote_tab_holds(cx: &mut TestAppContext) {
@@ -26,7 +26,7 @@ fn a_tree_rebuild_keeps_the_native_ssh_split_a_remote_tab_holds(cx: &mut TestApp
             },
         );
         app.workspace = remote_id;
-        let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
+        let (ssh_view, stream) = lyrel_terminal::view::quiet_test_ssh_pane(2, window, cx);
         let existing = std::mem::replace(&mut app.tabs[0].pane, Pane::Empty);
         app.tabs[0].pane = Pane::split_node(
             gpui_kit::Axis::Horizontal,
@@ -92,7 +92,7 @@ fn primed_two_tab_window(
 ) {
     let (app, mut vcx, first) = harness_with_pane(cx);
     let second = app.update_in(&mut vcx, |app, window, cx| {
-        let (view, stream) = crate::terminal::view::quiet_test_pane(2, window, cx);
+        let (view, stream) = lyrel_terminal::view::quiet_test_pane(2, window, cx);
         app.tabs
             .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
         let tabs = app
@@ -189,7 +189,7 @@ fn a_pure_native_ssh_tab_is_invisible_to_the_tree_not_held(cx: &mut TestAppConte
             },
         );
         app.workspace = remote_id;
-        let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
+        let (ssh_view, stream) = lyrel_terminal::view::quiet_test_ssh_pane(2, window, cx);
         app.tabs
             .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(ssh_view))));
         stream

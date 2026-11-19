@@ -17,16 +17,15 @@ mod score;
 mod sources;
 mod view;
 
-pub(crate) use crate::ui::file_search::FileList;
 pub(crate) use catalog::{ActionCatalog, SearchCatalog, TerminalCatalog};
 pub(crate) use command::{Avatar, ChromeState, CommandGroup, CommandKind, Item};
 pub(crate) use history::SessionHistory;
 pub(crate) use lifecycle::SearchState;
-pub(crate) use score::fuzzy_score;
+pub(crate) use lyrel_ui_base::file_search::FileList;
 pub(crate) use sources::{Catalog, LiveQuery};
 pub(crate) use view::{KEY_CONTEXT, SearchEvent, SearchView};
 
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SearchTab {

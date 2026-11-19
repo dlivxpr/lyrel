@@ -14,16 +14,17 @@ use std::cell::{Cell, RefCell};
 
 use uuid::Uuid;
 
-use crate::core::config::{
-    BellMode, Config, ConfirmClose, CursorStyle, LinkFileOpen, MotionPreference, MouseZoomModifier,
-    NewTabPosition, NotifyMode, PromptCursorStyle, UI_FONT_SIZE_DEFAULT, WindowBackdrop,
-};
 use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, UI_FONT_SIZE_STEP};
-use crate::ui::host_ops::HostId;
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
-use crate::ui::presets;
 use crate::ui::settings_window::{SettingsEvent, SettingsWindow};
 use crate::ui::window_chrome::TITLE_BAR_HEIGHT;
+use lyrel_core::core::config::{
+    BellMode, ConfirmClose, CursorStyle, LinkFileOpen, MotionPreference, MouseZoomModifier,
+    NewTabPosition, NotifyMode, PromptCursorStyle, UI_FONT_SIZE_DEFAULT, WindowBackdrop,
+};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::host_ops::HostId;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::presets;
 #[cfg(target_os = "windows")]
 pub(crate) use theme_edit::window_backdrop_label_key;
 
@@ -616,14 +617,14 @@ mod tests {
             L10nKey::SettingsLanguage,
             L10nKey::SettingsMouseZoom,
         ] {
-            crate::ui::i18n::set_locale("en");
+            lyrel_ui_base::i18n::set_locale("en");
             let expected = settings_row_id(t(key), "");
             for locale in ["zh-CN"] {
-                crate::ui::i18n::set_locale(locale);
+                lyrel_ui_base::i18n::set_locale(locale);
                 assert_eq!(settings_row_id(t(key), ""), expected);
             }
         }
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
     }
 
     /// A key picked from the system dialog arrives as an absolute path under
@@ -742,7 +743,7 @@ mod tests {
     /// font is a starved label column at the largest one.
     #[test]
     fn the_stacking_width_follows_the_interface_font() {
-        use crate::core::config::UI_FONT_SIZE_MAX;
+        use lyrel_core::core::config::UI_FONT_SIZE_MAX;
         let large = UI_FONT_SIZE_MAX / UI_FONT_SIZE_DEFAULT;
         // Side by side at the default font...
         assert!(settings_row_width(900., 1.) >= STACK_ROW_BELOW);
@@ -805,13 +806,14 @@ mod tests {
 #[cfg(test)]
 mod gpui_tests {
     use super::SettingsSection;
-    use crate::core::config::{Config, MouseZoomModifier};
     use crate::ui::settings::test_window::harness;
     use gpui_kit::{TestAppContext, px, size};
+    use lyrel_core::core::config::MouseZoomModifier;
+    use lyrel_ui_base::config::Config;
 
     #[gpui_kit::test]
     fn failed_settings_writes_remain_visible_until_retry_succeeds(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::General, window, cx);
@@ -862,7 +864,7 @@ mod gpui_tests {
     /// reach the config the wheel reads.
     #[gpui_kit::test]
     fn the_terminal_page_paints_the_zoom_modifier_row(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::Terminal, window, cx);
@@ -892,7 +894,7 @@ mod gpui_tests {
     /// menu they had switched off.
     #[gpui_kit::test]
     fn the_prompt_editor_greys_its_dependants_without_rewriting_them(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (app, mut vcx) = harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::Terminal, window, cx);

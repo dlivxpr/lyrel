@@ -9,10 +9,10 @@
 use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
-use crate::core::actions::CloseActiveTab;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
+use lyrel_ui_base::actions::CloseActiveTab;
 use lyrel_workbench_editor::code_editor::drawio_engine::bridge::Command;
 use lyrel_workbench_editor::code_editor::drawio_engine::surface::SurfaceEvent;
 use std::path::{Path, PathBuf};
@@ -130,7 +130,7 @@ fn dispatch<A: gpui_kit::Action>(app: &Entity<LyrelApp>, cx: &mut VisualTestCont
 
 #[gpui_kit::test]
 fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let plain = fixture(dir.path(), "plain.drawio", &uncompressed(2));
     let packed = fixture(dir.path(), "packed.drawio", &compressed(3));
@@ -193,7 +193,7 @@ fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut Te
 
 #[gpui_kit::test]
 fn page_controls_and_split_groups_keep_their_own_page(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "pages.drawio", &compressed(4));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -277,7 +277,7 @@ fn page_controls_and_split_groups_keep_their_own_page(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = compressed(2);
     let path = fixture(dir.path(), "unedited.drawio", &before);
@@ -289,10 +289,13 @@ fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        let wrap_before = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let wrap_before = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .editor_soft_wrap;
         app.toggle_document_wrap(window, cx);
         assert_eq!(
-            cx.global::<crate::core::config::Config>().editor_soft_wrap,
+            cx.global::<lyrel_ui_base::config::Config>()
+                .editor_soft_wrap,
             wrap_before
         );
         assert!(!app.editor.read(cx).has_bar());
@@ -321,7 +324,7 @@ fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "watched.drawio", &compressed(2));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -353,7 +356,7 @@ fn an_external_rewrite_replaces_the_page_list_and_retires_the_old_view(tcx: &mut
 
 #[gpui_kit::test]
 fn the_owning_host_supplies_the_diagram_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local = fixture(dir.path(), "host.drawio", &compressed(2));
     let remote_dir = dir.path().join("remote");
@@ -380,7 +383,7 @@ fn the_owning_host_supplies_the_diagram_bytes(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn malformed_and_non_diagram_files_report_their_own_failure(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let broken = fixture(dir.path(), "broken.drawio", b"<mxfile><diagram>");
     let not_diagram = fixture(
@@ -431,7 +434,7 @@ fn malformed_and_non_diagram_files_report_their_own_failure(tcx: &mut TestAppCon
 /// directly so a bridge event cannot silently become a second authority.
 #[gpui_kit::test]
 fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "events.drawio", &compressed(3));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -501,7 +504,7 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
 /// what walks the document back through every presentation's edits.
 #[gpui_kit::test]
 fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(2);
     let path = fixture(dir.path(), "edited.drawio", &original);
@@ -592,7 +595,7 @@ fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(tcx: &m
 /// the last good bytes instead of taking a truncated serialization.
 #[gpui_kit::test]
 fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "truncated.drawio", &original);
@@ -639,7 +642,7 @@ fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
 /// same Host write path.
 #[gpui_kit::test]
 fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "saved.drawio", &uncompressed(1));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -700,7 +703,7 @@ fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) 
 /// content on both sides, not a silent overwrite of engine work.
 #[gpui_kit::test]
 fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "raced.drawio", &compressed(2));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -755,7 +758,7 @@ fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext)
 /// state or push a history entry; it is not an edit.
 #[gpui_kit::test]
 fn an_identical_commit_is_not_an_edit(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = uncompressed(1);
     let path = fixture(dir.path(), "flushed.drawio", &bytes);
@@ -812,7 +815,7 @@ fn confirm_pending_sync(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) -> O
 /// host — the file on the other side changes and the original stays put.
 #[gpui_kit::test]
 fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let remote_dir = dir.path().join("remote298");
     std::fs::create_dir_all(&remote_dir).unwrap();
@@ -867,7 +870,7 @@ fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
 /// through the frame sweep into the same Host write path as the toolbar.
 #[gpui_kit::test]
 fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "engine-save.drawio", &uncompressed(1));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -926,7 +929,7 @@ fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext)
 /// the untouched page is still there verbatim.
 #[gpui_kit::test]
 fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let untouched = format!(
         "<diagram id=\"keep\" name=\"Keep\" custom-attr=\"kept\" background=\"#ffeeaa\">{COMPRESSED_PAGE}</diagram>"
@@ -1010,7 +1013,7 @@ fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(tcx: &mut T
 /// confirmation arrives afterwards.
 #[gpui_kit::test]
 fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "flush-all.drawio", &original);
@@ -1121,7 +1124,7 @@ fn a_deferred_save_flushes_every_presentation_and_writes_once(tcx: &mut TestAppC
 /// commit, a sibling's confirmation, and a foreign token cannot release it.
 #[gpui_kit::test]
 fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "barrier.drawio", &original);
@@ -1235,7 +1238,7 @@ fn a_save_waits_for_each_presentations_own_sync_confirmation(tcx: &mut TestAppCo
 fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
     tcx: &mut TestAppContext,
 ) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "refused.drawio", &original);
@@ -1375,7 +1378,7 @@ fn a_refused_canvas_stays_unsaved_and_saves_or_closes_only_with_its_answer(
 /// rather than dropping the engine's work.
 #[gpui_kit::test]
 fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "never-confirmed.drawio", &original);
@@ -1465,7 +1468,7 @@ fn an_unconfirmed_flush_fails_the_save_instead_of_writing_stale_bytes(tcx: &mut 
 /// the original file untouched.
 #[gpui_kit::test]
 fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let original = uncompressed(1);
     let path = fixture(dir.path(), "save-as-source.drawio", &original);
@@ -1539,7 +1542,7 @@ fn save_as_writes_the_confirmed_model_to_the_chosen_target(tcx: &mut TestAppCont
 fn a_remote_diagram_saves_through_the_real_ssh_route(tcx: &mut TestAppContext) {
     use lyrel_core::host::Host as _;
 
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
         "real SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER names the same-commit router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
     );

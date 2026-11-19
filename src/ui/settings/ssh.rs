@@ -129,9 +129,9 @@ impl SshSettings {
 
     fn import_profiles(
         cfg: &mut Config,
-        profiles: Vec<crate::core::ssh_config::ImportedProfile>,
-    ) -> crate::core::ssh_config::MergeStats {
-        crate::core::ssh_config::merge_imported(&mut cfg.ssh_profiles, profiles)
+        profiles: Vec<lyrel_ui_base::ssh_config::ImportedProfile>,
+    ) -> lyrel_ui_base::ssh_config::MergeStats {
+        lyrel_ui_base::ssh_config::merge_imported(&mut cfg.ssh_profiles, profiles)
     }
 
     fn load(
@@ -406,7 +406,7 @@ fn ssh_group_key(p: &SshProfile) -> &str {
 
 fn ssh_group_label(key: &str) -> &str {
     match key {
-        crate::core::ssh_config::IMPORTED_GROUP => "~/.ssh/config",
+        lyrel_ui_base::ssh_config::IMPORTED_GROUP => "~/.ssh/config",
         "" => t(L10nKey::SettingsInLyrel),
         other => other,
     }
@@ -414,7 +414,7 @@ fn ssh_group_label(key: &str) -> &str {
 
 fn ssh_group_rank(key: &str) -> u8 {
     match key {
-        crate::core::ssh_config::IMPORTED_GROUP => 0,
+        lyrel_ui_base::ssh_config::IMPORTED_GROUP => 0,
         "" => 2,
         _ => 1,
     }

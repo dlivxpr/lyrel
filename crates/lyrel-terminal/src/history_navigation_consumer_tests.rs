@@ -11,9 +11,17 @@ fn history_recall_snaps_the_viewport_back_to_the_prompt(cx: &mut TestAppContext)
 
             view.handle_editor_key(&key("up"), false, cx);
 
-            assert_eq!(view.input.editor().text(), "echo hello", "↑ recalled the entry");
+            assert_eq!(
+                view.input.editor().text(),
+                "echo hello",
+                "↑ recalled the entry"
+            );
             assert_eq!(display_offset(view), 0, "and the viewport followed it down");
-            assert_eq!(view.selection_scroll.fraction(), 0., "the sub-line remainder reset too");
+            assert_eq!(
+                view.selection_scroll.fraction(),
+                0.,
+                "the sub-line remainder reset too"
+            );
         })
         .unwrap();
 }
@@ -23,10 +31,13 @@ fn ctrl_p_and_ctrl_n_walk_the_history(cx: &mut TestAppContext) {
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "cargo build", "echo hello"]
-                .into_iter()
-                .map(String::from)
-                .collect());
+            seed_history(
+                view,
+                ["git status", "cargo build", "echo hello"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
 
             view.handle_editor_key(&key("ctrl-p"), false, cx);
             assert_eq!(view.input.editor().text(), "echo hello");
@@ -45,10 +56,13 @@ fn up_and_ctrl_p_recall_the_last_command_matching_the_typed_prefix(cx: &mut Test
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "echo hello", "git log", "ls"]
-                .into_iter()
-                .map(String::from)
-                .collect());
+            seed_history(
+                view,
+                ["git status", "echo hello", "git log", "ls"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
             view.input.editor_mut().set("git");
 
             view.handle_editor_key(&key("up"), false, cx);
@@ -80,17 +94,24 @@ fn history_search_takes_its_prefix_from_the_text_left_of_the_cursor(cx: &mut Tes
     let (window, _daemon) = harness(cx);
     window
         .update(cx, |view, _, cx| {
-            seed_history(view, ["git status", "echo hello", "git log", "ls"]
-                .into_iter()
-                .map(String::from)
-                .collect());
+            seed_history(
+                view,
+                ["git status", "echo hello", "git log", "ls"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            );
 
             // Ctrl+A parks the cursor at the start. Nothing sits left of
             // it, so UP walks the whole list instead of filtering on a line
             // the user is about to edit in front of.
             view.input.editor_mut().set_with_cursor("git", 0);
             view.handle_editor_key(&key("up"), false, cx);
-            assert_eq!(view.input.editor().text(), "ls", "an empty prefix filters nothing");
+            assert_eq!(
+                view.input.editor().text(),
+                "ls",
+                "an empty prefix filters nothing"
+            );
 
             // A cursor parked mid-line searches on what is behind it, and
             // DOWN past the newest match restores the whole line, the part

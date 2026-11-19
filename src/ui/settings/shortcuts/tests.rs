@@ -1,8 +1,8 @@
-use crate::core::config::Config;
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings::test_window::harness;
 use crate::ui::settings_window::SettingsWindow;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+use lyrel_ui_base::config::Config;
 
 fn begin_capture(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext, action: &str) {
     let action = action.to_string();

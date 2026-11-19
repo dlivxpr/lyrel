@@ -1,6 +1,6 @@
 //! 进程内统计服务：元数据锁不跨 Host I/O，扫描由两个专用 worker 执行。
 use super::{Snapshot, StatisticsCache, statistics, storage::StoredStatistics};
-use crate::ui::host_registry::{HostId, SharedHost};
+use lyrel_ui_base::host_registry::{HostId, SharedHost};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, mpsc};

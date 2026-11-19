@@ -3,7 +3,7 @@
     fn a_disconnected_remote_pane_keeps_the_line_instead_of_handing_it_to_nowhere(
         cx: &mut TestAppContext,
     ) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (window, mut daemon) = harness(cx);
         cx.update(|cx| crate::ui::keymap::init(cx));
         DaemonMsg::Prompt {
@@ -57,7 +57,7 @@
 #[cfg(not(target_os = "macos"))]
 #[gpui_kit::test]
 fn ctrl_v_pastes_at_a_prompt(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (window, mut daemon) = harness(cx);
     cx.update(|cx| crate::ui::keymap::init(cx));
     cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("echo hi".into())));
@@ -81,7 +81,7 @@ fn ctrl_v_pastes_at_a_prompt(cx: &mut TestAppContext) {
 #[cfg(not(target_os = "macos"))]
 #[gpui_kit::test]
 fn ctrl_v_reaches_a_full_screen_program_as_syn(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (window, mut daemon) = harness(cx);
     cx.update(|cx| crate::ui::keymap::init(cx));
     cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("echo hi".into())));
@@ -112,7 +112,7 @@ fn ctrl_v_reaches_a_full_screen_program_as_syn(cx: &mut TestAppContext) {
     /// moved to Alt+1..9.
     #[gpui_kit::test]
     fn ctrl_6_reaches_the_pty_as_rs(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let (window, mut daemon) = harness(cx);
         cx.update(|cx| crate::ui::keymap::init(cx));
         window
@@ -130,11 +130,11 @@ fn ctrl_v_reaches_a_full_screen_program_as_syn(cx: &mut TestAppContext) {
 
     #[cfg(target_os = "macos")]
 use super::*;
-use crate::terminal::view::notices::INTEGRATION_GRACE;
+use lyrel_terminal::view::notices::INTEGRATION_GRACE;
 
 #[gpui_kit::test]
 fn insert_newline_action_extends_the_line_and_enter_submits_it(cx: &mut TestAppContext) {
-crate::core::config::pin_test_config_dir();
+lyrel_ui_base::config::pin_test_config_dir();
 
 let (window, mut daemon) = harness(cx);
 prompt_ready(&window, cx, &mut daemon);
@@ -163,7 +163,7 @@ Some(b"echo a\recho b\r".to_vec()),
 
 #[gpui_kit::test]
 fn shift_enter_reaches_a_foreground_tui_with_kitty_encoding(cx: &mut TestAppContext) {
-crate::core::config::pin_test_config_dir();
+lyrel_ui_base::config::pin_test_config_dir();
 let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
 cx.update(|cx| crate::ui::keymap::init(cx));
 DaemonMsg::Output(b"\x1b[>1u".to_vec())
@@ -204,7 +204,7 @@ Some(b"\x1b[106;5u".to_vec())
 
 #[gpui_kit::test]
 fn shift_enter_reaches_a_foreground_tui_as_lf_without_kitty(cx: &mut TestAppContext) {
-crate::core::config::pin_test_config_dir();
+lyrel_ui_base::config::pin_test_config_dir();
 let (window, mut daemon) = harness_on(cx, PtySource::Raw);
 cx.update(|cx| crate::ui::keymap::init(cx));
 window
@@ -249,7 +249,7 @@ Some(b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_".to_vec()),
 
 #[gpui_kit::test]
 fn alt_enter_keeps_its_legacy_encoding_in_a_foreground_tui(cx: &mut TestAppContext) {
-crate::core::config::pin_test_config_dir();
+lyrel_ui_base::config::pin_test_config_dir();
 let (window, mut daemon) = harness(cx);
 cx.update(|cx| crate::ui::keymap::init(cx));
 window
@@ -420,7 +420,7 @@ Some(seq),
 
 #[gpui_kit::test]
 fn ctrl_j_and_ctrl_m_submit_the_line_like_enter(cx: &mut TestAppContext) {
-crate::core::config::pin_test_config_dir();
+lyrel_ui_base::config::pin_test_config_dir();
 
 let (window, mut daemon) = harness(cx);
 for (chord, line) in [("ctrl-j", "echo j"), ("ctrl-m", "echo m")] {

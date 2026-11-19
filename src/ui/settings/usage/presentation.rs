@@ -1103,7 +1103,7 @@ impl Render for UsagePage {
             .min_w_0()
             .text_sm()
             .child(self.render_header(cx))
-            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+            .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
                 "usage-scrollbar",
                 scroll,
                 &self.scroll,

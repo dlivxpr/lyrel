@@ -313,8 +313,10 @@ native-markdown-tests = [
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
+# 含根包共 13 个成员：协议与会话核心、领域引擎、桌面应用、仅测试支持。
 members = ["crates/*"]
-# Windows/macOS 默认包含 editor 与 updater helper；Linux 排除桌面包。
+# 默认成员面向 Windows/macOS；此清单不随构建目标变化。
+# Linux headless 用 CI 与安装指南中的 --workspace --exclude 显式选包。
 default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]

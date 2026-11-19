@@ -2,7 +2,7 @@
 //! Keep its legacy SSH quoting distinct from the settings argv-field grammar.
 
 use crate::daemon::protocol::ssh_option_takes_value;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 fn parse_ssh_option_words(input: &str) -> Result<Vec<String>, ()> {
     let mut words = Vec::new();
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn typed_connection_errors_keep_their_existing_categories() {
-        use crate::ui::i18n::{L10nKey, t, t_fmt};
+        use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
         for (input, expected) in [
             (

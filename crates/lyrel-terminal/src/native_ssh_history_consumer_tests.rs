@@ -29,7 +29,9 @@ fn history_pane(
         restore: None,
         allow_remote_clipboard_write: false,
         await_claim: false,
-    }.encode(&mut stream).unwrap();
+    }
+    .encode(&mut stream)
+    .unwrap();
     let pane = match DaemonMsg::read(&mut stream).unwrap() {
         DaemonMsg::Spawned { pane_id } => pane_id,
         other => panic!("real history PTY spawn failed: {other:?}"),
@@ -65,8 +67,12 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     });
     let host = fixture.connect_control();
     let path = host.join(&host.home(), ".bash_history");
-    assert!(!host.exists(&path), "refuse to overwrite even a fixture's pre-existing history");
-    host.write_file(&path, b"echo REMOTE_HOME_ONLY_185\n").unwrap();
+    assert!(
+        !host.exists(&path),
+        "refuse to overwrite even a fixture's pre-existing history"
+    );
+    host.write_file(&path, b"echo REMOTE_HOME_ONLY_185\n")
+        .unwrap();
     let _history = RemoteHistoryFile(host.clone(), path);
     std::fs::write(fixture.local_config_dir().join("history"), b"echo LOCAL_ONLY_185\n").unwrap();
     // The workbench's `HostLinks` table is shell-side; the terminal client
@@ -83,14 +89,29 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         cx.run_until_parked();
-        if direct.read_with(cx, |view, _| view.history.entries().iter().any(|entry| entry == "echo REMOTE_HOME_ONLY_185")) {
+        if direct.read_with(cx, |view, _| {
+            view.history
+                .entries()
+                .iter()
+                .any(|entry| entry == "echo REMOTE_HOME_ONLY_185")
+        }) {
             break;
         }
-        assert!(Instant::now() < deadline, "remote HOME history never reached the connected pane");
+        assert!(
+            Instant::now() < deadline,
+            "remote HOME history never reached the connected pane"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     direct.update(cx, |view, cx| {
-        assert!(!view.history.entries().iter().any(|entry| entry.contains("LOCAL_ONLY_185")), "local history leaked into native SSH");
+        assert!(
+            !view
+                .history
+                .entries()
+                .iter()
+                .any(|entry| entry.contains("LOCAL_ONLY_185")),
+            "local history leaked into native SSH"
+        );
         view.input.editor_mut().set("echo REMOTE_HOME_ONLY");
         view.handle_editor_key(&key("up"), false, cx);
         assert_eq!(view.input.editor().text(), "echo REMOTE_HOME_ONLY_185");
@@ -101,8 +122,11 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     // remote history scopes. Open a real login shell instead of remote cat.
     nested_shell.args.pop();
     let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-    let command = std::iter::once(&nested_shell.program).chain(nested_shell.args.iter())
-        .map(|arg| quote(arg)).collect::<Vec<_>>().join(" ");
+    let command = std::iter::once(&nested_shell.program)
+        .chain(nested_shell.args.iter())
+        .map(|arg| quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
     // A real user starts ssh from their existing shell. Making ssh itself
     // the pane's root shell suppresses the daemon's foreground-child detector.
     let nested = history_pane(&fixture, lyrel_core::daemon::protocol::ShellSpec {
@@ -115,9 +139,12 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
         if nested.read_with(cx, |view, _| view.remote_context().is_some()) {
             break;
         }
-        assert!(Instant::now() < deadline, "real inner SSH hop missing: {:?}; screen={}",
+        assert!(
+            Instant::now() < deadline,
+            "real inner SSH hop missing: {:?}; screen={}",
             host.pane_procs(nested.read_with(cx, |view, _| view.pane_id)),
-            nested.read_with(cx, |view, _| view.scrollback_text()));
+            nested.read_with(cx, |view, _| view.scrollback_text())
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     nested.update(cx, |view, cx| view.follow_history_scope(cx));
@@ -126,9 +153,21 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     cx.background_executor.run_until_parked();
     cx.run_until_parked();
     nested.update(cx, |view, cx| {
-        assert!(!view.history.entries().iter().any(|entry| entry.contains("REMOTE_HOME_ONLY_185") || entry.contains("LOCAL_ONLY_185")), "outer/local history leaked into the real inner hop");
+        assert!(
+            !view
+                .history
+                .entries()
+                .iter()
+                .any(|entry| entry.contains("REMOTE_HOME_ONLY_185")
+                    || entry.contains("LOCAL_ONLY_185")),
+            "outer/local history leaked into the real inner hop"
+        );
         view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "", "inner hop must not recall another Host's command");
+        assert_eq!(
+            view.input.editor().text(),
+            "",
+            "inner hop must not recall another Host's command"
+        );
     });
 }
 
@@ -153,8 +192,12 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     });
     let host = fixture.connect_control();
     let path = host.join(&host.home(), ".bash_history");
-    assert!(!host.exists(&path), "refuse to overwrite pre-existing fixture history");
-    host.write_file(&path, b"echo LYREL185_NATIVE_HISTORY_SEED\n").unwrap();
+    assert!(
+        !host.exists(&path),
+        "refuse to overwrite pre-existing fixture history"
+    );
+    host.write_file(&path, b"echo LYREL185_NATIVE_HISTORY_SEED\n")
+        .unwrap();
     let _history = RemoteHistoryFile(host, path);
     let endpoint = fixture.local_config_dir().join(if cfg!(windows) { "daemon.port" } else { "daemon.sock" });
     let mut stream = lyrel_core::daemon::transport::connect_endpoint_at(&endpoint).unwrap();
@@ -165,7 +208,9 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
         cwd: Some(fixture.remote_home().into()),
         size: lyrel_test_support::native_ssh::win_size(),
         spec: Box::new(spec),
-    }.encode(&mut stream).unwrap();
+    }
+    .encode(&mut stream)
+    .unwrap();
     let pane = match DaemonMsg::read(&mut stream).unwrap() {
         DaemonMsg::Spawned { pane_id } => pane_id,
         other => panic!("real native SSH shell-channel spawn failed: {other:?}"),
@@ -186,13 +231,23 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
         let connected = view.read_with(cx, |view, _| {
             assert!(view.host_id.is_local());
             let phase = view.terminal.ssh_phase();
-            assert!(!matches!(phase, Some(SshPhase::Failed { .. })), "native shell fixture failed: {phase:?}");
+            assert!(
+                !matches!(phase, Some(SshPhase::Failed { .. })),
+                "native shell fixture failed: {phase:?}"
+            );
             matches!(phase, Some(SshPhase::Connected))
-                && view.remote_context().is_some_and(|context| context.kind == RemoteKind::NativeSsh)
+                && view
+                    .remote_context()
+                    .is_some_and(|context| context.kind == RemoteKind::NativeSsh)
                 && view.input_active()
         });
-        if connected { break; }
-        assert!(Instant::now() < connected_by, "native SSH fixture never established a connected shell-channel pane with an active prompt editor");
+        if connected {
+            break;
+        }
+        assert!(
+            Instant::now() < connected_by,
+            "native SSH fixture never established a connected shell-channel pane with an active prompt editor"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     eprintln!("native SSH shell-channel connected; asserting SFTP history seed for pane {pane}");
@@ -200,17 +255,31 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     loop {
         cx.run_until_parked();
         let seeded = view.update(cx, |view, cx| {
-            assert!(view.host_id.is_local(), "the original native shell pane is not a remote-daemon workspace");
+            assert!(
+                view.host_id.is_local(),
+                "the original native shell pane is not a remote-daemon workspace"
+            );
             view.follow_history_scope(cx);
-            view.history.entries().iter().any(|entry| entry == "echo LYREL185_NATIVE_HISTORY_SEED")
+            view.history
+                .entries()
+                .iter()
+                .any(|entry| entry == "echo LYREL185_NATIVE_HISTORY_SEED")
         });
-        if seeded { break; }
-        assert!(Instant::now() < deadline, "connected native shell never seeded the far-end history through its own SFTP connection");
+        if seeded {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "connected native shell never seeded the far-end history through its own SFTP connection"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     view.update(cx, |view, cx| {
         view.input.editor_mut().set("echo LYREL185_NATIVE_HISTORY");
         view.handle_editor_key(&key("up"), false, cx);
-        assert_eq!(view.input.editor().text(), "echo LYREL185_NATIVE_HISTORY_SEED");
+        assert_eq!(
+            view.input.editor().text(),
+            "echo LYREL185_NATIVE_HISTORY_SEED"
+        );
     });
 }

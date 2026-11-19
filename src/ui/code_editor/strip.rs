@@ -92,11 +92,11 @@ mod gpui_tests {
     use super::super::nav::gpui_tests::open_rs;
     use super::super::{BufferKind, test_host};
     use super::*;
-    use crate::core::actions::{
+    use crate::ui::app::test_window::harness_with_tabs;
+    use lyrel_ui_base::actions::{
         FocusDocumentTabNavigation, FocusRightPanelNavigation, FocusTerminalTabNavigation,
     };
-    use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::host_ops::HostId;
+    use lyrel_ui_base::host_ops::HostId;
 
     fn settle(vcx: &mut VisualTestContext) {
         vcx.run_until_parked();
@@ -178,7 +178,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn the_strip_is_one_tab_stop_and_activation_leaves_the_keys_in_it(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/strip/a.rs");
         open_rs(&app, &mut vcx, "/strip/b.rs");
         open_rs(&app, &mut vcx, "/strip/c.rs");
@@ -251,7 +251,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn the_shared_strip_keeps_each_groups_cell_across_a_switch(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/strip/left.rs");
         app.update_in(&mut vcx, |app, window, cx| {
             assert!(app.editor_split(window, cx), "the editor splits");
@@ -300,7 +300,7 @@ mod gpui_tests {
         cx: &mut TestAppContext,
     ) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
             open_rs(&app, &mut vcx, &format!("/strip/{name}.rs"));
         }
@@ -374,12 +374,12 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn terminal_content_enters_the_document_strip_through_the_root_keymap(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for name in ["a", "b", "c"] {
             open_rs(&app, &mut vcx, &format!("/strip/{name}.rs"));
         }
         app.update_in(&mut vcx, |app, window, cx| {
-            app.set_document_layout(crate::core::config::DocumentLayout::Dock, cx);
+            app.set_document_layout(lyrel_core::core::config::DocumentLayout::Dock, cx);
             app.focus_active(window, cx);
         });
         settle(&mut vcx);
@@ -418,7 +418,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn editor_content_enters_sidebar_navigation_and_returns_to_the_editor(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/strip/editor.rs");
         settle(&mut vcx);
         assert!(content_has_keys(&app, &mut vcx));
@@ -442,7 +442,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn pointer_opened_hidden_document_list_keeps_content_focus(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
             open_rs(&app, &mut vcx, &format!("/strip/{name}.rs"));
         }
@@ -465,7 +465,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn closing_a_document_leaves_a_live_strip_cell(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/strip/a.rs");
         let b = open_rs(&app, &mut vcx, "/strip/b.rs");
         open_rs(&app, &mut vcx, "/strip/c.rs");
@@ -509,7 +509,7 @@ mod gpui_tests {
         cx: &mut TestAppContext,
     ) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/strip/clean.rs");
         let edited = open_rs(&app, &mut vcx, "/strip/edited.rs");
         settle(&mut vcx);
@@ -544,7 +544,7 @@ mod gpui_tests {
                 "a cancelled close keeps the document"
             );
         });
-        vcx.simulate_prompt_answer(crate::ui::i18n::t(L10nKey::Cancel));
+        vcx.simulate_prompt_answer(lyrel_ui_base::i18n::t(L10nKey::Cancel));
         settle(&mut vcx);
         assert!(dirty(&app, &mut vcx, edited));
     }
@@ -557,7 +557,7 @@ mod gpui_tests {
         let host = test_host::FileHost::new(HostId(737));
         let path = dir.path().join("saved.rs");
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             let tab = app.tabs[0].id();
             let id = app.editor.update(cx, |editor, cx| {

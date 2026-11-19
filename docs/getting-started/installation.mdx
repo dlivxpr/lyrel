@@ -142,7 +142,7 @@ GUI 统一通过正式 `gpui-kit =0.10.0` 的官方 `gpui-fast` feature 选择 G
 
 `0.9.0` 将公开主题记录标为 `#[non_exhaustive]`：外部调用从 `Default`／现有构造器创建，再逐字段赋值，不能使用含 `..Default::default()` 的结构体字面量。`Window::text_system()` 现在返回 `&Rc<WindowTextSystem>`，窗口布局缓存不再可共享给并发回调；后台任务继续携带 `Arc<TextSystem>`，在任务内创建布局系统。Merman 的测宽回调要求 `Send + Sync`，因此该任务独有的布局缓存通过互斥访问保留复用，不捕获窗口的 `Rc`。`Animation` 使用 executor 时钟，测试动画推进使用 `advance_clock`，不靠墙钟休眠。保留每窗一个 `Root`、主题字段／tokens 与 Base 同步，以及 macOS 平台完整委派；维护自定义 GPUI 代码时核对[官方 `v0.9.0` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.0)。本轮原生工作流、HTTP 与性能结果须单独记录；macOS 实机验收由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪，先前轮次的未执行决定不适用于本次升级。
 
-桌面应用代码由共享 `lyrel` library 提供，`lyrel-app` 只调用 `run()`。Windows／macOS 默认成员测试使用 `cargo test --locked`（Windows 使用 wrapper），不启用非默认 `native-markdown-tests`。只检查工作台 library 使用 `cargo test --locked -p lyrel --lib`；独立 updater 使用 `cargo test --locked -p lyrel-updater --lib`。Markdown editor 全部 unit／结构公式／foundation 行为使用 `cargo test --locked -p lyrel-markdown-editor`，不能只跑 `--test foundation`。旧二进制零用例结果不是行为证据。
+`lyrel-app` 只调用根包的 `run()`；窗口组合、终端与编辑器分别由 `lyrel`、`lyrel-terminal`、`lyrel-workbench-editor` 提供。Windows／macOS 默认成员测试使用 `cargo test --locked`（Windows 使用 wrapper），不启用非默认 `native-markdown-tests`。只检查一个桌面模块时使用 `cargo test --locked -p <包名> --lib`；Markdown editor 全部 unit／结构公式／foundation 行为使用 `cargo test --locked -p lyrel-markdown-editor`，不能只跑 `--test foundation`。旧二进制零用例结果不是行为证据。
 
 单独验证轻量文本 codec 用 `cargo test --locked -p lyrel-document --no-default-features`；验证完整无 GUI 的格式引擎用 `cargo test --locked -p lyrel-document --all-features`。Markdown editor 单包构建不启用 `formats`。
 
@@ -165,8 +165,8 @@ Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单�
 
 ### 本地测试与 CI 分层
 
-`.cargo/config.toml` 提供 `t-check`、`t-core`、`t-lib`、`t-editor`、`t-cli`、
-`t-native-md` 和 `t-native-term`。例如 macOS 使用 `cargo t-lib`，Windows 使用
+`.cargo/config.toml` 提供 `t-check`、`t-protocol`、`t-core`、`t-lib`、`t-editor`、`t-cli`、
+`t-native-md` 和 `t-native-term`。`t-lib` 包含窗口、UI base、terminal 与 workbench editor 的 library suites；`t-editor` 单独测试原生 Markdown editor。macOS 使用 `cargo t-lib`，Windows 使用
 `pwsh scripts/cargo-windows.ps1 t-lib`；附加的 Cargo 参数与 `--` 后的测试筛选照常传递。
 桌面普通／native 测试统一启用 `native-markdown-tests,test-support`，其中 `test-support`
 将 Tokio paused clock 与 Host 契约测试留在测试图中，不进入默认产品。GUI-free 单包测试
@@ -197,7 +197,7 @@ CI 的 sccache 关闭 incremental 以缓存可复用 Rust 编译；本地仍默�
 完整桌面测试前可用 `cargo build --locked --workspace --features native-markdown-tests,test-support --bin lyrel-graphics-fixture`
 预构建（Windows 同样使用 wrapper）。普通单包测试也会在缺失／过期时有锁地按需构建，
 不会回退到 GUI libtest；预构建产物可通过 `LYREL_GRAPHICS_FIXTURE_BIN` 指定绝对路径，
-仍须与当前 fixture／core 源码身份一致。三个显式 SSH 集成 target 保持原名，普通 core／server
+仍须与当前 fixture／core／protocol 源码身份一致。三个显式 SSH 集成 target 保持原名，普通 core／server
 集成测试分别归 `core_integration`／`server_integration`；`--exact` 名称增加原文件 stem 的模块前缀。
 Windows 的真实 ConPTY 键盘回归需要 Git Bash；安装不在产品检测器的标准位置时，
 只对本次测试进程设置 `LYREL_TEST_GIT_BASH` 为真实 `bash.exe` 路径。指定路径不存在即失败，
@@ -234,7 +234,7 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
 首轮 CPU 仅建立基线；请求共享每秒最多一次的快照，空闲超过十秒后重建基线。API 依据见
 [sysinfo 0.40.1 `System`](https://docs.rs/sysinfo/0.40.1/sysinfo/struct.System.html)。
 
-手动执行 `bash .github/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
+手动执行 `bash .github/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器扫描根包与 UI base、terminal、workbench editor，仅用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
 仅由 `#[cfg(test)]` 或显式测试专用 `native-markdown-tests` feature 引用的外部 `mod` 与字面量 `include!("...")` 文件一并排除；同一文件只要也被生产代码引用，仍执行 Host 检查。其他 feature／平台条件保持保守判断，未引用文件不因文件名含 `test` 而豁免。
 
 <Tabs>
@@ -274,15 +274,17 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
     而不会清理或修复该快捷方式——失效入口需按[卸载说明](#uninstalling)手动移除。
   </Tab>
   <Tab title="Linux（server／CLI）">
-    只构建无 GUI 的成员，包含 core、server、CLI、文档引擎、insights 的 skills／统计／GitHub 查询和共享测试夹具，不需要 X11／Wayland／桌面字体开发库。
+    只构建无 GUI 的成员，包含协议、core、server、CLI、文档引擎、insights 的 skills／统计／GitHub 查询和共享测试夹具，不需要 X11／Wayland／桌面字体开发库。
     以下完整 feature 验证包含既有 Unix GSSAPI，需要 MIT Kerberos 开发包；GSSAPI 仍按平台与 feature 启用，不表示 Windows 新增该认证能力。
 
     完整测试还需要 **Linux 原生 Node.js 22.19+，且实际支持内置 TypeScript type stripping**。先执行 `node -p 'process.execPath'`、`node --version` 与 `node -p 'process.features.typescript'`；最后一项应为 `strip`（或显式启用转换时的 `transform`）。仅版本号达标不够：本轮 Ubuntu 的 `/usr/bin/node` 虽为 `22.22.1`，该能力仍为 `false`，Pi 桥的真实 `.ts` 导入失败。改用校验过官方 SHA-256 的同版本 Linux 原生发行包、仅在验证进程的 `PATH` 中选择它后，完整范围通过；不跳过 Pi 测试、不使用 Windows `node.exe`、不增加产品转译 fallback。参阅 [Node.js type stripping](https://nodejs.org/docs/latest-v22.x/api/typescript.html#type-stripping)。
 
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
-    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --exclude lyrel-ui-base --all-features
-    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --exclude lyrel-ui-base --all-features
+    headless=(--workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater \
+      --exclude lyrel-ui-base --exclude lyrel-terminal --exclude lyrel-workbench-editor --all-features)
+    LIBGSSAPI_IMPL=mit cargo build --release --locked "${headless[@]}"
+    LIBGSSAPI_IMPL=mit cargo test --locked "${headless[@]}"
     ```
 
     不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。

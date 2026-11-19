@@ -412,10 +412,7 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
         b"\x1b_Gi=22,p=2;OK\x1b\\".as_slice(),
     ] {
         assert!(
-            detached.contains(&format!(
-                "KITTY_REPLY 202 {}",
-                hex(reply)
-            )),
+            detached.contains(&format!("KITTY_REPLY 202 {}", hex(reply))),
             "detached uploads must be admitted before they can be claimed as restoration: {detached}"
         );
     }
@@ -445,10 +442,7 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
         b"\x1b_Gi=23,p=3;OK\x1b\\".as_slice(),
     ] {
         assert!(
-            admitted.contains(&format!(
-                "KITTY_REPLY 203 {}",
-                hex(reply)
-            )),
+            admitted.contains(&format!("KITTY_REPLY 203 {}", hex(reply))),
             "concurrent replay uploads must be accepted with their own image and placement identities: {admitted}"
         );
     }
@@ -1265,9 +1259,8 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
         .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
         .unwrap();
     view.read_with(cx, |view, _| {
-        view.terminal.write(
-            format!("SEND {serial} 1 {} 0\n", hex(corrupt)).into_bytes(),
-        )
+        view.terminal
+            .write(format!("SEND {serial} 1 {} 0\n", hex(corrupt)).into_bytes())
     });
     graphics_recovery_wait(cx, "corrupt PNG edit response", |cx| {
         view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};"))
@@ -1306,10 +1299,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
             "\x1b_Ga=f,i=142,{controls},s=1,v=1;{}\x1b\\",
             encode(&[1, 2, 3, 255])
         );
-        let request = format!(
-            "SEND {serial} 1 {} 0\n",
-            hex(request.as_bytes())
-        );
+        let request = format!("SEND {serial} 1 {} 0\n", hex(request.as_bytes()));
         view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
         let marker = format!("KITTY_DONE_{serial};");
         graphics_recovery_wait(cx, "invalid frame response", |cx| {
@@ -1322,10 +1312,7 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
             b"\x1b_Gi=142;EINVAL:"
         };
         assert!(
-            text.contains(&format!(
-                "KITTY_REPLY {serial} {}",
-                hex(status)
-            )),
+            text.contains(&format!("KITTY_REPLY {serial} {}", hex(status))),
             "serial={serial}, controls={controls}; PTY output={text:?}"
         );
         graphics_recovery_pixels(&view, cx, 142, &edited);
@@ -1464,20 +1451,14 @@ fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(
             .unwrap();
         let request = format!("\x1b_Ga=c,i=143,p=7,q=1,{keys}\x1b\\");
         view.read_with(cx, |view, _| {
-            view.terminal.write(
-                format!(
-                    "SEND {serial} 1 {} 0\n",
-                    hex(request.as_bytes())
-                )
-                .into_bytes(),
-            )
+            view.terminal
+                .write(format!("SEND {serial} 1 {} 0\n", hex(request.as_bytes())).into_bytes())
         });
         graphics_recovery_wait(cx, "compose refusal", |cx| {
             view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};"))
         });
         let (text, _) = graphics_recovery_collect(observer, serial);
-        let expected =
-            hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
+        let expected = hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
         assert!(
             text.contains(&format!("KITTY_REPLY {serial} {expected}")),
             "{text}"

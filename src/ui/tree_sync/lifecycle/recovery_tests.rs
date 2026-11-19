@@ -11,9 +11,9 @@ fn a_parked_folder_outlives_the_pull_that_has_to_be_retried(cx: &mut gpui_kit::T
     cx.update(|cx| {
         let ws = WorkspaceId::new();
         let path = std::path::PathBuf::from("/tmp/from-explorer");
-        crate::core::session::WorkspaceStore::install_for_test(
+        lyrel_ui_base::session::WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews::default(),
+            lyrel_ui_base::session::WindowViews::default(),
         );
         crate::ui::windows::WindowRegistry::init(cx);
 
@@ -118,7 +118,7 @@ fn preemption_drops_the_mirror_the_queue_and_the_informed_licence(
 /// cover, and it touches neither the store nor the registry.
 #[gpui_kit::test]
 fn a_deletion_nothing_has_open_forgets_the_workspace_here_too(cx: &mut gpui_kit::TestAppContext) {
-    use crate::core::session::{WindowView, WindowViews};
+    use lyrel_ui_base::session::{WindowView, WindowViews};
 
     cx.update(|cx| {
         // Removing a workspace saves the views, and a test has no business
@@ -456,11 +456,11 @@ fn the_next_sync_leaves_a_tab_the_rebuild_could_not_put_up_on_the_machine(
     let (app, mut vcx, _pane_stream) = crate::ui::app::test_window::harness_with_pane(cx);
     let (put_up, failed) = (TabId::new(), TabId::new());
     app.update_in(&mut vcx, |app, _, cx| {
-        let view = crate::core::session::WindowView::default();
+        let view = lyrel_ui_base::session::WindowView::default();
         let ws = view.id;
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![view],
                 active: Some(ws),
             },
@@ -551,12 +551,12 @@ fn arriving_at_a_workspace_does_not_prune_what_is_already_in_it(cx: &mut gpui_ki
     let theirs = (TabId::new(), TabId::new());
     app.update_in(&mut vcx, |app, window, cx| {
         crate::ui::windows::WindowRegistry::init(cx);
-        let here = crate::core::session::WindowView::default();
-        let there = crate::core::session::WindowView::default();
+        let here = lyrel_ui_base::session::WindowView::default();
+        let there = lyrel_ui_base::session::WindowView::default();
         let (here_id, there_id) = (here.id, there.id);
         WorkspaceStore::install_for_test(
             cx,
-            crate::core::session::WindowViews {
+            lyrel_ui_base::session::WindowViews {
                 views: vec![here, there],
                 active: Some(here_id),
             },

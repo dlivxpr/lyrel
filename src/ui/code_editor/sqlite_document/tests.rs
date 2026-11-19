@@ -171,7 +171,7 @@ fn people_database(dir: &Path, name: &str, marker: &str, rows: usize) -> PathBuf
 
 #[gpui_kit::test]
 fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "people.sqlite", "Ada", 501);
     let before = std::fs::read(&path).expect("source bytes");
@@ -280,7 +280,7 @@ fn a_sqlite_database_opens_read_only_with_schema_and_paged_rows(tcx: &mut TestAp
 
 #[gpui_kit::test]
 fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_path = people_database(dir.path(), "data.sqlite", "local", 2);
     let local_bytes = std::fs::read(&local_path).expect("local source bytes");
@@ -351,7 +351,7 @@ fn the_mapped_host_shows_its_own_database(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -397,7 +397,7 @@ fn failures_and_empty_schemas_are_visible_documents(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "split.sqlite", "Ada", 501);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -561,7 +561,7 @@ fn split_groups_keep_their_own_focus_and_table_state(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn filtering_and_sorting_requery_the_same_view_in_place(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = people_database(dir.path(), "filter.sqlite", "Ada", 5);
     let before = std::fs::read(&path).expect("source bytes");
@@ -707,7 +707,7 @@ fn big_value_database(dir: &Path) -> PathBuf {
 
 #[gpui_kit::test]
 fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = big_value_database(dir.path());
     let before = std::fs::read(&path).expect("source bytes");
@@ -965,7 +965,7 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
 
 #[gpui_kit::test]
 fn a_wal_writer_shares_one_snapshot_until_the_view_refreshes(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = dir.path().join("wal.sqlite");
     let writer = rusqlite::Connection::open(&path).expect("the writer opens");

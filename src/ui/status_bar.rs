@@ -6,9 +6,9 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems, svg};
 
-use crate::core::actions::{OpenSettings, ShowRightPanelInfo, ToggleSwitcher};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t};
+use lyrel_ui_base::actions::{OpenSettings, ShowRightPanelInfo, ToggleSwitcher};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 pub(crate) struct Clock {
     text: SharedString,
@@ -126,7 +126,7 @@ impl LyrelApp {
                 if id.is_local() {
                     return t(L10nKey::RemoteThisComputer).to_string();
                 }
-                crate::core::session::WorkspaceStore::all(cx)
+                lyrel_ui_base::session::WorkspaceStore::all(cx)
                     .views
                     .iter()
                     .filter_map(|workspace| workspace.host.as_ref())
@@ -138,7 +138,7 @@ impl LyrelApp {
                             .map(|snapshot| snapshot.target.to_string())
                     })
                     .unwrap_or_else(|| {
-                        crate::ui::i18n::t_fmt(
+                        lyrel_ui_base::i18n::t_fmt(
                             L10nKey::StatusRemoteHost,
                             &[("id", &format!("{:016x}", id.0))],
                         )
@@ -148,7 +148,7 @@ impl LyrelApp {
         let path = if document {
             location.map(|(host, path)| {
                 if host.is_local() {
-                    crate::ui::path_display::native_separators(path)
+                    lyrel_ui_base::path_display::native_separators(path)
                         .display()
                         .to_string()
                 } else {
@@ -298,11 +298,11 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
-    use crate::core::config::Config;
     use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+    use lyrel_ui_base::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
+    use lyrel_ui_base::config::Config;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -334,7 +334,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn long_host_and_cjk_path_yield_to_global_controls_at_narrow_zoom(cx: &mut TestAppContext) {
-        use crate::core::session::{
+        use lyrel_ui_base::session::{
             RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
         };
         let (app, mut vcx, _stream) = harness_with_pane(cx);

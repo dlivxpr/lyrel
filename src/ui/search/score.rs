@@ -6,7 +6,7 @@
 //! subtitles, aliases and the frecency nudge — on top of it.
 
 use super::command::Item;
-pub(crate) use lyrel_ui_base::fuzzy::fuzzy_score;
+use lyrel_ui_base::fuzzy::fuzzy_score;
 
 /// Whether every whitespace-separated word of `query` occurs in `text`,
 /// ignoring case.
@@ -61,8 +61,8 @@ pub(crate) fn frecency_bonus(used: f64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::i18n::L10nKey;
     use crate::ui::search::CommandKind;
+    use lyrel_ui_base::i18n::L10nKey;
 
     #[test]
     fn frecency_nudges_without_overruling_the_match() {
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn a_translated_command_is_still_found_by_its_english_name() {
-        crate::ui::i18n::set_locale("zh-CN");
+        lyrel_ui_base::i18n::set_locale("zh-CN");
         let cmd = Item::localized(L10nKey::CmdChangeTheme, CommandKind::OpenThemePicker);
         assert!(
             !cmd.title.to_lowercase().contains("theme"),
@@ -125,7 +125,7 @@ mod tests {
         // The displayed label still works, and still wins: the same query
         // against the locale that shows it scores higher.
         let zh = item_score("更改主题", &cmd).expect("the shown label matches");
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let en = Item::localized(L10nKey::CmdChangeTheme, CommandKind::OpenThemePicker);
         assert!(zh > 0 && en.title.contains("Theme"));
         assert!(

@@ -22,13 +22,14 @@ use gpui_kit::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rem
 use std::cell::Cell as StdCell;
 use std::rc::Rc;
 
-use crate::core::config::{
-    Config, DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_STOPS, DocumentLayout,
-};
 use crate::ui::app::{DOCUMENT_MIN_W, LyrelApp, TERMINAL_MIN_W, document_column_px};
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
 use crate::ui::tab::OverlayTop;
+use lyrel_core::core::config::{
+    DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_STOPS, DocumentLayout,
+};
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 /// Which wrapper a document surface is being asked to paint itself in.
 ///
@@ -190,7 +191,7 @@ pub(crate) fn switch_track(
     cells: Vec<gpui_kit::AnyElement>,
     cx: &gpui_kit::App,
 ) -> gpui_kit::AnyElement {
-    let sf = cx.global::<crate::ui::presets::Surfaces>().window;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
     h_flex()
         .id(id)
         .when(cfg!(test), |track| track.debug_selector(move || id.into()))
@@ -220,7 +221,7 @@ where
     H: Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
 {
     let theme = cx.theme();
-    let sf = cx.global::<crate::ui::presets::Surfaces>().window;
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
     let dark = theme.mode.is_dark();
     div()
         .id(id)
@@ -279,7 +280,11 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .map(|tab| self.tab_label(tab, self.tabs.active_index(), Some(window), cx))
             .unwrap_or_default();
-        let badge_bg = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.selected);
+        let badge_bg = gpui_kit::rgb(
+            cx.global::<lyrel_ui_base::presets::Surfaces>()
+                .window
+                .selected,
+        );
         Some(
             h_flex()
                 .flex_none()
@@ -679,11 +684,11 @@ pub(crate) fn next_ratio_stop(current: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{dragged_ratio, next_ratio_stop};
-    use crate::core::config::{
+    use crate::ui::app::{DOCUMENT_MIN_W, TERMINAL_MIN_W, document_column_px};
+    use lyrel_core::core::config::{
         DOCUMENT_RATIO_HALF, DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_THIRD,
         DOCUMENT_RATIO_TWO_THIRDS,
     };
-    use crate::ui::app::{DOCUMENT_MIN_W, TERMINAL_MIN_W, document_column_px};
 
     /// Nothing the divider can write is something the next launch moves.
     /// `Config::sanitize` clamps `document_ratio` into a band, so a drag that
@@ -794,12 +799,12 @@ mod tests {
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
-    use crate::core::config::{DOCUMENT_RATIO_TWO_THIRDS, DocumentLayout};
     use crate::ui::app::test_window;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext, px, size};
+    use lyrel_core::core::config::{DOCUMENT_RATIO_TWO_THIRDS, DocumentLayout};
 
     /// One quiet tab. The pane is a *connecting* one so the harness needs no
     /// PTY and runs on every platform.
@@ -1016,11 +1021,11 @@ mod gpui_tests {
     /// the config here offered "Fill" to a tab that was already filling.
     #[gpui_kit::test]
     fn the_palette_offers_the_active_tabs_layout_not_the_configs(cx: &mut TestAppContext) {
-        use crate::ui::i18n::L10nKey;
         use crate::ui::search::CommandKind;
+        use lyrel_ui_base::i18n::L10nKey;
 
         let (app, mut vcx) = window_with(cx, 1440., 2);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let row = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
             app.update_in(vcx, |app, window, cx| {
                 app.search_input(window, cx)

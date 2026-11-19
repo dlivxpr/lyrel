@@ -8,9 +8,9 @@ use gpui_kit::{
 };
 use gpui_kit::{Axis, Entity, InteractiveElement as _, prelude::*, px};
 
-use crate::terminal::view::TerminalView;
-use crate::ui::pane_dim::{INACTIVE_DIM, LIFTED_DIM};
 use crate::ui::pending_pane::PendingPane;
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::pane_dim::{INACTIVE_DIM, LIFTED_DIM};
 
 const MIN_RATIO: f32 = 0.1;
 const MAX_RATIO: f32 = 0.9;

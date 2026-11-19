@@ -43,8 +43,8 @@ use gpui_kit::{
     Pixels, Point, Render, Styled, Window, div, point, px, rems, size,
 };
 
-use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Dir, Pane};
+use lyrel_ui_base::i18n::{L10nKey, t};
 
 /// How much of a pane, in from a side that is also the tab's own edge, still
 /// means "beside everything else" rather than "split this pane".

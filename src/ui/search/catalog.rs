@@ -6,11 +6,11 @@ use super::command::{Avatar, ChromeState, CommandGroup, CommandKind, Item};
 use super::history::SessionHistory;
 use super::{Catalog, FileList};
 use crate::core::cli_agent::CLIAgent;
-use crate::core::config::Config;
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::core::shells::ShellInventory;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::switcher::TabRow;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 
 pub(crate) struct ActionCatalog {
     chrome: ChromeState,
@@ -199,7 +199,7 @@ impl<'a> TerminalCatalog<'a> {
         // by typing one word. Listed in the order that menu uses.
         let default_shell = self.shells.default_name.clone();
         let usage = &cx.global::<Config>().shell_frecency;
-        let now = crate::core::config::unix_now();
+        let now = lyrel_core::core::config::unix_now();
         for s in crate::ui::tab_strip::shells_by_frecency(
             &self.shells.shells,
             &default_shell,
@@ -242,8 +242,8 @@ pub(crate) struct SearchCatalog {
     terminals: Vec<Item>,
     history: SessionHistory,
     query: Option<(
-        crate::ui::host_ops::SharedHost,
-        Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>>,
+        lyrel_ui_base::host_ops::SharedHost,
+        Vec<gpui_kit::Entity<lyrel_terminal::view::TerminalView>>,
         Vec<CLIAgent>,
     )>,
     files: FileList,
@@ -267,8 +267,8 @@ impl SearchCatalog {
 
     pub(crate) fn query_sessions(
         mut self,
-        host: Option<crate::ui::host_ops::SharedHost>,
-        panes: Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>>,
+        host: Option<lyrel_ui_base::host_ops::SharedHost>,
+        panes: Vec<gpui_kit::Entity<lyrel_terminal::view::TerminalView>>,
         agents: Vec<CLIAgent>,
     ) -> Self {
         self.query = host.map(|host| (host, panes, agents));

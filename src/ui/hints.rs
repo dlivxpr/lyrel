@@ -77,10 +77,10 @@ mod tests {
 
 #[cfg(test)]
 mod gpui_tests {
-    use crate::core::config::Config;
-    use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
     use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, WindowHandle};
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::Session;
 
     fn harness(cx: &mut TestAppContext) -> (WindowHandle<LyrelApp>, VisualTestContext) {
         cx.executor().allow_parking();

@@ -11,9 +11,9 @@
 use std::path::Path;
 
 use super::*;
-use crate::ui::host_ops::{HostOps, SharedHost};
 use gpui_kit::EntityId;
 use gpui_kit::component::input::Position;
+use lyrel_ui_base::host_ops::{HostOps, SharedHost};
 use lyrel_workbench_editor::code_editor::markdown::links;
 use lyrel_workbench_editor::code_editor::{BufferId, GroupId};
 

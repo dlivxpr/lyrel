@@ -85,8 +85,7 @@ fn a_late_spawn_lands_in_its_own_slot_and_workspace(cx: &mut TestAppContext) {
         let waiting = pending(app, window, cx);
         app.tabs.select(0);
         app.focus_active(window, cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(91, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(91, Some(app.workspace));
         (waiting, original, (app.workspace, parts), daemon)
     });
     deliver(&waiting, Ok(owner.1), &mut vcx);
@@ -170,8 +169,7 @@ fn a_closed_or_replaced_slot_cannot_claim_a_late_success(cx: &mut TestAppContext
         app.tabs.remove(1);
         app.tabs.select(0);
         app.focus_active(window, cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(92, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(92, Some(app.workspace));
         (waiting, original, parts, daemon)
     });
     deliver(&waiting, Ok(parts), &mut vcx);
@@ -187,8 +185,7 @@ fn a_workspace_change_rejects_the_original_slots_late_success(cx: &mut TestAppCo
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     let (waiting, parts, _daemon) = app.update_in(&mut vcx, |app, window, cx| {
         let waiting = pending(app, window, cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(93, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(93, Some(app.workspace));
         app.workspace = WorkspaceId::new();
         (waiting, parts, daemon)
     });
@@ -212,11 +209,11 @@ fn a_replacement_terminal_is_not_overwritten_by_the_previous_requests_result(
         app.update_in(&mut vcx, |app, window, cx| {
             let waiting = pending(app, window, cx);
             let (replacement, replacement_daemon) =
-                crate::terminal::view::quiet_test_pane(94, window, cx);
+                lyrel_terminal::view::quiet_test_pane(94, window, cx);
             app.tabs
                 .replace_leaf(waiting.entity_id(), PaneSlot::Ready(replacement.clone()));
             let (parts, daemon) =
-                crate::terminal::view::quiet_test_shell_parts(95, Some(app.workspace));
+                lyrel_terminal::view::quiet_test_shell_parts(95, Some(app.workspace));
             (waiting, replacement, parts, replacement_daemon, daemon)
         });
     deliver(&waiting, Ok(parts), &mut vcx);
@@ -246,8 +243,7 @@ fn a_focused_split_hands_focus_to_its_landed_terminal(cx: &mut TestAppContext) {
             PaneSlot::Connecting(waiting.clone()),
         ));
         window.focus(&waiting.read(cx).focus_handle(cx), cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(96, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(96, Some(app.workspace));
         (waiting, original, parts, daemon)
     });
     deliver(&waiting, Ok(parts), &mut vcx);
@@ -274,11 +270,10 @@ fn a_late_spawn_keeps_the_open_searchs_focus(cx: &mut TestAppContext) {
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     let (waiting, parts, _daemon) = app.update_in(&mut vcx, |app, window, cx| {
         let waiting = pending(app, window, cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
         (waiting, parts, daemon)
     });
-    vcx.dispatch_action(crate::core::actions::TogglePalette);
+    vcx.dispatch_action(lyrel_ui_base::actions::TogglePalette);
     vcx.run_until_parked();
     let search_focus = vcx.update(|window, cx| {
         assert!(app.read(cx).search.is_open());
@@ -346,8 +341,8 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
     );
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
-        let cfg = cx.global_mut::<crate::core::config::Config>();
-        cfg.shell = Some(crate::core::config::ShellConfig {
+        let cfg = cx.global_mut::<lyrel_ui_base::config::Config>();
+        cfg.shell = Some(lyrel_core::core::config::ShellConfig {
             program: shell.into(),
             args: Vec::new(),
         });
@@ -367,8 +362,7 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
                 cx,
             );
         }
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
         (waiting, parts, daemon)
     });
     deliver(&waiting, Ok(parts), &mut vcx);
@@ -473,16 +467,15 @@ fn a_prepared_hermes_command_is_typed_verbatim_and_keeps_its_marker(cx: &mut Tes
 
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
-        let cfg = cx.global_mut::<crate::core::config::Config>();
-        cfg.shell = Some(crate::core::config::ShellConfig {
+        let cfg = cx.global_mut::<lyrel_ui_base::config::Config>();
+        cfg.shell = Some(lyrel_core::core::config::ShellConfig {
             program: shell.into(),
             args: Vec::new(),
         });
         let waiting = pending(app, window, cx);
         let slot = PaneSlot::Connecting(waiting.clone());
         crate::ui::agent_launch::run_prepared_when_ready(&slot, command.clone(), cx);
-        let (parts, daemon) =
-            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        let (parts, daemon) = lyrel_terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
         (waiting, parts, daemon)
     });
     deliver(&waiting, Ok(parts), &mut vcx);
@@ -553,8 +546,8 @@ fn a_prepared_hermes_command_is_typed_verbatim_and_keeps_its_marker(cx: &mut Tes
 fn reduced_motion_keeps_connecting_legible_without_animation_frames(cx: &mut TestAppContext) {
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     vcx.update(|_, cx| {
-        cx.global_mut::<crate::core::config::Config>()
-            .motion_preference = crate::core::config::MotionPreference::Reduce;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .motion_preference = lyrel_core::core::config::MotionPreference::Reduce;
         crate::ui::motion::apply(cx);
     });
     let waiting = app.update_in(&mut vcx, |app, window, cx| pending(app, window, cx));
@@ -584,8 +577,8 @@ fn reduced_motion_keeps_connecting_legible_without_animation_frames(cx: &mut Tes
     });
 
     vcx.update(|_, cx| {
-        cx.global_mut::<crate::core::config::Config>()
-            .motion_preference = crate::core::config::MotionPreference::Allow;
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .motion_preference = lyrel_core::core::config::MotionPreference::Allow;
         crate::ui::motion::apply(cx);
     });
     vcx.run_until_parked();

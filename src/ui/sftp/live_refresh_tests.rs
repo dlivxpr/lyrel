@@ -1,9 +1,9 @@
 //! Real native SSH/SFTP consumer coverage; no listing or route substitution.
 use super::*;
-use crate::core::config::RightPanelTab;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, RemoteContext, RemoteKind, SshPhase};
 use crate::ui::app::test_window::harness_with_pane;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+use lyrel_core::core::config::RightPanelTab;
 use lyrel_core::host::Host as _;
 
 use crate::native_ssh_graphics_fixture as native_fixture;
@@ -84,7 +84,7 @@ fn visible_sftp_polling_observes_external_create_rename_and_delete(cx: &mut Test
         std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit lyrel-server required"),
     );
     let fixture = native_fixture::NativeSshFixture::start(&binary);
-    crate::core::config::set_config_dir(fixture.local_config_dir());
+    lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
     let host = fixture.connect_control();
     // Registers the unique remote root with the fixture's existing cleanup.
     fixture.install_sender(&host);

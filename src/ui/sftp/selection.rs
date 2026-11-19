@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::host_ops::HostOps;
+use lyrel_ui_base::host_ops::HostOps;
 
 pub(super) fn primary(modifiers: gpui_kit::Modifiers) -> bool {
     if cfg!(target_os = "macos") {

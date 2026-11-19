@@ -121,7 +121,7 @@ fn secondary(chord: &str) -> String {
 
 #[gpui_kit::test]
 fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "reading.pdf", &bytes);
@@ -195,7 +195,7 @@ fn a_pdf_opens_as_a_read_only_document_with_page_identity(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn page_navigation_and_zoom_reframe_the_page_window(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -257,7 +257,7 @@ fn page_navigation_and_zoom_reframe_the_page_window(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_page_window_evicts_retired_bitmaps(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -292,7 +292,7 @@ fn the_page_window_evicts_retired_bitmaps(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "reading.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -328,7 +328,7 @@ fn a_stale_page_result_cannot_replace_a_replaced_document(tcx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
@@ -366,7 +366,7 @@ fn a_late_password_result_cannot_resurrect_reloaded_content(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::encrypted_reading_document();
     let path = fixture(dir.path(), "locked.pdf", &bytes);
@@ -430,7 +430,7 @@ fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -533,7 +533,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
 
 #[gpui_kit::test]
 fn malformed_and_oversized_pdfs_fail_visibly(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
@@ -568,7 +568,7 @@ fn malformed_and_oversized_pdfs_fail_visibly(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = fixtures::reading_document();
     let path = fixture(dir.path(), "read-only.pdf", &before);
@@ -601,7 +601,7 @@ fn text_only_commands_leave_a_pdf_alone(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let local_bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "doc.pdf", &local_bytes);
@@ -689,7 +689,7 @@ fn the_owning_host_decides_which_pdf_bytes_are_shown(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "split.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -735,7 +735,7 @@ fn split_groups_keep_their_own_page_and_zoom(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "watched.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -762,7 +762,7 @@ fn an_external_rewrite_replaces_the_pdf(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "late.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 2);
@@ -807,7 +807,7 @@ fn a_pdf_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(tcx: &mut 
 
 #[gpui_kit::test]
 fn a_pdf_opens_through_the_owning_hosts_versioned_read(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "versioned.pdf", &bytes);
@@ -845,7 +845,7 @@ fn find_count(cx: &mut VisualTestContext) -> String {
 
 #[gpui_kit::test]
 fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "outline.pdf", &bytes);
@@ -908,7 +908,7 @@ fn the_outline_navigates_named_destinations_by_click_and_keyboard(tcx: &mut Test
 
 #[gpui_kit::test]
 fn page_link_annotations_jump_to_their_destination(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "links.pdf", &fixtures::links_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -935,7 +935,7 @@ fn page_link_annotations_jump_to_their_destination(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::links_document();
     let path = fixture(dir.path(), "rotated.pdf", &bytes);
@@ -982,7 +982,7 @@ fn a_rotated_page_selects_and_copies_its_decoded_text(tcx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "find.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1047,7 +1047,7 @@ fn the_find_bar_counts_matches_and_steps_with_keys(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::reading_document();
     let path = fixture(dir.path(), "unicode-find.pdf", &bytes);
@@ -1139,7 +1139,7 @@ fn unicode_search_finds_text_on_the_last_page_and_reanchors_after_zoom(tcx: &mut
 
 #[gpui_kit::test]
 fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "cjk.pdf", &fixtures::unicode_text_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1196,7 +1196,7 @@ fn cjk_search_and_selection_copy_join_glyph_runs(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_ligature_glyph_copies_as_its_full_unicode_text(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::ligature_text_document();
     let path = fixture(dir.path(), "ligature.pdf", &bytes);
@@ -1239,7 +1239,7 @@ fn a_ligature_glyph_copies_as_its_full_unicode_text(tcx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_scan_only_pdf_says_so_instead_of_pretending_matches(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = fixtures::scan_only_document();
     let path = fixture(dir.path(), "scan.pdf", &bytes);
@@ -1266,7 +1266,7 @@ fn a_scan_only_pdf_says_so_instead_of_pretending_matches(tcx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "stale.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -1306,7 +1306,7 @@ fn a_stale_sweep_cannot_report_matches_for_a_replaced_document(tcx: &mut TestApp
 
 #[gpui_kit::test]
 fn split_groups_keep_their_own_selection(tcx: &mut TestAppContext) {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(dir.path(), "split-sel.pdf", &fixtures::reading_document());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);

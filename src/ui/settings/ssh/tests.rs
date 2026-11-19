@@ -126,18 +126,18 @@ fn the_host_filter_ignores_case() {
 
 #[test]
 fn group_buckets_sort_imported_first_and_ungrouped_last() {
-    let mut keys = vec!["", "Work", crate::core::ssh_config::IMPORTED_GROUP];
+    let mut keys = vec!["", "Work", lyrel_ui_base::ssh_config::IMPORTED_GROUP];
     keys.sort_by_key(|k| ssh_group_rank(k));
     assert_eq!(
         keys,
-        vec![crate::core::ssh_config::IMPORTED_GROUP, "Work", ""]
+        vec![lyrel_ui_base::ssh_config::IMPORTED_GROUP, "Work", ""]
     );
 }
 
 #[test]
 fn group_labels_name_the_file_and_the_app() {
     assert_eq!(
-        ssh_group_label(crate::core::ssh_config::IMPORTED_GROUP),
+        ssh_group_label(lyrel_ui_base::ssh_config::IMPORTED_GROUP),
         "~/.ssh/config"
     );
     assert_eq!(ssh_group_label(""), "lyrel settings");
@@ -374,7 +374,7 @@ fn the_same_endpoint_under_two_names_counts_as_shared() {
 /// way to store one is to connect and wait to be asked.
 #[gpui_kit::test]
 fn a_typed_password_is_something_the_form_has_to_save(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_settings_section(SettingsSection::Ssh, window, cx);
@@ -412,7 +412,7 @@ fn a_typed_password_is_something_the_form_has_to_save(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
     let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
     let mut original = crate::core::ssh_profile::SshProfile::new("original");
@@ -444,8 +444,8 @@ fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContex
     });
     vcx.run_until_parked();
     assert!(vcx.has_pending_prompt());
-    vcx.simulate_prompt_answer(crate::ui::i18n::t(
-        crate::ui::i18n::L10nKey::SettingsKeepEditing,
+    vcx.simulate_prompt_answer(lyrel_ui_base::i18n::t(
+        lyrel_ui_base::i18n::L10nKey::SettingsKeepEditing,
     ));
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, _, cx| {
@@ -466,7 +466,9 @@ fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContex
     });
     vcx.run_until_parked();
     assert!(vcx.has_pending_prompt());
-    vcx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorDiscard));
+    vcx.simulate_prompt_answer(lyrel_ui_base::i18n::t(
+        lyrel_ui_base::i18n::L10nKey::EditorDiscard,
+    ));
     vcx.run_until_parked();
     assert!(!vcx.has_pending_prompt());
     app.update_in(&mut vcx, |app, _, cx| {
@@ -495,8 +497,8 @@ fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContex
         workspace.open_ssh_profile_in_settings(id, window, cx);
     });
     vcx.run_until_parked();
-    vcx.simulate_prompt_answer(crate::ui::i18n::t(
-        crate::ui::i18n::L10nKey::SettingsSaveChanges,
+    vcx.simulate_prompt_answer(lyrel_ui_base::i18n::t(
+        lyrel_ui_base::i18n::L10nKey::SettingsSaveChanges,
     ));
     vcx.run_until_parked();
     assert!(!vcx.has_pending_prompt());
@@ -526,7 +528,7 @@ fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn the_credential_rows_follow_the_auth_method(cx: &mut TestAppContext) {
     use crate::core::ssh_profile::{AuthMode, SshProfile};
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
     let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
     for (auth, password, keys) in [
@@ -557,7 +559,7 @@ fn the_credential_rows_follow_the_auth_method(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn invalid_ssh_edits_stay_dirty_until_explicit_cancel(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_settings_section(SettingsSection::Ssh, window, cx);
@@ -594,7 +596,7 @@ fn invalid_ssh_edits_stay_dirty_until_explicit_cancel(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn failed_ssh_config_save_never_advances_credentials_or_secret_baselines(cx: &mut TestAppContext) {
     use crate::core::keychain::InMemoryCredentialStore;
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("temporary-identity");
     std::fs::write(&key, b"isolated settings key").unwrap();
@@ -671,7 +673,7 @@ fn failed_ssh_config_save_never_advances_credentials_or_secret_baselines(cx: &mu
 #[gpui_kit::test]
 fn ssh_retargeting_preserves_shared_passwords_and_other_keys_passphrases(cx: &mut TestAppContext) {
     use crate::core::keychain::InMemoryCredentialStore;
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("key-a");
     let b = dir.path().join("key-b");
@@ -761,7 +763,7 @@ fn ssh_retargeting_preserves_shared_passwords_and_other_keys_passphrases(cx: &mu
 
 #[gpui_kit::test]
 fn ssh_form_round_trip_preserves_windows_paths_and_raw_command_spelling(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {

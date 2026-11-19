@@ -48,7 +48,7 @@ fn until_state<T: std::fmt::Debug>(
     }
 }
 pub(super) fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
-    context.dispatch_action(crate::core::actions::EditorSave);
+    context.dispatch_action(lyrel_ui_base::actions::EditorSave);
     until_state(context, "owning document save", |context| {
         app.read_with(context, |app, cx| {
             let state = with_active_file(app, cx, |file, _| {
@@ -99,7 +99,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
     save(&app, &mut context);
     assert_eq!(std::fs::read(&remote_file).unwrap(), original);
-    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.dispatch_action(lyrel_ui_base::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input("2:3", cx);
         window.press("enter", cx);
@@ -169,7 +169,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             second.read(cx).document().entity_id()
         );
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     second.read_with(&context, |view, cx| {
@@ -382,7 +382,7 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
     });
     for source_mode in [false, true] {
         if source_mode {
-            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
         }
         for at in [0, original.len()] {
             view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
@@ -514,7 +514,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         view.focus_handle(cx).focus(window, cx);
     });
     if !view.read_with(&context, |view, _| view.is_soft_wrap()) {
-        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+        context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentWrap);
     }
     view.read_with(&context, |view, _| {
         assert!(
@@ -703,7 +703,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
             source.as_bytes()
         )
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     let unicode = source.find("中文").unwrap();
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(unicode + "中文 ".len()..unicode + "中文 ".len(), cx)
@@ -936,7 +936,7 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
             .unwrap()
             .clone()
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     first.read_with(&context, |first, cx| {
         assert!(first.is_source_only());
         assert!(!first.is_live());
@@ -959,7 +959,7 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
         second.select_range(0..0, cx);
         second.focus_handle(cx).focus(window, cx);
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(lyrel_ui_base::actions::ToggleDocumentPreview);
     second.read_with(&context, |second, _| assert!(!second.is_live()));
     context.update(|window, cx| window.input("注", cx));
     context.dispatch_action(gpui_kit::component::input::Undo);

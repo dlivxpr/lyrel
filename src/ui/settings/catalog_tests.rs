@@ -18,7 +18,7 @@ fn the_catalog_has_unique_titles_and_valid_destinations() {
 #[test]
 fn config_keys_and_cross_language_names_reach_the_same_setting() {
     for locale in ["en", "zh-CN"] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         for (query, title, section) in [
             (
                 "gui_language",
@@ -57,7 +57,7 @@ fn config_keys_and_cross_language_names_reach_the_same_setting() {
             );
         }
     }
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn language_search_keeps_system_mode_and_drops_retired_language_aliases() {
         .find(|entry| entry.title == L10nKey::SettingsLanguage)
         .unwrap();
     for locale in ["en", "zh-CN"] {
-        crate::ui::i18n::set_locale(locale);
+        lyrel_ui_base::i18n::set_locale(locale);
         for query in ["follow system", "跟随系统", "english", "chinese"] {
             assert!(entry_matches(entry, query), "{locale}: {query}");
         }
@@ -95,7 +95,7 @@ fn modified_settings_compare_their_own_values_only() {
 /// merely mention splits and never the row labelled exactly that (#444).
 #[test]
 fn searching_for_a_feature_finds_its_shortcut() {
-    crate::ui::i18n::set_locale("en");
+    lyrel_ui_base::i18n::set_locale("en");
     let kb = SettingsSection::Keybindings;
 
     // Split Right and Split Down, at least — the index carries no entry

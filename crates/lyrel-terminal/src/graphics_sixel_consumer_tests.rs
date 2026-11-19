@@ -6,11 +6,8 @@
 #[track_caller]
 fn sixel_reply_bytes(text: &str, serial: usize) -> Option<Vec<u8>> {
     let prefix = format!("KITTY_REPLY {serial} ");
-    text.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix(prefix.as_str())
-            .map(unhex)
-    })
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix.as_str()).map(unhex))
 }
 
 fn sixel_exchange(

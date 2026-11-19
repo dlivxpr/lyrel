@@ -115,7 +115,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn go_to_symbol_previews_and_escape_puts_the_caret_back(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
 
@@ -346,7 +346,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn a_symbol_jump_can_be_walked_back_and_forward(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
 
@@ -406,7 +406,7 @@ pub(super) mod gpui_tests {
     fn history_follows_edits_to_the_file(cx: &mut TestAppContext) {
         use gpui_kit::EntityInputHandler as _;
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
         put_caret(&app, &mut vcx, 50);
@@ -544,7 +544,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn the_symbol_chord_puts_go_to_symbol_away(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         put_caret(&app, &mut vcx, 5);
         app.update_in(&mut vcx, |app, window, cx| {
@@ -566,7 +566,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn tab_walks_the_editors_row(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         // No file in front: Files is all the row would hold.
         assert_eq!(
             app.read_with(&vcx, |app, cx| app.editor_search_tabs(cx)),
@@ -594,7 +594,7 @@ pub(super) mod gpui_tests {
     #[gpui_kit::test]
     fn the_palette_offers_the_editor_commands_only_with_a_file_open(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         assert!(app.read_with(&vcx, |app, cx| app.editor_palette_items(cx).is_empty()));
         open_rs(&app, &mut vcx, "/nav-test/a.rs");
         let kinds: Vec<CommandKind> = app.read_with(&vcx, |app, cx| {

@@ -7,11 +7,12 @@
 //! the XDG portal) and the override bookkeeping; this module only translates
 //! Lyrel's config value and decides when the system is re-read.
 
-use crate::core::config::{Config, MotionPreference};
 use gpui_kit::App;
 use gpui_kit::base::{
     ReduceMotionPreference, apply_system_reduce_motion, set_reduce_motion_preference,
 };
+use lyrel_core::core::config::MotionPreference;
+use lyrel_ui_base::config::Config;
 
 fn framework_preference(preference: MotionPreference) -> ReduceMotionPreference {
     match preference {

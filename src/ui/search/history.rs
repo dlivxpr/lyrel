@@ -6,11 +6,11 @@ use super::command::{Avatar, CommandKind, Item};
 use super::{SearchEvent, SearchView};
 use crate::core::agent_history::PastSession;
 use crate::core::cli_agent::CLIAgent;
-use crate::core::config::Config;
-use crate::terminal::view::TerminalView;
-use crate::ui::host_ops::{HostId, HostOps, SharedHost};
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use gpui_kit::{App, Context, Entity, Window};
+use lyrel_terminal::view::TerminalView;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::host_ops::{HostId, HostOps, SharedHost};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 pub(crate) struct SessionHistory {
     host: HostId,
@@ -39,7 +39,7 @@ impl SessionHistory {
     }
 
     pub(super) fn items(&self, found: Vec<PastSession>, cx: &App) -> (Vec<Item>, usize) {
-        let now = crate::core::config::unix_now();
+        let now = lyrel_core::core::config::unix_now();
         let hidden = &cx.global::<Config>().hidden_agent_sessions;
         let here = &self.here;
         let home = &self.home;
@@ -341,14 +341,14 @@ impl SessionQuery {
 static LAST_SESSIONS: std::sync::LazyLock<
     std::sync::Mutex<
         std::collections::HashMap<
-            crate::ui::host_ops::HostId,
+            lyrel_ui_base::host_ops::HostId,
             Vec<crate::core::agent_history::PastSession>,
         >,
     >,
 > = std::sync::LazyLock::new(Default::default);
 
 fn last_sessions(
-    host: crate::ui::host_ops::HostId,
+    host: lyrel_ui_base::host_ops::HostId,
 ) -> Vec<crate::core::agent_history::PastSession> {
     LAST_SESSIONS
         .lock()
@@ -359,7 +359,7 @@ fn last_sessions(
 }
 
 fn remember_sessions(
-    host: crate::ui::host_ops::HostId,
+    host: lyrel_ui_base::host_ops::HostId,
     found: Vec<crate::core::agent_history::PastSession>,
 ) {
     LAST_SESSIONS

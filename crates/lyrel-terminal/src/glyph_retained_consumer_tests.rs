@@ -1061,19 +1061,13 @@ fn glyph_state_survives_a_producer_that_truly_exits(cx: &mut TestAppContext) {
     let place = format!("\x1b[2J\x1b[3;5H{}", char::from_u32(GLYPH_CP).unwrap());
     let marker = format!("GLYPH_PRODUCER_EXITED_{}", std::process::id());
     let exe = graphics_fixture_bin().display().to_string();
-    let mut command = format!(
-        "{} glyph <<'LYREL_GLYPH_EOF'\n",
-        glyph_shell_quote(&exe)
-    );
+    let mut command = format!("{} glyph <<'LYREL_GLYPH_EOF'\n", glyph_shell_quote(&exe));
     command.push_str(&format!(
         "SEND {}\n",
         hex(&glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 0))
     ));
     command.push_str("FLOOD 9437184\n");
-    command.push_str(&format!(
-        "SEND {}\n",
-        hex(place.as_bytes())
-    ));
+    command.push_str(&format!("SEND {}\n", hex(place.as_bytes())));
     command.push_str("LYREL_GLYPH_EOF\n");
     command.push_str(&format!("echo {marker}\n"));
     daemon

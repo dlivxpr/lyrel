@@ -165,7 +165,7 @@ macOS 可用 <kbd>⌘ ⇧ W</kbd> 执行“关闭窗口”（`CloseWindow`），
 切换标签页、停放或隐藏窗格不会暂停 Shell、智能体状态处理或图像解码；回到窗格时显示当前内容，
 不要求程序重新发送文字或图像。隐藏输出不会持续触发无关前台窗格的窗口重绘。
 
-桌面侧由 `src/terminal/lifecycle.rs` 的 `TerminalLifecycle` 统一持有事件批处理、重复 wakeup 合并、
+桌面侧由 `crates/lyrel-terminal/src/lifecycle.rs` 的 `TerminalLifecycle` 统一持有事件批处理、重复 wakeup 合并、
 显示登记、焦点订阅、光标闪烁与前台状态轮询任务。`TerminalView` 保留原有 GPUI entity、输入和绘制协调；
 工作台通过 `declare_displayed` 声明实际显示的窗格，Shell 与智能体的内部判断仍由各自能力负责。
 已退役图像在事件批次结束时归还 GPU 资源，不等到隐藏窗格再次绘制；既有周期清理继续作为补充。

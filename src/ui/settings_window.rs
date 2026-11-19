@@ -1,6 +1,4 @@
 //! 设置窗口独立持有输入、草稿、快捷键录制与订阅；工作区只接收明确的操作事件。
-use crate::core::actions::{CloseActiveTab, FocusSettingsNavigation, OpenSettings};
-use crate::core::config::Config;
 use crate::ui::settings::{SettingsSection, SettingsState};
 use gpui_kit::component::{ActiveTheme as _, TitleBar};
 use gpui_kit::{
@@ -8,6 +6,8 @@ use gpui_kit::{
     Styled as _, Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations,
     WindowOptions, px, size,
 };
+use lyrel_ui_base::actions::{CloseActiveTab, FocusSettingsNavigation, OpenSettings};
+use lyrel_ui_base::config::Config;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -22,14 +22,14 @@ pub(crate) struct SettingsContext {
     pub owner: gpui_kit::AnyWindowHandle,
     pub shells: Rc<dyn Fn(&App) -> Vec<crate::core::shells::DetectedShell>>,
     pub live_profiles: Rc<dyn Fn(&App) -> std::collections::HashSet<uuid::Uuid>>,
-    pub session_sources: Rc<dyn Fn(crate::ui::host_ops::HostId, &App) -> SessionSources>,
+    pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
 }
 
 #[derive(Clone)]
 pub(crate) enum SettingsEvent {
     Closed(SettingsLocation),
     ConnectSsh(uuid::Uuid),
-    OpenFile(crate::ui::host_ops::SharedHost, std::path::PathBuf),
+    OpenFile(lyrel_ui_base::host_ops::SharedHost, std::path::PathBuf),
     RestartDaemon,
     RefreshShells,
     TerminalCursorChanged { force_visible: bool },
@@ -48,7 +48,9 @@ pub(crate) fn window_options(cx: &mut App) -> WindowOptions {
         ))),
         app_id: Some("io.github.dlivxpr.lyrel".to_owned()),
         titlebar: Some(TitlebarOptions {
-            title: Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::SettingsWindowTitle).into()),
+            title: Some(
+                lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::SettingsWindowTitle).into(),
+            ),
             traffic_light_position: Some(crate::ui::window_chrome::traffic_light_position()),
             ..TitleBar::title_bar_options()
         }),
@@ -89,9 +91,9 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let title = crate::ui::i18n::t(crate::ui::i18n::L10nKey::SettingsWindowTitle);
+        let title = lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::SettingsWindowTitle);
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {
-            let title = crate::ui::i18n::t(crate::ui::i18n::L10nKey::SettingsWindowTitle);
+            let title = lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::SettingsWindowTitle);
             if this.title != title {
                 window.set_window_title(title);
                 this.title = title;
@@ -283,7 +285,7 @@ impl SettingsWindow {
 
     pub(crate) fn refresh_locale_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings() {
-            use crate::ui::i18n::{L10nKey, t};
+            use lyrel_ui_base::i18n::{L10nKey, t};
             for (input, key) in [
                 (s.navigation.search(), L10nKey::SearchSettings),
                 (s.ssh.filter(), L10nKey::FilterHosts),

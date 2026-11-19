@@ -4,11 +4,12 @@ use gpui_kit::{
     TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, point, px, size,
 };
 
-use crate::core::config::{Config, StartupMode};
-use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::ui::app::LyrelApp;
-use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_core::core::config::StartupMode;
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
+use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 
 const CASCADE_STEP: f32 = 28.0;
 
@@ -526,7 +527,7 @@ pub const MENU_SLOTS: usize = 9;
 
 /// The workspaces behind `SelectWorkspace1`…`9` and the Workspaces menu, in
 /// slot order, each with whether a window has it open. A stable order —
-/// [`WindowViews::numbered`](crate::core::session::WindowViews::numbered) —
+/// [`WindowViews::numbered`](lyrel_ui_base::session::WindowViews::numbered) —
 /// not the most recently used one: slot 3 is the same workspace however
 /// often the others are switched to (#760).
 pub fn menu_order(cx: &App) -> Vec<(WorkspaceId, bool)> {
@@ -538,7 +539,7 @@ pub fn menu_order(cx: &App) -> Vec<(WorkspaceId, bool)> {
 }
 
 pub struct PaneCountQuery {
-    route: crate::ui::route::PaneRoute,
+    route: lyrel_ui_base::route::PaneRoute,
     claimed: Vec<u64>,
 }
 
@@ -555,7 +556,7 @@ pub fn live_pane_count(q: &PaneCountQuery) -> Option<usize> {
     if claimed.is_empty() {
         return Some(0);
     }
-    match crate::terminal::RemoteTerminal::try_list_panes_on(route) {
+    match lyrel_terminal::RemoteTerminal::try_list_panes_on(route) {
         Ok(panes) => {
             let alive: std::collections::HashSet<u64> = panes
                 .into_iter()
@@ -564,7 +565,7 @@ pub fn live_pane_count(q: &PaneCountQuery) -> Option<usize> {
                 .collect();
             Some(claimed.iter().filter(|id| alive.contains(id)).count())
         }
-        Err(_) if matches!(route, crate::ui::route::PaneRoute::Local) => Some(0),
+        Err(_) if matches!(route, lyrel_ui_base::route::PaneRoute::Local) => Some(0),
         Err(_) => None,
     }
 }
@@ -660,13 +661,13 @@ fn stop_workspace_keeping(cx: &mut App, workspace: WorkspaceId, ids: Vec<u64>) {
     let host = WorkspaceStore::all(cx)
         .get(workspace)
         .map(|w| w.host_id())
-        .unwrap_or(crate::ui::host_ops::HostId::LOCAL);
+        .unwrap_or(lyrel_ui_base::host_ops::HostId::LOCAL);
     if !ids.is_empty() {
         let route = route.clone();
         cx.background_executor()
             .spawn(async move {
                 for pane_id in ids {
-                    crate::terminal::RemoteTerminal::kill_pane_on(&route, pane_id);
+                    lyrel_terminal::RemoteTerminal::kill_pane_on(&route, pane_id);
                 }
             })
             .detach();
@@ -709,7 +710,7 @@ pub fn delete_workspace(cx: &mut App, workspace: WorkspaceId) {
 /// until the next reconnect replaces the snapshot. `forget_workspace` must
 /// *not* do this: forgetting keeps the machine's session, and re-discovering
 /// it from the listing is that flow's whole point (#485).
-fn scrub_host_snapshots(cx: &mut App, remote: &crate::core::session::RemoteRef) {
+fn scrub_host_snapshots(cx: &mut App, remote: &lyrel_ui_base::session::RemoteRef) {
     let host = remote.host_id();
     let machine_ws = remote.workspace;
     for (_, app) in WindowRegistry::open_windows(cx) {
@@ -777,7 +778,7 @@ fn release_unused_hosts(cx: &mut App) {
         .filter(|w| w.is_remote())
         .map(|w| w.host_id())
         .collect();
-    for id in crate::ui::host_registry::HostRegistry::ids(cx) {
+    for id in lyrel_ui_base::host_registry::HostRegistry::ids(cx) {
         if !id.is_local() && !live.contains(&id) {
             crate::ui::desktop_lookups::HostLinks::remove(cx, id);
         }
@@ -803,7 +804,12 @@ fn close_window_for(cx: &mut App, workspace: WorkspaceId) {
     WindowRegistry::rebind(cx, workspace, fresh);
     let _ = handle.update(cx, |_, window, cx| {
         app.update(cx, |app, cx| {
-            app.adopt_workspace(fresh, crate::core::session::Session::default(), window, cx)
+            app.adopt_workspace(
+                fresh,
+                lyrel_ui_base::session::Session::default(),
+                window,
+                cx,
+            )
         });
     });
 }
@@ -883,8 +889,8 @@ fn cascade(bounds: Bounds<gpui_kit::Pixels>, existing: usize) -> Bounds<gpui_kit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
-    use crate::ui::i18n::{L10nKey, set_locale, t_plural};
+    use lyrel_ui_base::i18n::{L10nKey, set_locale, t_plural};
+    use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 
     fn bounds_at(x: f32, y: f32) -> Bounds<gpui_kit::Pixels> {
         Bounds {
@@ -1000,7 +1006,7 @@ mod tests {
         // back the layout that was there, not mint a blank workspace beside it.
         // The restore saves `views.json`; run alone, this test would otherwise
         // write it into the real config dir.
-        crate::core::config::pin_test_config_dir();
+        lyrel_ui_base::config::pin_test_config_dir();
         let view = WindowView::default();
         let restored = view.id;
         let mut opened = None;
@@ -1181,7 +1187,7 @@ mod tests {
             );
             crate::ui::machine_mirror::MachineMirrors::install(
                 cx,
-                crate::ui::host_ops::HostId::LOCAL,
+                lyrel_ui_base::host_ops::HostId::LOCAL,
                 Machine {
                     workspaces: vec![TreeWorkspace {
                         id,

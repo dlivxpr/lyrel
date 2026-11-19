@@ -90,7 +90,7 @@ function isPreflightOnly(file) {
 }
 
 // 只在桌面（GUI/updater/native harness）与 Apple/Windows 目标上编译的输入；
-// lyrel-ui-base 与未来桌面 UI 子 crate 同理，Linux headless 显式 --exclude。
+// Linux headless 显式排除桌面包；manifest 变化仍按共享解析输入处理。
 function isDesktopOnly(file) {
   return (
     file.startsWith('src/') ||

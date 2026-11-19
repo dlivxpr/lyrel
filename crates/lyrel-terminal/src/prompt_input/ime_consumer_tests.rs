@@ -1,7 +1,7 @@
 use super::*;
-use lyrel_ui_base::actions::FindInTerminal;
 use crate::view::input::TerminalInputHandler;
 use gpui_kit::InputHandler;
+use lyrel_ui_base::actions::FindInTerminal;
 
 #[gpui_kit::test]
 fn ime_mark_commit_blur_and_resize_preserve_the_current_input_owner(cx: &mut TestAppContext) {

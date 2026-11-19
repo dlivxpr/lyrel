@@ -19,7 +19,7 @@ fn install_editable_theme(cx: &mut App, path: &std::path::Path) -> presets::Them
 
 #[gpui_kit::test]
 fn theme_edits_preview_without_writing_and_cancel_restores_original(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("draft.yaml");
     let (app, mut vcx) = harness(cx);
@@ -79,7 +79,7 @@ fn theme_edits_preview_without_writing_and_cancel_restores_original(cx: &mut Tes
 
 #[gpui_kit::test]
 fn reverting_theme_edits_clears_dirty_and_image_edits_keep_their_opacity(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
@@ -132,7 +132,7 @@ fn reverting_theme_edits_clears_dirty_and_image_edits_keep_their_opacity(cx: &mu
 
 #[gpui_kit::test]
 fn late_theme_image_results_cannot_edit_an_abandoned_context(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
@@ -188,7 +188,7 @@ fn late_theme_image_results_cannot_edit_an_abandoned_context(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn closed_theme_session_rejects_picker_results_after_reopen(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
@@ -222,7 +222,7 @@ fn closed_theme_session_rejects_picker_results_after_reopen(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn replaced_color_controls_cannot_edit_the_current_theme(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     let original = app.update_in(&mut vcx, |app, window, cx| {
@@ -259,7 +259,7 @@ fn replaced_color_controls_cannot_edit_the_current_theme(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn theme_modes_remember_slots_without_changing_fonts_or_language(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_settings_section(SettingsSection::Appearance, window, cx);

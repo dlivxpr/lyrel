@@ -1,8 +1,8 @@
 //! Window-local result cursors. Daemon records and other clients are never mutated.
 use crate::core::osc::NoteBudget;
-use crate::ui::host_ops::HostId;
-use crate::ui::i18n::{L10nKey, t};
 use lyrel_core::core::program_status::{ProgramRecord, ProgramState, ProgramStatusFrame};
+use lyrel_ui_base::host_ops::HostId;
+use lyrel_ui_base::i18n::{L10nKey, t};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -197,7 +197,7 @@ struct NoticeSource {
 }
 
 struct NoticeViewer {
-    view: gpui_kit::WeakEntity<crate::terminal::view::TerminalView>,
+    view: gpui_kit::WeakEntity<lyrel_terminal::view::TerminalView>,
     /// Highest result version this viewer saw while watching, so it is never
     /// replayed to this window later.
     seen: u64,
@@ -209,7 +209,7 @@ impl ProgramNotices {
     fn deliver(
         &mut self,
         source: ProgramSource,
-        view: &gpui_kit::Entity<crate::terminal::view::TerminalView>,
+        view: &gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
         frame: &ProgramStatusFrame,
         wanted: &[String],
         now: Instant,
@@ -289,7 +289,7 @@ impl ProgramNotices {
 impl crate::ui::app::LyrelApp {
     pub(crate) fn observe_program_attention(
         &mut self,
-        view: &gpui_kit::Entity<crate::terminal::view::TerminalView>,
+        view: &gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
         frames: &[ProgramStatusFrame],
         window: &gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
@@ -300,7 +300,7 @@ impl crate::ui::app::LyrelApp {
         let source = view.read(cx).program_source();
         let watched = self.program_pane_is_viewed(view, window, cx);
         let deliver = cx
-            .global::<crate::core::config::Config>()
+            .global::<lyrel_ui_base::config::Config>()
             .notify_on_command_finish
             .allows(watched);
         let now = Instant::now();
@@ -328,7 +328,7 @@ impl crate::ui::app::LyrelApp {
                     view.notification_title(Some(&lead), cx)
                 };
                 for body in notices {
-                    crate::terminal::desktop_notification::notify_desktop_for_pane(
+                    lyrel_terminal::desktop_notification::notify_desktop_for_pane(
                         Some(&title),
                         &body,
                         Some(view.entity_id()),
@@ -344,7 +344,7 @@ impl crate::ui::app::LyrelApp {
 
     fn program_pane_is_viewed(
         &self,
-        view: &gpui_kit::Entity<crate::terminal::view::TerminalView>,
+        view: &gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
         window: &gpui_kit::Window,
         cx: &gpui_kit::App,
     ) -> bool {

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use lyrel_core::host::{ContentHit, ContentQuery, ContentResults};
 
-use crate::ui::host_ops::HostId;
+use lyrel_ui_base::host_ops::HostId;
 
 /// One search, fully named: the same key twice is the same search, and a
 /// search is only ever re-run when its key changes or someone asks.

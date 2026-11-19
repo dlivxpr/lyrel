@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{App, AppContext as _, BorrowAppContext as _};
 
-use crate::core::session::{WindowView, WorkspaceId, WorkspaceStore};
-use crate::ui::host_ops::{HostId, InFlight};
-use crate::ui::route::PaneRoute;
+use lyrel_core::core::session::{WindowView, WorkspaceId};
 use lyrel_terminal::RemoteTerminal;
+use lyrel_ui_base::host_ops::{HostId, InFlight};
+use lyrel_ui_base::route::PaneRoute;
+use lyrel_ui_base::session::WorkspaceStore;
 
 const LOCAL_TTL: Duration = Duration::from_millis(2_000);
 

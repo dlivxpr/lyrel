@@ -69,7 +69,7 @@ const YEAR: i64 = DAY * 365;
 /// `now` is a parameter rather than a clock read so the whole thing stays a
 /// pure function, and so a test can sit exactly on a boundary.
 pub(crate) fn relative_time(now_unix: i64, then_unix: i64) -> String {
-    use crate::ui::i18n::{L10nKey, t, t_fmt};
+    use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
     // A commit stamped in the future (clock skew across machines is routine in
     // a shared repo) reads as "now" rather than as a negative age.
     let delta = (now_unix - then_unix).max(0);
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn relative_time_covers_every_bucket() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let now = 1_800_000_000i64;
         let ago = |secs: i64| relative_time(now, now - secs);
         assert_eq!(ago(0), "now");
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn relative_time_clamps_commits_from_the_future() {
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let now = 1_800_000_000i64;
         assert_eq!(relative_time(now, now + DAY), "now");
     }
@@ -190,12 +190,12 @@ mod tests {
     /// through the i18n table like `home::relative_time`, in compact form.
     #[test]
     fn relative_time_speaks_the_ui_language() {
-        crate::ui::i18n::set_locale("zh-CN");
+        lyrel_ui_base::i18n::set_locale("zh-CN");
         let now = 1_800_000_000i64;
         assert_eq!(relative_time(now, now), "刚刚");
         assert_eq!(relative_time(now, now - 2 * HOUR), "2时");
         // “3月”会被读成月份名,所以是“个月”。
         assert_eq!(relative_time(now, now - 3 * MONTH), "3个月");
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
     }
 }

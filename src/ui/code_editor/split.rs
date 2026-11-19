@@ -155,7 +155,7 @@ mod gpui_tests {
     use super::*;
     use crate::ui::app::LyrelApp;
     use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::editor_session::{self, SplitEditor, TabEditor};
+    use lyrel_workbench_editor::editor_session::{self, SplitEditor, TabEditor};
 
     fn front(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> PathBuf {
         app.read_with(vcx, |app, cx| app.active_buffer(cx).unwrap().path.clone())
@@ -168,7 +168,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn two_groups_keep_their_own_file_and_caret(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/split/a.rs");
         put_caret(&app, &mut vcx, 5);
         assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_split(window, cx)));
@@ -231,7 +231,7 @@ mod gpui_tests {
             std::fs::write(p, "fn main() {}\n").unwrap();
         }
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let state = TabEditor {
             files: vec![a.clone(), b.clone()],
             active: 1,
@@ -286,7 +286,7 @@ mod gpui_tests {
         let c = root.join("c.rs");
         std::fs::write(&c, "fn main() {}\n").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let state = TabEditor {
             files: vec![],
             active: 0,
@@ -336,7 +336,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn a_key_pressed_right_after_a_focus_move_acts_on_the_new_group(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/split/a.rs");
         app.update_in(&mut vcx, |app, window, cx| app.editor_split(window, cx));
         open_rs(&app, &mut vcx, "/split/b.rs");
@@ -379,7 +379,7 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn a_menu_command_right_after_a_focus_move_acts_on_the_new_group(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         open_rs(&app, &mut vcx, "/split/a.rs");
         app.update_in(&mut vcx, |app, window, cx| app.editor_split(window, cx));
         open_rs(&app, &mut vcx, "/split/b.rs");
@@ -399,7 +399,7 @@ mod gpui_tests {
                 .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let node = window.focused(cx).unwrap();
-            node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);
+            node.dispatch_action(&lyrel_ui_base::actions::EditorGoToLine, window, cx);
             assert!(
                 app.read(cx).editor.read(cx).has_bar(),
                 "the command saw the group the keyboard is in"
@@ -418,7 +418,7 @@ mod gpui_tests {
             std::fs::write(p, "fn main() {}\n").unwrap();
         }
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        crate::ui::i18n::set_locale("en");
+        lyrel_ui_base::i18n::set_locale("en");
         let state = TabEditor {
             files: vec![a.clone(), b.clone()],
             active: 0,

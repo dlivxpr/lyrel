@@ -17,9 +17,9 @@ use lyrel_core::host::{
 
 use crate::ui::app::LyrelApp;
 use crate::ui::desktop_lookups::HostLinks;
-use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::local_link::{LocalLink, LocalLinkStatus};
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 #[derive(Clone)]
 enum MetricsSource {
@@ -165,7 +165,7 @@ impl HostMetricsView {
                     Some(source) => {
                         let query = source.clone();
                         let Some(result) =
-                            crate::ui::host_ops::off_thread(move || query.sample()).await
+                            lyrel_ui_base::host_ops::off_thread(move || query.sample()).await
                         else {
                             break;
                         };

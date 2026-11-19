@@ -25,7 +25,7 @@ fn empty_page() -> CommitPage {
 
 #[gpui_kit::test]
 fn switching_scope_resets_the_page_and_its_size(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update(&mut vcx, |app, cx| {
         let repo = repo("/scope");
@@ -147,7 +147,7 @@ fn failed_loading_waits_for_a_new_refresh_identity(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_scope_change_rejects_the_old_query_even_when_it_finishes_last(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update(&mut vcx, |app, cx| {
         let repo = repo("/query");
@@ -173,7 +173,7 @@ fn a_scope_change_rejects_the_old_query_even_when_it_finishes_last(cx: &mut Test
 
 #[gpui_kit::test]
 fn closing_and_reopening_the_same_commit_rejects_the_retired_detail(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update(&mut vcx, |app, cx| {
         let repo = repo("/detail");
@@ -202,7 +202,7 @@ fn closing_and_reopening_the_same_commit_rejects_the_retired_detail(cx: &mut Tes
 
 #[gpui_kit::test]
 fn a_detail_refresh_cannot_land_after_its_repository_epoch_changes(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
     let (app, mut vcx) = harness(cx);
     app.update(&mut vcx, |app, cx| {
         let repo = repo("/detail-epoch");

@@ -1,11 +1,5 @@
 use super::kit::BtnKind;
-use crate::{
-    core::{config::Config, keychain::OsCredentialStore},
-    ui::{
-        i18n::{L10nKey, t},
-        settings_window::SettingsWindow,
-    },
-};
+use crate::{core::keychain::OsCredentialStore, ui::settings_window::SettingsWindow};
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -22,6 +16,8 @@ use lyrel_insights::usage::accounts::{
 use lyrel_insights::usage::{
     BalanceHttp, HttpSource, UsageRequest, browser, platform, providers, query, query_provider,
 };
+use lyrel_ui_base::config::Config;
+use lyrel_ui_base::i18n::{L10nKey, t};
 use providers::Provider;
 use std::{
     sync::{
@@ -420,7 +416,7 @@ impl UsagePage {
         let data = if let Some(global) = cx.try_global::<UsageGlobal>() {
             global.0.clone()
         } else {
-            let path = crate::core::config::config_path("usage-accounts.json");
+            let path = lyrel_core::core::config::config_path("usage-accounts.json");
             let shared = Arc::new(Shared {
                 accounts: Mutex::new(Err(UsageError::Persistence)),
                 http: Arc::new(DeepSeekHttp),

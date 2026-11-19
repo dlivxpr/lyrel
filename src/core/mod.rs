@@ -1,20 +1,14 @@
-//! GUI-side `core` facade: local adapters below, and the pure protocol/core
-//! modules re-exported by name. No glob — `config`, `session` and `keychain`
-//! are the local modules and nothing here shadows them.
+//! GUI-side core adapters and explicitly named shared core modules.
 
 pub use lyrel_core::core::{
     agent_history, agent_hooks, agent_prompt, cli_agent, crash, git, group_key, logfile, machine,
     osc, proc, shell_quote, shells, ssh_profile, worktree,
 };
 
-pub mod actions;
 #[cfg(target_os = "windows")]
 pub mod cli_install;
-pub mod config;
 pub mod default_terminal;
 pub mod explorer_context_menu;
 pub mod keychain;
-pub mod session;
-pub mod ssh_config;
 pub mod update;
 pub mod window_state;
