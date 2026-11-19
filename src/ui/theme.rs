@@ -915,15 +915,19 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let theme_window = window.as_deref_mut();
+    #[cfg(not(target_os = "macos"))]
+    let theme_window = window;
     lyrel_ui_base::presentation::install_preset_theme(
-        window,
+        theme_window,
         cx,
         &theme,
         material_active(backdrop, blur),
     );
 
     #[cfg(target_os = "macos")]
-    if let Some(window) = window.as_deref_mut() {
+    if let Some(window) = window {
         window.set_traffic_light_position(crate::ui::window_chrome::traffic_light_position());
     }
 }

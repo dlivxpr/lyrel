@@ -5,7 +5,9 @@
 use std::rc::Rc;
 
 use super::kit::{self, BtnKind, Stepper, Tk};
-use super::shell::{MenuEntry, SearchOption};
+#[cfg(target_os = "windows")]
+use super::shell::MenuEntry;
+use super::shell::SearchOption;
 use super::*;
 
 impl SettingsWindow {
