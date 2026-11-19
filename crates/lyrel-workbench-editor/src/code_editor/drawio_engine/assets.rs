@@ -31,15 +31,14 @@ pub const ENGINE_URL: &str = "https://drawio.lyrel.invalid/drawio/engine.html";
 
 /// macOS registers a custom WKWebView scheme; the same manifest paths and CSP
 /// are served under this origin. WebKit cannot intercept https/file schemes.
-/// The WKWebView host is a non-test platform component, so the URLs it alone
-/// uses share that gate instead of compiling as dead constants in lib tests.
-#[cfg(all(target_os = "macos", not(test)))]
+/// The native host is also compiled in macOS test builds.
+#[cfg(target_os = "macos")]
 pub const MAC_SCHEME: &str = "lyrel";
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(target_os = "macos")]
 pub const MAC_ORIGIN: &str = "lyrel://app";
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(target_os = "macos")]
 pub const MAC_SHELL_URL: &str = "lyrel://app/drawio/shell.html";
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(target_os = "macos")]
 pub const MAC_ENGINE_URL: &str = "lyrel://app/drawio/engine.html";
 
 const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; \
