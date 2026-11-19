@@ -46,8 +46,8 @@ for (const { name, cfg, shared, status } of [
             fs.mkdirSync(ui, { recursive: true });
             fs.mkdirSync(path.join(root, 'src', 'terminal'), { recursive: true });
             fs.mkdirSync(crateSrc, { recursive: true });
-            for (let ix = 0; ix < 8; ix++) fs.writeFileSync(path.join(ui, `shell_${ix}.rs`), '');
-            for (let ix = 0; ix < 8; ix++) fs.writeFileSync(path.join(crateSrc, `component_${ix}.rs`), '');
+            // Keep enough shell files to reach traversal even without the new crate root.
+            for (let ix = 0; ix < 10; ix++) fs.writeFileSync(path.join(ui, `shell_${ix}.rs`), '');
             fs.writeFileSync(path.join(crateSrc, 'lib.rs'), `#[cfg(${cfg})]\nmod fixture;\n${shared ? '#[path = "fixture.rs"]\nmod shared;' : ''}\n`);
             fs.writeFileSync(path.join(crateSrc, 'fixture.rs'), 'fn fixture() { std::fs::read("workspace-file").unwrap(); }\n');
             const result = spawnSync(process.execPath, [scanner], { cwd: root, env: { ...process.env, HOST_BOUNDARY_ALLOW: '' }, encoding: 'utf8' });
