@@ -819,7 +819,7 @@ impl EditorPanelState {
     }
 
     /// Open the peek on the hunk starting at buffer line `start`.
-    pub(crate) fn open_peek(
+    fn open_peek(
         &mut self,
         id: BufferId,
         start: usize,

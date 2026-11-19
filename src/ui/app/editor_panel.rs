@@ -362,7 +362,12 @@ impl LyrelApp {
 
     /// The status line's document-focus watch for one buffer's input: a focus
     /// landing there tells the status bar what the front is.
-    fn watch_editor_buffer_focus(&self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn watch_editor_buffer_focus(
+        &self,
+        id: BufferId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(handle) = self
             .editor
             .read(cx)
@@ -1147,6 +1152,7 @@ impl LyrelApp {
 
     // ---- Changes made by something else ----
 
+    #[cfg(test)]
     pub(crate) fn editor_reload_from_disk(
         &mut self,
         id: BufferId,
@@ -1414,7 +1420,7 @@ impl LyrelApp {
                     self.scm_invalidate_cwd(*host, directory, cx);
                 }
             }
-            EditorPanelEvent::IdentityChanged => self.lsp_sync_buffers(cx),
+            EditorPanelEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
             EditorPanelEvent::RenameRequested { id, offset, name } => {
                 self.lsp_rename(*id, *offset, name.clone(), window, cx);
             }
@@ -1426,6 +1432,7 @@ impl LyrelApp {
             }
             EditorPanelEvent::OpenCompleted {
                 workspace,
+                window_host,
                 tab,
                 group,
                 id,
@@ -1436,7 +1443,7 @@ impl LyrelApp {
                 // after a workspace switch, has nothing to land in: the
                 // buffer stays in the registry and orphan adoption reclaims
                 // or adopts it.
-                if *workspace != self.workspace {
+                if *workspace != self.workspace || *window_host != self.spawn_host(cx) {
                     return;
                 }
                 let Some(tab_ix) = self.tab_index_of(*tab) else {
@@ -1462,10 +1469,18 @@ impl LyrelApp {
                 self.editor_rebuild_watcher(cx);
             }
             EditorPanelEvent::TabRestored {
+                workspace,
+                window_host,
                 tab,
                 open,
                 snapshot,
             } => {
+                if *workspace != self.workspace
+                    || *window_host != self.spawn_host(cx)
+                    || open.is_empty()
+                {
+                    return;
+                }
                 let Some(tab_ix) = self.tab_index_of(*tab) else {
                     return;
                 };
@@ -1497,10 +1512,16 @@ impl LyrelApp {
                     .split
                     .as_ref()
                     .map(|s| (group(&s.files, s.active), s.focused));
-                let Some(code) = self.tabs[tab_ix].code.as_deref_mut() else {
-                    return;
-                };
+                let code = self.tabs[tab_ix]
+                    .code
+                    .get_or_insert_with(|| Box::new(TabCode::new()));
                 let restored: Vec<BufferId> = open.iter().map(|(_, id, _)| *id).collect();
+                if code.is_split() {
+                    // A split made while I/O was pending keeps its layout.
+                    for id in &restored {
+                        code.append(*id);
+                    }
+                }
                 // Merged into what the tab has now, not written over it: a
                 // file opened, or a split made, while these were loading stays.
                 let untouched = code.restore_groups(
@@ -1517,10 +1538,6 @@ impl LyrelApp {
                 }
                 self.editor_rebuild_watcher(cx);
                 cx.notify();
-            }
-            EditorPanelEvent::ShowInFileTree { path } => self.file_tree_show(path, window, cx),
-            EditorPanelEvent::RevealInFileTree { host: _, path } => {
-                self.file_tree_reveal_path(path, cx);
             }
             EditorPanelEvent::AttachToAgent { path, suffix } => {
                 self.attach_path_to_agent(path, suffix, cx)
@@ -1545,10 +1562,6 @@ impl LyrelApp {
                 window,
                 cx,
             ),
-            EditorPanelEvent::FocusTerminal => self.focus_active(window, cx),
-            EditorPanelEvent::FocusFileTree => {
-                self.file_tree.focus_handle.focus(window, cx);
-            }
             EditorPanelEvent::FocusDocument => self.focus_editor(window, cx),
             EditorPanelEvent::StatusCommand(command) => {
                 match command {
@@ -1564,12 +1577,6 @@ impl LyrelApp {
             }
             EditorPanelEvent::GoToLineRequested { id, line, column } => {
                 self.editor_go_to_line_landed(*id, *line, *column, window, cx);
-            }
-            EditorPanelEvent::DocumentFocused { .. } => {
-                if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
-                    self.status_document_focus = Some((tab.id(), true));
-                }
-                cx.notify();
             }
             EditorPanelEvent::RebuildWatcher => self.editor_rebuild_watcher(cx),
         }

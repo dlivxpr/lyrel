@@ -451,10 +451,11 @@ mod tests {
                             "the terminal must use the content height, not collapse to its intrinsic size");
                     });
                 }
-                vcx.update(|window, cx| {
+                let line_ending = vcx.update(|window, cx| {
                     let status = window.find("workbench-status").bounds();
                     let content = window.find("workbench-content").bounds();
                     assert_global_controls_in_bounds(window);
+                    let mut line_ending = None;
                     if filled && width == 720. {
                         let local = window.find("code-status-bar").bounds();
                         let document = window.find("document-status").bounds();
@@ -480,13 +481,22 @@ mod tests {
                         assert_global_controls_in_bounds(window);
                         let label = eol.label().unwrap().to_owned();
                         window.click("status-eol", cx);
-                        assert_ne!(window.find("status-eol").label(), Some(label.as_str()));
+                        line_ending = Some(label);
                     }
                     assert!(content.bottom() <= status.top());
                     assert!(status.bottom() <= window.viewport_size().height);
                     assert!(window.find("status-settings").visible());
-                    window.click("status-settings", cx);
+                    line_ending
                 });
+                if let Some(label) = line_ending {
+                    // The editor's click notifies the window through a GPUI event
+                    // after the input callback returns.
+                    settle(&mut vcx);
+                    vcx.update(|window, _| {
+                        assert_ne!(window.find("status-eol").label(), Some(label.as_str()));
+                    });
+                }
+                vcx.update(|window, cx| window.click("status-settings", cx));
                 settle(&mut vcx);
                 assert!(app.read_with(&vcx, |app, _| app.settings.is_some()));
                 vcx.simulate_keystrokes("escape");

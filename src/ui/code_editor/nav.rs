@@ -1499,6 +1499,7 @@ pub(super) mod gpui_tests {
                     cx,
                 )
             });
+            app.watch_editor_buffer_focus(id, window, cx);
             app.editor_show_in_tab(tab, id, true, window, cx);
             id
         })

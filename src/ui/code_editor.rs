@@ -504,8 +504,7 @@ pub(crate) enum EditorPanelEvent {
         host: HostId,
         directory: Option<PathBuf>,
     },
-    /// A buffer's identity changed (save-as / rename); the shell re-syncs LSP
-    /// while the watcher rebuild stays inside the editor.
+    /// Save As changed the path; the shell refreshes Host watches and LSP.
     IdentityChanged,
     /// The rename bar was answered; the shell runs the LSP rename.
     RenameRequested {
@@ -522,6 +521,7 @@ pub(crate) enum EditorPanelEvent {
     /// places the buffer, or ignores a stale target.
     OpenCompleted {
         workspace: lyrel_core::core::session::WorkspaceId,
+        window_host: HostId,
         tab: TabId,
         group: Option<split::GroupId>,
         id: BufferId,
@@ -531,6 +531,8 @@ pub(crate) enum EditorPanelEvent {
     /// A tab's recorded files finished restoring; the shell merges them into
     /// the tab's groups and takes the focus when nothing else did.
     TabRestored {
+        workspace: lyrel_core::core::session::WorkspaceId,
+        window_host: HostId,
         tab: TabId,
         open: Vec<(PathBuf, BufferId, bool)>,
         snapshot: crate::ui::editor_session::TabEditor,
@@ -544,20 +546,10 @@ pub(crate) enum EditorPanelEvent {
         anchor: Option<String>,
         revision: u64,
     },
-    /// Show a path in the file tree (a directory link asked "where is this?").
-    ShowInFileTree { path: PathBuf },
-    /// Reveal a path in the file tree after opening it in the editor.
-    RevealInFileTree { host: HostId, path: PathBuf },
     /// Type `@path` into the running agent's prompt.
     AttachToAgent { path: PathBuf, suffix: String },
     /// Hand a file the editor cannot show to the OS/desktop.
     OpenExternally { host: HostId, path: PathBuf },
-    /// The panel closed with no file to hold the focus: back to the terminal.
-    FocusTerminal,
-    /// An empty panel handed the keyboard to the file tree.
-    FocusFileTree,
-    /// The document surface took the focus; the status bar notes it.
-    DocumentFocused { tab: TabId },
     /// The file watcher must be rebuilt against the current window host.
     RebuildWatcher,
     /// A cancelled save prompt or an answered bar returns the keyboard to the
@@ -1408,13 +1400,13 @@ impl EditorPanelState {
                 }
                 cx.emit(EditorPanelEvent::OpenCompleted {
                     workspace: target.workspace,
+                    window_host: target.window_host,
                     tab: target.tab,
                     group: target.group,
                     id,
                     created,
                     front,
                 });
-                cx.emit(EditorPanelEvent::RebuildWatcher);
             }
             buffers::OpenResult::Failed {
                 host,
@@ -1455,7 +1447,7 @@ impl EditorPanelState {
     /// Makes a buffer out of a loaded file, or finds the one already open for
     /// it. Returns the buffer id and whether it was created; the caller — the
     /// restore completion, or the shell — decides where it shows.
-    pub(crate) fn install(
+    fn install(
         &mut self,
         host: SharedHost,
         loaded: Loaded,
@@ -2095,11 +2087,12 @@ impl EditorPanelState {
                     }
                 }
                 cx.emit(EditorPanelEvent::TabRestored {
+                    workspace: target.workspace,
+                    window_host: target.window_host,
                     tab,
                     open: opened,
-                    snapshot: state.clone(),
+                    snapshot: state,
                 });
-                cx.emit(EditorPanelEvent::RebuildWatcher);
             },
         );
     }
