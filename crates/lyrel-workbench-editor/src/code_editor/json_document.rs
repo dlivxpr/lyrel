@@ -81,7 +81,6 @@ impl StructuredViewFormat for JsonShell {
     type Target = Option<NodeTarget>;
 
     const KEY_CONTEXT: &str = "JsonStructure";
-    const STRUCTURE_UNDO_REDO: bool = true;
 
     fn element_prefix(&self) -> &'static str {
         "json"

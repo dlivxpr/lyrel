@@ -61,7 +61,6 @@ impl StructuredViewFormat for YamlShell {
     type Target = NodeTarget;
 
     const KEY_CONTEXT: &str = "YamlStructure";
-    const STRUCTURE_UNDO_REDO: bool = true;
     /// YAML 没有完整值面板：块标量与复杂键的保真靠双击直接 reveal 源码。
     const FULL_VALUE: bool = false;
 

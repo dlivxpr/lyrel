@@ -521,6 +521,19 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
         row_value(&view, &mut cx, "$.a.value").as_deref(),
         Some("+2_048")
     );
+    click_row(&view, &mut cx, "$.a.value");
+    cx.update(|window, cx| window.press(&secondary("z"), cx));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        row_value(&view, &mut cx, "$.a.value").as_deref(),
+        Some("+1_024")
+    );
+    cx.update(|window, cx| window.press(&secondary("shift-z"), cx));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert_eq!(
+        row_value(&view, &mut cx, "$.a.value").as_deref(),
+        Some("+2_048")
+    );
     assert_eq!(
         row_value(&view, &mut cx, "$[\"dotted.key\"]").as_deref(),
         Some("1979-05-27T07:32:00Z")
@@ -528,6 +541,11 @@ fn mapped_host_structure_occurrences_source_edit_and_exact_save(tcx: &mut TestAp
 
     // Undo/redo are the shared source history and the structure follows both.
     toggle_mode(&view, &mut cx);
+    assert!(cx.update(|window, _| {
+        window
+            .try_find(("toml-edit-value", view.entity_id()))
+            .is_none()
+    }));
     cx.update(|window, cx| window.press(&secondary("z"), cx));
     until(&mut cx, |cx| is_ready(&view, cx));
     toggle_mode(&view, &mut cx);

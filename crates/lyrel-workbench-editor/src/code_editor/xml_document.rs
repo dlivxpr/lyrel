@@ -65,7 +65,7 @@ impl StructuredViewFormat for XmlShell {
     type Target = NodeTarget;
 
     const KEY_CONTEXT: &str = "XmlStructure";
-    const STRUCTURE_UNDO_REDO: bool = true;
+    const REOPEN_ROOT_ON_REFRESH: bool = false;
 
     fn element_prefix(&self) -> &'static str {
         "xml"

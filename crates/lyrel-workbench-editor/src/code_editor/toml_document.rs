@@ -72,7 +72,6 @@ impl StructuredViewFormat for TomlShell {
     type Target = TomlTarget;
 
     const KEY_CONTEXT: &str = "TomlStructure";
-    const STRUCTURE_UNDO_REDO: bool = false;
 
     fn element_prefix(&self) -> &'static str {
         "toml"

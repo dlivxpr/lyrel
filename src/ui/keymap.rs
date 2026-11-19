@@ -241,35 +241,25 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             load_binding("secondary-shift-delete", CsvDeleteColumn, csv, cx),
         ]);
     }
-    // The JSON structure tree's history keys. A tree presentation edits the
-    // shared source Document through its ordinary `replace_ranges`, so undo
-    // and redo there are the same document history the source view uses, not
-    // a second one. Bound on the tree's own context so a source view, a text
-    // field, a shell or the terminal keeps its own chords.
+    // Structure and source presentations edit the same Document history. The
+    // tree-only contexts leave text inputs, shells and terminal bindings alone.
     {
         use gpui_kit::component::input::{Redo, Undo};
-        let json = Some(lyrel_workbench_editor::code_editor::JSON_KEY_CONTEXT);
-        bindings.extend([
-            load_binding("secondary-z", Undo, json, cx),
-            load_binding("secondary-shift-z", Redo, json, cx),
-            load_binding("ctrl-y", Redo, json, cx),
-        ]);
-        let xml = Some(lyrel_workbench_editor::code_editor::XML_KEY_CONTEXT);
-        bindings.extend([
-            load_binding("secondary-z", Undo, xml, cx),
-            load_binding("secondary-shift-z", Redo, xml, cx),
-            load_binding("ctrl-y", Redo, xml, cx),
-        ]);
-    }
-    // YAML's tree uses the same shared Document history as its source view.
-    {
-        use gpui_kit::component::input::{Redo, Undo};
-        let yaml = Some(lyrel_workbench_editor::code_editor::YAML_KEY_CONTEXT);
-        bindings.extend([
-            load_binding("secondary-z", Undo, yaml, cx),
-            load_binding("secondary-shift-z", Redo, yaml, cx),
-            load_binding("ctrl-y", Redo, yaml, cx),
-        ]);
+        use lyrel_workbench_editor::code_editor::{
+            JSON_KEY_CONTEXT, TOML_KEY_CONTEXT, XML_KEY_CONTEXT, YAML_KEY_CONTEXT,
+        };
+        for tree in [
+            JSON_KEY_CONTEXT,
+            TOML_KEY_CONTEXT,
+            XML_KEY_CONTEXT,
+            YAML_KEY_CONTEXT,
+        ] {
+            bindings.extend([
+                load_binding("secondary-z", Undo, Some(tree), cx),
+                load_binding("secondary-shift-z", Redo, Some(tree), cx),
+                load_binding("ctrl-y", Redo, Some(tree), cx),
+            ]);
+        }
     }
     // The read-only book's commands. `BookDocument` is declared only by the
     // book presentation, so none of these take a key from a text field, a

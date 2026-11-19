@@ -171,8 +171,8 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
     fn element_prefix(&self) -> &'static str;
     /// 结构预览持有键盘时成立的上下文；源码面不声明它，文字编辑键不会被截走。
     const KEY_CONTEXT: &'static str;
-    /// 结构模式是否注册共享 history 的撤销/重做动作（JSON 有，TOML 无）。
-    const STRUCTURE_UNDO_REDO: bool;
+    /// 保留格式原有的刷新策略；XML 的文档根折叠由当前视图独立持有。
+    const REOPEN_ROOT_ON_REFRESH: bool = true;
     /// 是否提供完整值面板与双击打开完整值；YAML 为假——块标量与复杂键的
     /// 保真靠双击直接 reveal 源码，工具栏也不渲染完整值按钮。
     const FULL_VALUE: bool = true;
@@ -739,10 +739,6 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let source = self.document.read(cx).document().clone();
         Some(source.read(cx).snapshot().shared_text())
     }
-
-    fn structure_editable(&self, cx: &App) -> bool {
-        self.current_projection(cx).is_some()
-    }
 }
 
 impl<F: StructuredViewFormat> StructuredView<F> {
@@ -754,6 +750,9 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         cx: &mut Context<Self>,
         request: F::EditRequest,
     ) {
+        if self.mode != StructuredMode::Structure {
+            return;
+        }
         let Some(projection) = self.current_projection(cx) else {
             return;
         };
@@ -995,7 +994,8 @@ impl<F: StructuredViewFormat> StructuredView<F> {
             self.expanded = vec![false; node_count];
             format.default_expansion(&projection, &mut self.expanded);
         }
-        if let Some(root) = projection.root()
+        if F::REOPEN_ROOT_ON_REFRESH
+            && let Some(root) = projection.root()
             && root < self.expanded.len()
         {
             self.expanded[root] = true;
@@ -1253,11 +1253,12 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                 .projection()
                 .is_some_and(|projection| document.format().node_has_full_value(projection, index))
         });
-        let edit_buttons: Vec<EditButton<F::EditRequest>> = match self.current_projection(cx) {
-            Some(projection) => document.format().edit_buttons(&projection, self.selected),
-            None => Vec::new(),
+        let edit_buttons = if self.mode == StructuredMode::Structure {
+            self.current_projection(cx)
+                .map(|projection| document.format().edit_buttons(&projection, self.selected))
+        } else {
+            None
         };
-        let editable = self.structure_editable(cx);
         let mutation_error = self.mutation_error.clone();
         let notice = self.notice.clone();
         let mode = self.mode;
@@ -1379,7 +1380,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                         .child(notice),
                 )
             })
-            .when(editable, |row| {
+            .when_some(edit_buttons, |row, edit_buttons| {
                 let mut row = row;
                 for button in &edit_buttons {
                     let request = button.flow.request();
@@ -1663,8 +1664,7 @@ impl<F: StructuredViewFormat> Render for StructuredView<F> {
         let item = item.child(body);
         match mode {
             StructuredMode::Structure => {
-                let item = item
-                    .key_context(F::KEY_CONTEXT)
+                item.key_context(F::KEY_CONTEXT)
                     .track_focus(&focus)
                     .focus_visible(move |style| style.border_1().border_color(focus_ring))
                     .on_mouse_down(
@@ -1676,14 +1676,10 @@ impl<F: StructuredViewFormat> Render for StructuredView<F> {
                     )
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         this.key(event, window, cx)
-                    }));
-                if F::STRUCTURE_UNDO_REDO {
-                    item.on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
-                        .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
-                        .into_any_element()
-                } else {
-                    item.into_any_element()
-                }
+                    }))
+                    .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
+                    .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
+                    .into_any_element()
             }
             StructuredMode::Source => item.into_any_element(),
         }

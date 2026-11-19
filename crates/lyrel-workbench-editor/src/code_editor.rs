@@ -114,6 +114,8 @@ pub const NAV_OR_STRIP_KEY_CONTEXT: &str = "Input || DocumentStrip";
 pub use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
 pub use pdf_document::{PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
 pub use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+/// TOML 结构树的键盘上下文。
+pub use toml_document::KEY_CONTEXT as TOML_KEY_CONTEXT;
 /// XML 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
 pub use xml_document::KEY_CONTEXT as XML_KEY_CONTEXT;
 /// YAML 结构树的键盘上下文。
