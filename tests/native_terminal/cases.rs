@@ -129,7 +129,10 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
             view.update(cx, |view, cx| {
                 view.open_search(window, cx);
                 assert_eq!(
-                    view.search.as_ref().unwrap().input.read(cx).value(),
+                    view.search_input()
+                        .expect("the find bar opened")
+                        .read(cx)
+                        .value(),
                     "frozen 宽e\u{301}"
                 );
                 assert_eq!(view.selection_text().as_deref(), Some("frozen 宽e\u{301}"));

@@ -582,7 +582,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
             .update(cx, |_, window, cx| {
                 view.update(cx, |view, cx| {
                     view.open_search(window, cx);
-                    let input = view.search.as_ref().unwrap().input.clone();
+                    let input = view.search_input().unwrap().clone();
                     input.update(cx, |input, cx| input.set_value(query, window, cx));
                     view.recompute_matches(cx);
                 });
@@ -591,7 +591,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.search.as_ref().unwrap().matches.len(),
+                view.search_match_count(),
                 expected,
                 "query {query} describes semantic reading rows, not replacements"
             );
@@ -615,7 +615,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
             });
             graphics_assert_production_paint(window, &view, cx);
             assert_eq!(
-                view.read_with(cx, |view, _| view.search.as_ref().unwrap().current_index),
+                view.read_with(cx, |view, _| view.search_current_index()),
                 Some(0)
             );
             let stepped = reading_painted_search_runs(window, &view, cx);

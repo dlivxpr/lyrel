@@ -352,13 +352,13 @@ window
 // same starting state.
 view.input.reset_handoff();
 view.input.editor_mut().set("echo a");
-assert!(view.search.is_none(), "no find bar is open");
+assert!(!view.is_search_open(), "no find bar is open");
 })
 .unwrap();
 vcx.simulate_keystrokes(chord);
 window
 .update(cx, |view, _, _| {
-assert!(view.search.is_none(), "{chord} did not open the find bar");
+assert!(!view.is_search_open(), "{chord} did not open the find bar");
 assert_eq!(
 view.input.editor().text(),
 "",

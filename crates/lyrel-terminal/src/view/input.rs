@@ -72,7 +72,7 @@ impl TerminalView {
             return;
         }
 
-        if self.search.is_some() && self.search_focused {
+        if self.search.is_open() && self.search.focused() {
             if ks.key == "escape" {
                 self.close_search(window, cx);
                 cx.stop_propagation();
@@ -171,7 +171,7 @@ impl TerminalView {
         if !self.focus_handle.is_focused(window)
             || !window.is_window_active()
             || self.composer_focused
-            || self.search_focused
+            || self.search.focused()
             || self.terminal.exited
             || !self.accepts_input(cx)
         {
@@ -356,7 +356,7 @@ impl TerminalView {
         {
             context.add("keyboard_events");
         }
-        if self.history.search().is_some() && !self.search_focused && !self.composer_focused {
+        if self.history.search().is_some() && !self.search.focused() && !self.composer_focused {
             context.add("reverse_search");
         }
         context
@@ -427,7 +427,7 @@ impl TerminalView {
 
     pub fn frame_input_active(&self) -> bool {
         self.input
-            .inactive_reason_on_screen(&self.terminal, self.search_focused, self.frame.alt_screen)
+            .inactive_reason_on_screen(&self.terminal, self.search.focused(), self.frame.alt_screen)
             .is_none()
     }
 
@@ -454,7 +454,7 @@ impl TerminalView {
 
     pub fn input_inactive_reason(&self) -> Option<&'static str> {
         self.input
-            .inactive_reason(&self.terminal, self.search_focused)
+            .inactive_reason(&self.terminal, self.search.focused())
     }
 
     pub fn link_inactive_reason(&self, cx: &gpui_kit::App) -> Option<&'static str> {
@@ -489,7 +489,7 @@ impl TerminalView {
             self.input.settle_shell_owner(&self.terminal);
         } else if self
             .input
-            .inactive_reason_on_screen(&self.terminal, self.search_focused, alt_screen)
+            .inactive_reason_on_screen(&self.terminal, self.search.focused(), alt_screen)
             .is_none()
         {
             self.input.engage_hold_into_editor();
@@ -547,7 +547,7 @@ impl TerminalView {
     pub fn insert_newline_fallback_action(&mut self, cx: &mut Context<Self>) {
         if self.input_active() {
             self.insert_newline_action(cx);
-        } else if (self.search.is_some() && self.search_focused)
+        } else if (self.search.is_open() && self.search.focused())
             || self.key_flags().kitty_active()
             || !self.accepts_input(cx)
         {
@@ -581,7 +581,7 @@ impl TerminalView {
         // A frame-old context must not submit after focus or prompt ownership
         // has moved to another input surface.
         if !self.input_active()
-            || self.search_focused
+            || self.search.focused()
             || self.composer_focused
             || self.history.search().is_none()
         {
@@ -617,7 +617,7 @@ impl TerminalView {
     }
 
     pub fn tab_pressed(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.search_focused {
+        if self.search.focused() {
             cx.propagate();
             return;
         }

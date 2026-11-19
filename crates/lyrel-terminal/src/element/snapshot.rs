@@ -561,7 +561,7 @@ impl TerminalElement {
         live_origin: i64,
         cx: &App,
     ) -> (bool, bool) {
-        let Some(search) = self.view.read(cx).search.as_ref() else {
+        let Some(search) = self.view.read(cx).search_session() else {
             return (false, false);
         };
         let reading = self
