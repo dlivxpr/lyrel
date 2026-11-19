@@ -281,8 +281,8 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
 
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
-    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features
-    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features
+    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --exclude lyrel-ui-base --all-features
+    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --exclude lyrel-ui-base --all-features
     ```
 
     不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。

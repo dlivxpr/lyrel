@@ -14,6 +14,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
 | 根包 `lyrel`，程序 `lyrel-app` | GPUI 窗口、终端呈现、编辑器、工作台、平台凭据与桌面集成 | 不在 GUI 层复制 daemon 或 Host 实现 |
+| `lyrel-ui-base` | Windows／macOS 的共享 GPUI 基础：`Config`、共享 actions、`WorkspaceStore`、`HostOps`／`HostRegistry`、主题与本地化、通知历史、路由与只读 SCM 快照 | 不拥有 `LyrelApp`、终端网格、文档引擎、WebView 或系统凭据 |
 | `lyrel-protocol` | control／pane wire、同步 IPC、daemon 启动探测、配置与会话值、`Host` 契约、C-free 本机 `LocalHost`、`terminal_width` | 不链接 SSH、Tokio、SQLite、PTY、权威图形或图像解码 |
 | `lyrel-core` | 重导出协议，持有 daemon、MachineStore、RemoteHost、PTY、SSH、图形状态、主机指标与只读 SQLite 引擎 | 不依赖 GPUI 或系统钥匙串 |
 | `lyrel-cli`，程序 `lyrel` | 面向人和 agent 的命令、目标解析、输出与退出码，经协议连接 daemon | 生产路径不依赖 `lyrel-core`；不要求 GUI 正在运行 |
@@ -24,7 +25,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 | `lyrel-insights` | 无 GPUI 的 skills、agent 统计和 GitHub 查询；桌面另含用量提供方与显式选择浏览器 profile 的会话导入 | 经 `Host` 执行工作区操作，不进入 CLI 或 server 的生产依赖图，不拥有 GPUI 或系统凭据存储 |
 | `lyrel-test-support`（仅测试） | 共享 GPUI-free 测试夹具库（真实 PTY／protocol producer、native-SSH 夹具）与轻量 `lyrel-graphics-fixture` daemon／PTY producer 进程 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
 
-`src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
+`src/daemon.rs` 重导出共享 daemon；桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。桌面基础层只提供共享状态、值和 Host 调度；窗口菜单、托盘、通知来源跳转及工作区连接编排仍由根包接线。
 
 `Host` 共用契约测试仅在 `lyrel-core` 自身测试或启用 `test-support` 时编译。`lyrel-server` 的 `insights_conformance` 通过 `lyrel-insights` 的公开接口验证 skills 与统计：所有平台运行本地适配器，Unix 另运行真实 `lyrel-server --stdio`。这个测试依赖不进入 server 的生产依赖图。
 
@@ -320,8 +321,8 @@ PDF 引擎的格式兼容、保真文本编辑模型、SQLite 的并发读取与
 
 通知、本地化与用量账号属于桌面应用，不是远端工作区状态。
 
-- **通知历史：**`ui::notification_history` 记录应用收到的 Toast，最多保留 500 条；内存修改在 GPUI 事件循环串行执行，单一 writer 按同序原子写盘。它不是 daemon 事件日志，也不读取系统通知中心。
-- **本地化：**`ui::i18n` 以 `L10nKey` 维护 `en`／`zh-CN`，`system` 只是选择模式。配置热重载按变化刷新窗口、菜单、快捷键与 Windows Explorer 动词，不用 PTY locale 决定界面语言。
+- **通知历史：**`lyrel-ui-base` 记录应用收到的 Toast，最多保留 500 条；内存修改在 GPUI 事件循环串行执行，单一 writer 按同序原子写盘。窗口 shell 负责解析并打开通知来源；历史不是 daemon 事件日志，也不读取系统通知中心。
+- **本地化：**`lyrel-ui-base` 以 `L10nKey` 维护 `en`／`zh-CN`，`system` 只是选择模式。配置热重载按变化刷新窗口、菜单、快捷键与 Windows Explorer 动词，不用 PTY locale 决定界面语言。
 - **用量账号：**`ui::settings::usage` 的账号和 `lyrel-usage` 凭据域仅供桌面用量查询，与 SSH 凭据、远端 Host 和 agent 配置分离。
 
 ## 修改位置与验证边界
@@ -332,7 +333,7 @@ PDF 引擎的格式兼容、保真文本编辑模型、SQLite 的并发读取与
 | --- | --- |
 | 进程角色与桌面启动 | [`src/lib.rs::run`](https://github.com/dlivxpr/lyrel/blob/main/src/lib.rs)（[`src/main.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/main.rs) 为薄 binary）、[`lyrel-server` 入口](https://github.com/dlivxpr/lyrel/blob/main/crates/lyrel-server/src/main.rs) |
 | 会话值与持久化 | [`lyrel-protocol/src/core/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-protocol/src/core)、[`lyrel-core/src/core/machine/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/core/machine) |
-| Host 契约与执行 | [`lyrel-protocol/src/host/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-protocol/src/host)、[`lyrel-core/src/host/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/host)、[`ui/host_ops.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/ui/host_ops.rs) |
+| Host 契约与执行 | [`lyrel-protocol/src/host/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-protocol/src/host)、[`lyrel-core/src/host/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/host)、[`lyrel-ui-base/src/host_ops.rs`](https://github.com/dlivxpr/lyrel/blob/main/crates/lyrel-ui-base/src/host_ops.rs) |
 | PTY、pane 与 SSH 路由 | [`daemon/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/daemon) |
 | 窗口组合与能力所有者 | [`ui/app.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/ui/app.rs)、[`ui/`](https://github.com/dlivxpr/lyrel/tree/main/src/ui) |
 | 终端连接、交互与绘制 | [`terminal/`](https://github.com/dlivxpr/lyrel/tree/main/src/terminal) |
