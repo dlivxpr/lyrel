@@ -1,6 +1,16 @@
 // Host boundary module traversal. Invoked by check-host-boundary.sh, not a test harness.
 const fs = require('node:fs');
 const path = require('node:path').posix;
+// Single scan-root policy. The root package's desktop sources must always be
+// present; a known desktop UI sub-crate is scanned in full whenever its
+// extraction has landed, and skipped loudly (never fatal) while it has not.
+const SCAN_ROOTS = [
+    {root: 'src/ui', required: true},
+    {root: 'src/terminal', required: true},
+    {root: 'crates/lyrel-ui-base/src', required: false},
+    {root: 'crates/lyrel-terminal/src', required: false},
+    {root: 'crates/lyrel-workbench-editor/src', required: false},
+];
 const files = new Set();
 function collect(root) {
     for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
@@ -9,7 +19,17 @@ function collect(root) {
         else if (file.endsWith('.rs')) files.add(file);
     }
 }
-['src/ui', 'src/terminal'].forEach(collect);
+for (const {root, required} of SCAN_ROOTS) {
+    if (fs.existsSync(root)) {
+        collect(root);
+        continue;
+    }
+    if (required) {
+        console.error(`check-host-boundary: scan root '${root}' does not exist (moved? renamed?)`);
+        process.exit(2);
+    }
+    console.error(`check-host-boundary: scan root '${root}' not extracted yet; skipping`);
+}
 if (files.size < 10) throw Error('check-host-boundary: fewer than 10 files; scan roots look wrong');
 
 // Strings/comments are units: fixture braces cannot manufacture Rust modules.
@@ -125,7 +145,15 @@ function parse(file) {
             ix = last+1;
         }
     }
-    const directory = path.basename(file) === 'mod.rs' ? path.dirname(file) : path.join(path.dirname(file), path.basename(file, '.rs'));
+    // `mod.rs` and crate roots (`lib.rs`/`main.rs`) resolve child modules in the
+    // file's own directory; any other module's children live in the matching
+    // module directory. Without the crate-root case, `src/lib.rs`'s
+    // `#[cfg(test)] mod fixture;` would never resolve and the fixture would be
+    // scanned as production.
+    const base = path.basename(file);
+    const directory = base === 'mod.rs' || base === 'lib.rs' || base === 'main.rs'
+        ? path.dirname(file)
+        : path.join(path.dirname(file), path.basename(file, '.rs'));
     walk(0, tokens.length, directory, path.dirname(file));
 }
 for (const file of files) parse(file);

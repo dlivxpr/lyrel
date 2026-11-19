@@ -89,13 +89,17 @@ function isPreflightOnly(file) {
   );
 }
 
-// 只在桌面（GUI/updater/native harness）与 Apple/Windows 目标上编译的输入。
+// 只在桌面（GUI/updater/native harness）与 Apple/Windows 目标上编译的输入；
+// lyrel-ui-base 与未来桌面 UI 子 crate 同理，Linux headless 显式 --exclude。
 function isDesktopOnly(file) {
   return (
     file.startsWith('src/') ||
     file === 'build.rs' ||
     file.startsWith('crates/lyrel-markdown-editor/') ||
     file.startsWith('crates/lyrel-updater/') ||
+    file.startsWith('crates/lyrel-ui-base/') ||
+    file.startsWith('crates/lyrel-terminal/') ||
+    file.startsWith('crates/lyrel-workbench-editor/') ||
     file.startsWith('tests/') ||
     file.startsWith('assets/icons/') ||
     file.startsWith('assets/drawio/') ||

@@ -247,7 +247,7 @@ jobs:
       - name: Build Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 30
-        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }}
+        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-ui-base --exclude lyrel-updater --all-features --target ${{ matrix.target }}
 
       # A binary that imports VCRUNTIME140.dll cannot start on a Windows
       # machine that has never installed the Visual C++ Redistributable — the
@@ -349,22 +349,24 @@ jobs:
         timeout-minutes: 15
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --test cli_e2e
 
-      # Linux headless 只有 GUI-free 成员，生产图本身就是 --all-features；
-      # 测试沿用同一选择，同样只把 harness=false 的 cli_e2e 排除在 nextest 之外。
+      # Linux headless 只有 GUI-free 成员（workspace 显式排除桌面 lyrel、
+      # lyrel-markdown-editor、lyrel-ui-base、lyrel-updater），生产图本身
+      # 就是 --all-features；测试沿用同一选择，同样只把 harness=false 的
+      # cli_e2e 排除在 nextest 之外。
       - name: Test Linux headless
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 20
-        run: cargo nextest run --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --lib --bins --tests --all-features --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(cli_e2e)'
+        run: cargo nextest run --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-ui-base --exclude lyrel-updater --lib --bins --tests --all-features --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(cli_e2e)'
 
       - name: Test Linux headless doctests
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 15
-        run: cargo test --doc --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }}
+        run: cargo test --doc --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-ui-base --exclude lyrel-updater --all-features --target ${{ matrix.target }}
 
       - name: Test Linux CLI end-to-end harness
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.preflight.outputs.reuse != 'true' }}
         timeout-minutes: 15
-        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater --all-features --target ${{ matrix.target }} --test cli_e2e
+        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-ui-base --exclude lyrel-updater --all-features --target ${{ matrix.target }} --test cli_e2e
 
       # There is deliberately no post-mortem step here, and that is worth
       # recording, because an earlier version of this file had one: on failure it

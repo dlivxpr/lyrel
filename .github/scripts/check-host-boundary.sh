@@ -2,13 +2,14 @@
 #
 # The GUI must not touch the filesystem or git directly.
 #
-# Once a workspace can live on a remote machine, a path held by `ui::` or
-# `terminal::` is not necessarily a path on *this* box, and `std::path`'s
+# Once a workspace can live on a remote machine, a path held by desktop UI or
+# terminal code is not necessarily a path on *this* box, and `std::path`'s
 # fs-backed APIs quietly answer for the wrong machine:
 # `canonicalize` walks the local filesystem, `is_absolute` says `false` for
 # `/home/me` on Windows, `read_dir` lists the client's disk. Everything that may
-# be looking at a workspace path has to go through `ui::host_ops` / the `Host`
-# trait, which routes to the local disk or the far side as appropriate.
+# be looking at a workspace path has to go through `lyrel-ui-base`'s host_ops /
+# the `Host` trait, which routes to the local disk or the far side as
+# appropriate.
 #
 # This script enforces that. It is deliberately *not* the raw grep from the
 # contract: run bare, that grep reports 42 hits on a clean tree — not one of them
@@ -31,21 +32,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-ROOTS=(src/ui src/terminal)
-
 # Allowlist entries are `<path>|<literal pattern>`, one per line. `<path>|*`
 # exempts a file wholesale (used only for the boundary module itself). The
 # pattern side is matched as a plain substring of the offending line.
 ALLOW=$(
     cat <<'EOF'
 # The host boundary itself: every routed filesystem call lands here by design.
-src/ui/host_ops.rs|*
+crates/lyrel-ui-base/src/host_ops.rs|*
 
 # Themes and presets are app-owned files under the local config dir
 # (`themes_dir()`), never a workspace path — a remote workspace does not carry
 # the user's color schemes with it.
-src/ui/presets.rs|std::fs::
-src/ui/presets.rs|.is_absolute()
+crates/lyrel-ui-base/src/presets.rs|std::fs::
+crates/lyrel-ui-base/src/presets.rs|.is_absolute()
 src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 
 # The editor's record of which files each tab had open is app state under the
@@ -68,8 +67,8 @@ src/ui/code_editor/drawio_engine/surface.rs|std::fs::remove_dir_all(&self.data_d
 
 # 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
 # Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
-src/ui/notification_history.rs|std::fs::read
-src/ui/notification_history.rs|std::fs::create_dir_all
+crates/lyrel-ui-base/src/notification_history.rs|std::fs::read
+crates/lyrel-ui-base/src/notification_history.rs|std::fs::create_dir_all
 
 # Reading a private key off *this* machine to hash it into a keychain account
 # (`core::keychain`). The key is the client's credential; the far side never
@@ -149,16 +148,10 @@ src/ui/lsp/servers.rs|std::fs::read_to_string
 EOF
 )
 
-# Module traversal uses the existing Node.js prerequisite; no compiler/build.
-# A guard that scans nothing reports success, which is the one failure mode worse
-# than a noisy guard. Fail loudly if a root has moved out from under us.
-for root in "${ROOTS[@]}"; do
-    if [ ! -d "$root" ]; then
-        echo "check-host-boundary: scan root '$root' does not exist (moved? renamed?)" >&2
-        exit 2
-    fi
-done
-
+# Module traversal and the scan-root policy live in host-boundary.cjs — this
+# script only supplies the allowlist, so the roots cannot drift apart into two
+# lists. The scanner fails loudly (exit 2) when a required root has moved out
+# from under us, and refuses implausibly small scan sets.
 export HOST_BOUNDARY_ALLOW="$ALLOW"
 node .github/scripts/host-boundary.cjs
 
