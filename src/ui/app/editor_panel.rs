@@ -477,6 +477,7 @@ impl LyrelApp {
     }
 
     /// Brings the file at `pos` in the active tab's strip to the front.
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(crate) fn editor_activate(
         &mut self,
         pos: usize,
