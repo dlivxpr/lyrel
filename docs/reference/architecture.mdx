@@ -16,13 +16,13 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 | 根包 `lyrel`，程序 `lyrel-app` | GPUI 窗口装配、标签页／侧栏、`TreeSync`、机器镜像与连接、文件树／SCM、GitHub／设置呈现、系统凭据／托盘与整窗及原生集成测试 | 不实现终端网格、文档编辑器、daemon 或 Host |
 | `lyrel-ui-base` | Windows／macOS 的共享 GPUI 基础：`Config`、共享 actions、`WorkspaceStore`、`HostOps`／`HostRegistry`、主题与本地化、通知历史、路由与只读 SCM 快照 | 不拥有 `LyrelApp`、终端网格、文档引擎、WebView 或系统凭据 |
 | `lyrel-terminal` | pane 连接与流消费、`TerminalView`／`TerminalElement`、输入栏、客户端图形／Glyph 渲染和回放缓存 | 不持有窗口、权威 PTY 或编辑器状态；以 `TerminalHostEvent` 交接通知的 pane 揭示意图 |
-| `lyrel-workbench-editor` | `EditorPanelState`、`EditorBuffers`、Host 文档生命周期、各格式视图、Markdown 宿主、Mermaid、LSP 与 draw.io WebView | 不依赖终端或窗口 shell；通过 `EditorPanelEvent` 交接导航等窗口操作 |
+| `lyrel-workbench-editor` | `EditorPanelState`、`EditorBuffers`、Host 文档生命周期、各格式视图、Markdown 宿主、Mermaid、LSP 与 draw.io WebView | 不依赖终端、窗口 shell 或 `lyrel-core/remote-install`；通过 `EditorPanelEvent` 交接导航等窗口操作 |
 | `lyrel-protocol` | control／pane wire、同步 IPC、daemon 启动探测、配置与会话值、`Host` 契约、C-free 本机 `LocalHost`、`terminal_width` | 不链接 SSH、Tokio、SQLite、PTY、权威图形或图像解码 |
 | `lyrel-core` | 重导出协议，持有 daemon、MachineStore、RemoteHost、PTY、SSH、图形状态、主机指标与只读 SQLite 引擎 | 不依赖 GPUI 或系统钥匙串 |
 | `lyrel-cli`，程序 `lyrel` | 面向人和 agent 的命令、目标解析、输出与退出码，经协议连接 daemon | 生产路径不依赖 `lyrel-core`；不要求 GUI 正在运行 |
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
 | `lyrel-document` | GUI-free 文档引擎：`default-features = false` 只编译编码/BOM/逐行行尾/EditorConfig 的 text codec；`formats` 解锁 JSON／JSONL、TOML、YAML、XML 的保真投影／局部 mutation、CSV 表格、GIF／TIFF 解码、draw.io 文档探测、EPUB 容器／章节清洗／阅读状态／全书搜索与只读 PDF 页度量／栅格化／文本层／大纲／表单描述，全部共享一个 `CancelToken`／`ProjectionState` 取消与 revision／generation guard | 不依赖 GPUI、`lyrel-core` 或 `lyrel-protocol`，不持有 Host/path、Document、history、保存或 UI 本地化，不写回任何格式 |
-| `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
+| `lyrel-markdown-editor` | 独立维护的 Zorite MIT editor／bidi／ratex 派生实现，拥有 `Document` 和原生编辑呈现 | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
 | `lyrel-updater` | Windows／macOS 的独立更新程序与共享库：安装布局标记、验证／安装计划及更新结果；Windows 复用 core 的 ConPTY 清单校验 | 不依赖 GPUI，不负责下载检查、界面或会话 |
 | `lyrel-insights` | 无 GPUI 的 skills、agent 统计和 GitHub 查询；桌面另含用量提供方与显式选择浏览器 profile 的会话导入 | 经 `Host` 执行工作区操作，不进入 CLI 或 server 的生产依赖图，不拥有 GPUI 或系统凭据存储 |
 | `lyrel-test-support`（仅测试） | 共享 GPUI-free 测试夹具库（真实 PTY／protocol producer、native-SSH 夹具）与轻量 `lyrel-graphics-fixture` daemon／PTY producer 进程 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
@@ -30,15 +30,16 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 `src/daemon.rs` 重导出共享 daemon；桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。桌面基础层只提供共享状态、值和 Host 调度；窗口菜单、托盘、通知来源跳转及工作区连接编排仍由根包接线。
 
 桌面六包仅在 Windows／macOS 构建。Linux headless 明确排除桌面六包，保留另外七包。CI 的 `workspace-graph.cjs` 核对成员、跨目标的直接依赖声明和选定目标的传递生产依赖；桌面四个 Host 消费者（根包、基础层、终端和编辑器）均由 `check-host-boundary.sh` 扫描。
+终端与文档工作台不相互依赖。CLI 不链接 core 执行引擎，server 的唯一直接生产依赖仍是 `lyrel-core`；工作台不引入安装器专用的 `async_zip`。
 固定版本的 `gpui-kit` 本身传递依赖 `lsp-types`；终端和共享基础层不直接声明它，LSP 客户端只在编辑器中实现。
 
 `Host` 共用契约测试仅在 `lyrel-core` 自身测试或启用 `test-support` 时编译。`lyrel-server` 的 `insights_conformance` 通过 `lyrel-insights` 的公开接口验证 skills 与统计：所有平台运行本地适配器，Unix 另运行真实 `lyrel-server --stdio`。这个测试依赖不进入 server 的生产依赖图。
 
 不带引擎的 `LocalHost` 保留文件、Git 与 agent 操作，SQLite 查询返回 `Unsupported`。桌面和 server 使用 core 组合的完整本机 Host；远端经同一 `Host` 契约与 `sqlite-browse-v1` 传输。拆分不改变 control v18 或 pane v19。
 
-结构化文档纯引擎与模型测试集中在 `crates/lyrel-document/src/`；
-`lyrel-workbench-editor` 的 `*_document.rs` 保留 Document／Host 适配、异步调度与呈现。引擎级来源
-记录已随各格式子模块迁入 `lyrel-document`（`src/{json,toml,yaml,xml,csv,image}/UPSTREAM.toml`
+JSON／JSONC／JSONL、TOML、YAML、XML 的保真投影和局部修改仍分别归 `lyrel-document`，不共享 AST。`lyrel-workbench-editor` 的 `structured_document` 负责订阅 `Document`、防抖单飞解析和 revision 校验；`structured_view` 负责模式切换、树展开与导航、滚动、源码定位和编辑面板会话。各 `*_document.rs` 适配器提供格式专属的解析、行呈现和编辑规则；整窗集成测试仍留在根包。
+
+引擎级来源记录已随各格式子模块迁入 `lyrel-document`（`src/{json,toml,yaml,xml,csv,image}/UPSTREAM.toml`
 与 crate 根部的 `UPSTREAM-epub.toml`／`UPSTREAM-pdf.toml`），UI 交互级记录留在工作台。
 下方源码复用表中的 `image_document/gif.rs`、`csv_document/edit.rs`、`structure_view`
 和 `xml_document/projection.rs` 是原模块名；当前对应 `lyrel-document/src/image/gif.rs`、
@@ -96,14 +97,29 @@ CLI 的 `-m` 复用本地 daemon 已连接的机器路由，不自行建立新�
 | 延迟创建与附着 | `PendingPane` | 每 connecting slot Entity | 管理创建代次、失败、取消和合法结果安装 |
 | 窗口连接 | `WindowConnection` | 每窗口 | 管理手动连接尝试与待创建工作区意图 |
 | 共享机器连接 | `RemoteLinks`、`HostLinks`、`LocalLink` | 进程 Global | 监督机器连接、control link、本地 daemon、重连与 pane relink，各自保留原有职责 |
-| 文件树／SCM | `FileTreeState`／`ScmPanelState` | 每窗口 | 管理各自加载、失效和转换；工作台适配 Host 调度、确认与导航 |
+| 工作区文件树 | `FileTree` | 每窗口 Entity | 持有目录缓存、异步加载、监视、quick-open 索引、搜索、行内编辑、焦点与虚拟列表；通过 `FileTreeEvent` 交接跨面板操作，标签页保留自己的展开和选择记录 |
+| SCM 与 diff 探测 | `ScmPanelState`、`DiffProbeTracker` | 每窗口 | 探测按 Host、路径和 `DiffSource` 去重；飞行期间的多次失效合并为一次后续探测，退休 `SharedHost` 的结果不发布。diff overlay 的焦点、选择和滚动仍归标签页 |
 | 文档面板与缓冲区 | `EditorPanelState`／`EditorBuffers` | 每窗口编辑面板 | 管理文档加载、监视、导航、保存及未保存提示 |
-| Markdown／MDX 原文与撤销 | `lyrel_markdown_editor::Document` | 每文档 | 一份 LF 原文、逐行表示、格式、history 与 revision；每个 `EditorState` presentation 独立持有选择、焦点、滚动、IME 与几何缓存 |
+| Markdown／MDX 原文与撤销 | `lyrel_markdown_editor::Document` | 每文档 | 一份 LF 原文、格式、history、revision 和唯一有效 IME lease；每个 `EditorState` 独立持有选择、光标 affinity、滚动、帧布局缓存、命中几何和互斥菜单 |
 | 终端客户端与绘制 | `RemoteTerminal`、`PaneConnection`、`TerminalView`、`TerminalElement` | 每客户端 pane | 按连接、流消费、实体适配与逐帧绘制分工，桌面缓存不是会话权威 |
-| 终端交互 | `PromptInput`、`Composer`、`AgentActivity`、搜索与滚动状态 | 每客户端 pane | 各自拥有输入、agent 消息框、活动与交互转换，生命周期任务归 `TerminalLifecycle` |
+| 终端交互 | `PromptInput`、`Composer`、`AgentActivity`、`TerminalSearch` 和滚动状态 | 每客户端 pane | `TerminalSearch` 管理搜索栏状态、匹配和防抖代次；不改变隐藏 pane 重绘门控或输入读取实时模式的规则 |
+| 设置 | `SettingsWindow`、`SettingsContext`、`SettingsEvent` | 每设置窗口 | 设置页按节组织；通过注入的凭据适配器读写凭据，通过事件交接快捷键重绑、主题与菜单刷新。主题即时预览不写盘，确认后才持久化 |
 | 应用通知历史 | `InboxGlobal` 内的 `Inbox` | 进程共享；每窗一个 `NotificationBell` | 本机有界持久化，与 daemon 和系统通知中心解耦 |
 
 逻辑 pane 不等于当前可见的分屏叶。PiP 和停放改变 `Tab.presentation` 的可见投影，不删除完整逻辑树中的会话，也不能被同步差分解释成 `PaneClose`。休眠与会话恢复使用各自的生命周期规则，不能仅凭视图未挂载就销毁 PTY。
+
+### 设置保留在根包
+
+[#343](https://github.com/dlivxpr/lyrel/issues/343) 比较了 [#339](https://github.com/dlivxpr/lyrel/issues/339) 解耦前后的 Windows x64 增量构建。在同一个临时 worktree 分别预热 `4af2fe82` 和 `bb4ef622`，使用 rustc 1.100.0 和 `CARGO_INCREMENTAL=1 pwsh -NoProfile -File scripts/cargo-windows.ps1 build --locked -p lyrel --lib`。每个版本先改单个设置值并构建，再在该热缓存上只改窗口值。表中是 Cargo 的单次 `Finished` 耗时，不含首次预热，不是抽 crate 前后的对照。
+
+| 改动 | 解耦前 | 解耦后 |
+| --- | ---: | ---: |
+| 终端设置的滚动倍率 `STEP: 0.25 → 0.5`（`pages.rs` → `sections/terminal.rs`） | 64 s | 41.04 s |
+| 窗口 `app.rs` 的 `SIDE_PANEL_MAX_RATIO: 0.5 → 0.55` | 37.27 s | 30.87 s |
+
+四次样本均只重新编译根 `lyrel`。样本说明现有失效范围，不能证明分包收益或把耗时差归因于解耦。现有 `SettingsWindow` GPUI 测试无需创建 `LyrelApp`，即可验证快捷键事件、主题预览／取消／确认及内存凭据往返。独立编译仍需迁移或注入窗口 chrome、主题与快捷键目录等依赖；目前没有实测收益证明值得新增第 14 个包，因此设置留在根包，不改变 CI 选包和发行边界。
+
+根 `LICENSE` 中的 Zorite／Glim MIT 和第三方通知未改动。Windows 安装器暂存目录与 ZIP、macOS app 与 ZIP 的打包校验使用完整根 `LICENSE`，不另维护精简副本。源码传递链核对不等于实物打包验收。
 
 <a id="host-boundary"></a>
 ## Host 与线程边界
@@ -215,7 +231,13 @@ Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即�
 
 每个 presentation 都安装 writing、table/code、owning-Host 图片/链接、结构公式及 Mermaid provider。普通链接采用 release 单击，caret 附近按上游语义显露标记；不保留旧 Ctrl+Click-only、始终隐藏标记或旧 WYSIWYG fallback。MDX 是 source-only，旧 rich component/inspector/workspace embed 已退役；frontmatter 和未知语法保留源码，不执行项目组件。公式与图形在 native Rust 中呈现，不使用浏览器或 Node.js 编辑器。
 
+远程 Markdown 图片由桌面装配注入代理解析器，依次采用 `config.json`、系统和环境变量配置；工作台控制请求的重定向拒绝、超时和下载上限。Markdown editor 只接收各自可选的 typed provider，不感知 Host 或文件路径。
+
+Markdown 的 `element` 模块协调布局、shaping、prepaint 和绘制，具体构造的计算与绘制由各阶段的内部函数负责；`render` 装配滚动与输入，`render_menus` 只呈现当前菜单。量化 shaping band 在跨视口跳转时请求有限的补帧，非聚焦 caret 行仍保留真实 shaping；prepaint 和 paint 转移布局与命中数据而不复制整个帧。
+
 当前已接入的源码例外涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。#279 的格式源码复用已按下方[上游源码复用与适配](#file-source-reuse)与各模块 `UPSTREAM.toml` 实施，逐格式来源、适配与拒绝理由以这些记录为准。LSP 仍属于桌面，headless 不引入 GUI。
+
+以上来源记录说明历史引入范围，不是当前目录结构或后续同步契约。已经导入的源码可按 Lyrel 模块职责重构，不要求保留上游文件边界或为本地重构更新上游 blob 记录；源文件通知、根 `LICENSE` 和打包许可仍须保留。下方新导入源码的许可与来源核对规则不变。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 

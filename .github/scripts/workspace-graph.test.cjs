@@ -31,13 +31,20 @@ function graph() {
       ['lyrel-terminal', new Set(['lyrel-ui-base', 'lyrel-core', 'russh', 'lsp-types'])],
       ['lyrel-workbench-editor', new Set(['lyrel-ui-base', 'lyrel-document', 'wry'])],
     ]),
+    headless: new Set(['lyrel-protocol', 'lyrel-core', 'lyrel-server', 'lyrel-cli', 'lyrel-document', 'lyrel-insights', 'lyrel-test-support']),
   };
 }
 
-const check = ({ packages, normal }) => graphViolations(packages, normal);
+const check = ({ packages, normal, headless }) => graphViolations(packages, normal, headless);
 
 test('dev-only engines and a standalone updater do not breach the production graph', () => {
   assert.deepEqual(check(graph()), []);
+});
+
+test('rejects desktop packages reached indirectly by a Linux headless member', () => {
+  const input = graph();
+  input.headless.add('lyrel-markdown-editor');
+  assert.deepEqual(check(input), ['Linux headless production graph reaches lyrel-markdown-editor']);
 });
 
 test('flags a removed engine and an unclassified replacement workspace member', () => {
