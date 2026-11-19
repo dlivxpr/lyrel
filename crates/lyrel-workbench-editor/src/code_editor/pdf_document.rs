@@ -189,6 +189,11 @@ impl PdfDocument {
         self.reloading
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn retains_unlock_bytes(&self) -> bool {
+        self.bytes.is_some()
+    }
+
     /// 尝试用用户输入的密码重新解析。密码只在这次调用的任务里存在，解析
     /// 结束即释放；失败回到锁定状态并给出可见提示，而不是无限等待。
     pub fn unlock(&mut self, password: String, cx: &mut Context<Self>) {
@@ -646,7 +651,7 @@ impl PdfView {
         self.rescale(previous_width, cx);
     }
 
-    fn go_to_page(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn jump_to_page(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.dims.is_empty() {
             return;
         }
@@ -669,18 +674,24 @@ impl PdfView {
         cx.notify();
     }
 
+    /// 测试专用：整窗保留测试直接跳到某页来驱动真实的滚动与逐出路径。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn go_to_page(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.jump_to_page(index, cx);
+    }
+
     pub fn next_page(&mut self, cx: &mut Context<Self>) {
         if self.slots.is_empty() {
             return;
         }
-        self.go_to_page((self.current + 1).min(self.dims.len() - 1), cx);
+        self.jump_to_page((self.current + 1).min(self.dims.len() - 1), cx);
     }
 
     pub fn previous_page(&mut self, cx: &mut Context<Self>) {
         if self.slots.is_empty() {
             return;
         }
-        self.go_to_page(self.current.saturating_sub(1), cx);
+        self.jump_to_page(self.current.saturating_sub(1), cx);
     }
 
     fn submit_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {

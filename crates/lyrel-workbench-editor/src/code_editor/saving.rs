@@ -34,6 +34,15 @@ pub struct EditorBar {
     _sub: Subscription,
 }
 
+impl EditorBar {
+    /// The bar's current input text, for tests asserting what was typed or
+    /// prefilled (for example a Save As target's extension).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn input_value(&self, cx: &gpui_kit::App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+}
+
 #[derive(Clone)]
 struct SaveIdentity {
     id: BufferId,

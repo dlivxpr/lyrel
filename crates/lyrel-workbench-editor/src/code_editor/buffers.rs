@@ -214,6 +214,12 @@ impl EditorBuffers {
         self.watch.is_some()
     }
 
+    /// 测试中等待进行中的打开全部落定,再断言后续状态。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending_is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     pub fn get_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
         self.files.iter_mut().find(|file| file.id() == id)
     }

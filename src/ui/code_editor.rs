@@ -92,6 +92,7 @@ mod close_gpui_tests {
     use super::*;
     use crate::core::actions::CloseActiveTab;
     use crate::ui::app::test_window::harness_with_tabs;
+    use std::sync::Arc;
 
     fn panel(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> (bool, usize) {
         app.read_with(vcx, |app, _| {

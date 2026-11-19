@@ -48,7 +48,7 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
             .bar
             .as_ref()
             .expect("remote Save As bar");
-        assert!(bar.input.read(cx).value().ends_with(".md"));
+        assert!(bar.input_value(cx).ends_with(".md"));
         assert!(app.active_buffer(cx).unwrap().path.as_os_str().is_empty());
     });
     vcx.update(|window, cx| {

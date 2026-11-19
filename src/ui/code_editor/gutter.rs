@@ -9,7 +9,6 @@ mod tests {
     use super::*;
     use crate::ui::app::LyrelApp;
     use gpui_kit::component::input::Position;
-    use gpui_kit::test::TestWindowExt as _;
     use lyrel_workbench_editor::code_editor::TabCode;
     use std::ops::Range;
 
@@ -105,8 +104,7 @@ mod tests {
                     .get(id)
                     .unwrap()
                     .gutter
-                    .peek
-                    .is_some()
+                    .peek_open()
             })
         };
         app.update_in(&mut vcx, |app, window, cx| {

@@ -2,15 +2,13 @@
 // `lyrel-workbench-editor`. Keeping this anchor at the original module path
 // preserves every existing test selector.
 
-pub(crate) use lyrel_workbench_editor::code_editor::strip::*;
-
 // Narrow imports for the retained whole-window tests, which drive `LyrelApp`.
 #[cfg(test)]
 use crate::ui::app::LyrelApp;
 #[cfg(test)]
-use lyrel_workbench_editor::code_editor::*;
+use lyrel_ui_base::i18n::L10nKey;
 #[cfg(test)]
-use std::path::PathBuf;
+use lyrel_workbench_editor::code_editor::*;
 
 #[cfg(test)]
 mod tests {

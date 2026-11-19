@@ -2,31 +2,7 @@
 // `lyrel-workbench-editor`. Keeping this anchor at the original module path
 // preserves every existing test selector.
 
-pub(crate) use lyrel_workbench_editor::code_editor::markdown_search::*;
-
-// Inherited by the retained tests from the production module's scope before
-// the move; kept here so their `use super::*` resolves unchanged.
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use crate::ui::app::LyrelApp;
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use gpui_kit::component::input::Position;
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use gpui_kit::prelude::*;
-use gpui_kit::{
-    App, Context, Entity, EntityInputHandler as _, Focusable as _, SharedString, Window, px,
-};
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use lyrel_ui_base::host_ops::{HostId, HostOps, SharedHost};
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use lyrel_workbench_editor::code_editor::*;
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use std::path::{Path, PathBuf};
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use std::sync::Arc;
-#[cfg(any(test, feature = "native-markdown-tests"))]
-use std::time::{Duration, Instant};
+use gpui_kit::px;
 
 #[cfg(test)]
 mod tests {

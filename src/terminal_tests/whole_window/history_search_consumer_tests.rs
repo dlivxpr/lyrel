@@ -204,7 +204,7 @@ fn reverse_search_cmd_enter_owns_dispatch_only_while_searching(cx: &mut TestAppC
         assert_eq!(
             app.editor_active_local_file(cx)
                 .unwrap()
-                .input
+                .input()
                 .read(cx)
                 .text()
                 .to_string(),

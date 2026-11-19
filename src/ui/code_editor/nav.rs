@@ -2,8 +2,6 @@
 // `lyrel-workbench-editor`. Keeping this anchor at the original module path
 // preserves every existing test selector.
 
-pub(crate) use lyrel_workbench_editor::code_editor::nav::*;
-
 // Narrow imports for the retained whole-window tests, which drive `LyrelApp`.
 #[cfg(test)]
 use crate::ui::app::LyrelApp;
@@ -150,10 +148,7 @@ pub(super) mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             let editor = app.editor.read(cx);
             let tab = app.nav_tab().unwrap();
-            assert!(
-                editor.nav.tabs[&tab].history.back.is_empty(),
-                "looking is not jumping"
-            );
+            assert!(editor.nav.tab_back_is_empty(tab), "looking is not jumping");
         });
     }
 

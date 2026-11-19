@@ -4,6 +4,10 @@ use super::test_support::{active_editor_input, with_active_file};
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{ClipboardEntry, ClipboardItem, TestAppContext, VisualTestContext};
+#[cfg(test)]
+use lyrel_ui_base::i18n::t;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn settle(cx: &mut VisualTestContext) {

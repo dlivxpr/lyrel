@@ -1101,7 +1101,7 @@ mod gpui_tests {
             let file = app
                 .editor_active_local_file(cx)
                 .expect("the hit opened a local code editor");
-            let input = file.input.read(cx);
+            let input = file.input().read(cx);
             let cursor = input.cursor_position();
             assert_eq!((cursor.line, cursor.character), (1, 2));
             assert_eq!(input.text().to_string(), refreshed);

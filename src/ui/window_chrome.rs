@@ -922,7 +922,7 @@ mod gpui_tests {
         });
         wait_for_editor(&app, &mut vcx);
         let editor = app.read_with(&vcx, |app, cx| {
-            app.editor_active_local_file(cx).unwrap().input
+            app.editor_active_local_file(cx).unwrap().into_input()
         });
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
@@ -1199,7 +1199,7 @@ mod gpui_tests {
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
             let editor = app.read_with(&vcx, |app, cx| {
-                app.editor_active_local_file(cx).unwrap().input
+                app.editor_active_local_file(cx).unwrap().into_input()
             });
             vcx.simulate_keystrokes("a");
             settle(&mut vcx);

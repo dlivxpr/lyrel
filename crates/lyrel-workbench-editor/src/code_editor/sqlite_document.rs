@@ -552,7 +552,7 @@ impl SqliteDocument {
                 self.columns = Some(columns);
                 self.touch_grid(cx);
                 self.load_page(0, cx);
-                self.load_count(cx);
+                self.load_count_inner(cx);
             }
             Err(error) => {
                 if token_cancelled || error.kind() == io::ErrorKind::Interrupted {
@@ -660,7 +660,7 @@ impl SqliteDocument {
         self.count_failed = false;
         self.notice = None;
         self.load_page(0, cx);
-        self.load_count(cx);
+        self.load_count_inner(cx);
     }
 
     /// The three-state header sort: descending, ascending, then back to the
@@ -711,12 +711,12 @@ impl SqliteDocument {
             cx,
             move |h| h.sqlite_page(view, &query, &token),
             move |document, result, cx| {
-                document.on_page(epoch, serial, view, result, cx);
+                document.on_page_inner(epoch, serial, view, result, cx);
             },
         );
     }
 
-    fn on_page(
+    fn on_page_inner(
         &mut self,
         epoch: u64,
         serial: u64,
@@ -756,7 +756,7 @@ impl SqliteDocument {
         self.touch_grid(cx);
     }
 
-    fn load_count(&mut self, cx: &mut Context<Self>) {
+    fn load_count_inner(&mut self, cx: &mut Context<Self>) {
         let Some(mut query) = self.query(self.page_number) else {
             return;
         };
@@ -803,7 +803,7 @@ impl SqliteDocument {
             },
         );
     }
-    fn navigate(&mut self, page: u64, cx: &mut Context<Self>) {
+    fn navigate_inner(&mut self, page: u64, cx: &mut Context<Self>) {
         if self.is_busy() || self.stale || self.columns.is_none() {
             return;
         }
@@ -811,6 +811,34 @@ impl SqliteDocument {
             return;
         }
         self.load_page(page, cx);
+    }
+
+    // Whole-window tests deliver a late page from an older query generation.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn page_serial(&self) -> u64 {
+        self.page_serial
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn navigate(&mut self, page: u64, cx: &mut Context<Self>) {
+        self.navigate_inner(page, cx);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn load_count(&mut self, cx: &mut Context<Self>) {
+        self.load_count_inner(cx);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn on_page(
+        &mut self,
+        epoch: u64,
+        serial: u64,
+        view: u64,
+        result: io::Result<SqlitePage>,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_page_inner(epoch, serial, view, result, cx);
     }
 
     fn shift_columns(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -1113,7 +1141,7 @@ impl SqliteView {
 
     fn navigate(&mut self, page: u64, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        document.update(cx, |document, cx| document.navigate(page, cx));
+        document.update(cx, |document, cx| document.navigate_inner(page, cx));
     }
 
     fn shift_columns(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -1792,6 +1820,39 @@ impl SqliteView {
     #[cfg(any(test, feature = "test-support"))]
     pub fn selected_table(&self) -> Option<&str> {
         self.state.selected.as_deref()
+    }
+
+    /// The table widget entity: the retained whole-window tests scroll
+    /// columns and read the selection through the real grid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn grid(&self) -> &Entity<TableState<SqliteGrid>> {
+        &self.grid
+    }
+
+    /// 复制元数据的只读测试接缝：整窗保留测试在过渡 settle 期间断言它们。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_busy(&self) -> bool {
+        self.state.busy
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn object_count(&self) -> usize {
+        self.state.objects.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn search(&self) -> &str {
+        &self.state.search
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn sort(&self) -> Option<(u32, bool)> {
+        self.state.sort
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn total(&self) -> Option<u64> {
+        self.state.total
     }
 
     fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

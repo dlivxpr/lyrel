@@ -3,7 +3,6 @@ use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::editor_session;
 use gpui_kit::component::input::Position;
-use gpui_kit::prelude::*;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
@@ -897,7 +896,7 @@ fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(
                 .read(cx)
                 .local_files()
                 .iter()
-                .map(|file| file.id)
+                .map(|file| file.id())
                 .collect::<Vec<_>>(),
             vec![local]
         );
@@ -905,7 +904,7 @@ fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(
         assert_eq!(app.editor_active_location(cx).unwrap().0, HostId(69));
         assert_eq!(
             remote.path,
-            app.editor.read(cx).local_file(local).unwrap().path
+            app.editor.read(cx).local_file(local).unwrap().path()
         );
     });
 }
@@ -933,7 +932,7 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, cx| app.editor.read(cx).buffers.watch.is_some())
+        app.read_with(vcx, |app, cx| app.editor.read(cx).buffers.watching())
     });
     std::fs::write(&path, "external version\n").unwrap();
     wait_until(&mut vcx, |vcx| {
@@ -1199,7 +1198,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
             app.active_buffer(cx).is_some_and(|file| file.path == path)
-                && app.editor.read(cx).buffers.watch.is_some()
+                && app.editor.read(cx).buffers.watching()
         })
     });
     vcx.update(|window, cx| {
@@ -1297,7 +1296,7 @@ fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.editor.read(cx).buffers.pending.is_empty()
+            app.editor.read(cx).buffers.pending_is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {
@@ -1332,7 +1331,7 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.editor.read(cx).buffers.pending.is_empty()
+            app.editor.read(cx).buffers.pending_is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {

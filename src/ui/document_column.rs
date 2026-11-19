@@ -883,7 +883,7 @@ mod gpui_tests {
         let editor = loop {
             vcx.run_until_parked();
             if let Some(file) = app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx)) {
-                break file.input;
+                break file.into_input();
             }
             assert!(
                 std::time::Instant::now() < deadline,

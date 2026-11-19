@@ -369,6 +369,12 @@ impl BufferGutter {
         self.base = Some(base.into());
         self.edits += 1;
     }
+
+    /// Whether the inline peek is open, for tests that drive it open and shut.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn peek_open(&self) -> bool {
+        self.peek.is_some()
+    }
 }
 
 use super::*;

@@ -487,6 +487,14 @@ impl EditorNav {
             nav.history.retain(|l| l.buffer != Some(id));
         }
     }
+
+    /// 测试断言"看一眼不算跳转":`tab` 没有记录任何后退位置。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn tab_back_is_empty(&self, tab: TabId) -> bool {
+        self.tabs
+            .get(&tab)
+            .is_none_or(|nav| nav.history.lens().0 == 0)
+    }
 }
 
 /// Where a Back or Forward wants the shell to go: an open buffer to show,

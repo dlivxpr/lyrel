@@ -14,6 +14,7 @@ use lyrel_document::pdf::fixtures;
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
 use lyrel_ui_base::i18n::{L10nKey, t};
 use lyrel_workbench_editor::code_editor::BufferId;
+use lyrel_workbench_editor::code_editor::TabCode;
 use lyrel_workbench_editor::code_editor::pdf_document::work_gate::{Work, pause_work};
 use lyrel_workbench_editor::code_editor::pdf_document::{
     PdfActualSize, PdfContent, PdfCopy, PdfFitPage, PdfNextPage, PdfView, PdfZoomIn,
@@ -415,10 +416,10 @@ fn encrypted_pdf_prompts_and_recovers_from_a_wrong_password(tcx: &mut TestAppCon
     );
     let document = view.read_with(&cx, |view, cx| {
         assert!(
-            view.document.read(cx).bytes.is_none(),
+            !view.document().read(cx).retains_unlock_bytes(),
             "only the locked document retains retry bytes"
         );
-        view.document.read(cx).ready().expect("unlocked")
+        view.document().read(cx).ready().expect("unlocked")
     });
     assert_eq!(document.page_count(), 12);
     assert!(document.text(0).unwrap().text().contains("unique-page-01"));
@@ -443,7 +444,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     until(&mut cx, |cx| ready(&app, cx));
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let document = view.document.read(cx).ready().unwrap();
+        let document = view.document().read(cx).ready().unwrap();
         let fields = document.fields();
         assert_eq!(fields.len(), 2);
         assert!(fields.iter().all(|field| field.has_appearance));
@@ -474,7 +475,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     });
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let fields = view.document.read(cx).ready().unwrap().fields().to_vec();
+        let fields = view.document().read(cx).ready().unwrap().fields().to_vec();
         assert_eq!(fields[0].value, "中文表单279");
         assert_eq!(fields[1].value, "第一行\n第二行");
         assert!(fields[1].multiline);
@@ -510,7 +511,7 @@ fn existing_appearances_render_and_missing_values_are_read_only_overlays(tcx: &m
     });
     let view = pdf_view(&app, &cx);
     view.read_with(&cx, |view, cx| {
-        let fields = view.document.read(cx).ready().unwrap().fields().to_vec();
+        let fields = view.document().read(cx).ready().unwrap().fields().to_vec();
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].value, "Doc \u{02d8} \u{2022} \u{fb01} \u{20ac} é");
         assert!(fields[0].needs_text_overlay());

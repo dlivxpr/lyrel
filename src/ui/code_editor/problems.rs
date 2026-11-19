@@ -2,8 +2,6 @@
 // `lyrel-workbench-editor`. Keeping this anchor at the original module path
 // preserves every existing test selector.
 
-pub(crate) use lyrel_workbench_editor::code_editor::problems::*;
-
 #[cfg(test)]
 mod tests {
     use gpui_kit::test::TestWindowExt as _;

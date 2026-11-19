@@ -270,7 +270,7 @@ impl OpenFile {
 
     /// The format the next save writes back, for documents that have one.
     /// A read-only picture has no text format and nothing to write.
-    fn format(&self, cx: &gpui_kit::App) -> Option<TextFormat> {
+    pub fn format(&self, cx: &gpui_kit::App) -> Option<TextFormat> {
         self.input
             .source_document(cx)
             .map(|document| document.read(cx).format())
@@ -322,7 +322,7 @@ impl OpenFile {
         self.untitled.is_none() && self.host.id() == host && self.path == path
     }
 
-    fn language(&self) -> &'static str {
+    pub fn language(&self) -> &'static str {
         if self.input.markdown().is_some() {
             return "markdown";
         }
@@ -390,6 +390,16 @@ impl LocalFile {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn input(&self) -> &Entity<EditorState> {
+        &self.input
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn into_input(self) -> Entity<EditorState> {
+        self.input
     }
 }
 
