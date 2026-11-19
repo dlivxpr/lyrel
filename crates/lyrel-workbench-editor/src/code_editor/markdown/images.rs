@@ -2,7 +2,7 @@
 use super::super::*;
 use super::links::{self, Target};
 use gpui_kit::component::{WindowExt as _, button::Button};
-use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
+use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, Global, RenderImage, WeakEntity};
 use lyrel_core::host::Host;
 use lyrel_document::CancelToken;
 use lyrel_document::image::MAX_PIXELS;
@@ -13,6 +13,48 @@ use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Resolve the effective proxy for one URL, in the desktop's precedence order.
+///
+/// The production implementation (manual `config.json` proxy, then the
+/// platform system proxy, then the environment) lives in
+/// `lyrel_core::daemon::install::proxy::resolve` and is injected by the
+/// desktop crate through [`ImageProxyResolver`]; this crate compiles without
+/// the installer's `remote-install` feature, so it cannot resolve proxies
+/// itself. Harnesses install their own resolver to route fetches through
+/// loopback fixtures.
+pub type ProxyResolveFn = Arc<dyn Fn(&str, Option<&str>) -> Option<ureq::Proxy> + Send + Sync>;
+
+/// The proxy resolver the desktop shell installs for remote Markdown image
+/// previews.
+///
+/// `ImageHost::load` clones the installed resolver on the UI thread and hands
+/// it to the worker running [`fetch`], which applies the resolver's `Option`
+/// verbatim: `Some(proxy)` routes the request through it, `None` explicitly
+/// disables any proxy. When no resolver is installed, the fetch keeps ureq's
+/// own default configuration (environment variables only).
+pub struct ImageProxyResolver {
+    resolve: ProxyResolveFn,
+}
+
+impl ImageProxyResolver {
+    pub fn new(resolve: ProxyResolveFn) -> Self {
+        Self { resolve }
+    }
+
+    pub fn install(cx: &mut App, resolver: Self) {
+        cx.set_global(resolver);
+    }
+
+    /// The installed resolver's function, if the shell (or a harness)
+    /// installed one.
+    pub fn get(cx: &App) -> Option<ProxyResolveFn> {
+        cx.try_global::<Self>()
+            .map(|resolver| resolver.resolve.clone())
+    }
+}
+
+impl Global for ImageProxyResolver {}
 
 type Signature = (HostId, PathBuf);
 type Images = Rc<RefCell<HashMap<String, Bitmap>>>;
@@ -364,6 +406,9 @@ impl ImageHost {
             .global::<lyrel_ui_base::config::Config>()
             .http_proxy
             .clone();
+        // Cloned here, on the UI thread: the worker cannot touch globals, and
+        // the resolver must stay swappable for loopback fixtures.
+        let resolve = ImageProxyResolver::get(cx);
         let generation = self.generation;
         let signature = self.signature.clone();
         let cancel = CancelToken::new();
@@ -411,7 +456,7 @@ impl ImageHost {
                         };
                         read_bytes(h, &path, MAX_BYTES, &worker_cancel, &mut report)?.1
                     }
-                    Resource::External(url) => fetch(&url, proxy.as_deref())?,
+                    Resource::External(url) => fetch(&url, proxy.as_deref(), resolve.as_ref())?,
                 };
                 decode(&bytes).map(|(rgba, _)| render(rgba))
             },
@@ -1086,14 +1131,36 @@ fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
     )))
 }
 
-fn fetch(url: &url::Url, proxy: Option<&str>) -> io::Result<Vec<u8>> {
+fn fetch(
+    url: &url::Url,
+    proxy: Option<&str>,
+    resolve: Option<&ProxyResolveFn>,
+) -> io::Result<Vec<u8>> {
+    fetch_with_limit(url, proxy, resolve, MAX_BYTES)
+}
+
+/// Fetches one remote picture with an explicit byte budget.
+///
+/// `resolve` is the desktop proxy resolver cloned by [`ImageHost::load`]. The
+/// resolver already applies the desktop precedence (manual `config.json`
+/// proxy, then the platform system proxy, then the environment), so its
+/// `Option` is applied verbatim — including an explicit `None`, which matters
+/// because ureq's default agent configuration otherwise reads the proxy
+/// environment variables on its own. Without a resolver the builder is left
+/// untouched and ureq's default applies.
+fn fetch_with_limit(
+    url: &url::Url,
+    proxy: Option<&str>,
+    resolve: Option<&ProxyResolveFn>,
+    max_bytes: u64,
+) -> io::Result<Vec<u8>> {
     let mut builder = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(30)))
         .timeout_connect(Some(Duration::from_secs(10)))
         .max_redirects(0)
         .http_status_as_error(false);
-    if let Some(proxy) = lyrel_core::daemon::install::proxy::resolve(url.as_str(), proxy) {
-        builder = builder.proxy(Some(proxy));
+    if let Some(resolve) = resolve {
+        builder = builder.proxy(resolve(url.as_str(), proxy));
     }
     let agent: ureq::Agent = builder.build().into();
     let mut response = agent
@@ -1108,7 +1175,7 @@ fn fetch(url: &url::Url, proxy: Option<&str>) -> io::Result<Vec<u8>> {
     response
         .body_mut()
         .with_config()
-        .limit(MAX_BYTES)
+        .limit(max_bytes)
         .read_to_vec()
         .map_err(|error| io::Error::other(error.to_string()))
 }
@@ -1372,5 +1439,236 @@ impl gpui_kit::Render for ImagePreview {
                             .child(gpui_kit::img(self.image.image.clone()).size_full()),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::sync::Mutex;
+    use std::thread;
+
+    /// One fixture's answer to a single HTTP request.
+    struct Reply {
+        status: u16,
+        headers: Vec<(&'static str, String)>,
+        body: Vec<u8>,
+    }
+
+    fn ok(body: &[u8]) -> Reply {
+        Reply {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_vec(),
+        }
+    }
+
+    /// Serves `respond` on loopback for up to `cap` connections, recording
+    /// every request line it receives. The caller asserts on the recording
+    /// after its fetch returned: both are synchronous, so a recorded line
+    /// proves a request happened and a missing one proves it did not.
+    fn serve(
+        respond: impl Fn(&str) -> Reply + Send + 'static,
+        cap: usize,
+    ) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = seen.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(cap) {
+                let Ok(mut stream) = stream else { continue };
+                if let Some(reply) = read_request(&mut stream).map(|line| {
+                    seen_thread.lock().unwrap().push(line.clone());
+                    respond(&line)
+                }) {
+                    let _ = write_reply(&mut stream, reply);
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// Reads one request's head and returns its request line.
+    fn read_request(stream: &mut TcpStream) -> Option<String> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .ok()?;
+        let mut head = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    head.extend_from_slice(&chunk[..n]);
+                    if head.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        head.split(|byte| *byte == b'\r')
+            .next()
+            .map(|line| String::from_utf8_lossy(line).into_owned())
+            .filter(|line| !line.is_empty())
+    }
+
+    fn write_reply(stream: &mut TcpStream, reply: Reply) -> std::io::Result<()> {
+        let reason = match reply.status {
+            200 => "OK",
+            302 => "Found",
+            _ => "Reply",
+        };
+        let mut head = format!("HTTP/1.1 {} {}\r\n", reply.status, reason);
+        for (name, value) in &reply.headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str(&format!(
+            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+            reply.body.len()
+        ));
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(&reply.body)
+    }
+
+    /// A resolver that always routes through `proxy`, like the production
+    /// shell's installed resolver does for a configured proxy.
+    fn via(proxy: SocketAddr) -> ProxyResolveFn {
+        Arc::new(move |_url, _manual| Some(ureq::Proxy::new(&format!("http://{proxy}")).unwrap()))
+    }
+
+    /// A resolver that resolves to no proxy at all.
+    fn none() -> ProxyResolveFn {
+        Arc::new(|_url: &str, _manual: Option<&str>| -> Option<ureq::Proxy> { None })
+    }
+
+    /// A port nothing listens on (the listener is dropped immediately), so a
+    /// fetch can name an origin that must never be contacted directly.
+    fn free_addr() -> SocketAddr {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        addr
+    }
+
+    #[test]
+    fn fetch_routes_through_the_injected_proxy_resolver() {
+        // ureq 3 tunnels HTTP requests through an HTTP proxy via CONNECT.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = seen.clone();
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept()
+                && let Some(connect_line) = read_request(&mut stream)
+            {
+                seen_thread.lock().unwrap().push(connect_line);
+                let _ = stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+                let _ = stream.flush();
+                if let Some(get_line) = read_request(&mut stream) {
+                    seen_thread.lock().unwrap().push(get_line);
+                    let _ = write_reply(&mut stream, ok(b"via-proxy"));
+                    let _ = stream.flush();
+                }
+            }
+        });
+        let origin = free_addr();
+        let resolve = via(proxy_addr);
+        let url = url::Url::parse(&format!("http://{origin}/image.png")).unwrap();
+
+        let bytes = fetch_with_limit(&url, None, Some(&resolve), MAX_BYTES).unwrap();
+
+        assert_eq!(bytes, b"via-proxy");
+        // The proxy received the CONNECT tunnel for the unreachable origin and
+        // the tunneled GET, proving the injected resolver routed the fetch.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                format!("CONNECT {origin} HTTP/1.1"),
+                "GET /image.png HTTP/1.1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_applies_resolver_none_as_no_proxy() {
+        let (addr, seen) = serve(|_| ok(b"direct"), 2);
+        let resolve = none();
+        let url = url::Url::parse(&format!("http://{addr}/image.png")).unwrap();
+
+        let bytes = fetch_with_limit(&url, None, Some(&resolve), MAX_BYTES).unwrap();
+
+        assert_eq!(bytes, b"direct");
+        // Origin form proves the request went straight to the server: had the
+        // builder kept ureq's environment default, the ambient CI proxy would
+        // have taken over.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["GET /image.png HTTP/1.1".to_string()]
+        );
+    }
+
+    #[test]
+    fn fetch_refuses_redirects_without_contacting_the_target() {
+        let (target_addr, target_seen) = serve(|_| ok(b"forbidden"), 1);
+        let (addr, seen) = serve(
+            move |_| Reply {
+                status: 302,
+                headers: vec![("Location", format!("http://{target_addr}/elsewhere"))],
+                body: Vec::new(),
+            },
+            2,
+        );
+        let resolve = none();
+        let url = url::Url::parse(&format!("http://{addr}/image.png")).unwrap();
+
+        let error = fetch_with_limit(&url, None, Some(&resolve), MAX_BYTES).unwrap_err();
+
+        let inner = error.into_inner().expect("a boxed image error");
+        assert!(
+            matches!(
+                *inner.downcast::<ImageError>().expect("an ImageError"),
+                ImageError::Redirect(302)
+            ),
+            "redirect refusal must report the 302"
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["GET /image.png HTTP/1.1".to_string()],
+            "exactly the original request may reach the fixture"
+        );
+        assert!(
+            target_seen.lock().unwrap().is_empty(),
+            "redirect target must never be contacted"
+        );
+    }
+
+    #[test]
+    fn fetch_enforces_the_response_size_limit() {
+        let body = vec![7u8; 1024];
+        let (addr, _seen) = serve(
+            move |_| Reply {
+                status: 200,
+                headers: Vec::new(),
+                body: body.clone(),
+            },
+            2,
+        );
+        let resolve = none();
+        let url = url::Url::parse(&format!("http://{addr}/image.png")).unwrap();
+
+        let error = fetch_with_limit(&url, None, Some(&resolve), 512).unwrap_err();
+
+        let is_redirect = error
+            .into_inner()
+            .and_then(|inner| inner.downcast::<ImageError>().ok())
+            .is_some_and(|image_error| matches!(*image_error, ImageError::Redirect(_)));
+        assert!(
+            !is_redirect,
+            "a size violation must not surface as a redirect refusal"
+        );
     }
 }

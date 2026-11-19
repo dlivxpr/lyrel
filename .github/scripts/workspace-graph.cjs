@@ -19,7 +19,9 @@ const forbidden = {
   'lyrel-server': ['lyrel-insights'],
   'lyrel-ui-base': ['lyrel', 'lyrel-core', terminal, editor, 'rio-vt', 'rio-graphics', ...editorEngines],
   [terminal]: ['lyrel', editor, ...editorEngines],
-  [editor]: ['lyrel', terminal],
+  // The Markdown image proxy resolver is injected by the desktop shell, so
+  // the workbench links none of the installer's archive machinery.
+  [editor]: ['lyrel', terminal, 'async_zip'],
 };
 const shellEngines = [
   'rusqlite', 'rusty-leveldb', 'aes-gcm', ...editorEngines, 'lsp-types', 'tree-sitter',
@@ -71,6 +73,14 @@ function graphViolations(packages, normal) {
   }
   for (const [from, to] of [[terminal, editor], [editor, terminal]]) {
     if (byName.get(from).dependencies.some(dep => dep.name === to)) violations.push(`${from} declares a direct dependency on ${to}`);
+  }
+  // The workbench editor gets its Markdown image proxy resolver injected by
+  // the desktop shell; enabling lyrel-core's installer feature would compile
+  // the downloader back into the editor's dependency graph.
+  for (const dependency of byName.get(editor).dependencies) {
+    if (dependency.name === 'lyrel-core' && dependency.features?.includes('remote-install')) {
+      violations.push(`${editor} must not enable the remote-install feature on lyrel-core`);
+    }
   }
   for (const [name, denied] of Object.entries(forbidden)) {
     const dependencies = normal.get(name);

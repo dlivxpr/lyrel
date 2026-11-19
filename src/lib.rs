@@ -820,6 +820,10 @@ pub fn run() {
         gpui_kit::init(cx);
         crate::ui::ime::install(cx);
         lyrel_workbench_editor::lsp::popups::init(cx);
+        // Markdown previews resolve their proxy with the same desktop
+        // precedence as the updater and installer; the workbench editor
+        // links no installer machinery, so the resolver is injected here.
+        crate::ui::app::LyrelApp::ensure_image_proxy_resolver(cx);
         register_bundled_fonts(cx);
         crate::ui::prompt::install(cx);
         cx.activate(true);

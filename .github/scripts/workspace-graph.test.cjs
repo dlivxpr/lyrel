@@ -22,7 +22,7 @@ function graph() {
       { name: 'lyrel-test-support', dependencies: [] },
       { name: 'lyrel-ui-base', dependencies: [] },
       { name: 'lyrel-terminal', dependencies: [dep('lyrel-ui-base')] },
-      { name: 'lyrel-workbench-editor', dependencies: [dep('lyrel-ui-base'), dep('lyrel-document')] },
+      { name: 'lyrel-workbench-editor', dependencies: [dep('lyrel-ui-base'), dep('lyrel-document'), dep('lyrel-core')] },
     ],
     normal: new Map([
       ['lyrel-cli', new Set(['lyrel-protocol'])],
@@ -108,6 +108,25 @@ test('rejects a direct editor-to-terminal dev edge and a transitive terminal-to-
   const violations = check(input);
   assert.ok(violations.some(line => /lyrel-workbench-editor.*lyrel-terminal/.test(line)), violations);
   assert.ok(violations.some(line => /lyrel-terminal.*lyrel-workbench-editor/.test(line)), violations);
+});
+
+test('keeps installer-only archive machinery out of the workbench editor graph', () => {
+  const input = graph();
+  input.normal.get('lyrel-workbench-editor').add('async_zip');
+  const violations = check(input);
+  assert.ok(violations.some(line => /lyrel-workbench-editor reaches async_zip/.test(line)), violations);
+});
+
+test('rejects the editor re-enabling the remote-install feature on lyrel-core', () => {
+  const input = graph();
+  const editor = input.packages.find(pkg => pkg.name === 'lyrel-workbench-editor');
+  editor.dependencies.find(dependency => dependency.name === 'lyrel-core').features = ['remote-install'];
+  assert.deepEqual(check(input), [
+    'lyrel-workbench-editor must not enable the remote-install feature on lyrel-core',
+  ]);
+  // Without the feature the declaration is fine again.
+  delete editor.dependencies.find(dependency => dependency.name === 'lyrel-core').features;
+  assert.deepEqual(check(input), []);
 });
 
 test('terminal may inherit GPUI LSP values but cannot declare its own LSP dependency', () => {

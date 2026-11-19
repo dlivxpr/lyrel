@@ -8,6 +8,7 @@
 //! editor module holds a production `impl LyrelApp` (#327).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui_kit::AnyElement;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -211,6 +212,30 @@ impl LyrelApp {
         self.editor_open_on_host_at(host, path, None, window, cx);
     }
 
+    /// Installs the Markdown image proxy resolver when nothing has claimed
+    /// the global yet.
+    ///
+    /// `src/lib.rs::run` calls this before the first window opens, with the
+    /// production resolver that applies the desktop precedence (manual
+    /// `config.json` proxy, then the platform system proxy, then the
+    /// environment). Harnesses that construct `LyrelApp` without the desktop
+    /// bootstrap — `ui::app::test_window::harness`, the native Markdown
+    /// runner — reach documents through [`Self::editor_open_on_host`], so
+    /// that entry re-checks the global instead of letting a bare image fetch
+    /// fall back to raw ureq defaults. A harness that installed its own
+    /// resolver first is never overwritten.
+    pub(crate) fn ensure_image_proxy_resolver(cx: &mut gpui_kit::App) {
+        use lyrel_workbench_editor::code_editor::markdown::images::ImageProxyResolver;
+        if cx.try_global::<ImageProxyResolver>().is_none() {
+            ImageProxyResolver::install(
+                cx,
+                ImageProxyResolver::new(Arc::new(|url, manual| {
+                    lyrel_core::daemon::install::proxy::resolve(url, manual)
+                })),
+            );
+        }
+    }
+
     pub(crate) fn editor_open_on_host_at(
         &mut self,
         host: SharedHost,
@@ -219,6 +244,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Harnesses construct LyrelApp without the desktop bootstrap; make
+        // sure the image proxy resolver is installed before any document of
+        // this tab can request a remote picture.
+        Self::ensure_image_proxy_resolver(cx);
         let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else {
             return;
         };
