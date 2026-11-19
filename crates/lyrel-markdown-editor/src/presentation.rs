@@ -1,21 +1,17 @@
 use super::*;
 
 impl EditorState {
-    pub(super) fn request_caret_reveal(&mut self) {
-        self.reveal_requested = true;
-        self.revealed_caret = None;
-    }
     pub(super) fn affinity_for_offset(&self, offset: usize) -> WrapAffinity {
         if offset == self.cursor_offset() {
-            return self.caret_affinity;
+            return self.selection.caret_affinity;
         }
-        let anchor = if self.selection_reversed {
-            self.selected_range.end
+        let anchor = if self.selection.selection_reversed {
+            self.selection.selected_range.end
         } else {
-            self.selected_range.start
+            self.selection.selected_range.start
         };
         if offset == anchor {
-            self.anchor_affinity
+            self.selection.anchor_affinity
         } else {
             WrapAffinity::Upstream
         }
@@ -26,7 +22,7 @@ impl EditorState {
         column: usize,
         position: Point<Pixels>,
     ) -> WrapAffinity {
-        let Some(line) = self.wrapped.get(row) else {
+        let Some(line) = self.frame.wrapped.get(row) else {
             return WrapAffinity::Downstream;
         };
         let lh = self.line_h(row);
@@ -50,11 +46,11 @@ impl EditorState {
         offset: usize,
         position: Point<Pixels>,
     ) -> WrapAffinity {
-        let Some(bounds) = self.last_bounds else {
+        let Some(bounds) = self.frame.last_bounds else {
             return WrapAffinity::Downstream;
         };
         let (row, column) = self.row_col(offset);
-        let Some(top) = self.line_tops.get(row) else {
+        let Some(top) = self.frame.line_tops.get(row) else {
             return WrapAffinity::Downstream;
         };
         self.affinity_for_visual_position(
@@ -70,9 +66,9 @@ impl EditorState {
         &self.document
     }
     pub fn occurrence_range(&self) -> Range<usize> {
-        self.extra_selections
+        self.selection.extra_selections
             .last()
-            .unwrap_or(&self.selected_range)
+            .unwrap_or(&self.selection.selected_range)
             .clone()
     }
     pub fn add_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
@@ -83,15 +79,15 @@ impl EditorState {
             ..self
                 .content
                 .floor_char_boundary(range.end.min(self.content.len()));
-        if range != self.selected_range && !self.extra_selections.contains(&range) {
-            self.extra_selections.push(range);
+        if range != self.selection.selected_range && !self.selection.extra_selections.contains(&range) {
+            self.selection.extra_selections.push(range);
         }
         self.last_edit = EditKind::Other;
         cx.notify();
     }
     pub(super) fn replace_occurrences(&mut self, text: &str, cx: &mut Context<Self>) {
-        let primary = self.selected_range.clone();
-        let mut selections = self.extra_selections.clone();
+        let primary = self.selection.selected_range.clone();
+        let mut selections = self.selection.extra_selections.clone();
         selections.push(primary.clone());
         selections.sort_by_key(|range| range.start);
         selections.dedup();
@@ -110,7 +106,7 @@ impl EditorState {
         let mut shift: isize = 0;
         let len = text.len() - text.matches("\r\n").count();
         let mut after_primary = 0..0;
-        let mut after_extra = Vec::with_capacity(self.extra_selections.len());
+        let mut after_extra = Vec::with_capacity(self.selection.extra_selections.len());
         for range in &selections {
             let at = range
                 .start
@@ -131,8 +127,8 @@ impl EditorState {
                 .collect(),
             cx,
         );
-        self.selected_range = after_primary.clone();
-        self.extra_selections = after_extra;
+        self.selection.selected_range = after_primary.clone();
+        self.selection.extra_selections = after_extra;
         self.set_history_selection(primary, after_primary, cx);
         self.last_edit = EditKind::Other;
         cx.emit(EditorEvent::Changed);
@@ -160,7 +156,7 @@ impl EditorState {
         if source_only {
             self.markdown_style = None;
         }
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     /// Whether this presentation is raw non-Markdown source.
@@ -182,13 +178,9 @@ impl EditorState {
         if plain {
             self.source_only = true;
             self.markdown_style = None;
-            self.menu = None;
-            self.table_menu = None;
-            self.image_menu = None;
-            self.prop_menu = None;
-            self.code_lang_menu = None;
+            self.overlay_menu.dismiss();
         }
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn set_history_selection(
@@ -203,18 +195,18 @@ impl EditorState {
         });
     }
     pub(super) fn indent_selected_lines(&mut self, outdent: bool, cx: &mut Context<Self>) -> bool {
-        if self.selected_range.is_empty()
-            || !self.content[self.selected_range.clone()].contains('\n')
+        if self.selection.selected_range.is_empty()
+            || !self.content[self.selection.selected_range.clone()].contains('\n')
         {
             return false;
         }
-        let start = self.content[..self.selected_range.start]
+        let start = self.content[..self.selection.selected_range.start]
             .rfind('\n')
             .map_or(0, |at| at + 1);
         let mut at = start;
         let mut replacements = Vec::new();
         for line in self.content[start..].split_inclusive('\n') {
-            if at >= self.selected_range.end {
+            if at >= self.selection.selected_range.end {
                 break;
             }
             if outdent {
@@ -243,7 +235,7 @@ impl EditorState {
         cx: &mut Context<Self>,
     ) {
         self.finish_composition(cx);
-        let before = self.selected_range.clone();
+        let before = self.selection.selected_range.clone();
         let mut after = before.clone();
         let mut ordered: Vec<_> = replacements.iter().collect();
         ordered.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
@@ -269,14 +261,14 @@ impl EditorState {
         });
         self.diagnostics.clear();
         self.content = snapshot.text_handle();
-        self.content_gen = document.read(cx).revision();
-        self.selected_range = after.clone();
-        self.request_caret_reveal();
+        self.frame.content_gen = document.read(cx).revision();
+        self.selection.selected_range = after.clone();
+        self.frame.request_caret_reveal();
         if document.read(cx).revision() != revision {
             self.set_history_selection(before, after, cx);
         }
         self.last_edit = EditKind::Other;
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn replace_lines(
@@ -296,23 +288,23 @@ impl EditorState {
         });
         self.diagnostics.clear();
         self.content = snapshot.text_handle();
-        self.content_gen = document.read(cx).revision();
-        self.request_caret_reveal();
+        self.frame.content_gen = document.read(cx).revision();
+        self.frame.request_caret_reveal();
         self.last_edit = EditKind::Other;
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn selected_range(&self) -> Range<usize> {
-        self.selected_range.clone()
+        self.selection.selected_range.clone()
     }
     pub fn selection_reversed(&self) -> bool {
-        self.selection_reversed
+        self.selection.selection_reversed
     }
     pub fn scroll_offset(&self) -> Point<Pixels> {
-        self.scroll.offset()
+        self.frame.scroll.offset()
     }
     pub fn set_scroll_offset(&mut self, offset: Point<Pixels>, cx: &mut Context<Self>) {
-        self.scroll.set_offset(offset);
+        self.frame.scroll.set_offset(offset);
         cx.notify();
     }
     pub fn is_live(&self) -> bool {
@@ -323,7 +315,7 @@ impl EditorState {
     }
     pub fn set_soft_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
         self.soft_wrap = wrap;
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn set_live_style(&mut self, style: SyntaxStyle, cx: &mut Context<Self>) {
@@ -331,7 +323,7 @@ impl EditorState {
         if self.is_live() {
             self.markdown_style = Some(style);
         }
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
@@ -344,25 +336,25 @@ impl EditorState {
         } else {
             self.markdown_style = self.live_style.clone();
         }
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         self.finish_composition(cx);
-        self.extra_selections.clear();
+        self.selection.extra_selections.clear();
         let start = self
             .content
             .floor_char_boundary(range.start.min(self.content.len()));
         let end = self
             .content
             .floor_char_boundary(range.end.min(self.content.len()));
-        self.selected_range = start.min(end)..start.max(end);
-        self.selection_reversed = start > end;
-        self.caret_affinity = WrapAffinity::Downstream;
-        self.anchor_affinity = WrapAffinity::Downstream;
+        self.selection.selected_range = start.min(end)..start.max(end);
+        self.selection.selection_reversed = start > end;
+        self.selection.caret_affinity = WrapAffinity::Downstream;
+        self.selection.anchor_affinity = WrapAffinity::Downstream;
         self.last_edit = EditKind::Other;
-        self.goal_x = None;
-        self.request_caret_reveal();
+        self.selection.goal_x = None;
+        self.frame.request_caret_reveal();
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
@@ -389,11 +381,11 @@ impl EditorState {
                 .map_or(text.len(), |(at, _)| at)
     }
     pub fn range_to_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
-        let bounds = self.last_bounds?;
+        let bounds = self.frame.last_bounds?;
         let (row, col) = self.row_col(range.start.min(self.content.len()));
         let lh = self.line_h(row);
         let p = caret_line_pos(
-            self.wrapped.get(row)?,
+            self.frame.wrapped.get(row)?,
             self.bidi_map(row),
             self.display_col(row, col),
             lh,
@@ -402,7 +394,7 @@ impl EditorState {
         Some(Bounds::new(
             point(
                 bounds.left() + p.x + self.row_origin_x(row),
-                bounds.top() + self.line_tops.get(row).copied()? + p.y,
+                bounds.top() + self.frame.line_tops.get(row).copied()? + p.y,
             ),
             size(px(1.), lh),
         ))
@@ -432,7 +424,7 @@ impl EditorState {
         let document = self.document.clone();
         let owner = document.read(cx).composition_owner();
         let Some(owner) = owner else {
-            self.marked_range = None;
+            self.selection.marked_range = None;
             return;
         };
         if owner.entity_id() != cx.entity_id() {
@@ -442,8 +434,8 @@ impl EditorState {
                 self.content = document
                     .update(cx, |document, cx| document.finish_orphaned_composition(cx))
                     .text_handle();
-                self.content_gen = document.read(cx).revision();
-                self.invalidate_geometry();
+                self.frame.content_gen = document.read(cx).revision();
+                self.frame.invalidate_geometry();
             }
             return;
         }
@@ -454,8 +446,8 @@ impl EditorState {
                 document.finish_composition(origin, false, caret, cx)
             })
             .text_handle();
-        self.retired_composition |= self.marked_range.is_some();
-        self.marked_range = None;
+        self.selection.retired_composition |= self.selection.marked_range.is_some();
+        self.selection.marked_range = None;
         self.last_edit = EditKind::Other;
     }
     pub(super) fn claim_composition(&mut self, cx: &mut Context<Self>) {
@@ -474,11 +466,11 @@ impl EditorState {
         let document = self.document.clone();
         let origin = cx.entity_id();
         let caret = self.cursor_offset();
-        let before_selection = self.selected_range.clone();
+        let before_selection = self.selection.selected_range.clone();
         let after_caret = range.start + text.len() - text.matches("\r\n").count();
         let coalesced = self.pending_coalesce;
-        let composing = self.marked_range.is_some() && document.read(cx).has_composition();
-        let snapshot = if self.marked_range.is_some() && document.read(cx).has_composition() {
+        let composing = self.selection.marked_range.is_some() && document.read(cx).has_composition();
+        let snapshot = if self.selection.marked_range.is_some() && document.read(cx).has_composition() {
             let owner = cx.weak_entity();
             document.update(cx, |document, cx| {
                 document.compose(range.clone(), text, owner, caret, cx);
@@ -501,21 +493,9 @@ impl EditorState {
             });
         }
         self.content = snapshot.text_handle();
-        self.content_gen = document.read(cx).revision();
-        self.request_caret_reveal();
+        self.frame.content_gen = document.read(cx).revision();
+        self.frame.request_caret_reveal();
         self.pending_coalesce = false;
-        self.invalidate_geometry();
-    }
-    pub(super) fn invalidate_geometry(&mut self) {
-        self.revealed_caret = None;
-        self.last_bounds = None;
-        self.wrapped.clear();
-        self.line_tops.clear();
-        self.table_rows.clear();
-        self.offset_maps.clear();
-        self.rtl_rows.clear();
-        *self.shape_memo.borrow_mut() = None;
-        *self.scan_cache.borrow_mut() = None;
-        self.utf16_anchor.set((self.content_gen, 0, 0));
+        self.frame.invalidate_geometry();
     }
 }

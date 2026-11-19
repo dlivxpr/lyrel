@@ -23,7 +23,7 @@ impl EditorState {
             return;
         }
         self.finish_composition(cx);
-        let before = self.selected_range.clone();
+        let before = self.selection.selected_range.clone();
         let mut text = String::new();
         let prefix = &self.content[..before.start];
         if !prefix.is_empty() && !prefix.ends_with("\n\n") {
@@ -80,8 +80,7 @@ impl EditorState {
         let Some(region) = self.caret_table_region() else {
             return;
         };
-        let Some(width) = self
-            .table_rows
+        let Some(width) = self.frame.table_rows
             .get(region.lines.start)
             .and_then(Option::as_ref)
             .and_then(|row| row.col_widths.get(col))
@@ -109,17 +108,15 @@ impl EditorState {
         window: &mut Window,
     ) -> Option<Bounds<Pixels>> {
         let (row, col) = self.row_col(range.start.min(self.content.len()));
-        let Some(table) = self
-            .table_rows
+        let Some(table) = self.frame.table_rows
             .get(row)
             .and_then(Option::as_ref)
             .filter(|table| !table.is_separator)
         else {
             return self.range_to_bounds(range);
         };
-        let bounds = self.last_bounds?;
-        let font = self
-            .paint_font
+        let bounds = self.frame.last_bounds?;
+        let font = self.frame.paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
         let (x, y, _, _) = table_caret_pos(
@@ -127,12 +124,12 @@ impl EditorState {
             col,
             self.table_left(table, row, &bounds),
             &font,
-            self.font_size,
+            self.frame.font_size,
             window,
         )?;
-        let height = self.font_size * LINE_HEIGHT_RATIO;
+        let height = self.frame.font_size * LINE_HEIGHT_RATIO;
         Some(Bounds::new(
-            point(x, bounds.top() + self.line_tops[row] + px(6.) + y),
+            point(x, bounds.top() + self.frame.line_tops[row] + px(6.) + y),
             size(px(1.), height),
         ))
     }
@@ -141,18 +138,15 @@ impl EditorState {
     /// hover zone / 1 = on the below "+" strip / 2 = on the right "+" strip)`, or
     /// `None` off every table. Drives `on_mouse_move`'s repaint-on-change.
     pub(crate) fn table_hover_region_at(&self, pos: Point<Pixels>) -> Option<(usize, u8)> {
-        let i = self
-            .table_hover_zones
+        let i = self.affordances.table_hover_zones
             .iter()
             .position(|(z, _)| z.contains(&pos))?;
-        let strip = if self
-            .table_row_add_rects
+        let strip = if self.affordances.table_row_add_rects
             .iter()
             .any(|(b, _)| b.contains(&pos))
         {
             1
-        } else if self
-            .table_col_add_rects
+        } else if self.affordances.table_col_add_rects
             .iter()
             .any(|(b, _, _)| b.contains(&pos))
         {
@@ -180,8 +174,7 @@ impl EditorState {
     /// The clamped horizontal scroll of the table headed at `header_row`.
     pub(crate) fn table_sx(&self, header_row: usize, total: Pixels, avail: Pixels) -> Pixels {
         let max = f32::from((total - avail).max(px(0.)));
-        px(self
-            .table_scroll_x
+        px(self.affordances.table_scroll_x
             .get(&header_row)
             .copied()
             .unwrap_or(0.)
@@ -206,15 +199,14 @@ impl EditorState {
             return;
         }
         let dbg = std::env::var_os("ZORITE_WHEEL_DEBUG").is_some();
-        let Some(bounds) = self.last_bounds else {
+        let Some(bounds) = self.frame.last_bounds else {
             return;
         };
         // Hit-test the PAINTED table zone (grid + margin, from the last
         // paint), not the text row model — table paint runs taller than its
         // logical rows (top gutter, cell padding), which left the lower rows
         // of a tall table unresponsive to the wheel.
-        let Some(&(_, header)) = self
-            .table_hover_zones
+        let Some(&(_, header)) = self.affordances.table_hover_zones
             .iter()
             .find(|(z, _)| z.contains(&event.position))
         else {
@@ -229,7 +221,7 @@ impl EditorState {
         if dx.abs() >= f32::from(event.delta.pixel_delta(px(20.)).y).abs() {
             cx.stop_propagation();
         }
-        let Some(t) = self.table_rows.get(header).and_then(Option::as_ref) else {
+        let Some(t) = self.frame.table_rows.get(header).and_then(Option::as_ref) else {
             return;
         };
         if t.col_widths.is_empty() {
@@ -244,19 +236,19 @@ impl EditorState {
             return;
         }
         let max = f32::from(total - avail);
-        let cur = self.table_scroll_x.get(&header).copied().unwrap_or(0.);
+        let cur = self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.);
         // An RTL table's scroll offset runs the other way (see `table_left_x`),
         // so the same physical swipe moves its content the same physical way.
         let new = if t.rtl { cur + dx } else { cur - dx }.clamp(0., max);
         if new != cur {
-            self.table_scroll_x.insert(header, new);
+            self.affordances.table_scroll_x.insert(header, new);
             cx.notify();
         }
     }
 
     /// drives the delete-handle repaint + reveal.
     pub(crate) fn hovered_table_cell(&self, pos: Point<Pixels>) -> Option<(usize, usize)> {
-        let bounds = self.last_bounds.as_ref()?;
+        let bounds = self.frame.last_bounds.as_ref()?;
         // Hover bands start at the left gutter and extend a header's band up into the
         // top gutter, so moving onto a delete handle keeps its cell "hovered".
         let gutter_left = bounds.left();
@@ -265,8 +257,8 @@ impl EditorState {
         }
         let rel_y = pos.y - bounds.top();
         let g = px(TABLE_GUTTER);
-        let row = (0..self.wrapped.len()).find(|&i| {
-            let Some(t) = self.table_rows.get(i).and_then(Option::as_ref) else {
+        let row = (0..self.frame.wrapped.len()).find(|&i| {
+            let Some(t) = self.frame.table_rows.get(i).and_then(Option::as_ref) else {
                 return false;
             };
             if t.is_separator {
@@ -274,13 +266,13 @@ impl EditorState {
             }
             let h = self.line_h(i) * self.row_span(i) as f32;
             let lo = if t.is_header {
-                self.line_tops[i] - g
+                self.frame.line_tops[i] - g
             } else {
-                self.line_tops[i]
+                self.frame.line_tops[i]
             };
-            rel_y >= lo && rel_y < self.line_tops[i] + h
+            rel_y >= lo && rel_y < self.frame.line_tops[i] + h
         })?;
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if t.col_widths.is_empty() {
             return None;
         }
@@ -302,7 +294,7 @@ impl EditorState {
 
     /// Hit-test the hovered row's border "+" → the row a new row lands after.
     pub(crate) fn table_add_row_at(&self, position: Point<Pixels>) -> Option<usize> {
-        self.table_row_add_rects
+        self.affordances.table_row_add_rects
             .iter()
             .find_map(|&(rect, row)| rect.contains(&position).then_some(row))
     }
@@ -310,14 +302,14 @@ impl EditorState {
     /// Hit-test the hovered column's border "+" → `(header row, column)` — a new
     /// column lands right of it.
     pub(crate) fn table_add_col_at(&self, position: Point<Pixels>) -> Option<(usize, usize)> {
-        self.table_col_add_rects
+        self.affordances.table_col_add_rects
             .iter()
             .find_map(|&(rect, row, col)| rect.contains(&position).then_some((row, col)))
     }
 
     /// Source offset at the start of `cell`'s content in table `row` (last paint).
     pub(crate) fn cell_start_offset(&self, row: usize, cell: usize) -> Option<usize> {
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         Some(self.line_starts()[row] + t.cell_ranges.get(cell)?.start)
     }
 
@@ -330,23 +322,23 @@ impl EditorState {
         position: Point<Pixels>,
         window: &mut Window,
     ) -> Option<usize> {
-        if self.wrapped.is_empty() || self.table_rows.iter().all(Option::is_none) {
+        if self.frame.wrapped.is_empty() || self.frame.table_rows.iter().all(Option::is_none) {
             return None;
         }
-        let bounds = self.last_bounds.as_ref()?;
+        let bounds = self.frame.last_bounds.as_ref()?;
         let rel = point(
             position.x - bounds.left() - px(TABLE_GUTTER),
             position.y - bounds.top(),
         );
-        let mut row = self.wrapped.len() - 1;
-        for i in 0..self.wrapped.len() {
+        let mut row = self.frame.wrapped.len() - 1;
+        for i in 0..self.frame.wrapped.len() {
             let h = self.line_h(i) * self.row_span(i) as f32;
-            if rel.y < self.line_tops[i] + h {
+            if rel.y < self.frame.line_tops[i] + h {
                 row = i;
                 break;
             }
         }
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if t.is_separator || t.col_widths.is_empty() {
             return None;
         }
@@ -354,11 +346,10 @@ impl EditorState {
         let rel = point(position.x - self.table_left(t, row, bounds), rel.y);
         // Measure at the last paint's font + size — the style stack is unwound
         // during event dispatch, so `text_style()` here reports the root style.
-        let font = self
-            .paint_font
+        let font = self.frame.paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
-        let font_size = self.font_size;
+        let font_size = self.frame.font_size;
         let pad = px(TABLE_CELL_PAD);
         // Column the click is in, and its left x — through the same mirrored
         // mapping the cells were painted with, or a click lands in a different
@@ -405,7 +396,7 @@ impl EditorState {
         let pad_y = px(6.);
         let target = point(
             (rel.x - cx - pad - align_off).max(px(0.)),
-            rel.y - self.line_tops[row] - pad_y,
+            rel.y - self.frame.line_tops[row] - pad_y,
         );
         let display_offset =
             cell_offset_for_point(content, target, avail, &cf, font_size, runs, window);
@@ -421,7 +412,7 @@ impl EditorState {
     /// separator) — so Tab navigates cells instead of indenting.
     pub(crate) fn caret_in_table(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.table_rows
+        self.frame.table_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|t| !t.is_separator)
@@ -433,7 +424,7 @@ impl EditorState {
     /// leave the table — the caller then does a normal vertical move (exiting it).
     pub(crate) fn table_move_vertical(&self, dir: i32) -> Option<usize> {
         let (row, col) = self.row_col(self.cursor_offset());
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if t.is_separator || t.cell_ranges.is_empty() {
             return None;
         }
@@ -446,7 +437,7 @@ impl EditorState {
                 return None;
             }
             let ru = r as usize;
-            match self.table_rows.get(ru) {
+            match self.frame.table_rows.get(ru) {
                 Some(Some(nt)) if !nt.is_separator && !nt.cell_ranges.is_empty() => {
                     let tc = cell.min(nt.cell_ranges.len() - 1);
                     let cr = &nt.cell_ranges[tc];
@@ -492,7 +483,7 @@ impl EditorState {
     /// `None` when the caret isn't in a table cell or the move would leave it.
     pub(crate) fn table_move_horizontal(&self, dir: i32) -> Option<usize> {
         let (row, col) = self.row_col(self.cursor_offset());
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if t.is_separator || t.cell_ranges.is_empty() {
             return None;
         }
@@ -509,7 +500,7 @@ impl EditorState {
                 return Some(starts[row] + t.cell_ranges[cell + 1].start);
             }
             // Last cell of the row → first cell of the next table row, else exit.
-            for (r, slot) in self.table_rows.iter().enumerate().skip(row + 1) {
+            for (r, slot) in self.frame.table_rows.iter().enumerate().skip(row + 1) {
                 match slot.as_ref() {
                     Some(nt) if !nt.is_separator && !nt.cell_ranges.is_empty() => {
                         return Some(starts[r] + nt.cell_ranges[0].start);
@@ -527,7 +518,7 @@ impl EditorState {
                 return Some(starts[row] + t.cell_ranges[cell - 1].end);
             }
             // First cell of the row → last cell of the previous table row, else exit.
-            for (r, slot) in self.table_rows.iter().enumerate().take(row).rev() {
+            for (r, slot) in self.frame.table_rows.iter().enumerate().take(row).rev() {
                 match slot.as_ref() {
                     Some(pt) if !pt.is_separator && !pt.cell_ranges.is_empty() => {
                         return Some(starts[r] + pt.cell_ranges[pt.cell_ranges.len() - 1].end);
@@ -545,7 +536,7 @@ impl EditorState {
     /// final/first cell. `None` when the caret isn't in a table cell.
     pub(crate) fn table_cell_nav(&self, forward: bool) -> Option<usize> {
         let (row, col) = self.row_col(self.cursor_offset());
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if t.is_separator {
             return None;
         }
@@ -556,7 +547,7 @@ impl EditorState {
             if cell + 1 < t.cell_ranges.len() {
                 return Some(starts[row] + t.cell_ranges[cell + 1].start);
             }
-            for (r, slot) in self.table_rows.iter().enumerate().skip(row + 1) {
+            for (r, slot) in self.frame.table_rows.iter().enumerate().skip(row + 1) {
                 match slot.as_ref() {
                     Some(nt) if usable(nt) => return Some(starts[r] + nt.cell_ranges[0].start),
                     Some(_) => continue,
@@ -567,7 +558,7 @@ impl EditorState {
             if cell > 0 {
                 return Some(starts[row] + t.cell_ranges[cell - 1].start);
             }
-            for (r, slot) in self.table_rows.iter().enumerate().take(row).rev() {
+            for (r, slot) in self.frame.table_rows.iter().enumerate().take(row).rev() {
                 match slot.as_ref() {
                     Some(pt) if usable(pt) => {
                         return Some(starts[r] + pt.cell_ranges[pt.cell_ranges.len() - 1].start);
@@ -588,7 +579,7 @@ impl EditorState {
     pub fn caret_table_align(&self) -> Option<CellAlign> {
         let (row, col) = self.row_col(self.cursor_offset());
         // Fast-reject via the paint: only a header row gets the toolbar.
-        let t = self.table_rows.get(row).and_then(Option::as_ref)?;
+        let t = self.frame.table_rows.get(row).and_then(Option::as_ref)?;
         if !t.is_header {
             return None;
         }
@@ -606,7 +597,7 @@ impl EditorState {
     /// `|---|` separator row; the caret stays put. No-op outside a table cell.
     pub fn set_caret_table_align(&mut self, align: CellAlign, cx: &mut Context<Self>) {
         let (row, col) = self.row_col(self.cursor_offset());
-        let Some(t) = self.table_rows.get(row).and_then(Option::as_ref) else {
+        let Some(t) = self.frame.table_rows.get(row).and_then(Option::as_ref) else {
             return;
         };
         if t.is_separator {
@@ -652,7 +643,7 @@ impl EditorState {
         } else {
             old_caret
         };
-        self.selected_range = caret..caret;
+        self.selection.selected_range = caret..caret;
         self.remap_diagnostics(&range, new_sep.len());
         cx.emit(EditorEvent::Changed);
         cx.notify();
@@ -694,8 +685,8 @@ impl EditorState {
         self.record_edit(&range, &new_row);
         self.replace_source(range.clone(), &new_row, cx);
         self.remap_diagnostics(&range, new_row.len());
-        self.selected_range = (pos + 3)..(pos + 3); // first cell, after "\n| "
-        self.table_menu = None;
+        self.selection.selected_range = (pos + 3)..(pos + 3); // first cell, after "\n| "
+        self.overlay_menu.dismiss();
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -734,8 +725,8 @@ impl EditorState {
             row.min(end - 2)
         };
         let caret = self.caret_pos_for_cell(target, cell, in_cell);
-        self.selected_range = caret..caret;
-        self.table_menu = None;
+        self.selection.selected_range = caret..caret;
+        self.overlay_menu.dismiss();
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -770,10 +761,10 @@ impl EditorState {
         self.replace_source(range.clone(), "", cx);
         self.remap_diagnostics(&range, 0);
         let caret = del_start.min(self.content.len());
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.goal_x = None;
-        self.table_menu = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.goal_x = None;
+        self.overlay_menu.dismiss();
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -811,8 +802,8 @@ impl EditorState {
         self.replace_source(range.clone(), &insert, cx);
         self.remap_diagnostics(&range, insert.len());
         let caret = self.caret_pos_for_cell(after + 1, cell, in_cell);
-        self.selected_range = caret..caret;
-        self.table_menu = None;
+        self.selection.selected_range = caret..caret;
+        self.overlay_menu.dismiss();
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -830,7 +821,7 @@ impl EditorState {
         };
         let end = self.line_end(region.lines.end - 1);
         let text = self.content[start..end].to_string();
-        self.table_menu = None;
+        self.overlay_menu.dismiss();
         self.write_clipboard(text, cx);
         cx.notify();
     }
@@ -860,7 +851,7 @@ impl EditorState {
             (None, None) => return,
         };
         let cell_pos = self.caret_table_cell_pos();
-        let old_caret = self.selected_range.start;
+        let old_caret = self.selection.selected_range.start;
         // The marker edit adds/removes one line ABOVE the table (or replaces in
         // place) — shift the caret's row index to keep it in its cell.
         let row_shift: isize = match (region.marker_line, new.is_empty()) {
@@ -891,8 +882,8 @@ impl EditorState {
             }
         };
         let caret = caret.min(self.content.len());
-        self.selected_range = caret..caret;
-        self.table_menu = None;
+        self.selection.selected_range = caret..caret;
+        self.overlay_menu.dismiss();
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -938,8 +929,7 @@ impl EditorState {
         // Measure with the PAINT font — the shaping that lays the table out
         // uses it, and the root font event dispatch reports has different
         // metrics (autofit widths were off by the family drift).
-        let font = self
-            .paint_font
+        let font = self.frame.paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
         let natural = table_column_widths(
@@ -947,7 +937,7 @@ impl EditorState {
             &region,
             window,
             &font,
-            self.font_size,
+            self.frame.font_size,
             Hsla::default(),
             None,
             None,
@@ -985,8 +975,7 @@ impl EditorState {
             return;
         };
         // The header row's committed display widths already carry the live drag.
-        let Some(t) = self
-            .table_rows
+        let Some(t) = self.frame.table_rows
             .get(resize.header_row)
             .and_then(Option::as_ref)
         else {
@@ -1060,8 +1049,8 @@ impl EditorState {
             // Inserting to the left shifts the caret's cell one column right.
             let new_cell = if right { cell } else { cell + 1 };
             let caret = self.caret_pos_for_cell(row, new_cell, in_cell);
-            self.selected_range = caret..caret;
-            self.table_menu = None;
+            self.selection.selected_range = caret..caret;
+            self.overlay_menu.dismiss();
             cx.emit(EditorEvent::Changed);
             cx.notify();
         }
@@ -1075,8 +1064,8 @@ impl EditorState {
         };
         if self.rewrite_table_columns(ColEdit::Delete(cell), cx) {
             let caret = self.caret_pos_for_cell(row, cell, in_cell);
-            self.selected_range = caret..caret;
-            self.table_menu = None;
+            self.selection.selected_range = caret..caret;
+            self.overlay_menu.dismiss();
             cx.emit(EditorEvent::Changed);
             cx.notify();
         }

@@ -162,7 +162,7 @@ impl Element for EditorElement {
                 let geometry_row = editor.row_col(editor.cursor_offset()).0;
                 let caret_row = focused.then_some(geometry_row);
                 let selection = if focused {
-                    (editor.selected_range.start, editor.selected_range.end)
+                    (editor.selection.selected_range.start, editor.selection.selected_range.end)
                 } else {
                     (usize::MAX, usize::MAX)
                 };
@@ -199,12 +199,12 @@ impl Element for EditorElement {
                     }),
                     sf,
                     selection,
-                    editor.image_resize,
-                    editor.table_col_resize,
+                    editor.affordances.image_resize,
+                    editor.affordances.table_col_resize,
                     &scan,
-                    &editor.shape_caches,
-                    editor.shape_band.get().map(|(a, b)| (px(a), px(b))),
-                    &editor.folded_headings,
+                    &editor.frame.shape_caches,
+                    editor.frame.shape_band.get().map(|(a, b)| (px(a), px(b))),
+                    &editor.affordances.folded_headings,
                 );
                 // Without soft wrap the widest shaped line is the document's
                 // horizontal extent. Tables contribute their fitted grid, not
@@ -229,13 +229,13 @@ impl Element for EditorElement {
                             }
                         })
                         .fold(px(0.), Pixels::max);
-                    if (editor.natural_width.replace(natural) - natural).abs() > px(0.5) {
+                    if (editor.frame.natural_width.replace(natural) - natural).abs() > px(0.5) {
                         let editor = layout_entity.clone();
                         window.on_next_frame(move |_, cx| {
                             editor.update(cx, |_, cx| cx.notify());
                         });
                     }
-                } else if editor.natural_width.replace(px(0.)) != px(0.) {
+                } else if editor.frame.natural_width.replace(px(0.)) != px(0.) {
                     let editor = layout_entity.clone();
                     window.on_next_frame(move |_, cx| {
                         editor.update(cx, |_, cx| cx.notify());
@@ -288,17 +288,17 @@ impl Element for EditorElement {
                 // heights diverge wildly from the wrapped layout at a narrow
                 // window — a compensation from one of those yanks the scroll
                 // offset by thousands of px and fights the user's scrolling.
-                if let (Some(f), Some(last)) = (&editor.scroll_compensator, editor.last_bounds)
-                    && editor.content_gen == editor.last_paint_gen
-                    && !editor.line_tops.is_empty()
+                if let (Some(f), Some(last)) = (&editor.scroll_compensator, editor.frame.last_bounds)
+                    && editor.frame.content_gen == editor.frame.last_paint_gen
+                    && !editor.frame.line_tops.is_empty()
                     && wrap_width.is_some_and(|w| (w - last.size.width).abs() < px(1.))
                 {
-                    let n = new_tops.len().min(editor.line_tops.len());
-                    let viewport_top = editor.scroll.bounds().top();
-                    let anchor = editor.line_tops.iter().position(|top| last.origin.y + *top >= viewport_top).unwrap_or(n);
+                    let n = new_tops.len().min(editor.frame.line_tops.len());
+                    let viewport_top = editor.frame.scroll.bounds().top();
+                    let anchor = editor.frame.line_tops.iter().position(|top| last.origin.y + *top >= viewport_top).unwrap_or(n);
                     // Changes below the visible row cannot cancel or amplify
                     // an independent asynchronous height change above it.
-                    let delta = new_tops.get(anchor).zip(editor.line_tops.get(anchor))
+                    let delta = new_tops.get(anchor).zip(editor.frame.line_tops.get(anchor))
                         .map_or(total - last.size.height, |(new, old)| *new - *old);
                     // Layout rounds the painted bounds to device pixels, so
                     // `last` can differ from `total` by just under one device
@@ -307,7 +307,7 @@ impl Element for EditorElement {
                     // 1.5 device px leaves margin over it.
                     if delta.abs() >= px(1.5 / sf) {
                         let j = (0..n)
-                            .find(|&k| (new_tops[k] - editor.line_tops[k]).abs() > px(0.5))
+                            .find(|&k| (new_tops[k] - editor.frame.line_tops[k]).abs() > px(0.5))
                             .unwrap_or(n);
                         // Debug tap (ZORITE_WINDOW_DEBUG=1): a height change
                         // with NO edit and NO width change means a cache
@@ -323,23 +323,23 @@ impl Element for EditorElement {
                                 .collect::<String>();
                             eprintln!(
                                 "[wdbg] gen={} delta={:?} first_changed_row={} old_top={:?} new_top={:?} line={:?}",
-                                editor.content_gen,
+                                editor.frame.content_gen,
                                 delta,
                                 j,
-                                editor.line_tops.get(j),
+                                editor.frame.line_tops.get(j),
                                 new_tops.get(j),
                                 line_txt
                             );
                         }
-                        let changed_y = editor.line_tops.get(j).copied().unwrap_or(last.size.height);
-                        if last.origin.y + changed_y < viewport_top && !editor.compensated.get() {
-                            editor.compensated.set(true);
+                        let changed_y = editor.frame.line_tops.get(j).copied().unwrap_or(last.size.height);
+                        if last.origin.y + changed_y < viewport_top && !editor.frame.compensated.get() {
+                            editor.frame.compensated.set(true);
                             compensate = Some((f.clone(), delta));
                         }
                     }
                 }
                 // Hand the shaping to this frame's prepaint (see ShapeMemo).
-                *editor.shape_memo.borrow_mut() = Some(ShapeMemo {
+                *editor.frame.shape_memo.borrow_mut() = Some(ShapeMemo {
                     wrap_width,
                     caret_row,
                     geometry_row,
@@ -376,7 +376,7 @@ impl Element for EditorElement {
         let focused = editor.focus_handle.is_focused(window);
         // The active image-resize drag (if any), so a dragged image's grip hitbox
         // tracks its live preview size (copied out — `editor` stays borrowed below).
-        let image_resize = editor.image_resize;
+        let image_resize = editor.affordances.image_resize;
         let style = window.text_style();
         let font = style.font();
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -389,14 +389,17 @@ impl Element for EditorElement {
         let geometry_row = editor.row_col(editor.cursor_offset()).0;
         let caret_row = focused.then_some(geometry_row);
         let selection = if focused {
-            (editor.selected_range.start, editor.selected_range.end)
+            (
+                editor.selection.selected_range.start,
+                editor.selection.selected_range.end,
+            )
         } else {
             (usize::MAX, usize::MAX)
         };
         let sf = window.scale_factor();
         // The measure pass already shaped these exact inputs this frame — use
         // its result instead of shaping the whole document a second time.
-        let memo = editor.shape_memo.borrow_mut().take().filter(|m| {
+        let memo = editor.frame.shape_memo.borrow_mut().take().filter(|m| {
             m.wrap_width == wrap_width
                 && m.caret_row == caret_row
                 && m.geometry_row == geometry_row
@@ -472,12 +475,12 @@ impl Element for EditorElement {
                 }),
                 sf,
                 selection,
-                editor.image_resize,
-                editor.table_col_resize,
+                editor.affordances.image_resize,
+                editor.affordances.table_col_resize,
                 &editor.scan_data(),
-                &editor.shape_caches,
-                editor.shape_band.get().map(|(a, b)| (px(a), px(b))),
-                &editor.folded_headings,
+                &editor.frame.shape_caches,
+                editor.frame.shape_band.get().map(|(a, b)| (px(a), px(b))),
+                &editor.affordances.folded_headings,
             )
         };
 
@@ -492,7 +495,7 @@ impl Element for EditorElement {
             let q = 512.0;
             let lo = (((top - vh) / q).floor() * q).max(0.);
             let hi = ((top + 2. * vh) / q).ceil() * q;
-            if editor.shape_band.replace(Some((lo, hi))) != Some((lo, hi)) {
+            if editor.frame.shape_band.replace(Some((lo, hi))) != Some((lo, hi)) {
                 // This frame used the previous band; repaint the newly visible rows.
                 let editor = self.editor.clone();
                 window.on_next_frame(move |_, cx| {
@@ -704,7 +707,7 @@ impl Element for EditorElement {
                 code_card_rects.push((i, card));
                 // The chrome itself is hover-revealed: only the hovered card
                 // lays out (and hit-tests) its chips.
-                if editor.code_chip_hover != Some(i) {
+                if editor.affordances.code_chip_hover != Some(i) {
                     continue;
                 }
                 // The opening fence row: this row if the fence is revealed, else
@@ -781,8 +784,8 @@ impl Element for EditorElement {
                     i,
                     Bounds::new(point(bounds.origin.x, top), size(bounds.size.width, lh)),
                 ));
-                let folded = editor.folded_headings.contains(line.trim());
-                if !folded && editor.heading_hover_row != Some(i) {
+                let folded = editor.affordances.folded_headings.contains(line.trim());
+                if !folded && editor.affordances.heading_hover_row != Some(i) {
                     continue;
                 }
                 // Past the heading text (its mark inset + shaped width), capped
@@ -832,7 +835,7 @@ impl Element for EditorElement {
                     .markdown_style
                     .as_ref()
                     .and_then(|st| st.block_ref_count.as_ref())
-                    .filter(|_| editor.row_col(editor.selected_range.start).0 != i)
+                    .filter(|_| editor.row_col(editor.selection.selected_range.start).0 != i)
                     .and_then(|f| {
                         zorite_markdown::syntax::block_id(line)
                             .filter(|(_, id)| f(id) > 0)
@@ -941,13 +944,13 @@ impl Element for EditorElement {
         // While a drag is live, a viewport-sized hitbox (inserted after the
         // editor's own, so it sits on top) keeps the closed-hand cursor
         // everywhere — otherwise the text I-beam takes over mid-drag.
-        if editor.line_drag.is_some() {
+        if editor.affordances.line_drag.is_some() {
             let all = Bounds::new(gpui_kit::Point::default(), window.viewport_size());
             grip_hb = Some(window.insert_hitbox(all, HitboxBehavior::Normal));
         }
-        let gl = grip_left(bounds.origin.x, editor.grip_inset);
+        let gl = grip_left(bounds.origin.x, editor.affordances.grip_inset);
         if editor.markdown_style.is_some()
-            && editor.line_drag.is_none()
+            && editor.affordances.line_drag.is_none()
             && mouse.x >= gl - px(4.)
             && mouse.x <= bounds.origin.x + bounds.size.width
         {
@@ -980,7 +983,7 @@ impl Element for EditorElement {
         let mut row_aff: Option<TableAffordance> = None;
         let mut col_aff: Option<TableAffordance> = None;
         let mut col_resize_grips: Vec<ColResizeGrip> = Vec::new();
-        let dragging_col = editor.table_col_resize;
+        let dragging_col = editor.affordances.table_col_resize;
         let mut caret_cell: Option<(Bounds<Pixels>, Hsla)> = None;
         let caret_pos = editor.caret_table_cell_pos();
         let mut tbl_top: Option<Pixels> = None;
@@ -1179,7 +1182,7 @@ impl Element for EditorElement {
             |top: Pixels, p: Point<Pixels>| point(bounds.left() + p.x, bounds.top() + top + p.y);
 
         // Caret/selection positioning must use THIS frame's fresh per-row data —
-        // `editor.offset_maps`/`line_insets` aren't committed until paint, so the
+        // `editor.frame.offset_maps`/`line_insets` aren't committed until paint, so the
         // method forms would lag a frame (a one-frame caret jump after an edit
         // that hides/reveals markers).
         let disp_col =
@@ -1411,6 +1414,7 @@ impl Element for EditorElement {
         // do. Without it an unfinished composition looks committed — and the
         // arrow keys the input method keeps for itself seem to stick (#119).
         let marked: Vec<PaintQuad> = editor
+            .selection
             .marked_range
             .as_ref()
             .map(|m| {
@@ -1439,7 +1443,7 @@ impl Element for EditorElement {
                 text_color,
             );
             (Some(c), Vec::new())
-        } else if editor.selected_range.is_empty() {
+        } else if editor.selection.selected_range.is_empty() {
             let (row, col) = editor.row_col(editor.cursor_offset());
             let lh = line_heights.get(row).copied().unwrap_or(base_lh);
             let top = line_tops.get(row).copied().unwrap_or(px(0.));
@@ -1480,7 +1484,13 @@ impl Element for EditorElement {
                 let p = wrapped
                     .get(row)
                     .and_then(|l| {
-                        caret_line_pos(l, bidi(row), disp_col(row, col), lh, editor.caret_affinity)
+                        caret_line_pos(
+                            l,
+                            bidi(row),
+                            disp_col(row, col),
+                            lh,
+                            editor.selection.caret_affinity,
+                        )
                     })
                     .unwrap_or_default();
                 let inset = row_x(row);
@@ -1517,14 +1527,14 @@ impl Element for EditorElement {
             (
                 None,
                 range_quads(
-                    editor.selected_range.start,
-                    editor.selected_range.end,
+                    editor.selection.selected_range.start,
+                    editor.selection.selected_range.end,
                     color,
                     window,
                 ),
             )
         };
-        for selection in &editor.extra_selections {
+        for selection in &editor.selection.extra_selections {
             if selection.is_empty() {
                 let (row, col) = editor.row_col(selection.start);
                 if let Some(line) = wrapped.get(row) {
@@ -1633,7 +1643,7 @@ impl Element for EditorElement {
             .markdown_style
             .as_ref()
             .map_or(text_color, |s| s.link);
-        let image_resize = self.editor.read(cx).image_resize;
+        let image_resize = self.editor.read(cx).affordances.image_resize;
         // Window-space bounds of each painted image + its logical line, collected
         // for the next frame's grip hit-testing (committed below).
         let mut image_rects: Vec<(usize, Bounds<Pixels>)> = Vec::new();
@@ -2310,7 +2320,7 @@ impl Element for EditorElement {
         // Column-resize grips: a resize cursor over each border band; the
         // hovered/dragged border draws in the accent color.
         let mut table_col_resize_rects: Vec<(Bounds<Pixels>, usize, usize, f32)> = Vec::new();
-        let dragging = self.editor.read(cx).table_col_resize;
+        let dragging = self.editor.read(cx).affordances.table_col_resize;
         for gr in &prepaint.col_resize_grips {
             window.set_cursor_style(CursorStyle::ResizeLeftRight, &gr.hit);
             table_col_resize_rects.push((gr.band, gr.header_row, gr.col, gr.width));
@@ -2341,7 +2351,7 @@ impl Element for EditorElement {
             let accent = ed.markdown_style.as_ref().map_or(text_color, |s| s.link);
             let mut dot_c = ed.markdown_style.as_ref().map_or(text_color, |s| s.marker);
             dot_c.a = (dot_c.a * 1.6).min(0.9);
-            if let Some((bs, be, t)) = ed.line_drag {
+            if let Some((bs, be, t)) = ed.affordances.line_drag {
                 let y = prepaint.line_tops.get(t).copied().unwrap_or_else(|| {
                     let i = prepaint.line_tops.len().saturating_sub(1);
                     prepaint.line_tops.last().copied().unwrap_or(px(0.))
@@ -2401,9 +2411,9 @@ impl Element for EditorElement {
                 {
                     editor.update(cx, |ed, cx| {
                         let (bs, be) = ed.drag_block_rows(row);
-                        ed.line_drag = Some((bs, be, bs));
-                        ed.is_selecting = false;
-                        ed.menu = None;
+                        ed.affordances.line_drag = Some((bs, be, bs));
+                        ed.selection.is_selecting = false;
+                        ed.overlay_menu.dismiss();
                         cx.notify();
                     });
                     cx.stop_propagation();
@@ -2423,9 +2433,9 @@ impl Element for EditorElement {
                 if phase == gpui_kit::DispatchPhase::Bubble {
                     let ed = editor.read(cx);
                     let gr = ed.grip_hover_row_at(e.position);
-                    if gr != ed.grip_hover_row {
+                    if gr != ed.affordances.grip_hover_row {
                         editor.update(cx, |ed, cx| {
-                            ed.grip_hover_row = gr;
+                            ed.affordances.grip_hover_row = gr;
                             cx.notify();
                         });
                     }
@@ -2437,15 +2447,15 @@ impl Element for EditorElement {
         // fire — so track the boundary and land the drop from window-level
         // listeners too (the div's own handlers cover in-bounds travel; both
         // paths take/compare the same state, so double delivery is a no-op).
-        if self.editor.read(cx).line_drag.is_some() {
+        if self.editor.read(cx).affordances.line_drag.is_some() {
             let editor = self.editor.clone();
             window.on_mouse_event(move |e: &MouseMoveEvent, phase, _w, cx| {
                 if phase == gpui_kit::DispatchPhase::Bubble {
                     editor.update(cx, |ed, cx| {
-                        if let Some((bs, be, t)) = ed.line_drag {
+                        if let Some((bs, be, t)) = ed.affordances.line_drag {
                             let b = ed.snap_drop_boundary(ed.drop_boundary_at(e.position));
                             if b != t {
-                                ed.line_drag = Some((bs, be, b));
+                                ed.affordances.line_drag = Some((bs, be, b));
                                 cx.notify();
                             }
                         }
@@ -2456,7 +2466,7 @@ impl Element for EditorElement {
             window.on_mouse_event(move |e: &MouseUpEvent, phase, _w, cx| {
                 if phase == gpui_kit::DispatchPhase::Bubble && e.button == MouseButton::Left {
                     editor.update(cx, |ed, cx| {
-                        if let Some((bs, be, t)) = ed.line_drag.take() {
+                        if let Some((bs, be, t)) = ed.affordances.line_drag.take() {
                             ed.apply_line_drag(bs, be, t, cx);
                             cx.notify();
                         }
@@ -2554,53 +2564,54 @@ impl Element for EditorElement {
             window.set_cursor_style(CursorStyle::PointingHand, hb);
         }
         let reveal = self.editor.update(cx, |editor, _| {
-            editor.wrapped = wrapped;
-            editor.line_tops = line_tops;
-            editor.line_heights = line_heights;
-            editor.wrap_rows = std::mem::take(&mut prepaint.wrap_rows);
-            editor.widget_rows = widget_rows;
-            editor.offset_maps = offset_maps;
-            editor.chip_rows = chip_rows;
-            editor.line_insets = line_insets;
-            editor.rtl_rows = std::mem::take(&mut prepaint.rtl);
-            editor.table_rows = table_rows;
-            editor.image_rects = image_rects;
-            editor.inline_math_rects = inline_math_rects;
-            editor.prop_pill_rects = prop_pill_rects;
-            editor.link_rects = std::mem::take(&mut prepaint.link_rects);
-            editor.prop_row_rects = prop_row_rects;
-            editor.checkbox_rects = checkbox_rects;
-            editor.table_thumbs = prepaint.table_thumbs.iter().map(|(t, _)| *t).collect();
-            editor.code_chip_rects = code_chip_rects;
-            editor.table_col_resize_rects = table_col_resize_rects;
-            editor.code_card_rects = std::mem::take(&mut prepaint.code_card_rects);
-            editor.alert_fold_rects = alert_fold_rects;
-            editor.heading_fold_rects = heading_fold_rects;
-            editor.heading_row_rects = std::mem::take(&mut prepaint.heading_row_rects);
-            editor.table_row_add_rects = table_row_add_rects;
-            editor.table_col_add_rects = table_col_add_rects;
-            editor.table_hover_zones = table_hover_zones;
-            editor.table_row_del = table_row_del;
-            editor.table_col_del = table_col_del;
-            editor.last_bounds = Some(bounds);
-            editor.compensated.set(false);
-            editor.last_paint_gen = editor.content_gen;
-            editor.line_height = base_lh;
-            editor.font_size = font_size;
-            editor.paint_font = Some(font.clone());
-            if !editor.reveal_requested {
+            editor.frame.wrapped = wrapped;
+            editor.frame.line_tops = line_tops;
+            editor.frame.line_heights = line_heights;
+            editor.frame.wrap_rows = std::mem::take(&mut prepaint.wrap_rows);
+            editor.frame.widget_rows = widget_rows;
+            editor.frame.offset_maps = offset_maps;
+            editor.affordances.chip_rows = chip_rows;
+            editor.frame.line_insets = line_insets;
+            editor.frame.rtl_rows = std::mem::take(&mut prepaint.rtl);
+            editor.frame.table_rows = table_rows;
+            editor.affordances.image_rects = image_rects;
+            editor.affordances.inline_math_rects = inline_math_rects;
+            editor.affordances.prop_pill_rects = prop_pill_rects;
+            editor.affordances.link_rects = std::mem::take(&mut prepaint.link_rects);
+            editor.affordances.prop_row_rects = prop_row_rects;
+            editor.affordances.checkbox_rects = checkbox_rects;
+            editor.affordances.table_thumbs =
+                prepaint.table_thumbs.iter().map(|(t, _)| *t).collect();
+            editor.affordances.code_chip_rects = code_chip_rects;
+            editor.affordances.table_col_resize_rects = table_col_resize_rects;
+            editor.affordances.code_card_rects = std::mem::take(&mut prepaint.code_card_rects);
+            editor.affordances.alert_fold_rects = alert_fold_rects;
+            editor.affordances.heading_fold_rects = heading_fold_rects;
+            editor.affordances.heading_row_rects = std::mem::take(&mut prepaint.heading_row_rects);
+            editor.affordances.table_row_add_rects = table_row_add_rects;
+            editor.affordances.table_col_add_rects = table_col_add_rects;
+            editor.affordances.table_hover_zones = table_hover_zones;
+            editor.affordances.table_row_del = table_row_del;
+            editor.affordances.table_col_del = table_col_del;
+            editor.frame.last_bounds = Some(bounds);
+            editor.frame.compensated.set(false);
+            editor.frame.last_paint_gen = editor.frame.content_gen;
+            editor.frame.line_height = base_lh;
+            editor.frame.font_size = font_size;
+            editor.frame.paint_font = Some(font.clone());
+            if !editor.frame.reveal_requested {
                 return None;
             }
             let key = (
-                editor.content_gen,
+                editor.frame.content_gen,
                 editor.cursor_offset(),
-                editor.caret_affinity,
+                editor.selection.caret_affinity,
             );
             let caret = editor.range_to_bounds(&(key.1..key.1))?;
-            editor.reveal_requested = false;
-            editor.revealed_caret = Some(key);
-            let viewport = editor.scroll.bounds();
-            let mut offset = editor.scroll.offset();
+            editor.frame.reveal_requested = false;
+            editor.frame.revealed_caret = Some(key);
+            let viewport = editor.frame.scroll.bounds();
+            let mut offset = editor.frame.scroll.offset();
             let previous = offset;
             let margin = px(4.);
             if caret.top() < viewport.top() + margin {
@@ -2621,8 +2632,8 @@ impl Element for EditorElement {
             let editor = self.editor.clone();
             window.on_next_frame(move |_, cx| {
                 editor.update(cx, |editor, cx| {
-                    if editor.revealed_caret == Some(key) && !editor.reveal_requested {
-                        editor.scroll.set_offset(offset);
+                    if editor.frame.revealed_caret == Some(key) && !editor.frame.reveal_requested {
+                        editor.frame.scroll.set_offset(offset);
                         cx.notify();
                     }
                 });
@@ -2630,9 +2641,9 @@ impl Element for EditorElement {
         }
 
         let editor = self.editor.read(cx);
-        let viewport = editor.scroll_viewport;
+        let viewport = editor.frame.scroll_viewport;
         let viewport_h = f32::from(viewport.size.height);
-        let content_h = f32::from(editor.scroll.max_offset().y + viewport.size.height);
+        let content_h = f32::from(editor.frame.scroll.max_offset().y + viewport.size.height);
         if viewport.size.width > px(0.) && content_h > viewport_h {
             let track_w = px(4.);
             let track_right = viewport.right() - px(8.);
@@ -2643,7 +2654,7 @@ impl Element for EditorElement {
             window.paint_quad(fill(track, text_color.opacity(0.08)));
             let thumb_h = (viewport_h * viewport_h / content_h).max(24.);
             let max_offset = content_h - viewport_h;
-            let scrolled = (-f32::from(editor.scroll.offset().y)).clamp(0., max_offset);
+            let scrolled = (-f32::from(editor.frame.scroll.offset().y)).clamp(0., max_offset);
             let thumb = Bounds::new(
                 point(
                     track_right - track_w,
@@ -2941,7 +2952,7 @@ fn shape_inline_images(
 /// stay positionable.
 #[allow(clippy::too_many_arguments)]
 fn table_page_width(editor: &EditorState, window: &Window) -> Option<Pixels> {
-    let viewport = editor.scroll_viewport.size.width;
+    let viewport = editor.frame.scroll_viewport.size.width;
     (viewport > px(0.))
         .then(|| (viewport - window.rem_size() * (editor.document_inset.0 * 2.)).max(px(1.)))
 }

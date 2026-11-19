@@ -70,6 +70,9 @@ use tables::*;
 mod element;
 use element::*;
 
+mod state;
+use state::*;
+
 /// Key context the editing actions are scoped to (so they only fire while an
 /// editor is focused).
 const CONTEXT: &str = "Editor";
@@ -794,112 +797,26 @@ pub struct EditorState {
     _document_subscription: gpui_kit::Subscription,
     pending_coalesce: bool,
     soft_wrap: bool,
-    /// Widest laid-out line from the last layout pass, excluding document
-    /// padding. With soft wrap off this is the horizontal scroll extent; the
-    /// renderer gives the scroll content this minimum width so unwrapped lines
-    /// can be read by scrolling instead of being clipped.
-    natural_width: std::cell::Cell<Pixels>,
-    scroll: ScrollHandle,
-    /// Real viewport bounds published by the host; the editor's scroll handle
-    /// spans content height, so a scrollbar cannot infer the visible extent.
-    scroll_viewport: Bounds<Pixels>,
-    scrollbar_dragging: bool,
-    revealed_caret: Option<(u64, usize, WrapAffinity)>,
-    /// Only local navigation/editing requests reveal; observing another view never does.
-    reveal_requested: bool,
-    caret_affinity: WrapAffinity,
-    anchor_affinity: WrapAffinity,
     live_style: Option<SyntaxStyle>,
     source_only: bool,
     /// Raw source that is not Markdown: no Markdown styling or editing assists.
     /// The shared [`Document`], caret, selection, IME and undo remain.
     plain_source: bool,
     host_links: bool,
-    pending_link: Option<(SharedString, Point<Pixels>, u64)>,
     host_custom_colors: bool,
     writing_provider: Option<writing::WritingProvider>,
     writing_overlay: Option<gpui_kit::AnyView>,
     presentation_style_provider: Option<writing::PresentationStyleProvider>,
     document_inset: (f32, f32),
     placeholder: SharedString,
-    /// Selection as a byte range; the caret is one end (see [`Self::cursor_offset`]).
-    extra_selections: Vec<Range<usize>>,
-    selected_range: Range<usize>,
-    selection_reversed: bool,
-    /// IME composition range, if any.
-    marked_range: Option<Range<usize>>,
-    /// A finished lease cannot accept delayed native callbacks after focus handoff.
-    retired_composition: bool,
     /// Host-supplied clipboard writer for Copy/Cut (e.g. adding an HTML
     /// flavor beside the plain text). `None` = gpui's plain-string copy.
     clipboard_writer: Option<ClipboardWriter>,
     /// Find-in-feed highlights: match byte ranges + the active index, painted
     /// behind the text like the selection. Host-driven ([`Self::set_search`]).
     search: Option<(Vec<Range<usize>>, Option<usize>)>,
-    /// Last paint's wrapped lines (one per logical line) and each line's top
-    /// offset relative to the editor's top — both used for hit-testing and
-    /// cursor/IME positioning.
-    wrapped: Vec<WrappedLine>,
-    line_tops: Vec<Pixels>,
-    /// Per-logical-line wrap-row count (from the last paint). Geometry reads
-    /// this, not `wrapped[i].wrap_boundaries()` — a windowed-out line's entry
-    /// in `wrapped` is an empty placeholder.
-    wrap_rows: Vec<usize>,
-    /// Per-logical-line wrap-row height. Variable so a heading (bigger font) gets
-    /// a taller row (W2); `line_height` is the base/fallback for the empty doc
-    /// and any row without a recorded height.
-    line_heights: Vec<Pixels>,
-    /// Per-logical-line table-grid row (from the last paint), so a click /
-    /// Tab / caret hit-tests against cells instead of the raw source line.
-    table_rows: Vec<Option<TableRow>>,
-    /// Hover-revealed "+" add-row / add-column strips for each table (issue #16),
-    /// each paired with the table row to seat the caret in before inserting. From
-    /// the last paint, committed only while the table is hovered; hit-tested on
-    /// mouse-down.
-    table_row_add_rects: Vec<(Bounds<Pixels>, usize)>,
-    table_col_add_rects: Vec<(Bounds<Pixels>, usize, usize)>,
-    /// Each table's hover zone (grid + a thin margin) with its header row,
-    /// committed every paint so `on_mouse_move` can repaint when the pointer's
-    /// table-affordance region changes (the editor otherwise only repaints on
-    /// the caret blink) and `on_scroll_wheel` can hit-test the PAINTED table.
-    table_hover_zones: Vec<(Bounds<Pixels>, usize)>,
-    /// The affordance region the pointer was last in — `(table index, 0 = zone /
-    /// 1 = below strip / 2 = right strip)` — so the repaint fires only on change.
-    table_hover_region: Option<(usize, u8)>,
-    /// Committed delete-handle rects (issue #16): the hovered row's "−" `(bounds,
-    /// row)` and the hovered column's "−" `(bounds, row, col)`, hit-tested on click.
-    table_row_del: Option<(Bounds<Pixels>, usize)>,
-    table_col_del: Option<(Bounds<Pixels>, usize, usize)>,
-    /// The table cell `(row, col)` the pointer was last over, so `on_mouse_move`
-    /// repaints the delete handles when it changes.
-    table_hover_cell: Option<(usize, usize)>,
-    /// Per-logical-line flag: this row is painted as an inline image (W4), so a
-    /// click on it places the caret at the line start instead of hit-testing
-    /// source text. From the last paint.
-    widget_rows: Vec<bool>,
-    /// Per-logical-line display→source byte map for rows with hidden markers
-    /// (W6); `None` when the painted text equals the source. From the last paint.
-    offset_maps: Vec<Option<std::rc::Rc<Vec<usize>>>>,
-    /// Per-logical-line horizontal text inset (and so the caret/selection/hit-test
-    /// inset): non-zero for fenced code blocks and gutter marks (blockquotes,
-    /// lists). From the last paint.
-    line_insets: Vec<Pixels>,
-    /// Per-logical-line right-to-left geometry (#66), `None` on every LTR row
-    /// so an LTR document pays nothing. From the last paint. See [`RtlRow`].
-    rtl_rows: Vec<Option<RtlRow>>,
-    last_bounds: Option<Bounds<Pixels>>,
-    line_height: Pixels,
-    /// Font size from the last paint. Hit-testing that runs during event
-    /// dispatch (e.g. table-cell clicks) must measure at this size — the
-    /// window's text-style stack is unwound there, so `window.text_style()`
-    /// would report the root size, not the host wrapper's.
-    font_size: Pixels,
-    /// The font of the last paint, for the same reason: event-time
-    /// `text_style()` reports the ROOT font, whose family/metrics can differ
-    /// from what the table was painted with (column auto-fit measured with
-    /// the wrong glyph widths and wrapped cells).
-    paint_font: Option<Font>,
-    is_selecting: bool,
+    /// The last edit's kind, for coalescing a run of edits into one undo step.
+    /// `Insert(end)` is a single-grapheme insert whose caret ends at `end`.
     last_edit: EditKind,
     /// Whether the last content edit was a single typed grapheme or a single-char
     /// backspace — the only edits auto-pairing should react to, so programmatic /
@@ -908,9 +825,6 @@ pub struct EditorState {
     /// Spaces inserted per Tab / one list-nesting level (`Indent`/`Outdent`); set
     /// by the host via [`Self::set_tab_indent`] to match its list-indent setting.
     tab_indent: usize,
-    /// The target x for vertical (Up/Down) movement, so the caret keeps its
-    /// column across short lines. `Some` only during a run of Up/Down.
-    goal_x: Option<Pixels>,
     /// Spans to underline (misspellings, etc.), set by the host via
     /// [`Self::set_diagnostics`].
     diagnostics: Vec<Diagnostic>,
@@ -921,19 +835,6 @@ pub struct EditorState {
     /// Host-injectable UI labels for context menus / chrome; English by
     /// default, localized through [`Self::set_labels`].
     labels: Labels,
-    /// The open right-click suggestions menu, if any.
-    menu: Option<DiagMenu>,
-    /// The open table right-click menu's anchor (window space), if any. Its actions
-    /// operate on the caret's table cell.
-    table_menu: Option<Point<Pixels>>,
-    /// Scroll state for the table menu, so its overflow scrolls + shows a thumb.
-    table_menu_scroll: ScrollHandle,
-    /// The open image right-click menu, if any: the image's logical line + the
-    /// menu's anchor (window space). Offers Word-style object actions (Delete).
-    image_menu: Option<(usize, Point<Pixels>)>,
-    /// Right-clicked property-panel row: its source line + click position
-    /// (anchors the Edit/Delete property menu).
-    prop_menu: Option<(usize, Point<Pixels>)>,
     /// Supplies replacement suggestions for a flagged word, fetched lazily when
     /// the user right-clicks it. Set by the host via [`Self::on_suggest`];
     /// without it, the right-click menu has nothing to offer.
@@ -964,140 +865,34 @@ pub struct EditorState {
     /// [`Self::set_block_math_em`]. Inline `$…$` formulas reuse those rasters scaled by
     /// `text_em / this`, so they sit at text size. `None` disables inline math rendering.
     block_math_em: Option<f32>,
-    /// Per-logical-line `src` for rows painted as a file chip (from the last
-    /// paint), so a left-click can open it and a right-click can edit it.
-    chip_rows: Vec<Option<(SharedString, bool)>>,
-    /// Window-space painted bounds of each inline image, with its logical line
-    /// index (from the last paint), so a press near a corner can start a resize
-    /// and know which `![](src)` line to rewrite. One entry per rendered image.
-    image_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// Window-space bounds of each painted task checkbox, with its logical line —
-    /// so a click on the box toggles `[ ]`↔`[x]` instead of placing the caret.
-    checkbox_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// Painted code-card chrome bounds from the last frame (lang tag + Copy per
-    /// code block, keyed by the opening-fence row) — clicks route here before
-    /// caret placement.
-    code_chip_rects: Vec<CodeChipHit>,
-    /// Full card bounds of each code block from the last paint (`(first body
-    /// line, rect)`), for hover tracking — the chrome is hover-revealed.
-    code_card_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// The hovered code block's first body line, if any (chrome shows there).
-    code_chip_hover: Option<usize>,
-    /// Open language picker for a code block: `(opening fence row, anchor)`.
-    code_lang_menu: Option<(usize, Point<Pixels>)>,
-    code_lang_scroll: ScrollHandle,
     /// Languages the host's highlighter supports, offered in the code block's
     /// language picker. Empty (the default) disables the picker.
     code_langs: Vec<SharedString>,
-    /// Painted chevron bounds of foldable callouts (`(line, rect)`, from the
-    /// last paint) — a click flips the marker's `-`/`+` fold char.
-    alert_fold_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// The in-progress corner-grip drag, if any (see [`ImageResize`]). While set,
-    /// that image paints at the live width and other mouse handling is suppressed.
-    image_resize: Option<ImageResize>,
-    /// An in-progress table column-border drag (drag-to-resize, issue #16):
-    /// the column resizes live; release persists `cols=` into the table's
-    /// marker line. `None` = no drag.
-    table_col_resize: Option<TableColResize>,
-    /// Last-paint column-resize grip bands: `(band, header row, column, width)`.
-    table_col_resize_rects: Vec<(Bounds<Pixels>, usize, usize, f32)>,
-    /// The band index the pointer is on (repaint-on-change for its accent line).
-    table_resize_hover: Option<usize>,
-    /// See [`ShapeMemo`] — `RefCell` because the measure closure holds only a
-    /// read borrow of the editor.
-    shape_memo: std::cell::RefCell<Option<ShapeMemo>>,
-    /// See [`ScanData`].
-    scan_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<ScanData>)>>,
     /// See [`ScrollCompensatorFn`].
     scroll_compensator: Option<ScrollCompensatorFn>,
-    /// Cross-frame shaping caches — line runs, table column widths, and table
-    /// wrap rows (see [`ShapeCaches`]). Capacity-capped in `shape_document`.
-    shape_caches: ShapeCaches,
-    /// The shaping window (element-local y, quantized), set after each
-    /// prepaint from the painted bounds — one frame stale by design, so the
-    /// measure pass and prepaint always shape with the SAME band and the
-    /// measure→prepaint memo keeps hitting.
-    shape_band: std::cell::Cell<Option<(f32, f32)>>,
-    /// Latch: the scroll compensator fired since the last paint. Measure can
-    /// run several times before a paint commits fresh `line_tops`; without
-    /// this, one async height change compensates once per measure call.
-    compensated: std::cell::Cell<bool>,
-    /// An active gutter block drag (Notion/Cditor-style reorder): the grabbed
-    /// block's first + last rows and the current drop boundary (a row index;
-    /// `== rows` drops at the document end).
-    line_drag: Option<(usize, usize, usize)>,
-    /// The row whose gutter grip the pointer hovers (mirrors prepaint's
-    /// computation) — tracked so hover changes repaint the grip.
-    grip_hover_row: Option<usize>,
-    /// Horizontal scroll of each table, keyed by its header row. Columns are
-    /// fitted to the note width and wrap, so this is the fallback for a page
-    /// too narrow for every column's floor. Keys drift on edits above a table;
-    /// entries are clamped at use, so a stale one is a harmless partial
-    /// offset. (ponytail: no eviction, the map stays tiny)
-    table_scroll_x: std::collections::HashMap<usize, f32>,
-    /// Last-paint wide-table scroll thumbs (padded grab rects), so the thumb
-    /// is mouse-draggable, not just an indicator.
-    table_thumbs: Vec<TableThumb>,
-    /// A live thumb drag: `(header row, grab x, scroll offset at grab)`.
-    table_thumb_drag: Option<(usize, Pixels, f32)>,
-    /// Extra left offset for the drag grip — the host sets its line-number
-    /// gutter's width here so the grip sits beside the numbers, not on them.
-    grip_inset: Pixels,
-    /// `content_gen` as of the last paint — a measure with the SAME generation
-    /// but different heights means an async (non-edit) height change, the
-    /// scroll-anchoring trigger.
-    last_paint_gen: u64,
-    /// Bumped on every content mutation — cheap staleness key for caches
-    /// (the UTF-16 conversion anchor below; a shape cache later).
-    content_gen: u64,
-    /// Resume point for UTF-8↔UTF-16 conversion: `(generation, utf8, utf16)`
-    /// of the last converted offset. IME composition fires conversions many
-    /// times per keystroke, clustered near the caret — resuming from the
-    /// anchor makes them O(distance) instead of O(document) (CJK latency
-    /// grew with note size; found auditing against Cditor's per-block IME).
-    utf16_anchor: std::cell::Cell<(u64, usize, usize)>,
     /// A `$$…$$` block being edited in-line: its byte range + the host-supplied view (the
     /// structural editor) painted in a reserved gap at the block's spot. `None` = none.
     editing_block: Option<EditingBlock>,
-    /// Window-space painted bounds of each inline `$…$` formula + its absolute byte range and
-    /// inner LaTeX (from the last paint), so a click can open its structural editor and the
-    /// seated editor can be positioned at the formula's spot.
-    inline_math_rects: Vec<(Range<usize>, SharedString, Bounds<Pixels>)>,
     /// An inline `$…$` formula under structural edit: its byte range + the host's editor view,
     /// overlaid at the formula's spot. `None` = none.
     editing_inline: Option<EditingInline>,
-    /// Painted bounds + target of each property-panel pill (from the last paint),
-    /// so a left-click opens it (`OpenWikiLink` / `OpenLink`).
-    prop_pill_rects: Vec<(Bounds<Pixels>, zorite_markdown::syntax::LinkHit)>,
-    /// Inline links' painted boxes + targets from the last paint (the same
-    /// geometry as the hand-cursor hitboxes), for hover → `HoverLink`.
-    link_rects: Vec<(Bounds<Pixels>, zorite_markdown::syntax::LinkHit)>,
-    /// The link under the pointer, if any — `HoverLink` fires on change.
-    hovered_link: Option<(zorite_markdown::syntax::LinkHit, Bounds<Pixels>)>,
-    /// Painted bounds of each property-panel row (from the last paint), so
-    /// `on_mouse_move` repaints when the hovered row changes (the panel's hover
-    /// border reads the live pointer during paint).
-    /// Each painted property-panel row's bounds + its source line (for
-    /// hover borders and the right-click property menu).
-    prop_row_rects: Vec<(Bounds<Pixels>, usize)>,
-    /// The property row the pointer was last over — drives `on_mouse_move`'s
-    /// repaint-on-change (like the table hover).
-    prop_hover_row: Option<usize>,
-    /// Collapsed headings, keyed by the heading's trimmed source line
-    /// (`## Goals`). View-local — markdown has no heading-fold syntax (unlike
-    /// callouts' `-`/`+`), so folds live for the editor's lifetime and a key
-    /// self-heals by vanishing when its heading text is edited.
-    folded_headings: std::collections::HashSet<String>,
-    /// Painted chevron bounds of heading folds (`(line, rect)`, from the last
-    /// paint) — a click toggles that heading in `folded_headings`.
-    heading_fold_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// Window-space bounds of every heading's first visual row (from the last
-    /// paint) — `on_mouse_move` hit-tests these for the hover chevron.
-    heading_row_rects: Vec<(usize, Bounds<Pixels>)>,
-    /// The heading line the pointer was last over — its chevron shows on hover
-    /// (a fold chevron on every heading would clutter). Drives
-    /// `on_mouse_move`'s repaint-on-change, like the property-row hover.
-    heading_hover_row: Option<usize>,
+    /// Layout frame + shaping caches: the last paint's wrapped lines and
+    /// per-line geometry, the scroll handle + viewport, the shaping
+    /// memo/caches, and the paint generation counters.
+    frame: FrameState,
+    /// Hit map + affordance/drag state: the last paint's window-space rects
+    /// (tables, checkboxes, code-card chrome, folds, links, property rows,
+    /// math formulas), pointer hover tracking, and the in-progress drags.
+    affordances: AffordanceState,
+    /// The single mutually exclusive overlay menu (diagnostics / table /
+    /// image / property / code-language). Overlapping popups are
+    /// unrepresentable; `dismiss` clears whatever is open.
+    overlay_menu: OverlayMenuState,
+    /// Selection + presentation-local IME state: the primary/extra ranges,
+    /// wrap affinities, the vertical-movement goal column, and the marked
+    /// range + retired-composition latch. `Document` stays the sole authority
+    /// for source text, history, and the active `Composition` lease.
+    selection: SelectionState,
 }
 
 /// A math block under in-line structural edit: the byte range to overwrite on commit, and
@@ -1136,30 +931,31 @@ impl EditorState {
         let anchored_scroll = scroll.clone();
         let document_subscription =
             cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
-                if event.revision() <= this.content_gen {
+                if event.revision() <= this.frame.content_gen {
                     return;
                 }
                 if event.origin() != Some(cx.entity_id()) {
-                    let selection = this.selected_range.clone();
+                    let selection = this.selection.selected_range.clone();
                     this.diagnostics.clear();
                     for edit in event.edits() {
-                        for selection in &mut this.extra_selections {
+                        for selection in &mut this.selection.extra_selections {
                             *selection =
                                 edit.map_offset(selection.start)..edit.map_offset(selection.end);
                         }
-                        this.selected_range = edit.map_offset(this.selected_range.start)
-                            ..edit.map_offset(this.selected_range.end);
+                        this.selection.selected_range = edit.map_offset(
+                            this.selection.selected_range.start,
+                        )..edit.map_offset(this.selection.selected_range.end);
                     }
-                    this.retired_composition |= this.marked_range.is_some();
-                    this.marked_range = None;
+                    this.selection.retired_composition |= this.selection.marked_range.is_some();
+                    this.selection.marked_range = None;
                     this.last_edit = EditKind::Other;
-                    if this.selected_range != selection {
+                    if this.selection.selected_range != selection {
                         cx.emit(EditorEvent::SelectionChanged);
                     }
                 }
                 this.content = event.snapshot().text_handle();
-                this.content_gen = event.revision();
-                this.invalidate_geometry();
+                this.frame.content_gen = event.revision();
+                this.frame.invalidate_geometry();
                 cx.notify();
             });
         Self {
@@ -1169,65 +965,24 @@ impl EditorState {
             _document_subscription: document_subscription,
             pending_coalesce: false,
             soft_wrap: true,
-            natural_width: std::cell::Cell::new(px(0.)),
-            scroll,
-            scroll_viewport: Bounds::default(),
-            scrollbar_dragging: false,
-            revealed_caret: None,
-            reveal_requested: false,
-            caret_affinity: WrapAffinity::Downstream,
-            anchor_affinity: WrapAffinity::Downstream,
             live_style: None,
             source_only: false,
             plain_source: false,
             host_links: false,
-            pending_link: None,
             host_custom_colors: false,
             writing_provider: None,
             writing_overlay: None,
             presentation_style_provider: None,
             document_inset: (0., 0.),
             placeholder: SharedString::default(),
-            selected_range: 0..0,
-            extra_selections: Vec::new(),
-            selection_reversed: false,
-            marked_range: None,
-            retired_composition: false,
             clipboard_writer: None,
             search: None,
-            wrapped: Vec::new(),
-            line_tops: Vec::new(),
-            line_heights: Vec::new(),
-            wrap_rows: Vec::new(),
-            widget_rows: Vec::new(),
-            offset_maps: Vec::new(),
-            line_insets: Vec::new(),
-            rtl_rows: Vec::new(),
-            table_rows: Vec::new(),
-            table_row_add_rects: Vec::new(),
-            table_col_add_rects: Vec::new(),
-            table_hover_zones: Vec::new(),
-            table_hover_region: None,
-            table_row_del: None,
-            table_col_del: None,
-            table_hover_cell: None,
-            last_bounds: None,
-            line_height: px(20.),
-            font_size: px(16.),
-            paint_font: None,
-            is_selecting: false,
             last_edit: EditKind::Other,
             last_edit_keystroke: false,
             tab_indent: 4,
-            goal_x: None,
             diagnostics: Vec::new(),
             markdown_style: None,
             labels: Labels::default(),
-            menu: None,
-            table_menu: None,
-            table_menu_scroll: ScrollHandle::new(),
-            image_menu: None,
-            prop_menu: None,
             suggest: None,
             block_image: None,
             block_chip: None,
@@ -1238,51 +993,18 @@ impl EditorState {
             code_highlight: None,
             auto_replace: None,
             last_replaced: None,
-            chip_rows: Vec::new(),
-            image_rects: Vec::new(),
-            checkbox_rects: Vec::new(),
-            code_chip_rects: Vec::new(),
-            code_card_rects: Vec::new(),
-            code_chip_hover: None,
-            code_lang_menu: None,
-            code_lang_scroll: ScrollHandle::new(),
             code_langs: Vec::new(),
-            alert_fold_rects: Vec::new(),
-            image_resize: None,
-            table_col_resize: None,
-            table_col_resize_rects: Vec::new(),
-            table_resize_hover: None,
-            shape_memo: std::cell::RefCell::new(None),
-            scan_cache: std::cell::RefCell::new(None),
             scroll_compensator: Some(std::rc::Rc::new(move |delta, _, _| {
                 let mut offset = anchored_scroll.offset();
                 offset.y -= delta;
                 anchored_scroll.set_offset(offset);
             })),
-            last_paint_gen: 0,
-            shape_caches: ShapeCaches::default(),
-            shape_band: std::cell::Cell::new(None),
-            compensated: std::cell::Cell::new(false),
-            line_drag: None,
-            grip_hover_row: None,
-            table_scroll_x: std::collections::HashMap::new(),
-            table_thumbs: Vec::new(),
-            table_thumb_drag: None,
-            grip_inset: px(0.),
-            content_gen: revision,
-            utf16_anchor: std::cell::Cell::new((0, 0, 0)),
             editing_block: None,
-            inline_math_rects: Vec::new(),
             editing_inline: None,
-            prop_pill_rects: Vec::new(),
-            link_rects: Vec::new(),
-            hovered_link: None,
-            prop_row_rects: Vec::new(),
-            prop_hover_row: None,
-            folded_headings: std::collections::HashSet::new(),
-            heading_fold_rects: Vec::new(),
-            heading_row_rects: Vec::new(),
-            heading_hover_row: None,
+            frame: FrameState::new(scroll, revision),
+            affordances: AffordanceState::new(),
+            overlay_menu: OverlayMenuState::new(),
+            selection: SelectionState::new(),
         }
     }
 
@@ -1290,7 +1012,7 @@ impl EditorState {
     pub fn with_text(mut self, text: impl Into<String>, cx: &mut Context<Self>) -> Self {
         self.set_text(text, cx);
         let caret = caret_off_marker_line(&self.content, 0);
-        self.selected_range = caret..caret;
+        self.selection.selected_range = caret..caret;
         self
     }
 
@@ -1329,9 +1051,9 @@ impl EditorState {
         let inserted_len = text.len() - text.matches("\r\n").count();
         self.remap_diagnostics(&range, inserted_len);
         let caret = range.start + inserted_len;
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.marked_range = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.marked_range = None;
         // Don't coalesce a following keystroke into this structural replacement.
         self.last_edit = EditKind::Other;
         cx.notify();
@@ -1339,21 +1061,21 @@ impl EditorState {
 
     /// Replace the whole document; resets the caret to the start.
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
-        self.extra_selections.clear();
+        self.selection.extra_selections.clear();
         let document = self.document.clone();
         let format = document.read(cx).format();
         document.update(cx, |document, cx| document.reload(text.into(), format, cx));
         self.content = document.read(cx).snapshot().text_handle();
-        self.content_gen = document.read(cx).revision();
-        self.invalidate_geometry();
+        self.frame.content_gen = document.read(cx).revision();
+        self.frame.invalidate_geometry();
         // Never park the loaded caret on a collapsed marker line (`<!-- table/
         // math:… -->`): the first focus would reveal it raw mid-interaction.
         // This is the ONE passive parking path — every other caret write is a
         // deliberate placement (which SHOULD reveal markers for editing).
         let caret = caret_off_marker_line(&self.content, 0);
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.marked_range = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.marked_range = None;
         self.last_edit = EditKind::Other;
         cx.notify();
     }
@@ -1394,7 +1116,7 @@ impl EditorState {
         self.diagnostics = diagnostics;
         // Diagnostics feed the per-row run keys (they underline spans) — drop
         // the memo so the next shape re-keys affected lines.
-        *self.shape_caches.row_keys.borrow_mut() = (None, Vec::new());
+        *self.frame.shape_caches.row_keys.borrow_mut() = (None, Vec::new());
         cx.notify();
     }
 
@@ -1525,9 +1247,9 @@ impl EditorState {
     /// last layout) — for a host scrolling a find match into view. `None`
     /// before first paint or for an out-of-range offset.
     pub fn offset_screen_top(&self, offset: usize) -> Option<Pixels> {
-        let bounds = self.last_bounds?;
+        let bounds = self.frame.last_bounds?;
         let (row, _) = self.row_col(offset.min(self.content.len()));
-        Some(bounds.top() + self.line_tops.get(row).copied()?)
+        Some(bounds.top() + self.frame.line_tops.get(row).copied()?)
     }
 
     pub fn set_block_math_provider(
@@ -1601,8 +1323,8 @@ impl EditorState {
         self.record_edit(&abs, &replacement);
         self.replace_source(abs.clone(), &replacement, cx);
         self.remap_diagnostics(&abs, replacement.len());
-        let caret = (self.selected_range.start as isize + delta) as usize;
-        self.selected_range = caret..caret;
+        let caret = (self.selection.selected_range.start as isize + delta) as usize;
+        self.selection.selected_range = caret..caret;
     }
 
     /// Begin an in-line structural edit of the `$$…$$` block at `range`: reserve a gap at
@@ -1672,10 +1394,10 @@ impl EditorState {
 
     /// The last painted native formula bounds. Geometry belongs to this presentation only.
     pub fn formula_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
-        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen {
+        if self.frame.last_bounds.is_none() || self.frame.last_paint_gen != self.frame.content_gen {
             return None;
         }
-        self.inline_math_rects
+        self.affordances.inline_math_rects
             .iter()
             .find(|(source, latex, _)| source == range && !latex.is_empty())
             .map(|(_, _, bounds)| *bounds)
@@ -1683,8 +1405,8 @@ impl EditorState {
 
     /// Re-measure this presentation after an asynchronous formula bitmap or theme update.
     pub fn refresh_formula_layout(&mut self, cx: &mut Context<Self>) {
-        *self.shape_memo.borrow_mut() = None;
-        self.shape_caches.line_heights.borrow_mut().clear();
+        *self.frame.shape_memo.borrow_mut() = None;
+        self.frame.shape_caches.line_heights.borrow_mut().clear();
         cx.notify();
     }
 
@@ -1820,7 +1542,7 @@ impl EditorState {
             let Some(inner) = zorite_markdown::syntax::embed_line(line) else {
                 continue;
             };
-            let (Some(top), Some((view, height))) = (self.line_tops.get(row), provider(inner))
+            let (Some(top), Some((view, height))) = (self.frame.line_tops.get(row), provider(inner))
             else {
                 continue;
             };
@@ -1846,8 +1568,8 @@ impl EditorState {
     fn editing_block_overlay(&self) -> Option<gpui_kit::Div> {
         let eb = self.editing_block.as_ref()?;
         let row = self.row_col(eb.range.start).0;
-        let top = *self.line_tops.get(row)?;
-        let height = *self.line_heights.get(row)?;
+        let top = *self.frame.line_tops.get(row)?;
+        let height = *self.frame.line_heights.get(row)?;
         Some(
             div()
                 .absolute()
@@ -1869,11 +1591,10 @@ impl EditorState {
     /// surrounding text in place.
     fn editing_inline_overlay(&self) -> Option<gpui_kit::Div> {
         let ei = self.editing_inline.as_ref()?;
-        let (_, _, rect) = self
-            .inline_math_rects
+        let (_, _, rect) = self.affordances.inline_math_rects
             .iter()
             .find(|(r, _, _)| *r == ei.range)?;
-        let origin = self.last_bounds.map_or(Point::default(), |b| b.origin);
+        let origin = self.frame.last_bounds.map_or(Point::default(), |b| b.origin);
         Some(
             div()
                 .absolute()
@@ -1918,14 +1639,14 @@ impl EditorState {
     /// The presentation-owned vertical scroll handle, shared with the host's
     /// scrollbar without introducing a second scrolling authority.
     pub fn scroll_handle(&self) -> ScrollHandle {
-        self.scroll.clone()
+        self.frame.scroll.clone()
     }
 
     /// Publish the real viewport bounds from the host's layout. The scroll
     /// handle's own bounds describe content height, not the visible extent.
     pub fn set_scroll_viewport(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
-        let resized = (self.scroll_viewport.size.width - bounds.size.width).abs() > px(0.5);
-        self.scroll_viewport = bounds;
+        let resized = (self.frame.scroll_viewport.size.width - bounds.size.width).abs() > px(0.5);
+        self.frame.scroll_viewport = bounds;
         if resized {
             // Tables fit the visible page, not the horizontally scrolled
             // content width; a real resize may cross a fit boundary.
@@ -1934,15 +1655,15 @@ impl EditorState {
     }
 
     pub fn scroll_viewport(&self) -> Bounds<Pixels> {
-        self.scroll_viewport
+        self.frame.scroll_viewport
     }
 
     fn scrollbar_offset_at(&self, y: Pixels) -> Option<Point<Pixels>> {
-        let viewport = self.scroll_viewport;
+        let viewport = self.frame.scroll_viewport;
         if viewport.size.height <= px(0.) {
             return None;
         }
-        let max_offset = self.scroll.max_offset().y;
+        let max_offset = self.frame.scroll.max_offset().y;
         if max_offset <= px(0.) {
             return None;
         }
@@ -1957,7 +1678,7 @@ impl EditorState {
     /// no vertical advance (the next row's top equals theirs) — a gutter
     /// should skip those.
     pub fn row_layout(&self) -> Vec<(Pixels, Pixels)> {
-        self.line_tops
+        self.frame.line_tops
             .iter()
             .enumerate()
             .map(|(row, &top)| (top, self.line_h(row)))
@@ -1967,8 +1688,8 @@ impl EditorState {
     /// The cached [`ScanData`] for the current content, rebuilding on a
     /// generation mismatch.
     fn scan_data(&self) -> std::rc::Rc<ScanData> {
-        if let Some((generation, data)) = self.scan_cache.borrow().as_ref()
-            && *generation == self.content_gen
+        if let Some((generation, data)) = self.frame.scan_cache.borrow().as_ref()
+            && *generation == self.frame.content_gen
         {
             return data.clone();
         }
@@ -1982,7 +1703,7 @@ impl EditorState {
             }
         }
         let data = std::rc::Rc::new(ScanData {
-            generation: self.content_gen,
+            generation: self.frame.content_gen,
             ordered: markdown_syntax::ordered_numbers(&lines),
             tables: markdown_syntax::table_regions(&self.content),
             mermaid: markdown_syntax::mermaid_blocks(&self.content),
@@ -1991,35 +1712,35 @@ impl EditorState {
             alert_folds: markdown_syntax::alert_fold_regions(&self.content),
             fence_odd,
         });
-        *self.scan_cache.borrow_mut() = Some((self.content_gen, data.clone()));
+        *self.frame.scan_cache.borrow_mut() = Some((self.frame.content_gen, data.clone()));
         data
     }
 
     /// The wrap-row count of logical line `row` (1 when unrecorded).
     fn row_span(&self, row: usize) -> usize {
-        self.wrap_rows.get(row).copied().unwrap_or(1).max(1)
+        self.frame.wrap_rows.get(row).copied().unwrap_or(1).max(1)
     }
 
     /// The wrap-row height of logical line `row` (a heading is taller). Falls
     /// back to the base `line_height` for unrecorded rows / the empty document.
     fn line_h(&self, row: usize) -> Pixels {
-        self.line_heights
+        self.frame.line_heights
             .get(row)
             .copied()
-            .unwrap_or(self.line_height)
+            .unwrap_or(self.frame.line_height)
     }
 
     /// Horizontal text inset for logical line `row` (from the last paint): non-zero
     /// for fenced code blocks + gutter marks. Applied to the caret, selection,
     /// hit-test, and text paint so they all stay aligned.
     fn line_inset(&self, row: usize) -> Pixels {
-        self.line_insets.get(row).copied().unwrap_or(px(0.))
+        self.frame.line_insets.get(row).copied().unwrap_or(px(0.))
     }
 
     /// The right-align shift of an RTL row (zero everywhere else) — see
     /// [`RtlRow::shift`].
     fn rtl_shift(&self, row: usize) -> Pixels {
-        self.rtl_rows
+        self.frame.rtl_rows
             .get(row)
             .and_then(Option::as_ref)
             .and_then(|r| r.shifts.first().copied())
@@ -2039,7 +1760,7 @@ impl EditorState {
     /// visual arrows map to the opposite step.
     fn caret_table_is_rtl(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.table_rows
+        self.frame.table_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|t| t.rtl)
@@ -2053,7 +1774,7 @@ impl EditorState {
     /// one, so the two step functions swap.
     fn caret_row_is_rtl(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.rtl_rows
+        self.frame.rtl_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|r| r.base_rtl)
@@ -2134,17 +1855,17 @@ impl EditorState {
 
     /// The RTL layout for `row`, if it has one (see [`RtlRow`]).
     fn bidi_map(&self, row: usize) -> Option<&RtlRow> {
-        self.rtl_rows.get(row).and_then(Option::as_ref)
+        self.frame.rtl_rows.get(row).and_then(Option::as_ref)
     }
 
     /// Window-space bounds of the caret at `offset`, from the last paint's
     /// layout — for anchoring a popup (e.g. a slash menu) at a document offset.
     /// `None` before the first paint or if `offset`'s row isn't laid out.
     pub fn bounds_for_offset(&self, offset: usize) -> Option<Bounds<Pixels>> {
-        let bounds = self.last_bounds?;
+        let bounds = self.frame.last_bounds?;
         let (row, col) = self.row_col(offset);
         let lh = self.line_h(row);
-        let line = self.wrapped.get(row)?;
+        let line = self.frame.wrapped.get(row)?;
         let p = caret_line_pos(
             line,
             self.bidi_map(row),
@@ -2152,7 +1873,7 @@ impl EditorState {
             lh,
             self.affinity_for_offset(offset),
         )?;
-        let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
+        let top = bounds.top() + self.frame.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         Some(Bounds::from_corners(point(x, top), point(x, top + lh)))
     }
@@ -2194,13 +1915,13 @@ impl EditorState {
     // --- Cursor movement -----------------------------------------------------
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             // Collapse to the selection's VISUALLY left edge, which on an RTL
             // row is its logical end.
             let to = if self.caret_row_is_rtl() {
-                self.selected_range.end
+                self.selection.selected_range.end
             } else {
-                self.selected_range.start
+                self.selection.selected_range.start
             };
             self.move_to(to, cx);
             return;
@@ -2245,11 +1966,11 @@ impl EditorState {
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             let to = if self.caret_row_is_rtl() {
-                self.selected_range.start
+                self.selection.selected_range.start
             } else {
-                self.selected_range.end
+                self.selection.selected_range.end
             };
             self.move_to(to, cx);
             return;
@@ -2333,10 +2054,10 @@ impl EditorState {
             return;
         }
         // Set the caret directly (not via `move_to`) to keep the goal column.
-        self.selected_range = off..off;
-        self.caret_affinity = affinity;
-        self.anchor_affinity = affinity;
-        self.request_caret_reveal();
+        self.selection.selected_range = off..off;
+        self.selection.caret_affinity = affinity;
+        self.selection.anchor_affinity = affinity;
+        self.frame.request_caret_reveal();
         self.last_edit = EditKind::Other;
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
@@ -2378,23 +2099,23 @@ impl EditorState {
             });
             return;
         }
-        self.selected_range = off..off;
-        self.caret_affinity = affinity;
-        self.anchor_affinity = affinity;
-        self.request_caret_reveal();
+        self.selection.selected_range = off..off;
+        self.selection.caret_affinity = affinity;
+        self.selection.anchor_affinity = affinity;
+        self.frame.request_caret_reveal();
         self.last_edit = EditKind::Other;
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
 
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         let off = self.horizontal_step(false);
         self.select_to(off, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         let off = self.horizontal_step(true);
         self.select_to(off, cx);
     }
@@ -2419,7 +2140,7 @@ impl EditorState {
     }
 
     fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         self.select_to(self.home_target(), cx);
     }
 
@@ -2462,7 +2183,7 @@ impl EditorState {
     }
 
     fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         let (row, _) = self.row_col(self.cursor_offset());
         self.select_to(self.line_end(row), cx);
     }
@@ -2476,19 +2197,19 @@ impl EditorState {
     }
 
     fn select_doc_start(&mut self, _: &SelectDocStart, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         self.select_to(0, cx);
     }
 
     fn select_doc_end(&mut self, _: &SelectDocEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         self.select_to(self.content.len(), cx);
     }
 
     // --- Editing -------------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             // Word-style image deletion: with the caret on an image row — or at
             // the start of the line just below one — remove the whole picture
             // (line + newline) as one edit, never stepping into its hidden
@@ -2559,7 +2280,7 @@ impl EditorState {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             // Word-style, mirroring `backspace`: the caret on an image row — or
             // at the end of the line just above one — removes the whole picture.
             let off = self.cursor_offset();
@@ -2629,10 +2350,9 @@ impl EditorState {
         // Enter instead moves to the cell directly below (next row, same column,
         // spreadsheet-style); from the last row it exits onto a fresh line below
         // the table.
-        if self.selected_range.is_empty() && self.caret_in_table() {
+        if self.selection.selected_range.is_empty() && self.caret_in_table() {
             if let Some(off) = self.table_move_vertical(1)
-                && self
-                    .table_rows
+                && self.frame.table_rows
                     .get(self.row_col(off).0)
                     .and_then(Option::as_ref)
                     .is_some_and(|t| !t.is_separator)
@@ -2642,8 +2362,7 @@ impl EditorState {
             }
             let (row, _) = self.row_col(self.cursor_offset());
             let mut last = row;
-            while self
-                .table_rows
+            while self.frame.table_rows
                 .get(last + 1)
                 .and_then(Option::as_ref)
                 .is_some()
@@ -2652,14 +2371,14 @@ impl EditorState {
             }
             let starts = self.line_starts();
             let end = starts.get(last + 1).map_or(self.content.len(), |&s| s - 1);
-            self.selected_range = end..end;
+            self.selection.selected_range = end..end;
             self.replace_text_in_range(None, "\n", window, cx);
             return;
         }
         // Inside a property panel a raw newline would split a `key:: value`
         // line. Enter opens the panel's editor instead — the same route as a
         // click or arrow-in (the form's own Enter then commits).
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             let (row, _) = self.row_col(self.cursor_offset());
             if self.property_block_at(row).is_some() {
                 self.edit_properties_at_caret(false, cx);
@@ -2670,7 +2389,7 @@ impl EditorState {
         // (same marker + indent; ordered numbers increment); Enter on an *empty*
         // item removes the marker, exiting the list. Only with a collapsed
         // selection — a selection is just replaced by the newline.
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             let cursor = self.cursor_offset();
             let line_start = self.content[..cursor].rfind('\n').map_or(0, |i| i + 1);
             let line_end = self.content[line_start..]
@@ -2697,7 +2416,7 @@ impl EditorState {
                 match cont {
                     // Empty item: clear the marker, leaving an empty line.
                     None => {
-                        self.selected_range = line_start..line_end;
+                        self.selection.selected_range = line_start..line_end;
                         self.replace_text_in_range(None, "", window, cx);
                     }
                     Some(text) => self.replace_text_in_range(None, &text, window, cx),
@@ -2706,7 +2425,7 @@ impl EditorState {
             }
             if let Some(prefix) = markdown_syntax::blockquote_prefix(line) {
                 if line[prefix..].trim().is_empty() {
-                    self.selected_range = line_start..line_start + prefix;
+                    self.selection.selected_range = line_start..line_start + prefix;
                     self.replace_text_in_range(None, "", window, cx);
                 } else {
                     let continuation = format!("\n{}", &line[..prefix]);
@@ -2730,7 +2449,7 @@ impl EditorState {
     /// otherwise wraps — keeping the same text selected so presses toggle.
     fn toggle_wrap_pair(&mut self, open: &str, close: &str, cx: &mut Context<Self>) {
         self.trim_dangling_tags();
-        let sel = self.selected_range.clone();
+        let sel = self.selection.selected_range.clone();
         if sel.start >= sel.end {
             return;
         }
@@ -2770,7 +2489,7 @@ impl EditorState {
     /// (`<mark><span>word</mark></span>`), which the editor can't parse.
     fn trim_dangling_tags(&mut self) {
         loop {
-            let sel = self.selected_range.clone();
+            let sel = self.selection.selected_range.clone();
             let text = &self.content[sel.clone()];
             // A closing tag at the end with no opener inside the selection.
             if let Some(lt) = text.rfind("</")
@@ -2780,7 +2499,7 @@ impl EditorState {
                 && name.chars().all(|c| c.is_ascii_alphanumeric())
                 && !text[..lt].contains(&format!("<{name}"))
             {
-                self.selected_range.end = sel.start + lt;
+                self.selection.selected_range.end = sel.start + lt;
                 continue;
             }
             // A symmetric marker (`==`, `**`, `~~`) at either end with no
@@ -2791,9 +2510,9 @@ impl EditorState {
                     && text.matches(m).count() == 1
             }) {
                 if text.ends_with(m) {
-                    self.selected_range.end -= m.len();
+                    self.selection.selected_range.end -= m.len();
                 } else {
-                    self.selected_range.start += m.len();
+                    self.selection.selected_range.start += m.len();
                 }
                 continue;
             }
@@ -2808,7 +2527,7 @@ impl EditorState {
                 && !name.is_empty()
                 && !text[gt..].contains(&format!("</{name}>"))
             {
-                self.selected_range.start = sel.start + gt + 1;
+                self.selection.selected_range.start = sel.start + gt + 1;
                 continue;
             }
             break;
@@ -2826,9 +2545,9 @@ impl EditorState {
     ) {
         self.record_edit(&range, &new);
         self.replace_source(range.clone(), &new, cx);
-        self.selected_range = new_sel;
-        self.selection_reversed = false;
-        self.goal_x = None;
+        self.selection.selected_range = new_sel;
+        self.selection.selection_reversed = false;
+        self.selection.goal_x = None;
         self.remap_diagnostics(&range, new.len());
     }
 
@@ -2837,7 +2556,7 @@ impl EditorState {
     /// caller emits `Changed`.
     fn strip_color(&mut self, kind: ColorKind, cx: &mut Context<Self>) -> bool {
         use zorite_markdown::syntax::{StyledKind, styled_tag};
-        let sel = self.selected_range.clone();
+        let sel = self.selection.selected_range.clone();
         if sel.is_empty() {
             return false;
         }
@@ -2945,7 +2664,7 @@ impl EditorState {
                 MouseButton::Left,
                 cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    editor.menu = None;
+                    editor.overlay_menu.dismiss();
                     editor.highlight(&Highlight, window, cx);
                 }),
             ));
@@ -2964,7 +2683,7 @@ impl EditorState {
                 MouseButton::Left,
                 cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    editor.menu = None;
+                    editor.overlay_menu.dismiss();
                     editor.color_selection(kind, Some(c), cx);
                 }),
             ));
@@ -2977,7 +2696,7 @@ impl EditorState {
                     MouseButton::Left,
                     cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        editor.menu = None;
+                        editor.overlay_menu.dismiss();
                         editor.color_selection(kind, None, cx);
                     }),
                 ),
@@ -2990,7 +2709,11 @@ impl EditorState {
                     MouseButton::Left,
                     cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        let position = editor.menu.take().map(|m| m.anchor).unwrap_or_default();
+                        let position = editor
+                            .overlay_menu
+                            .diagnostics()
+                            .map(|m| m.anchor)
+                            .unwrap_or_default();
                         cx.emit(EditorEvent::PickColor {
                             highlight: kind == ColorKind::Highlight,
                             position,
@@ -3001,7 +2724,7 @@ impl EditorState {
                             } else {
                                 WritingIntent::TextColor
                             },
-                            editor.selected_range.clone(),
+                            editor.selection.selected_range.clone(),
                             window,
                             cx,
                         );
@@ -3090,9 +2813,9 @@ impl EditorState {
         let delta = new_text.len() as isize - (range.end - range.start) as isize;
         self.replace_source(range.clone(), &new_text, cx);
         let caret = (cursor as isize + delta).max(line_start as isize) as usize;
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.goal_x = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.goal_x = None;
         self.remap_diagnostics(&range, new_text.len());
         cx.emit(EditorEvent::Changed);
         cx.notify();
@@ -3129,9 +2852,9 @@ impl EditorState {
         self.record_edit(&range, "");
         self.replace_source(range.clone(), "", cx);
         let caret = cursor.saturating_sub(removed).max(line_start);
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.goal_x = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.goal_x = None;
         self.remap_diagnostics(&range, 0);
         cx.emit(EditorEvent::Changed);
         cx.notify();
@@ -3199,7 +2922,7 @@ impl EditorState {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             let range = self.copy_range();
             // Ordered markers copy at their DISPLAYED positions (still digit
             // markdown), so a paste counts the way the screen did.
@@ -3216,7 +2939,7 @@ impl EditorState {
     /// flavors — for pasting literal source into rich surfaces (the context
     /// menu's "Copy as Markdown"). Same selection/renumber rules as `copy`.
     pub fn copy_plain(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             let range = self.copy_range();
             let text = if self.markdown_style.is_some() {
                 markdown_syntax::renumber_copy(&self.content, range)
@@ -3244,8 +2967,8 @@ impl EditorState {
     /// line kept its own. Raw mode (no markdown style) copies verbatim.
     fn copy_range(&self) -> std::ops::Range<usize> {
         let (start, end) = (
-            self.selected_range.start.min(self.selected_range.end),
-            self.selected_range.start.max(self.selected_range.end),
+            self.selection.selected_range.start.min(self.selection.selected_range.end),
+            self.selection.selected_range.start.max(self.selection.selected_range.end),
         );
         if self.markdown_style.is_none() || !self.content[start..end].contains('\n') {
             return start..end;
@@ -3266,8 +2989,8 @@ impl EditorState {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            self.write_clipboard(self.content[self.selected_range.clone()].to_string(), cx);
+        if !self.selection.selected_range.is_empty() {
+            self.write_clipboard(self.content[self.selection.selected_range.clone()].to_string(), cx);
             self.replace_text_in_range(None, "", window, cx);
         }
     }
@@ -3298,17 +3021,17 @@ impl EditorState {
         cx: &mut Context<Self>,
     ) {
         self.content = snapshot.text_handle();
-        self.content_gen = self.document.read(cx).revision();
+        self.frame.content_gen = self.document.read(cx).revision();
         self.diagnostics.clear();
-        self.extra_selections.clear();
-        self.selected_range =
+        self.selection.extra_selections.clear();
+        self.selection.selected_range =
             selection.start.min(self.content.len())..selection.end.min(self.content.len());
-        self.selection_reversed = false;
-        self.marked_range = None;
+        self.selection.selection_reversed = false;
+        self.selection.marked_range = None;
         self.last_edit = EditKind::Other;
         self.last_edit_keystroke = false;
-        self.request_caret_reveal();
-        self.invalidate_geometry();
+        self.frame.request_caret_reveal();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
 
@@ -3512,37 +3235,34 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.position.x >= self.scroll_viewport.right() - px(20.)
-            && event.position.x <= self.scroll_viewport.right() - px(8.)
-            && event.position.y >= self.scroll_viewport.top()
-            && event.position.y <= self.scroll_viewport.bottom()
+        if event.position.x >= self.frame.scroll_viewport.right() - px(20.)
+            && event.position.x <= self.frame.scroll_viewport.right() - px(8.)
+            && event.position.y >= self.frame.scroll_viewport.top()
+            && event.position.y <= self.frame.scroll_viewport.bottom()
             && let Some(offset) = self.scrollbar_offset_at(event.position.y)
         {
-            self.scrollbar_dragging = true;
-            self.scroll.set_offset(offset);
+            self.frame.scrollbar_dragging = true;
+            self.frame.scroll.set_offset(offset);
             self.focus(window, cx);
             cx.stop_propagation();
             cx.notify();
             return;
         }
-        self.pending_link = None;
+        self.affordances.pending_link = None;
         // A press on an image's corner grip starts a resize drag — this takes
         // precedence over placing the caret on the image row (which the press
         // would otherwise do). The image keeps its bounds; the drag previews a new
         // width and release writes `{width=N}` (see on_mouse_move / on_mouse_up).
         if let Some((line, width)) = self.grip_at(event.position) {
-            self.image_resize = Some(ImageResize {
+            self.affordances.image_resize = Some(ImageResize {
                 line,
                 start_width: width,
                 start_x: event.position.x,
                 width,
                 revision: self.document.read(cx).revision(),
             });
-            self.is_selecting = false;
-            self.menu = None;
-            self.table_menu = None;
-            self.image_menu = None;
-            self.prop_menu = None;
+            self.selection.is_selecting = false;
+            self.overlay_menu.dismiss();
             cx.notify();
             return;
         }
@@ -3571,7 +3291,7 @@ impl EditorState {
                     self.write_clipboard(text, cx);
                 }
             } else if !self.code_langs.is_empty() {
-                self.code_lang_menu = Some((fence_row, event.position));
+                self.overlay_menu.open_code_lang(fence_row, event.position);
                 cx.notify();
             }
             return;
@@ -3629,8 +3349,7 @@ impl EditorState {
         if event.click_count == 1
             && !event.modifiers.shift
             && !event.modifiers.control
-            && let Some((_, hit)) = self
-                .prop_pill_rects
+            && let Some((_, hit)) = self.affordances.prop_pill_rects
                 .iter()
                 .find(|(b, _)| b.contains(&event.position))
         {
@@ -3693,12 +3412,11 @@ impl EditorState {
             && self.markdown_style.is_some()
             && self.host_links
         {
-            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self
-                .link_rects
+            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self.affordances.link_rects
                 .iter()
                 .find(|(bounds, _)| bounds.contains(&event.position))
             {
-                self.pending_link = Some((
+                self.affordances.pending_link = Some((
                     url.clone().into(),
                     event.position,
                     self.document.read(cx).revision(),
@@ -3712,12 +3430,12 @@ impl EditorState {
         if let Some(row) = self.table_add_row_at(event.position) {
             let keep = self.caret_table_cell_pos();
             if let Some(off) = self.cell_start_offset(row, 0) {
-                self.selected_range = off..off;
+                self.selection.selected_range = off..off;
                 self.insert_table_row(true, cx);
             }
             if let Some((r, c, ic)) = keep {
                 let caret = self.caret_pos_for_cell(r, c, ic);
-                self.selected_range = caret..caret;
+                self.selection.selected_range = caret..caret;
                 cx.notify();
             }
             return;
@@ -3725,46 +3443,45 @@ impl EditorState {
         if let Some((row, col)) = self.table_add_col_at(event.position) {
             let keep = self.caret_table_cell_pos();
             if let Some(off) = self.cell_start_offset(row, col) {
-                self.selected_range = off..off;
+                self.selection.selected_range = off..off;
                 self.insert_table_column(true, cx);
             }
             if let Some((r, c, ic)) = keep {
                 let caret = self.caret_pos_for_cell(r, c, ic);
-                self.selected_range = caret..caret;
+                self.selection.selected_range = caret..caret;
                 cx.notify();
             }
             return;
         }
         // A press on a row/column delete "−" handle removes that row/column (seat
         // the caret in it, then reuse the caret-driven delete APIs).
-        if let Some((rect, row)) = self.table_row_del
+        if let Some((rect, row)) = self.affordances.table_row_del
             && rect.contains(&event.position)
         {
             if let Some(off) = self.cell_start_offset(row, 0) {
-                self.selected_range = off..off;
+                self.selection.selected_range = off..off;
                 self.delete_table_row(cx);
             }
             return;
         }
-        if let Some((rect, row, col)) = self.table_col_del
+        if let Some((rect, row, col)) = self.affordances.table_col_del
             && rect.contains(&event.position)
         {
             if let Some(off) = self.cell_start_offset(row, col) {
-                self.selected_range = off..off;
+                self.selection.selected_range = off..off;
                 self.delete_table_column(cx);
             }
             return;
         }
         // A press on a wide table's scroll thumb starts a thumb drag — the
         // table scrolls with the pointer (see `on_mouse_move`).
-        if let Some(&TableThumb { header, .. }) = self
-            .table_thumbs
+        if let Some(&TableThumb { header, .. }) = self.affordances.table_thumbs
             .iter()
             .find(|t| t.grab.contains(&event.position))
         {
-            let sx = self.table_scroll_x.get(&header).copied().unwrap_or(0.);
-            self.table_thumb_drag = Some((header, event.position.x, sx));
-            self.is_selecting = false;
+            let sx = self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.);
+            self.affordances.table_thumb_drag = Some((header, event.position.x, sx));
+            self.selection.is_selecting = false;
             cx.notify();
             return;
         }
@@ -3772,8 +3489,7 @@ impl EditorState {
         // resizes live; release persists the width (issue #16). A DOUBLE-click
         // auto-fits the column to its content instead (the Excel/Sheets
         // convention for a column border).
-        if let Some(&(_, header_row, col, width)) = self
-            .table_col_resize_rects
+        if let Some(&(_, header_row, col, width)) = self.affordances.table_col_resize_rects
             .iter()
             .find(|(band, ..)| band.contains(&event.position))
         {
@@ -3781,14 +3497,14 @@ impl EditorState {
                 self.autofit_table_col(header_row, col, window, cx);
                 return;
             }
-            self.table_col_resize = Some(TableColResize {
+            self.affordances.table_col_resize = Some(TableColResize {
                 header_row,
                 col,
                 start_x: event.position.x,
                 orig: width,
                 width,
             });
-            self.is_selecting = false;
+            self.selection.is_selecting = false;
             cx.notify();
             return;
         }
@@ -3798,12 +3514,8 @@ impl EditorState {
             .table_offset_at(event.position, window)
             .unwrap_or_else(|| self.index_for_mouse_position(event.position));
         let affinity = self.affinity_for_mouse_position(offset, event.position);
-        self.menu = None;
-        self.table_menu = None;
-        self.image_menu = None;
-        self.prop_menu = None;
-        self.code_lang_menu = None;
-        self.goal_x = None;
+        self.overlay_menu.dismiss();
+        self.selection.goal_x = None;
         self.last_edit = EditKind::Other;
         match event.click_count {
             // Double-click selects the word under the cursor. On a $$…$$ block
@@ -3815,9 +3527,9 @@ impl EditorState {
                 if self.math_block_at(row).is_some() || self.property_block_at(row).is_some() {
                     return;
                 }
-                self.is_selecting = false;
-                self.selected_range = self.word_range_at(offset).unwrap_or(offset..offset);
-                self.selection_reversed = false;
+                self.selection.is_selecting = false;
+                self.selection.selected_range = self.word_range_at(offset).unwrap_or(offset..offset);
+                self.selection.selection_reversed = false;
                 cx.notify();
             }
             // Triple-click (or more): select the whole logical line — except on
@@ -3827,10 +3539,10 @@ impl EditorState {
                 if self.math_block_at(row).is_some() || self.property_block_at(row).is_some() {
                     return;
                 }
-                self.is_selecting = false;
+                self.selection.is_selecting = false;
                 let start = self.line_starts()[row];
-                self.selected_range = start..self.line_end(row);
-                self.selection_reversed = false;
+                self.selection.selected_range = start..self.line_end(row);
+                self.selection.selection_reversed = false;
                 cx.notify();
             }
             // Single click: place the caret, or extend the selection with Shift.
@@ -3859,7 +3571,7 @@ impl EditorState {
                         return;
                     }
                 }
-                self.is_selecting = true;
+                self.selection.is_selecting = true;
                 if event.modifiers.shift {
                     self.select_to_with_affinity(offset, affinity, cx);
                 } else {
@@ -3870,16 +3582,16 @@ impl EditorState {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.scrollbar_dragging {
-            self.scrollbar_dragging = false;
+        if self.frame.scrollbar_dragging {
+            self.frame.scrollbar_dragging = false;
             cx.notify();
             return;
         }
-        if let Some((url, origin, revision)) = self.pending_link.take()
+        if let Some((url, origin, revision)) = self.affordances.pending_link.take()
             && (event.position.x - origin.x).abs() < px(4.)
             && (event.position.y - origin.y).abs() < px(4.)
             && revision == self.document.read(cx).revision()
-            && self.selected_range.is_empty()
+            && self.selection.selected_range.is_empty()
             && !event.modifiers.shift
             && !event.modifiers.control
             && !event.modifiers.alt
@@ -3888,7 +3600,7 @@ impl EditorState {
             cx.emit(EditorEvent::OpenLink(url));
         }
         // End a gutter block drag: splice the block at the drop boundary.
-        if let Some((bs, be, t)) = self.line_drag.take() {
+        if let Some((bs, be, t)) = self.affordances.line_drag.take() {
             self.apply_line_drag(bs, be, t, cx);
             cx.notify();
             return;
@@ -3897,19 +3609,19 @@ impl EditorState {
         // in that image's source line (through the normal mutation path, so it
         // joins the undo history + emits Changed); the next paint shows the saved
         // size and the live override clears.
-        if let Some(resize) = self.image_resize.take() {
+        if let Some(resize) = self.affordances.image_resize.take() {
             self.commit_image_resize(resize, cx);
             cx.notify();
             return;
         }
         // End a table scroll-thumb drag (the live offsets are already stored).
-        if self.table_thumb_drag.take().is_some() {
+        if self.affordances.table_thumb_drag.take().is_some() {
             cx.notify();
             return;
         }
         // End a column-border drag by persisting every column's width into the
         // table marker's `cols=` list (one undo step, emits Changed).
-        if let Some(resize) = self.table_col_resize.take() {
+        if let Some(resize) = self.affordances.table_col_resize.take() {
             // A press on a narrow border band that never moved is a click,
             // not a resize. Persisting every fitted width here would write a
             // table marker the user never asked for.
@@ -3919,7 +3631,7 @@ impl EditorState {
             cx.notify();
             return;
         }
-        self.is_selecting = false;
+        self.selection.is_selecting = false;
     }
 
     fn on_mouse_move(
@@ -3928,36 +3640,36 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.scrollbar_dragging {
+        if self.frame.scrollbar_dragging {
             if event.dragging()
                 && let Some(offset) = self.scrollbar_offset_at(event.position.y)
             {
-                self.scroll.set_offset(offset);
+                self.frame.scroll.set_offset(offset);
                 cx.stop_propagation();
                 cx.notify();
             }
             return;
         }
-        if self.pending_link.as_ref().is_some_and(|(_, origin, _)| {
+        if self.affordances.pending_link.as_ref().is_some_and(|(_, origin, _)| {
             (event.position.x - origin.x).abs() >= px(4.)
                 || (event.position.y - origin.y).abs() >= px(4.)
         }) {
-            self.pending_link = None;
+            self.affordances.pending_link = None;
         }
         // Link under the pointer → `HoverLink` on change (a host shows a preview
         // card there). Painted boxes from the last frame, like the hand cursor.
         let over_link = self
             .host_links
             .then(|| {
-                self.link_rects
+                self.affordances.link_rects
                     .iter()
-                    .chain(self.prop_pill_rects.iter())
+                    .chain(self.affordances.prop_pill_rects.iter())
                     .find(|(b, _)| b.contains(&event.position))
                     .map(|(b, hit)| (hit.clone(), *b))
             })
             .flatten();
-        if over_link != self.hovered_link {
-            self.hovered_link = over_link.clone();
+        if over_link != self.affordances.hovered_link {
+            self.affordances.hovered_link = over_link.clone();
             cx.emit(EditorEvent::HoverLink(over_link));
         }
         // While dragging an image's grip, track the pointer: the new width is the
@@ -3968,19 +3680,18 @@ impl EditorState {
         // preserved).
         // While dragging a block by its gutter grip, track the drop boundary
         // (snapped out of rendered regions); paint draws the indicator there.
-        if let Some((bs, be, t)) = self.line_drag {
+        if let Some((bs, be, t)) = self.affordances.line_drag {
             let b = self.snap_drop_boundary(self.drop_boundary_at(event.position));
             if b != t {
-                self.line_drag = Some((bs, be, b));
+                self.affordances.line_drag = Some((bs, be, b));
                 cx.notify();
             }
             return;
         }
         // While dragging a wide table's scroll thumb, track the pointer: thumb
         // travel maps to content scroll through the committed factor.
-        if let Some((header, grab_x, start_sx)) = self.table_thumb_drag {
-            let factor = self
-                .table_thumbs
+        if let Some((header, grab_x, start_sx)) = self.affordances.table_thumb_drag {
+            let factor = self.affordances.table_thumbs
                 .iter()
                 .find(|t| t.header == header)
                 .map_or(0., |t| t.factor);
@@ -3988,8 +3699,8 @@ impl EditorState {
             // Clamp at use like the wheel path — the paint clamps too, but a
             // sane stored value keeps other consumers simple.
             let sx = sx.max(0.);
-            if self.table_scroll_x.get(&header).copied().unwrap_or(0.) != sx {
-                self.table_scroll_x.insert(header, sx);
+            if self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.) != sx {
+                self.affordances.table_scroll_x.insert(header, sx);
                 cx.notify();
             }
             return;
@@ -3997,30 +3708,29 @@ impl EditorState {
         // While dragging a table column's border, track the pointer: the new
         // width is the grab width plus the travel, floored so the column can't
         // vanish. Shaping applies it live (see `table_column_widths`).
-        if let Some(resize) = self.table_col_resize {
+        if let Some(resize) = self.affordances.table_col_resize {
             let dx = f32::from(event.position.x - resize.start_x);
             let width = (resize.orig + dx).max(24.);
-            if let Some(r) = self.table_col_resize.as_mut() {
+            if let Some(r) = self.affordances.table_col_resize.as_mut() {
                 r.width = width;
             }
             cx.notify();
             return;
         }
-        if let Some(resize) = self.image_resize {
-            let avail = self
-                .last_bounds
+        if let Some(resize) = self.affordances.image_resize {
+            let avail = self.frame.last_bounds
                 .map_or(f32::MAX, |b| f32::from(b.size.width))
                 - f32::from(self.line_inset(resize.line));
             let max_w = avail.max(IMG_MIN_W);
             let dx = f32::from(event.position.x - resize.start_x);
             let width = (resize.start_width + dx).clamp(IMG_MIN_W, max_w);
-            if let Some(r) = self.image_resize.as_mut() {
+            if let Some(r) = self.affordances.image_resize.as_mut() {
                 r.width = width;
             }
             cx.notify();
             return;
         }
-        if self.is_selecting {
+        if self.selection.is_selecting {
             let offset = self
                 .table_offset_at(event.position, window)
                 .unwrap_or_else(|| self.index_for_mouse_position(event.position));
@@ -4030,7 +3740,7 @@ impl EditorState {
         }
         // While the right-click menu is open it owns the pointer — don't let the
         // table hover (highlight/handles) track the mouse behind it.
-        if self.table_menu.is_some() {
+        if self.overlay_menu.is_table_open() {
             return;
         }
         // Repaint table "+" affordances when the pointer's region changes, so the
@@ -4038,49 +3748,45 @@ impl EditorState {
         // repaints on the caret blink).
         let region = self.table_hover_region_at(event.position);
         let cell = self.hovered_table_cell(event.position);
-        if region != self.table_hover_region || cell != self.table_hover_cell {
-            self.table_hover_region = region;
-            self.table_hover_cell = cell;
+        if region != self.affordances.table_hover_region || cell != self.affordances.table_hover_cell {
+            self.affordances.table_hover_region = region;
+            self.affordances.table_hover_cell = cell;
             cx.notify();
         }
         // Repaint the column-resize border accent as the pointer crosses a band
         // (the cursor comes from the hitbox; the painted line needs a frame).
-        let on_band = self
-            .table_col_resize_rects
+        let on_band = self.affordances.table_col_resize_rects
             .iter()
             .position(|(b, ..)| b.contains(&event.position));
-        if on_band != self.table_resize_hover {
-            self.table_resize_hover = on_band;
+        if on_band != self.affordances.table_resize_hover {
+            self.affordances.table_resize_hover = on_band;
             cx.notify();
         }
         // Repaint the property-panel hover border when the pointer moves between
         // rows (the border itself reads the live pointer during paint).
-        let prow = self
-            .prop_row_rects
+        let prow = self.affordances.prop_row_rects
             .iter()
             .position(|(b, _)| b.contains(&event.position));
-        if prow != self.prop_hover_row {
-            self.prop_hover_row = prow;
+        if prow != self.affordances.prop_hover_row {
+            self.affordances.prop_hover_row = prow;
             cx.notify();
         }
         // Repaint the heading fold chevron when the pointer enters/leaves a
         // heading row (the chevron is hover-revealed).
-        let hrow = self
-            .heading_row_rects
+        let hrow = self.affordances.heading_row_rects
             .iter()
             .find_map(|(row, b)| b.contains(&event.position).then_some(*row));
-        if hrow != self.heading_hover_row {
-            self.heading_hover_row = hrow;
+        if hrow != self.affordances.heading_hover_row {
+            self.affordances.heading_hover_row = hrow;
             cx.notify();
         }
         // Repaint the code card's chrome (lang tag + Copy) when the pointer
         // enters/leaves a card — it's hover-revealed.
-        let ccard = self
-            .code_card_rects
+        let ccard = self.affordances.code_card_rects
             .iter()
             .find_map(|(row, b)| b.contains(&event.position).then_some(*row));
-        if ccard != self.code_chip_hover {
-            self.code_chip_hover = ccard;
+        if ccard != self.affordances.code_chip_hover {
+            self.affordances.code_chip_hover = ccard;
             cx.notify();
         }
     }
@@ -4121,7 +3827,7 @@ impl EditorState {
                 o.min(start + new_line.len())
             }
         };
-        self.selected_range = remap(self.selected_range.start)..remap(self.selected_range.end);
+        self.selection.selected_range = remap(self.selection.selected_range.start)..remap(self.selection.selected_range.end);
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -4178,38 +3884,33 @@ impl EditorState {
         // row renders as a picture, there's no text under the pointer to edit.
         // Only for real `![](src)` rows: mermaid/math rasters share the widget
         // type but delete as text (their menu would silently no-op).
-        if let Some(&(line, _)) = self
-            .image_rects
+        if let Some(&(line, _)) = self.affordances.image_rects
             .iter()
             .find(|(_, rect)| rect.contains(&event.position))
             .filter(|&&(line, _)| self.image_row_range(line).is_some())
         {
-            self.menu = None;
-            self.table_menu = None;
+            self.overlay_menu.dismiss();
             self.focus(window, cx);
-            self.image_menu = Some((line, event.position));
+            self.overlay_menu.open_image(line, event.position);
             cx.notify();
             return;
         }
         // Right-click a property-panel row: Edit / Delete property menu — the
         // panel renders as a widget, there's no text under the pointer.
-        if let Some(&(_, row)) = self
-            .prop_row_rects
+        if let Some(&(_, row)) = self.affordances.prop_row_rects
             .iter()
             .find(|(rect, _)| rect.contains(&event.position))
         {
-            self.menu = None;
-            self.table_menu = None;
-            self.image_menu = None;
+            self.overlay_menu.dismiss();
             self.focus(window, cx);
-            self.prop_menu = Some((row, event.position));
+            self.overlay_menu.open_property(row, event.position);
             cx.notify();
             return;
         }
         // Right-click a file chip places the caret to edit its source (the line
         // then reveals raw `![](src)`), instead of opening the spell menu.
         if self.chip_at(event.position).is_some() {
-            self.menu = None;
+            self.overlay_menu.dismiss();
             self.focus(window, cx);
             let offset = self.index_for_mouse_position(event.position);
             self.move_to(offset, cx);
@@ -4236,11 +3937,11 @@ impl EditorState {
         // Cut/Copy act on it, like prose; the structure menu stays a
         // selection-free right-click away.
         if let Some(offset) = self.table_offset_at(event.position, window) {
-            self.menu = None;
+            self.overlay_menu.dismiss();
             self.focus(window, cx);
-            let sel = self.selected_range.clone();
+            let sel = self.selection.selected_range.clone();
             if !sel.is_empty() && offset >= sel.start && offset <= sel.end {
-                self.menu = Some(DiagMenu {
+                self.overlay_menu.open_diagnostics(DiagMenu {
                     anchor: event.position,
                     range: offset..offset,
                     suggestions: Vec::new(),
@@ -4249,7 +3950,7 @@ impl EditorState {
                 });
             } else {
                 self.move_to(offset, cx);
-                self.table_menu = Some(event.position);
+                self.overlay_menu.open_table(event.position);
             }
             cx.notify();
             return;
@@ -4260,7 +3961,7 @@ impl EditorState {
         // A right-click outside the selection moves the caret there (so Paste
         // lands under the pointer); inside it, the selection stays put — it's
         // what Cut/Copy act on.
-        let sel = self.selected_range.clone();
+        let sel = self.selection.selected_range.clone();
         let in_selection = !sel.is_empty() && offset >= sel.start && offset <= sel.end;
         if !in_selection {
             self.move_to(offset, cx);
@@ -4276,7 +3977,7 @@ impl EditorState {
             }
             None => (offset..offset, Vec::new()),
         };
-        self.menu = Some(DiagMenu {
+        self.overlay_menu.open_diagnostics(DiagMenu {
             anchor,
             range,
             suggestions: suggestions.into_iter().map(SharedString::from).collect(),
@@ -4295,17 +3996,12 @@ impl EditorState {
 
     /// Close the suggestions menu (Escape, or a click elsewhere).
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.extra_selections.is_empty() {
-            self.extra_selections.clear();
+        if !self.selection.extra_selections.is_empty() {
+            self.selection.extra_selections.clear();
             cx.notify();
             return;
         }
-        if self.menu.take().is_some()
-            || self.table_menu.take().is_some()
-            || self.image_menu.take().is_some()
-            || self.prop_menu.take().is_some()
-            || self.code_lang_menu.take().is_some()
-        {
+        if self.overlay_menu.dismiss() {
             cx.notify();
         }
     }
@@ -4318,9 +4014,9 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.menu = None;
-        self.selected_range = range;
-        self.selection_reversed = false;
+        self.overlay_menu.dismiss();
+        self.selection.selected_range = range;
+        self.selection.selection_reversed = false;
         self.replace_text_in_range(None, text, window, cx);
     }
 
@@ -4416,7 +4112,7 @@ impl EditorState {
     /// One undoable edit rewriting the block's lines; fenced kinds (code,
     /// math) and quote runs convert as whole blocks.
     fn turn_into(&mut self, kind: TurnKind, window: &mut Window, cx: &mut Context<Self>) {
-        let row = self.row_col(self.selected_range.start).0;
+        let row = self.row_col(self.selection.selected_range.start).0;
         let cur = self.block_kind_at(row);
         if cur == kind {
             return;
@@ -4485,8 +4181,8 @@ impl EditorState {
         };
         let range = starts[first]..self.line_end(last);
         let range_start = range.start;
-        self.selected_range = range;
-        self.selection_reversed = false;
+        self.selection.selected_range = range;
+        self.selection.selection_reversed = false;
         self.replace_text_in_range(None, &text, window, cx);
         // Fenced kinds: the caret parks after the closing fence, revealing the
         // raw markers (reveal-on-caret) — seat it on the body's first line
@@ -4494,14 +4190,14 @@ impl EditorState {
         if matches!(kind, TurnKind::Code | TurnKind::Math) {
             let caret =
                 (range_start + text.find('\n').map_or(0, |i| i + 1)).min(self.content.len());
-            self.selected_range = caret..caret;
+            self.selection.selected_range = caret..caret;
         }
     }
 
     /// Extra left offset for the gutter drag grip (e.g. the host's
     /// line-number gutter width), so the grip clears other gutter chrome.
     pub fn set_grip_inset(&mut self, inset: Pixels) {
-        self.grip_inset = inset;
+        self.affordances.grip_inset = inset;
     }
 
     /// The line span the gutter grip drags as one unit: whole fenced/rendered
@@ -4563,10 +4259,10 @@ impl EditorState {
     /// The row whose gutter grip the pointer would hover (the event-time
     /// mirror of prepaint's grip computation, for repaint change-detection).
     fn grip_hover_row_at(&self, position: Point<Pixels>) -> Option<usize> {
-        let bounds = self.last_bounds?;
+        let bounds = self.frame.last_bounds?;
         if self.markdown_style.is_none()
-            || self.line_drag.is_some()
-            || position.x < grip_left(bounds.origin.x, self.grip_inset) - px(4.)
+            || self.affordances.line_drag.is_some()
+            || position.x < grip_left(bounds.origin.x, self.affordances.grip_inset) - px(4.)
             || position.x > bounds.origin.x + bounds.size.width
             || position.y < bounds.origin.y
             || position.y > bounds.origin.y + bounds.size.height
@@ -4574,26 +4270,26 @@ impl EditorState {
             return None;
         }
         let y = position.y - bounds.origin.y;
-        (0..self.line_tops.len()).find(|&i| {
+        (0..self.frame.line_tops.len()).find(|&i| {
             let h = self.line_h(i) * self.row_span(i) as f32;
-            h > px(0.5) && y >= self.line_tops[i] && y < self.line_tops[i] + h
+            h > px(0.5) && y >= self.frame.line_tops[i] && y < self.frame.line_tops[i] + h
         })
     }
 
     /// The drop boundary (a between-rows index) nearest the pointer, from the
     /// last paint's committed geometry.
     fn drop_boundary_at(&self, position: Point<Pixels>) -> usize {
-        let Some(bounds) = self.last_bounds else {
+        let Some(bounds) = self.frame.last_bounds else {
             return 0;
         };
         let y = position.y - bounds.origin.y;
-        for i in 0..self.line_tops.len() {
-            let mid = self.line_tops[i] + self.line_h(i) * self.row_span(i) as f32 / 2.;
+        for i in 0..self.frame.line_tops.len() {
+            let mid = self.frame.line_tops[i] + self.line_h(i) * self.row_span(i) as f32 / 2.;
             if y < mid {
                 return i;
             }
         }
-        self.line_tops.len()
+        self.frame.line_tops.len()
     }
 
     /// Clamp a drop boundary out of the interior of any rendered region — a
@@ -4660,7 +4356,7 @@ impl EditorState {
             }
             self.replace_range(block_start..target_off, &new, cx);
             let caret = block_start + rest_len;
-            self.selected_range = caret..caret;
+            self.selection.selected_range = caret..caret;
         } else {
             // Up: [between... block] → [block \n between...]
             let target_off = starts[t];
@@ -4669,7 +4365,7 @@ impl EditorState {
             new.push('\n');
             new.push_str(&between[..between.len().saturating_sub(1)]);
             self.replace_range(target_off..block_end, &new, cx);
-            self.selected_range = target_off..target_off;
+            self.selection.selected_range = target_off..target_off;
         }
         cx.emit(EditorEvent::Changed);
     }
@@ -4686,16 +4382,16 @@ impl EditorState {
         affinity: WrapAffinity,
         cx: &mut Context<Self>,
     ) {
-        self.caret_affinity = affinity;
-        self.anchor_affinity = affinity;
-        self.selection_reversed = false;
-        self.extra_selections.clear();
-        self.selected_range = offset..offset;
-        self.request_caret_reveal();
+        self.selection.caret_affinity = affinity;
+        self.selection.anchor_affinity = affinity;
+        self.selection.selection_reversed = false;
+        self.selection.extra_selections.clear();
+        self.selection.selected_range = offset..offset;
+        self.frame.request_caret_reveal();
         // A deliberate caret move ends the current typing/deleting run and the
         // vertical-movement goal column.
         self.last_edit = EditKind::Other;
-        self.goal_x = None;
+        self.selection.goal_x = None;
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
@@ -4744,14 +4440,13 @@ impl EditorState {
     /// layout stored at the last paint, so it's valid for caret moves that don't
     /// change the text (arrow keys, click).
     pub fn caret_screen_bounds(&self) -> Option<Bounds<Pixels>> {
-        let bounds = self.last_bounds?;
+        let bounds = self.frame.last_bounds?;
         let (row, col) = self.row_col(self.cursor_offset());
         let lh = self.line_h(row);
-        let p = self
-            .wrapped
+        let p = self.frame.wrapped
             .get(row)?
             .position_for_index(self.display_col(row, col), lh)?;
-        let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
+        let top = bounds.top() + self.frame.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         Some(Bounds::from_corners(
             point(bounds.left(), top),
             point(bounds.left(), top + lh),
@@ -4759,10 +4454,10 @@ impl EditorState {
     }
 
     fn cursor_offset(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
+        if self.selection.selection_reversed {
+            self.selection.selected_range.start
         } else {
-            self.selected_range.end
+            self.selection.selected_range.end
         }
     }
 
@@ -4776,20 +4471,20 @@ impl EditorState {
         affinity: WrapAffinity,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_range.is_empty() {
-            self.anchor_affinity = self.caret_affinity;
+        if self.selection.selected_range.is_empty() {
+            self.selection.anchor_affinity = self.selection.caret_affinity;
         }
-        self.caret_affinity = affinity;
-        if self.selection_reversed {
-            self.selected_range.start = offset;
+        self.selection.caret_affinity = affinity;
+        if self.selection.selection_reversed {
+            self.selection.selected_range.start = offset;
         } else {
-            self.selected_range.end = offset;
+            self.selection.selected_range.end = offset;
         }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
+        if self.selection.selected_range.end < self.selection.selected_range.start {
+            self.selection.selection_reversed = !self.selection.selection_reversed;
+            self.selection.selected_range = self.selection.selected_range.end..self.selection.selected_range.start;
         }
-        self.request_caret_reveal();
+        self.frame.request_caret_reveal();
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
@@ -4852,7 +4547,7 @@ impl EditorState {
     /// (x) across the run. Falls back to logical-line movement before the first
     /// paint (when no wrapped layout is cached yet).
     fn move_vertical(&mut self, dir: i32) -> (usize, WrapAffinity) {
-        if self.wrapped.is_empty() {
+        if self.frame.wrapped.is_empty() {
             return (self.vertical_offset(dir), WrapAffinity::Downstream);
         }
         let (row, col) = self.row_col(self.cursor_offset());
@@ -4860,23 +4555,23 @@ impl EditorState {
         if cur_lh <= px(0.) {
             return (self.vertical_offset(dir), WrapAffinity::Downstream);
         }
-        let Some(cur) = self.wrapped.get(row).and_then(|l| {
+        let Some(cur) = self.frame.wrapped.get(row).and_then(|l| {
             caret_line_pos(
                 l,
                 self.bidi_map(row),
                 self.display_col(row, col),
                 cur_lh,
-                self.caret_affinity,
+                self.selection.caret_affinity,
             )
         }) else {
             return (self.vertical_offset(dir), WrapAffinity::Downstream);
         };
-        let global_y = self.line_tops[row] + cur.y;
+        let global_y = self.frame.line_tops[row] + cur.y;
         // The goal column is the caret's *visual* x, so it carries an RTL row's
         // right-align shift — the target row's shift comes off again below.
         // (Row insets stay out of it, as they always have.)
-        let goal = self.goal_x.unwrap_or(cur.x + self.rtl_shift(row));
-        self.goal_x = Some(goal);
+        let goal = self.selection.goal_x.unwrap_or(cur.x + self.rtl_shift(row));
+        self.selection.goal_x = Some(goal);
         // Step to the adjacent visual row. Down: to the bottom of the current
         // row (= the top of the next one). Up: just above the current row's top
         // — robust to the row above having a different height (e.g. a heading),
@@ -4889,8 +4584,8 @@ impl EditorState {
         if target_y < px(0.) {
             return (0, WrapAffinity::Downstream);
         }
-        let last = self.wrapped.len() - 1;
-        let total = self.line_tops[last] + self.line_h(last) * self.row_span(last) as f32;
+        let last = self.frame.wrapped.len() - 1;
+        let total = self.frame.line_tops[last] + self.line_h(last) * self.row_span(last) as f32;
         if target_y >= total {
             // Landing at the very end would park the caret on a trailing
             // collapsed row (a hidden closing ``` fence) and reveal it — clamp
@@ -4909,9 +4604,9 @@ impl EditorState {
             );
         }
         let mut trow = last;
-        for i in 0..self.wrapped.len() {
+        for i in 0..self.frame.wrapped.len() {
             let h = self.line_h(i) * self.row_span(i) as f32;
-            if target_y < self.line_tops[i] + h {
+            if target_y < self.frame.line_tops[i] + h {
                 trow = i;
                 break;
             }
@@ -4920,14 +4615,13 @@ impl EditorState {
         // to no row, and the loop assigns it to the row *after* it — right going
         // down, but going up that strands the caret on the far side of the gap (e.g.
         // just below a table). Going up, target the row before the gap instead.
-        if dir < 0 && trow > 0 && target_y < self.line_tops[trow] {
+        if dir < 0 && trow > 0 && target_y < self.frame.line_tops[trow] {
             trow -= 1;
         }
         // A table separator (`|---|`) row isn't editable — skip past it (in the
         // direction of travel) so the caret lands on the header/body row rather
         // than dropping the whole table to raw source.
-        if self
-            .table_rows
+        if self.frame.table_rows
             .get(trow)
             .and_then(Option::as_ref)
             .is_some_and(|t| t.is_separator)
@@ -4937,7 +4631,7 @@ impl EditorState {
             } else {
                 trow.wrapping_sub(1)
             };
-            if skip < self.wrapped.len() {
+            if skip < self.frame.wrapped.len() {
                 trow = skip;
             }
         }
@@ -4948,7 +4642,7 @@ impl EditorState {
         if self.line_h(trow) <= px(0.) {
             let step = |r: usize| {
                 if dir >= 0 {
-                    (r + 1 < self.wrapped.len()).then_some(r + 1)
+                    (r + 1 < self.frame.wrapped.len()).then_some(r + 1)
                 } else {
                     r.checked_sub(1)
                 }
@@ -4961,16 +4655,16 @@ impl EditorState {
                         trow = n;
                         break;
                     }
-                    None => return (self.cursor_offset(), self.caret_affinity),
+                    None => return (self.cursor_offset(), self.selection.caret_affinity),
                 }
             }
         }
         let rel = point(
             (goal - self.rtl_shift(trow)).max(px(0.)),
-            (target_y - self.line_tops[trow]).max(px(0.)),
+            (target_y - self.frame.line_tops[trow]).max(px(0.)),
         );
         let col = line_index_at(
-            &self.wrapped[trow],
+            &self.frame.wrapped[trow],
             self.bidi_map(trow),
             rel,
             self.line_h(trow),
@@ -5031,12 +4725,12 @@ impl EditorState {
     }
 
     fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         self.select_to(self.prev_word(self.cursor_offset()), cx);
     }
 
     fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.selection.goal_x = None;
         self.select_to(self.next_word(self.cursor_offset()), cx);
     }
 
@@ -5047,7 +4741,7 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             self.select_to(self.prev_word(self.cursor_offset()), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
@@ -5060,7 +4754,7 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_range.is_empty() {
+        if self.selection.selected_range.is_empty() {
             self.select_to(self.next_word(self.cursor_offset()), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
@@ -5069,29 +4763,29 @@ impl EditorState {
     /// The `src` of a file chip on the row at window `position`, if that row is a
     /// chip (from the last paint) — left-click opens it, right-click edits.
     fn chip_at(&self, position: Point<Pixels>) -> Option<(SharedString, bool)> {
-        if self.wrapped.is_empty() || self.chip_rows.iter().all(Option::is_none) {
+        if self.frame.wrapped.is_empty() || self.affordances.chip_rows.iter().all(Option::is_none) {
             return None;
         }
-        let bounds = self.last_bounds.as_ref()?;
+        let bounds = self.frame.last_bounds.as_ref()?;
         let rel_y = position.y - bounds.top();
-        let mut row = self.wrapped.len() - 1;
-        for i in 0..self.wrapped.len() {
+        let mut row = self.frame.wrapped.len() - 1;
+        for i in 0..self.frame.wrapped.len() {
             let h = self.line_h(i) * self.row_span(i) as f32;
-            if rel_y < self.line_tops[i] + h {
+            if rel_y < self.frame.line_tops[i] + h {
                 row = i;
                 break;
             }
         }
-        self.chip_rows.get(row).and_then(Option::clone)
+        self.affordances.chip_rows.get(row).and_then(Option::clone)
     }
 
     /// The inline `$…$` formula under `position` (its absolute byte range + inner LaTeX), from
     /// the last paint's window-space `inline_math_rects` — so a click opens its editor.
     fn inline_math_at(&self, position: Point<Pixels>) -> Option<(Range<usize>, SharedString)> {
-        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen {
+        if self.frame.last_bounds.is_none() || self.frame.last_paint_gen != self.frame.content_gen {
             return None;
         }
-        self.inline_math_rects
+        self.affordances.inline_math_rects
             .iter()
             // Empty latex marks an inline IMAGE sharing this machinery — not a
             // formula, so a click on it shouldn't open the math editor.
@@ -5102,8 +4796,7 @@ impl EditorState {
     /// The inline image `src` under `position` (an empty-latex entry in
     /// `inline_math_rects`), parsed from its `![alt](src)` source.
     fn inline_image_at(&self, position: Point<Pixels>) -> Option<SharedString> {
-        let (range, _, _) = self
-            .inline_math_rects
+        let (range, _, _) = self.affordances.inline_math_rects
             .iter()
             .find(|(_, latex, rect)| latex.is_empty() && rect.contains(&position))?;
         let text = self.content.get(range.clone())?;
@@ -5118,7 +4811,7 @@ impl EditorState {
     /// each image's painted corner (see [`Self::image_grip`]); checked against the
     /// last paint's window-space `image_rects`.
     fn grip_at(&self, position: Point<Pixels>) -> Option<(usize, f32)> {
-        self.image_rects.iter().find_map(|&(line, rect)| {
+        self.affordances.image_rects.iter().find_map(|&(line, rect)| {
             Self::image_grip(rect)
                 .contains(&position)
                 .then_some((line, f32::from(rect.size.width)))
@@ -5167,7 +4860,7 @@ impl EditorState {
     /// `(on_copy, fence_row)` — `true` = the Copy button, `false` = the
     /// language tag.
     fn code_chip_at(&self, position: Point<Pixels>) -> Option<(bool, usize)> {
-        self.code_chip_rects.iter().find_map(|c| {
+        self.affordances.code_chip_rects.iter().find_map(|c| {
             if c.copy.contains(&position) {
                 Some((true, c.fence_row))
             } else if c.lang.contains(&position) {
@@ -5210,7 +4903,7 @@ impl EditorState {
         if &self.content[token_start..token_end] == language {
             return;
         }
-        let before = self.selected_range.clone();
+        let before = self.selection.selected_range.clone();
         let delta = language.len() as isize - (token_end - token_start) as isize;
         self.replace_range(token_start..token_end, language, cx);
         // Keep source access in this editor, but seat routine language changes
@@ -5224,7 +4917,7 @@ impl EditorState {
 
     fn checkbox_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.checkbox_rects.iter().find_map(|&(line, rect)| {
+        self.affordances.checkbox_rects.iter().find_map(|&(line, rect)| {
             Bounds::new(
                 point(rect.origin.x - pad, rect.origin.y - pad),
                 size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
@@ -5239,7 +4932,7 @@ impl EditorState {
     /// like the task checkbox to stay easy to hit.
     fn alert_fold_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.alert_fold_rects.iter().find_map(|&(line, rect)| {
+        self.affordances.alert_fold_rects.iter().find_map(|&(line, rect)| {
             Bounds::new(
                 point(rect.origin.x - pad, rect.origin.y - pad),
                 size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
@@ -5254,7 +4947,7 @@ impl EditorState {
     /// like the callout chevron.
     fn heading_fold_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.heading_fold_rects.iter().find_map(|&(line, rect)| {
+        self.affordances.heading_fold_rects.iter().find_map(|&(line, rect)| {
             Bounds::new(
                 point(rect.origin.x - pad, rect.origin.y - pad),
                 size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
@@ -5265,31 +4958,31 @@ impl EditorState {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        if self.content.is_empty() || self.wrapped.is_empty() {
+        if self.content.is_empty() || self.frame.wrapped.is_empty() {
             return 0;
         }
-        let Some(bounds) = self.last_bounds.as_ref() else {
+        let Some(bounds) = self.frame.last_bounds.as_ref() else {
             return 0;
         };
         let rel = point(position.x - bounds.left(), position.y - bounds.top());
         // Which logical line, by the vertical band each occupies (variable height).
-        let mut row = self.wrapped.len() - 1;
-        for i in 0..self.wrapped.len() {
+        let mut row = self.frame.wrapped.len() - 1;
+        for i in 0..self.frame.wrapped.len() {
             let height = self.line_h(i) * self.row_span(i) as f32;
-            if rel.y < self.line_tops[i] + height {
+            if rel.y < self.frame.line_tops[i] + height {
                 row = i;
                 break;
             }
         }
         // An inline-image row: clicking it puts the caret at the line start (the
         // line then shows its source — "raw on caret"), not a text column.
-        if self.widget_rows.get(row).copied().unwrap_or(false) {
+        if self.frame.widget_rows.get(row).copied().unwrap_or(false) {
             return self.line_starts()[row];
         }
         let x = (rel.x - self.row_origin_x(row)).max(px(0.));
-        let line_rel = point(x, rel.y - self.line_tops[row]);
+        let line_rel = point(x, rel.y - self.frame.line_tops[row]);
         let col = line_index_at(
-            &self.wrapped[row],
+            &self.frame.wrapped[row],
             self.bidi_map(row),
             line_rel,
             self.line_h(row),
@@ -5301,7 +4994,7 @@ impl EditorState {
     /// unless the row's markers are hidden (W6), where the painted text is
     /// shorter than the source.
     fn source_col(&self, row: usize, display_col: usize) -> usize {
-        match self.offset_maps.get(row).and_then(Option::as_ref) {
+        match self.frame.offset_maps.get(row).and_then(Option::as_ref) {
             Some(map) => map.get(display_col).copied().unwrap_or(display_col),
             None => display_col,
         }
@@ -5313,7 +5006,7 @@ impl EditorState {
     /// has this frame's fresh map should call [`display_col_in`] directly.
     fn display_col(&self, row: usize, source_col: usize) -> usize {
         display_col_in(
-            self.offset_maps.get(row).and_then(Option::as_ref),
+            self.frame.offset_maps.get(row).and_then(Option::as_ref),
             source_col,
         )
     }
@@ -5329,7 +5022,7 @@ impl EditorState {
             utf16 += ch.len_utf16();
             utf8 += ch.len_utf8();
         }
-        self.utf16_anchor.set((self.content_gen, utf8, utf16));
+        self.frame.utf16_anchor.set((self.frame.content_gen, utf8, utf16));
         utf8
     }
 
@@ -5342,7 +5035,7 @@ impl EditorState {
             utf8 += ch.len_utf8();
             utf16 += ch.len_utf16();
         }
-        self.utf16_anchor.set((self.content_gen, utf8, utf16));
+        self.frame.utf16_anchor.set((self.frame.content_gen, utf8, utf16));
         utf16
     }
 
@@ -5352,9 +5045,9 @@ impl EditorState {
     /// converts monotonically-close offsets many times per keystroke, so this
     /// turns O(document) scans into O(distance-from-anchor).
     fn utf16_resume(&self, target: usize, by_utf8: bool) -> (usize, usize) {
-        let (generation, utf8, utf16) = self.utf16_anchor.get();
+        let (generation, utf8, utf16) = self.frame.utf16_anchor.get();
         let anchor_pos = if by_utf8 { utf8 } else { utf16 };
-        if generation == self.content_gen && anchor_pos <= target && utf8 <= self.content.len() {
+        if generation == self.frame.content_gen && anchor_pos <= target && utf8 <= self.content.len() {
             (utf8, utf16)
         } else {
             (0, 0)
@@ -5383,7 +5076,7 @@ impl EditorState {
             }
             let (row, col) = self.row_col(off);
             if row != row0
-                || self.offset_maps.get(row).and_then(Option::as_ref).is_none()
+                || self.frame.offset_maps.get(row).and_then(Option::as_ref).is_none()
                 || self.display_col(row, col) != d0
             {
                 return off;
@@ -5403,7 +5096,7 @@ impl EditorState {
             }
             let (row, col) = self.row_col(off);
             if row != row0
-                || self.offset_maps.get(row).and_then(Option::as_ref).is_none()
+                || self.frame.offset_maps.get(row).and_then(Option::as_ref).is_none()
                 || self.display_col(row, col) != d0
             {
                 return off;
@@ -5511,13 +5204,13 @@ impl EntityInputHandler for EditorState {
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: self.selection_reversed,
+            range: self.range_to_utf16(&self.selection.selected_range),
+            reversed: self.selection.selection_reversed,
         })
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked_range.as_ref().map(|r| self.range_to_utf16(r))
+        self.selection.marked_range.as_ref().map(|r| self.range_to_utf16(r))
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -5538,12 +5231,12 @@ impl EntityInputHandler for EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.retired_composition && !self.focus_handle.is_focused(window) {
+        if self.selection.retired_composition && !self.focus_handle.is_focused(window) {
             return;
         }
-        self.retired_composition = false;
-        let completing_composition = self.marked_range.is_some();
-        if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty()
+        self.selection.retired_composition = false;
+        let completing_composition = self.selection.marked_range.is_some();
+        if range_utf16.is_none() && self.selection.marked_range.is_none() && !self.selection.extra_selections.is_empty()
         {
             self.replace_occurrences(new_text, cx);
             return;
@@ -5551,8 +5244,8 @@ impl EntityInputHandler for EditorState {
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or(self.selection.marked_range.clone())
+            .unwrap_or(self.selection.selected_range.clone());
         // Report what this edit replaced (see `last_replaced`) — the fact a
         // diff can't reconstruct when the selection starts with the typed char.
         self.last_replaced =
@@ -5564,12 +5257,12 @@ impl EntityInputHandler for EditorState {
             self.last_edit = EditKind::Insert(range.start + new_text.len());
         }
         self.replace_source(range.clone(), new_text, cx);
-        self.retired_composition = completing_composition;
+        self.selection.retired_composition = completing_composition;
         let caret = range.start + new_text.len() - new_text.matches("\r\n").count();
-        self.selected_range = caret..caret;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.goal_x = None;
+        self.selection.selected_range = caret..caret;
+        self.selection.selection_reversed = false;
+        self.selection.marked_range = None;
+        self.selection.goal_x = None;
         // Keep unaffected diagnostics valid across the edit (shift those after
         // it, drop those it overlapped); the host recomputes the edited region.
         self.remap_diagnostics(&range, new_text.len() - new_text.matches("\r\n").count());
@@ -5609,15 +5302,15 @@ impl EntityInputHandler for EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.retired_composition && !self.focus_handle.is_focused(window) {
+        if self.selection.retired_composition && !self.focus_handle.is_focused(window) {
             return;
         }
-        self.retired_composition = false;
+        self.selection.retired_composition = false;
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or(self.selection.marked_range.clone())
+            .unwrap_or(self.selection.selected_range.clone());
         self.claim_composition(cx);
         let document = self.document.clone();
         let owner = cx.weak_entity();
@@ -5626,10 +5319,10 @@ impl EntityInputHandler for EditorState {
             document.compose(range.clone(), new_text, owner, caret, cx)
         });
         self.content = snapshot.text_handle();
-        self.content_gen = document.read(cx).revision();
-        self.request_caret_reveal();
-        self.invalidate_geometry();
-        self.marked_range =
+        self.frame.content_gen = document.read(cx).revision();
+        self.frame.request_caret_reveal();
+        self.frame.invalidate_geometry();
+        self.selection.marked_range =
             (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
         // The selection inside a composition counts UTF-16 units from the start
         // of `new_text`, not of the document (Windows sends the IME caret this
@@ -5637,7 +5330,7 @@ impl EntityInputHandler for EditorState {
         // against the document put the caret mid-character as soon as the
         // composed text was multi-byte — the next edit's slice then panicked,
         // and a release build aborted on the first Japanese keystroke (#119).
-        self.selected_range = new_selected_range_utf16
+        self.selection.selected_range = new_selected_range_utf16
             .as_ref()
             .map(|r| {
                 range.start + utf16_to_byte(new_text, r.start)
@@ -5660,8 +5353,7 @@ impl EntityInputHandler for EditorState {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        if self
-            .table_rows
+        if self.frame.table_rows
             .get(self.row_col(range.start).0)
             .and_then(Option::as_ref)
             .is_some_and(|table| !table.is_separator)
@@ -5670,7 +5362,7 @@ impl EntityInputHandler for EditorState {
         }
         let (row, col) = self.row_col(range.start);
         let lh = self.line_h(row);
-        let line = self.wrapped.get(row)?;
+        let line = self.frame.wrapped.get(row)?;
         let map = self.bidi_map(row);
         let p = caret_line_pos(
             line,
@@ -5679,7 +5371,7 @@ impl EntityInputHandler for EditorState {
             lh,
             self.affinity_for_offset(range.start),
         )?;
-        let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
+        let top = bounds.top() + self.frame.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         // Span the whole range when it stays on one wrap row (the common IME
         // composition), so the candidate window anchors under the marked TEXT
@@ -5741,7 +5433,7 @@ impl Render for EditorState {
             .id("markdown-document-scroll")
             .test_support()
             .overflow_scroll()
-            .track_scroll(&self.scroll)
+            .track_scroll(&self.frame.scroll)
             .size_full()
             // While a `$$` block OR an inline `$…$` formula is being edited, the hosted math
             // editor is focused but lives *inside* this element — so the editor's own
@@ -5870,9 +5562,9 @@ impl Render for EditorState {
                 let content = div().w_full().min_w_0();
                 // With soft wrap off, unwrapped lines become the scroll
                 // content's minimum width instead of being clipped.
-                let content = if !self.soft_wrap && self.natural_width.get() > px(0.) {
+                let content = if !self.soft_wrap && self.frame.natural_width.get() > px(0.) {
                     content.min_w(
-                        self.natural_width.get() + window.rem_size() * (self.document_inset.0 * 2.),
+                        self.frame.natural_width.get() + window.rem_size() * (self.document_inset.0 * 2.),
                     )
                 } else {
                     content
@@ -5897,7 +5589,7 @@ impl Render for EditorState {
             // Right-click suggestions menu, absolutely positioned over the
             // editor (anchored at the click). `Option`'s `IntoIterator` renders
             // zero or one popup; clicking a row replaces the misspelled span.
-            .children(self.menu.clone().map(|menu| {
+            .children(self.overlay_menu.diagnostics().cloned().map(|menu| {
                 let DiagMenu {
                     anchor,
                     range,
@@ -5978,7 +5670,7 @@ impl Render for EditorState {
 
                 // Cut / Copy need a selection; Paste always applies (the caret
                 // was seated at the click when it landed outside the selection).
-                let has_sel = !self.selected_range.is_empty();
+                let has_sel = !self.selection.selected_range.is_empty();
                 let clip_item = |id: &'static str, label: SharedString| {
                     div()
                         .id(id)
@@ -5999,7 +5691,7 @@ impl Render for EditorState {
                                 MouseButton::Left,
                                 cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
-                                    editor.menu = None;
+                                    editor.overlay_menu.dismiss();
                                     editor.cut(&Cut, window, cx);
                                 }),
                             ),
@@ -6009,7 +5701,7 @@ impl Render for EditorState {
                                 MouseButton::Left,
                                 cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
-                                    editor.menu = None;
+                                    editor.overlay_menu.dismiss();
                                     editor.copy(&Copy, window, cx);
                                 }),
                             ),
@@ -6023,7 +5715,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.copy_plain(window, cx);
                                     }),
                                 ),
@@ -6034,7 +5726,7 @@ impl Render for EditorState {
                         MouseButton::Left,
                         cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            editor.menu = None;
+                            editor.overlay_menu.dismiss();
                             editor.paste(&Paste, window, cx);
                         }),
                     ),
@@ -6070,7 +5762,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.bold(&Bold, window, cx);
                                     }),
                                 ),
@@ -6083,7 +5775,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.italic(&Italic, window, cx);
                                     }),
                                 ),
@@ -6096,7 +5788,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.underline(&Underline, window, cx);
                                     }),
                                 ),
@@ -6109,7 +5801,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.strike(&Strike, window, cx);
                                     }),
                                 ),
@@ -6128,7 +5820,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(|editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.code(&Code, window, cx);
                                     }),
                                 ),
@@ -6163,7 +5855,7 @@ impl Render for EditorState {
                 // "Turn into" block conversion (Cditor-style): a row whose
                 // hover opens a kind-list flyout beside the menu, the caret
                 // block's current kind checked.
-                let cur_kind = self.block_kind_at(self.row_col(self.selected_range.start).0);
+                let cur_kind = self.block_kind_at(self.row_col(self.selection.selected_range.start).0);
                 let turn_row = div()
                     .id("menu-turn-into")
                     .flex_shrink_0()
@@ -6179,7 +5871,7 @@ impl Render for EditorState {
                     .child(div().text_size(px(10.)).child("\u{25b8}"))
                     .on_hover(cx.listener(|editor, hovered: &bool, _, cx| {
                         if *hovered
-                            && let Some(m) = editor.menu.as_mut()
+                            && let Some(m) = editor.overlay_menu.diagnostics_mut()
                             && !m.turn_into
                         {
                             m.turn_into = true;
@@ -6213,7 +5905,7 @@ impl Render for EditorState {
                                     MouseButton::Left,
                                     cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
-                                        editor.menu = None;
+                                        editor.overlay_menu.dismiss();
                                         editor.turn_into(k, window, cx);
                                     }),
                                 )
@@ -6271,7 +5963,7 @@ impl Render for EditorState {
                                     // A click anywhere outside the menu dismisses it.
                                     .on_mouse_down_out(cx.listener(
                                         |editor, _: &MouseDownEvent, _, cx| {
-                                            editor.menu = None;
+                                            editor.overlay_menu.dismiss();
                                             cx.notify();
                                         },
                                     ))
@@ -6301,7 +5993,7 @@ impl Render for EditorState {
             }))
             // The table right-click menu (Word-style row/column editing), anchored
             // at the click; each row runs its action on the caret's table cell.
-            .children(self.table_menu.map(|anchor| {
+            .children(self.overlay_menu.table().map(|(anchor, menu_scroll)| {
                 // Menu chrome from the host's theme (fallbacks match the former
                 // hardcoded dark menu when no markdown style is set).
                 let st = self.markdown_style.as_ref();
@@ -6515,7 +6207,7 @@ impl Render for EditorState {
                 let view_h = MAX_H - 2.0 * PAD;
                 let thumb = (rows_h > view_h).then(|| {
                     let scrolled =
-                        (-f32::from(self.table_menu_scroll.offset().y)).clamp(0.0, rows_h - view_h);
+                        (-f32::from(menu_scroll.offset().y)).clamp(0.0, rows_h - view_h);
                     let thumb_h = (view_h * view_h / rows_h).max(24.0);
                     let thumb_top = PAD + scrolled / (rows_h - view_h) * (view_h - thumb_h);
                     div()
@@ -6547,7 +6239,7 @@ impl Render for EditorState {
                                 .text_size(px(13.))
                                 .on_mouse_down_out(cx.listener(
                                     |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.table_menu = None;
+                                        editor.overlay_menu.dismiss();
                                         cx.notify();
                                     },
                                 ))
@@ -6560,7 +6252,7 @@ impl Render for EditorState {
                                         .id("table-menu")
                                         .max_h(px(MAX_H))
                                         .overflow_y_scroll()
-                                        .track_scroll(&self.table_menu_scroll)
+                                        .track_scroll(menu_scroll)
                                         .flex()
                                         .flex_col()
                                         .py(px(PAD))
@@ -6572,7 +6264,7 @@ impl Render for EditorState {
             }))
             // The image right-click menu: Word-style object actions on an inline
             // image (Delete), anchored at the click. Chrome matches the table menu.
-            .children(self.prop_menu.map(|(row, anchor)| {
+            .children(self.overlay_menu.property().map(|(row, anchor)| {
                 let st = self.markdown_style.as_ref();
                 let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
                 let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
@@ -6606,7 +6298,7 @@ impl Render for EditorState {
                                 .py(px(4.))
                                 .on_mouse_down_out(cx.listener(
                                     |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.prop_menu = None;
+                                        editor.overlay_menu.dismiss();
                                         cx.notify();
                                     },
                                 ))
@@ -6617,7 +6309,7 @@ impl Render for EditorState {
                                             cx.listener(
                                                 move |editor, _: &MouseDownEvent, _, cx| {
                                                     cx.stop_propagation();
-                                                    editor.prop_menu = None;
+                                                    editor.overlay_menu.dismiss();
                                                     if let Some((range, source)) =
                                                         editor.property_block_at(row)
                                                     {
@@ -6641,7 +6333,7 @@ impl Render for EditorState {
                                             cx.listener(
                                                 move |editor, _: &MouseDownEvent, _, cx| {
                                                     cx.stop_propagation();
-                                                    editor.prop_menu = None;
+                                                    editor.overlay_menu.dismiss();
                                                     editor.delete_property_row(row, cx);
                                                 },
                                             ),
@@ -6650,7 +6342,7 @@ impl Render for EditorState {
                         ),
                 )
             }))
-            .children(self.image_menu.map(|(line, anchor)| {
+            .children(self.overlay_menu.image().map(|(line, anchor)| {
                 let st = self.markdown_style.as_ref();
                 let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
                 let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
@@ -6676,7 +6368,7 @@ impl Render for EditorState {
                                 .py(px(4.))
                                 .on_mouse_down_out(cx.listener(
                                     |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.image_menu = None;
+                                        editor.overlay_menu.dismiss();
                                         cx.notify();
                                     },
                                 ))
@@ -6692,7 +6384,7 @@ impl Render for EditorState {
                                             cx.listener(
                                                 move |editor, _: &MouseDownEvent, _, cx| {
                                                     cx.stop_propagation();
-                                                    editor.image_menu = None;
+                                                    editor.overlay_menu.dismiss();
                                                     editor.delete_image_row(line, cx);
                                                 },
                                             ),
@@ -6701,7 +6393,7 @@ impl Render for EditorState {
                         ),
                 )
             }))
-            .children(self.code_lang_menu.map(|(row, anchor)| {
+            .children(self.overlay_menu.code_lang().map(|(row, anchor, menu_scroll)| {
                 // The code block's language picker (Cditor-inspired): the host's
                 // highlighter languages, scrollable past the cap, current one
                 // checked. Selecting rewrites the opening fence (one undo step).
@@ -6721,7 +6413,7 @@ impl Render for EditorState {
                 let view_h = MAX_H - 2.0 * PAD;
                 let thumb = (rows_h > view_h).then(|| {
                     let scrolled =
-                        (-f32::from(self.code_lang_scroll.offset().y)).clamp(0.0, rows_h - view_h);
+                        (-f32::from(menu_scroll.offset().y)).clamp(0.0, rows_h - view_h);
                     let thumb_h = (view_h * view_h / rows_h).max(24.0);
                     let thumb_top = PAD + scrolled / (rows_h - view_h) * (view_h - thumb_h);
                     div()
@@ -6754,7 +6446,7 @@ impl Render for EditorState {
                                 .py(px(PAD))
                                 .on_mouse_down_out(cx.listener(
                                     |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.code_lang_menu = None;
+                                        editor.overlay_menu.dismiss();
                                         cx.notify();
                                     },
                                 ))
@@ -6763,7 +6455,7 @@ impl Render for EditorState {
                                         .id("code-lang-list")
                                         .max_h(px(MAX_H - 2.0 * PAD))
                                         .overflow_y_scroll()
-                                        .track_scroll(&self.code_lang_scroll)
+                                        .track_scroll(menu_scroll)
                                         .children(langs.into_iter().enumerate().map(
                                             |(i, lang)| {
                                                 let is_current = *lang == current
@@ -6786,7 +6478,7 @@ impl Render for EditorState {
                                                 cx.listener(
                                                     move |editor, _: &MouseDownEvent, _, cx| {
                                                         cx.stop_propagation();
-                                                        editor.code_lang_menu = None;
+                                                        editor.overlay_menu.dismiss();
                                                         editor.set_code_lang(row, &lang, cx);
                                                     },
                                                 ),
@@ -6804,7 +6496,7 @@ impl Render for EditorState {
         // the overflow is discoverable without touching the wheel.
         div().relative().size_full().child(scroll).child(
             div().absolute().inset_0().child(
-                Scrollbar::horizontal(&self.scroll)
+                Scrollbar::horizontal(&self.frame.scroll)
                     .id("markdown-horizontal-scrollbar")
                     .mode(ScrollbarMode::Always),
             ),
@@ -7698,21 +7390,21 @@ mod tests {
         });
         editor
             .update(cx, |e, window, cx| {
-                e.selected_range = 3..3;
+                e.selection.selected_range = 3..3;
                 // Typing "ka" composes "か" with the caret after it: 1..1 in
                 // UTF-16 units of the composition.
                 e.replace_and_mark_text_in_range(None, "か", Some(1..1), window, cx);
                 assert_eq!(e.content.as_str(), "abcか");
-                assert_eq!(e.marked_range, Some(3..6));
-                assert_eq!(e.selected_range, 6..6);
+                assert_eq!(e.selection.marked_range, Some(3..6));
+                assert_eq!(e.selection.selected_range, 6..6);
                 // The next composition step replaces the marked text cleanly.
                 e.replace_and_mark_text_in_range(None, "かな", Some(2..2), window, cx);
                 assert_eq!(e.content.as_str(), "abcかな");
-                assert_eq!(e.selected_range, 9..9);
+                assert_eq!(e.selection.selected_range, 9..9);
                 // Committing the result ends the composition.
                 e.replace_text_in_range(None, "仮名", window, cx);
                 assert_eq!(e.content.as_str(), "abc仮名");
-                assert_eq!(e.marked_range, None);
+                assert_eq!(e.selection.marked_range, None);
             })
             .unwrap();
     }
@@ -7731,7 +7423,7 @@ mod tests {
         editor
             .update(cx, |e, window, cx| {
                 e.set_diagnostics(vec![super::Diagnostic { range: 7..16 }], cx);
-                e.selected_range = 6..6;
+                e.selection.selected_range = 6..6;
                 e.replace_text_in_range(None, "テスト", window, cx);
                 assert_eq!(e.diagnostics[0].range, 16..25);
                 e.undo(&super::Undo, window, cx);
@@ -7756,7 +7448,7 @@ mod tests {
                 // The rendered word ends where the hidden `</mark>` does, so a
                 // drag across it takes the closing tag along.
                 let start = text.find("yellow").unwrap();
-                e.selected_range = start..text.find(',').unwrap();
+                e.selection.selected_range = start..text.find(',').unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
                 assert_eq!(
                     e.text(),
@@ -7765,7 +7457,7 @@ mod tests {
                 // A plain `==` highlight hides its markers the same way.
                 let plain = "a ==yellow mark==, b";
                 e.set_text(plain, cx);
-                e.selected_range = plain.find("yellow").unwrap()..plain.find(',').unwrap();
+                e.selection.selected_range = plain.find("yellow").unwrap()..plain.find(',').unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
                 assert_eq!(
                     e.content.as_str(),
@@ -7773,7 +7465,7 @@ mod tests {
                 );
                 // And a selection starting on the hidden opening tag.
                 e.set_text(&text, cx);
-                e.selected_range = text.find("<mark").unwrap()..text.find("</mark>").unwrap();
+                e.selection.selected_range = text.find("<mark").unwrap()..text.find("</mark>").unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
                 assert_eq!(
                     e.text(),
@@ -7793,13 +7485,13 @@ mod tests {
         });
         editor
             .update(cx, |e, window, cx| {
-                e.selected_range = 7..7;
+                e.selection.selected_range = 7..7;
                 e.select_home(&SelectHome, window, cx);
-                assert_eq!(e.selected_range, 0..7);
+                assert_eq!(e.selection.selected_range, 0..7);
                 e.doc_end(&DocEnd, window, cx);
                 e.select_doc_start(&SelectDocStart, window, cx);
-                assert_eq!(e.selected_range, 0..13);
-                e.selected_range = 7..7;
+                assert_eq!(e.selection.selected_range, 0..13);
+                e.selection.selected_range = 7..7;
                 e.delete_word_left(&DeleteWordLeft, window, cx);
                 assert_eq!(e.content.as_str(), "one \nthree");
                 e.doc_start(&DocStart, window, cx);
@@ -8115,7 +7807,7 @@ mod tests {
             .unwrap();
         cx.update(|cx| {
             let editor = editor.read(cx).unwrap();
-            let row = editor.table_rows[2].as_ref().unwrap();
+            let row = editor.frame.table_rows[2].as_ref().unwrap();
             let rendered: Vec<_> = row.cells.iter().map(|cell| cell.as_str()).collect();
             assert_eq!(rendered, ["Guide", "bold", "cargo test"]);
         });

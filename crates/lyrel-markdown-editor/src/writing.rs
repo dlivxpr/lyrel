@@ -55,7 +55,7 @@ impl EditorState {
     /// 当前选区包裹的显式颜色；混合或无色选区返回 None。
     pub fn selection_color(&self, kind: ColorKind) -> Option<u32> {
         use zorite_markdown::syntax::{StyledKind, styled_tag};
-        let range = self.selected_range.clone();
+        let range = self.selection.selected_range.clone();
         let text = &self.content[range.clone()];
         let want = if kind == ColorKind::Text {
             StyledKind::Span
@@ -88,9 +88,9 @@ impl EditorState {
     ) {
         use zorite_markdown::syntax::{StyledKind, styled_tag};
         self.finish_composition(cx);
-        let before = self.selected_range.clone();
+        let before = self.selection.selected_range.clone();
         self.trim_dangling_tags();
-        let selected = self.selected_range.clone();
+        let selected = self.selection.selected_range.clone();
         if selected.is_empty() {
             return;
         }
@@ -203,7 +203,7 @@ impl EditorState {
         }
         self.request_writing(
             WritingIntent::Insert,
-            self.selected_range.clone(),
+            self.selection.selected_range.clone(),
             window,
             cx,
         );
@@ -217,10 +217,10 @@ impl EditorState {
         if self.plain_source {
             return;
         }
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             self.request_writing(
                 WritingIntent::TextColor,
-                self.selected_range.clone(),
+                self.selection.selected_range.clone(),
                 window,
                 cx,
             );
@@ -235,10 +235,10 @@ impl EditorState {
         if self.plain_source {
             return;
         }
-        if !self.selected_range.is_empty() {
+        if !self.selection.selected_range.is_empty() {
             self.request_writing(
                 WritingIntent::HighlightColor,
-                self.selected_range.clone(),
+                self.selection.selected_range.clone(),
                 window,
                 cx,
             );
@@ -249,7 +249,7 @@ impl EditorState {
         let start = self.line_starts()[row];
         let end = self.line_end(row);
         let key = self.content[start..end].trim().to_string();
-        if !self.folded_headings.remove(&key) {
+        if !self.affordances.folded_headings.remove(&key) {
             let single = std::collections::HashSet::from([key.clone()]);
             let caret_row = self.row_col(self.cursor_offset()).0;
             if markdown_syntax::heading_fold_regions(&self.content, &single)
@@ -258,9 +258,9 @@ impl EditorState {
             {
                 self.move_to(end, cx);
             }
-            self.folded_headings.insert(key);
+            self.affordances.folded_headings.insert(key);
         }
-        self.invalidate_geometry();
+        self.frame.invalidate_geometry();
         cx.notify();
     }
     pub(super) fn toggle_heading_disclosure(
