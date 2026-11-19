@@ -224,6 +224,33 @@ pub fn skills_browse_is_readonly_and_host_bound(h: &dyn lyrel_core::host::Host, 
     assert_eq!(h.read_file(&untouched, 1024).unwrap(), b"unchanged");
 }
 
+fn github_repository_from_host_git(h: &dyn lyrel_core::host::Host, sandbox: &Path) {
+    use lyrel_core::core::git::git;
+    use lyrel_insights::github::remote::{default_remote, github_remotes};
+
+    let repo = h.join(sandbox, "github-repo");
+    mkdir(h, &repo);
+    git(h, &repo, &["init", "--template="]).expect("initialize fixture repository");
+    git(
+        h,
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/lyrel-fixture/example.git",
+        ],
+    )
+    .expect("configure the fixture remote without fetching");
+    let remote_lines = git(h, &repo, &["remote", "-v"]).expect("list Host repository remotes");
+    let remotes = github_remotes(&remote_lines);
+    let repository = default_remote(&remotes, None).expect("discover the GitHub fetch remote");
+    assert_eq!(
+        repository.slug.web_url(),
+        "https://github.com/lyrel-fixture/example"
+    );
+}
+
 #[cfg(unix)]
 struct ServerProcess {
     child: Mutex<Option<Child>>,
@@ -307,4 +334,15 @@ fn local_skills_browse_is_readonly_and_host_bound() {
 #[test]
 fn stdio_skills_browse_is_readonly_and_host_bound() {
     run_stdio(skills_browse_is_readonly_and_host_bound);
+}
+
+#[test]
+fn local_github_repository_from_host_git() {
+    run_local(github_repository_from_host_git);
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_github_repository_from_host_git() {
+    run_stdio(github_repository_from_host_git);
 }
