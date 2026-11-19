@@ -108,11 +108,19 @@ impl<R: Clone> EditFlow<R> {
     }
 }
 
-/// 把命令展开的结果：面板描述或立即目标。目标在打开面板时固定，提交时按
-/// revision 复核。
+/// 把命令展开的结果：面板描述、立即目标或源码 handoff。目标在打开面板时
+/// 固定，提交时按 revision 复核。
 pub enum EditPlan<T> {
     Panel(EditPanelDesc<T>),
-    Immediate { target: T },
+    Immediate {
+        target: T,
+    },
+    /// 格式壳要求的源码 handoff（如 YAML 的多行复杂键）：不猜测重排，把节点
+    /// 的精确源码范围交给 Source 编辑，并给出一条说明。
+    Handoff {
+        range: Range<usize>,
+        notice: SharedString,
+    },
 }
 
 /// 打开编辑面板所需的一切：标题、字段、提示、多行值与固定目标。
@@ -165,6 +173,9 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
     const KEY_CONTEXT: &'static str;
     /// 结构模式是否注册共享 history 的撤销/重做动作（JSON 有，TOML 无）。
     const STRUCTURE_UNDO_REDO: bool;
+    /// 是否提供完整值面板与双击打开完整值；YAML 为假——块标量与复杂键的
+    /// 保真靠双击直接 reveal 源码，工具栏也不渲染完整值按钮。
+    const FULL_VALUE: bool = true;
 
     /// 工具栏最左侧的格式标签。
     fn format_label(&self) -> SharedString;
@@ -190,6 +201,11 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
         let _ = projection;
         None
     }
+    /// 工具栏主计数之前的次计数文案（如 YAML 的多文档计数）；无则为 None。
+    fn documents_notice(&self, projection: &Self::Projection) -> Option<SharedString> {
+        let _ = projection;
+        None
+    }
     /// 逐行无效记录的可见说明（含计数）；无此概念的格式返回 None。
     fn invalid_records_notice(&self, projection: &Self::Projection) -> Option<SharedString> {
         let _ = projection;
@@ -211,6 +227,14 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
         index: usize,
     ) -> Option<NodeIdentity<'a>>;
 
+    /// 该节点能否打开完整值面板；默认与 `has_detail` 相同。XML 收窄为投影的
+    /// `has_full_value()`（属性／文本／CDATA／注释／PI／声明）；YAML 提供完整值
+    /// 面板为假，双击直接 reveal 源码。
+    fn node_has_full_value(&self, projection: &Self::Projection, index: usize) -> bool {
+        self.node_identity(projection, index)
+            .is_some_and(|identity| identity.has_detail)
+    }
+
     /// 一行可见节点的格式特定呈现数据（配色、徽标、记录行与行错误）。
     fn node_row(
         &self,
@@ -225,6 +249,13 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
     /// revision 刷新后的选中恢复策略。
     fn selection_restore(&self) -> SelectionRestore {
         SelectionRestore::PathFallback
+    }
+
+    /// 投影能否用于结构编辑与结构就绪的额外条件（revision 匹配之外）：
+    /// XML 拒绝带解析错误的投影，其余格式恒真。
+    fn projection_editable(&self, projection: &Self::Projection) -> bool {
+        let _ = projection;
+        true
     }
 
     /// 当前选择的工具栏编辑命令（含启用状态与触发方式）。
@@ -252,6 +283,18 @@ pub trait StructuredViewFormat: StructuredDocumentFormat {
         key: Option<String>,
         value: String,
     ) -> Result<Self::Mutation, Self::MutationError>;
+
+    /// 命令成功应用后显示在工具栏的提示（如 YAML 的锚点编辑说明）。在写入
+    /// 前用当前投影计算；写入失败或过期则不显示。默认无。
+    fn applied_notice(
+        &self,
+        request: &Self::EditRequest,
+        target: &Self::Target,
+        projection: &Self::Projection,
+    ) -> Option<SharedString> {
+        let _ = (request, target, projection);
+        None
+    }
 
     /// 规划一次局部修改，返回按源码顺序、互不重叠的替换清单；空清单是
     /// no-op。格式壳把 mutation 交给 `lyrel-document` 里对应的无损引擎。
@@ -313,6 +356,8 @@ pub struct StructuredView<F: StructuredViewFormat> {
     full_value: Option<FullValue>,
     editing: Option<EditSession<F>>,
     mutation_error: Option<SharedString>,
+    /// 成功应用命令或源码 handoff 后的提示（如 YAML 的锚点编辑说明）。
+    notice: Option<SharedString>,
     seen_revision: Option<u64>,
     _document: Subscription,
     _source_document: Subscription,
@@ -360,6 +405,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
             full_value: None,
             editing: None,
             mutation_error: None,
+            notice: None,
             seen_revision: None,
             _document: watch_document,
             _source_document: watch_source_document,
@@ -458,6 +504,12 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         }
     }
 
+    /// 成功应用命令或源码 handoff 后的提示（YAML 的 `mutation_notice`）。
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn notice(&self) -> Option<SharedString> {
+        self.notice.clone()
+    }
+
     pub fn full_value_text(&self, cx: &App) -> Option<SharedString> {
         let detail = self.full_value.as_ref()?;
         let snapshot = self.document.read(cx).document().read(cx).snapshot();
@@ -504,10 +556,10 @@ impl<F: StructuredViewFormat> StructuredView<F> {
     }
 
     pub fn structure_ready(&self, cx: &App) -> bool {
-        self.document
-            .read(cx)
-            .projection()
-            .is_some_and(|projection| projection.root().is_some())
+        let document = self.document.read(cx);
+        document.projection().is_some_and(|projection| {
+            document.format().projection_editable(projection) && projection.root().is_some()
+        })
     }
 
     pub fn select_source_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
@@ -652,12 +704,9 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let document = self.document.read(cx);
         let detail = document
             .projection()
+            .filter(|projection| document.format().node_has_full_value(projection, index))
             .and_then(|projection| document.format().node_identity(projection, index))
-            .and_then(|identity| {
-                identity
-                    .has_detail
-                    .then(|| (SharedString::from(identity.path), identity.detail))
-            });
+            .map(|identity| (SharedString::from(identity.path), identity.detail));
         self.full_value = detail.map(|(path, range)| FullValue { path, range });
         cx.notify();
     }
@@ -674,14 +723,16 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         }
     }
 
-    /// 当前已安装的投影，且它的 revision 必须仍等于源码权威。任何不一致
-    /// 都按过期处理，不允许用旧范围规划写入。
+    /// 当前已安装的投影，且它的 revision 必须仍等于源码权威、格式壳仍认可它
+    /// 可用于结构编辑。任何不一致都按过期处理，不允许用旧范围规划写入。
     fn current_projection(&self, cx: &App) -> Option<Arc<F::Projection>> {
         let document = self.document.read(cx);
         let projection = document.shared_projection()?;
         let installed = document.installed_revision()?;
         let source = document.document().clone();
-        (source.read(cx).revision() == installed).then_some(projection)
+        let format = document.format();
+        (format.projection_editable(&projection) && source.read(cx).revision() == installed)
+            .then_some(projection)
     }
 
     fn current_text(&self, cx: &App) -> Option<Arc<String>> {
@@ -716,7 +767,11 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         };
         match plan {
             EditPlan::Panel(desc) => self.open_edit(window, cx, request, desc),
+            EditPlan::Handoff { range, notice } => {
+                self.handoff_to_source(range, notice, window, cx)
+            }
             EditPlan::Immediate { target } => {
+                let notice = format.applied_notice(&request, &target, &projection);
                 let result = format
                     .build_mutation(&request, &target, None, String::new())
                     .map_err(StructuredMutationError::Plan)
@@ -724,6 +779,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                 match result {
                     Ok(()) => {
                         self.mutation_error = None;
+                        self.notice = notice;
                         cx.notify();
                     }
                     Err(error) => {
@@ -733,6 +789,28 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                 }
             }
         }
+    }
+
+    /// 格式壳明确要求的源码 handoff：切到 Source、选中节点的精确范围并给出
+    /// 一条说明（如 YAML 多行复杂键的保真提示）。与 reveal 不同，它不是
+    /// 导航，而是一次带解释的编辑移交，同一个 Document history/save 适用。
+    fn handoff_to_source(
+        &mut self,
+        range: Range<usize>,
+        notice: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_edit(None, cx);
+        self.finish_composition(cx);
+        self.mutation_error = None;
+        self.notice = Some(notice);
+        self.mode = StructuredMode::Source;
+        self.source
+            .update(cx, |source, cx| source.select_range(range, cx));
+        let focus = self.source.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
     }
 
     fn open_edit(
@@ -745,6 +823,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         self.close_edit(None, cx);
         self.full_value = None;
         self.mutation_error = None;
+        self.notice = None;
         let owner = cx.entity_id();
         let panel = cx.new(|cx| {
             StructureEditPanel::new(
@@ -816,12 +895,14 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let target = session.target.clone();
         let key = panel.read(cx).key_text(cx);
         let value = panel.read(cx).value_text(cx);
-        let mutation = self
+        let format = self.document.read(cx).format().clone();
+        // 提示在写入前用当前投影计算；写入失败或过期则不显示。
+        let notice = self
             .document
             .read(cx)
-            .format()
-            .build_mutation(&request, &target, key, value);
-        let mutation = match mutation {
+            .projection()
+            .and_then(|projection| format.applied_notice(&request, &target, projection));
+        let mutation = match format.build_mutation(&request, &target, key, value) {
             Ok(mutation) => mutation,
             Err(error) => {
                 let message = self
@@ -836,6 +917,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         match self.apply_mutation(mutation, cx) {
             Ok(()) => {
                 self.mutation_error = None;
+                self.notice = notice;
                 self.close_edit(Some(window), cx);
             }
             Err(error) => {
@@ -870,7 +952,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
             )
         };
         let projection = projection.ok_or(StructuredMutationError::Stale)?;
-        if installed != Some(revision) {
+        if installed != Some(revision) || !format.projection_editable(&projection) {
             return Err(StructuredMutationError::Stale);
         }
         let replacements = format
@@ -1012,6 +1094,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let range = identity.range;
         self.close_edit(None, cx);
         self.mutation_error = None;
+        self.notice = None;
         self.selected = Some(index);
         self.selected_path = Some(path);
         self.selected_range = Some(range);
@@ -1149,6 +1232,9 @@ impl<F: StructuredViewFormat> StructuredView<F> {
         let counts = document
             .projection()
             .and_then(|projection| document.format().count_notice(projection));
+        let documents_notice = document
+            .projection()
+            .and_then(|projection| document.format().documents_notice(projection));
         let invalid_notice = document
             .projection()
             .and_then(|projection| document.format().invalid_records_notice(projection));
@@ -1162,12 +1248,18 @@ impl<F: StructuredViewFormat> StructuredView<F> {
             )
         });
         let has_detail = self.selected_location(cx).is_some();
+        let has_full_value = self.selected.is_some_and(|index| {
+            document
+                .projection()
+                .is_some_and(|projection| document.format().node_has_full_value(projection, index))
+        });
         let edit_buttons: Vec<EditButton<F::EditRequest>> = match self.current_projection(cx) {
             Some(projection) => document.format().edit_buttons(&projection, self.selected),
             None => Vec::new(),
         };
         let editable = self.structure_editable(cx);
         let mutation_error = self.mutation_error.clone();
+        let notice = self.notice.clone();
         let mode = self.mode;
         let (toggle, tip) = document.format().mode_labels(mode);
         let reveal_label = document.format().reveal_label();
@@ -1194,6 +1286,17 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                     .text_color(muted)
                     .child(format_label),
             )
+            .when_some(documents_notice, |row, documents| {
+                row.child(
+                    div()
+                        .id(scoped_id(prefix, "documents", entity))
+                        .test_support()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(documents),
+                )
+            })
             .when_some(counts, |row, counts| {
                 row.child(
                     div()
@@ -1257,10 +1360,23 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                     div()
                         .id(scoped_id(prefix, "mutation-error", entity))
                         .test_support()
+                        .aria_value(error.clone())
                         .flex_none()
                         .text_xs()
                         .text_color(warning)
                         .child(error),
+                )
+            })
+            .when_some(notice, |row, notice| {
+                row.child(
+                    div()
+                        .id(scoped_id(prefix, "notice", entity))
+                        .test_support()
+                        .aria_value(notice.clone())
+                        .flex_none()
+                        .text_xs()
+                        .text_color(cx.theme().yellow)
+                        .child(notice),
                 )
             })
             .when(editable, |row| {
@@ -1293,15 +1409,17 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                         cx.listener(|this, _, window, cx| this.reveal_selected_source(window, cx)),
                     ),
             )
-            .child(
-                Button::new(scoped_id(prefix, "full-value-button", entity))
-                    .ghost()
-                    .xsmall()
-                    .flex_none()
-                    .disabled(!has_detail)
-                    .label(full_value_label)
-                    .on_click(cx.listener(|this, _, _, cx| this.open_selected_full_value(cx))),
-            )
+            .when(F::FULL_VALUE, |row| {
+                row.child(
+                    Button::new(scoped_id(prefix, "full-value-button", entity))
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .disabled(!has_full_value)
+                        .label(full_value_label)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_selected_full_value(cx))),
+                )
+            })
             .child(
                 Button::new(scoped_id(prefix, "mode-toggle", entity))
                     .ghost()
@@ -1365,7 +1483,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                             return div().into_any_element();
                         };
                         let row = view.rows[row_index];
-                        let Some(identity) = format.node_identity(projection, row.node) else {
+                        let Some(_identity) = format.node_identity(projection, row.node) else {
                             return div().into_any_element();
                         };
                         let Some(node_row) = format.node_row(projection, row.node, cx.theme())
@@ -1375,7 +1493,7 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                         let expandable = projection.is_expandable(row.node);
                         let expanded = view.expanded.get(row.node).copied().unwrap_or(false);
                         let selected = view.selected == Some(row.node);
-                        let has_detail = identity.has_detail;
+                        let has_full_value = format.node_has_full_value(projection, row.node);
                         let index = row.node;
                         let row_id = SharedString::from(format!(
                             "{}-row-{}-{index}",
@@ -1406,8 +1524,12 @@ impl<F: StructuredViewFormat> StructuredView<F> {
                                 view.focus.focus(window, cx);
                                 if event.click_count() > 1 {
                                     view.select_node(index, cx);
-                                    if has_detail {
-                                        view.open_selected_full_value(cx);
+                                    if F::FULL_VALUE {
+                                        if has_full_value {
+                                            view.open_selected_full_value(cx);
+                                        }
+                                    } else {
+                                        view.reveal_selected_source(window, cx);
                                     }
                                 } else {
                                     view.activate_node(index, cx);

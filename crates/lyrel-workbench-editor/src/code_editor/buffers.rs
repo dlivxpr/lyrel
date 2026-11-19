@@ -17,8 +17,8 @@ const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use super::json_document::JsonShell;
 use super::toml_document::{TomlDocument, TomlMode, TomlShell, TomlView};
-use super::xml_document::{XmlDocument, XmlMode, XmlView};
-use super::yaml_document::{YamlDocument, YamlMode, YamlView};
+use super::xml_document::{XmlDocument, XmlMode, XmlShell, XmlView};
+use super::yaml_document::{YamlDocument, YamlMode, YamlShell, YamlView};
 use lyrel_document::json::projection::JsonFormat;
 use markdown::images;
 use markdown::images::ImageFormat;
@@ -998,7 +998,7 @@ impl EditorBuffers {
                     edited(view, id, cx);
                 },
             );
-            let yaml_document = cx.new(|cx| YamlDocument::new(document, cx));
+            let yaml_document = cx.new(|cx| YamlDocument::new(document, YamlShell, cx));
             let presentation = cx.new(|cx| {
                 YamlView::new(
                     yaml_document,
@@ -1066,7 +1066,7 @@ impl EditorBuffers {
                     edited(view, id, cx);
                 },
             );
-            let xml_document = cx.new(|cx| XmlDocument::new(document, cx));
+            let xml_document = cx.new(|cx| XmlDocument::new(document, XmlShell, cx));
             let presentation = cx.new(|cx| {
                 XmlView::new(
                     xml_document,
