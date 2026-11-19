@@ -1,9 +1,10 @@
 use rio_vt::config::colors::ColorRgb;
 
-// The active palette and the shared HSL→RGB conversion live in the desktop
-// foundation now (`lyrel-ui-base`), between the workbench and the terminal, so
-// the theme presets can build ANSI tables without importing the terminal.
-pub use lyrel_ui_base::palette::{ActivePalette, hsla_to_rgb};
+pub use lyrel_ui_base::palette::ActivePalette;
+
+pub fn hsla_to_rgb(color: gpui_kit::Hsla) -> ColorRgb {
+    rgb_color(lyrel_ui_base::palette::hsla_to_rgb(color))
+}
 
 const DARK_ANSI16: [(u8, u8, u8); 16] = [
     (0x2c, 0x2a, 0x26),
@@ -71,7 +72,9 @@ pub fn effective(
 ) -> [ColorRgb; 256] {
     let mut table = *base;
     if let Some(active) = active {
-        table[..16].copy_from_slice(&active.ansi16);
+        for (slot, &rgb) in table.iter_mut().zip(active.ansi16()) {
+            *slot = rgb_color(rgb);
+        }
     }
     for (index, rgb) in overrides.iter_set() {
         if let Some(slot) = table.get_mut(usize::from(index)) {
@@ -139,20 +142,17 @@ mod tests {
     fn effective_overlays_only_the_sixteen_theme_slots() {
         use lyrel_core::core::pane_colors::PaneColors;
         let base = build();
-        let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
-        ansi16[1] = ColorRgb { r: 1, g: 2, b: 3 };
-        let active = ActivePalette {
-            ansi16,
-            sel_bg: ColorRgb { r: 0, g: 0, b: 0 },
-        };
+        let mut ansi16 = [[0u8; 3]; 16];
+        ansi16[1] = [1, 2, 3];
+        let active = ActivePalette::new(ansi16, [0; 3]);
 
         let none = effective(&base, None, &PaneColors::default());
         assert_eq!(none, base, "no theme overlay keeps the base table");
 
         let overlaid = effective(&base, Some(&active), &PaneColors::default());
-        assert_eq!(overlaid[1], ansi16[1]);
+        assert_eq!(overlaid[1], rgb_color(ansi16[1]));
         for i in [0usize, 2, 8, 15] {
-            assert_eq!(overlaid[i], ansi16[i]);
+            assert_eq!(overlaid[i], rgb_color(ansi16[i]));
         }
         assert_eq!(overlaid[16], base[16], "the cube is the theme's to keep");
         assert_eq!(overlaid[255], base[255]);
@@ -162,19 +162,16 @@ mod tests {
     fn pane_overrides_win_over_the_theme_and_only_where_set() {
         use lyrel_core::core::pane_colors::{DEFAULT_BG, DEFAULT_FG, PaneColors};
         let base = build();
-        let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
-        ansi16[1] = ColorRgb { r: 1, g: 2, b: 3 };
-        let active = ActivePalette {
-            ansi16,
-            sel_bg: ColorRgb { r: 0, g: 0, b: 0 },
-        };
+        let mut ansi16 = [[0u8; 3]; 16];
+        ansi16[1] = [1, 2, 3];
+        let active = ActivePalette::new(ansi16, [0; 3]);
         let mut overrides = PaneColors::default();
         overrides.set(1, [9, 8, 7]);
         overrides.set(DEFAULT_BG, [6, 5, 4]);
 
         let table = effective(&base, Some(&active), &overrides);
         assert_eq!((table[1].r, table[1].g, table[1].b), (9, 8, 7));
-        assert_eq!(table[2], ansi16[2], "unset slots keep the theme");
+        assert_eq!(table[2], rgb_color(ansi16[2]), "unset slots keep the theme");
         assert_eq!(table[200], base[200]);
 
         let fg = ColorRgb {
@@ -193,7 +190,10 @@ mod tests {
             b: 32,
         };
         assert_eq!(query_color(1, &table, &overrides, fg, bg, caret).r, 9);
-        assert_eq!(query_color(2, &table, &overrides, fg, bg, caret), ansi16[2]);
+        assert_eq!(
+            query_color(2, &table, &overrides, fg, bg, caret),
+            rgb_color(ansi16[2])
+        );
         assert_eq!(query_color(256, &table, &overrides, fg, bg, caret), fg);
         assert_eq!(
             query_color(257, &table, &overrides, fg, bg, caret).g,

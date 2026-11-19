@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use gpui_kit::{App, Global};
-use lyrel_core::host::local;
+use lyrel_protocol::host::local::LocalHost;
 
-pub use lyrel_core::host::{Host, HostId, SharedHost};
+pub use lyrel_protocol::host::{Host, HostId, SharedHost};
 
 pub struct HostRegistry {
     hosts: HashMap<HostId, SharedHost>,
@@ -14,7 +14,7 @@ impl Global for HostRegistry {}
 impl Default for HostRegistry {
     fn default() -> Self {
         let mut hosts = HashMap::new();
-        hosts.insert(HostId::LOCAL, local::shared());
+        hosts.insert(HostId::LOCAL, LocalHost::shared());
         HostRegistry { hosts }
     }
 }
@@ -27,7 +27,7 @@ impl HostRegistry {
     pub fn lookup(cx: &App, id: HostId) -> Option<SharedHost> {
         match cx.try_global::<HostRegistry>() {
             Some(reg) => reg.hosts.get(&id).cloned(),
-            None => id.is_local().then(local::shared),
+            None => id.is_local().then(LocalHost::shared),
         }
     }
 
@@ -75,7 +75,7 @@ mod tests {
     fn remote_hosts_come_and_go_but_local_stays() {
         let mut reg = HostRegistry::default();
         let id = HostId::from_connection_key("ssh-direct:me@box:22");
-        reg.hosts.insert(id, local::new());
+        reg.hosts.insert(id, LocalHost::new());
         assert_eq!(reg.hosts.len(), 2);
 
         assert!(reg.hosts.remove(&id).is_some());

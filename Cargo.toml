@@ -139,12 +139,8 @@ uuid = { version = "1.28.0", features = ["v4", "serde"] }
 # the account scheme) stays in core, where `config.json` parsing needs it.
 keyring = "4"
 
-# Theme files. lyrel themes are authored as YAML (`~/.config/lyrel/themes/*.yaml`,
-# our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
-# plist) so the large iTerm color-scheme ecosystem drops straight in.
-# The maintained YAML parser reads desktop theme files.
+# YAML for desktop settings that remain in the window shell.
 yaml_serde.workspace = true
-plist = "1"
 
 # Clipboard-image paste (`terminal::view`). When the clipboard holds a screenshot
 # and a coding-agent TUI (Claude Code &co.) is in the pane, off macOS we stage the

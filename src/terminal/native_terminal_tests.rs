@@ -213,13 +213,13 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
         gpui_kit::component::Theme::update(cx, |theme| theme.foreground = gpui_kit::white())
     });
     cx.update(|cx| {
-        let mut ansi16: [rio_vt::config::colors::ColorRgb; 16] =
-            view.read(cx).terminal.palette[..16].try_into().unwrap();
-        ansi16[1] = rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 };
-        cx.set_global(crate::terminal::palette::ActivePalette {
-            ansi16,
-            sel_bg: rio_vt::config::colors::ColorRgb { r: 0, g: 0, b: 0 },
+        let pane = view.read(cx);
+        let mut ansi16 = std::array::from_fn(|i| {
+            let color = pane.terminal.palette[i];
+            [color.r, color.g, color.b]
         });
+        ansi16[1] = [0, 255, 0];
+        cx.set_global(crate::terminal::palette::ActivePalette::new(ansi16, [0; 3]));
     });
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);

@@ -43,8 +43,8 @@ pub fn language_mode_label(mode: &str) -> L10nKey {
     }
 }
 
-pub fn agent_result_text(result: &lyrel_core::core::cli_agent::AgentResult) -> String {
-    use lyrel_core::core::cli_agent::AgentOutcome;
+pub fn agent_result_text(result: &lyrel_protocol::core::cli_agent::AgentResult) -> String {
+    use lyrel_protocol::core::cli_agent::AgentOutcome;
     let outcome = t(match result.outcome {
         AgentOutcome::Succeeded => L10nKey::AgentOutcomeSucceeded,
         AgentOutcome::Failed => L10nKey::AgentOutcomeFailed,
@@ -82,7 +82,7 @@ macro_rules! l10n_keys {
         pub enum L10nKey { $($key),* }
 
         impl L10nKey {
-            pub(crate) const ALL: &'static [L10nKey] = &[$(L10nKey::$key),*];
+            pub const ALL: &'static [L10nKey] = &[$(L10nKey::$key),*];
         }
     };
 }
@@ -2761,7 +2761,7 @@ pub fn set_locale(mode: &str) {
     let system = (mode == "system")
         .then(system::preferred_ui_language)
         .flatten();
-    let code = lyrel_core::core::config::resolve_gui_language(mode, system.as_deref());
+    let code = lyrel_protocol::core::config::resolve_gui_language(mode, system.as_deref());
     let index = SUPPORTED_LANGUAGES
         .iter()
         .position(|lang| lang.code == code)

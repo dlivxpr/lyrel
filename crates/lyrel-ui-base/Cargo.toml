@@ -15,24 +15,21 @@ publish = false
 # it, keeping the guards out of released code.
 test-guards = ["dep:tempfile"]
 
-[dependencies]
 # Desktop-only foundation, mirroring the root package: everything below the
 # line compiles only on Windows/macOS. On Linux this crate is an empty rlib so
 # headless workspace builds are unaffected.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-lyrel-core = { path = "../lyrel-core" }
+lyrel-protocol = { path = "../lyrel-protocol" }
 gpui-kit = { workspace = true }
 anyhow.workspace = true
 log.workspace = true
 chrono = "0.4.45"
-# The shared desktop palette reads Rio's color cell type; the same pinned
-# parser the terminal grid uses, parser only.
-rio-vt = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 smol.workspace = true
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 yaml_serde.workspace = true
+plist = "1"
 parking_lot = "0.13"
 tempfile = { version = "3", optional = true }
 
@@ -46,15 +43,13 @@ windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
 # `preferredLanguages`, never the PTY locale.
 objc2-foundation = { version = "0.3", features = ["NSLocale"] }
 
-[dev-dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
 # The unit tests exercise the test guards behind plain `cfg(test)`; the
 # optional production dependency above only exists for the `test-guards`
 # feature, so the dev-dependency carries the plain `cargo test` build.
 tempfile = "3"
-# GPUI test harness for the store/off-thread unit tests, and the same
-# test-support clock/graph features those tests had in the root package.
+# GPUI test harness for the store/off-thread unit tests.
 gpui-kit = { workspace = true, features = ["test-support"] }
-lyrel-core = { path = "../lyrel-core", features = ["test-support"] }
 
 [lints]
 workspace = true

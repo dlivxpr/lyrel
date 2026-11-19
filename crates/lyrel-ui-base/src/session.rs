@@ -1,9 +1,9 @@
-pub use lyrel_core::core::session::{
+pub use lyrel_protocol::core::session::{
     RemoteRef, RemoteTarget, Session, SessionAxis, SessionPane, SessionTab, WindowView,
     WindowViews, WorkspaceId,
 };
-pub use lyrel_core::core::window_state::WindowState;
-pub use lyrel_core::host::HostId;
+pub use lyrel_protocol::core::window_state::WindowState;
+pub use lyrel_protocol::host::HostId;
 
 /// Shell-installed reads the store needs but cannot take with it: the machine
 /// mirror that computes a workspace's display hint lives above this crate, so
@@ -110,7 +110,9 @@ impl WorkspaceStore {
     }
 
     pub fn record_geometry(cx: &mut gpui_kit::App, id: WorkspaceId, window: WindowState) {
-        let hint = Self::all(cx).get(id).and_then(|view| display_hint(cx, view));
+        let hint = Self::all(cx)
+            .get(id)
+            .and_then(|view| display_hint(cx, view));
         let Some(store) = Self::try_store(cx) else {
             return;
         };
@@ -164,7 +166,9 @@ impl WorkspaceStore {
     }
 
     pub fn close_window(cx: &mut gpui_kit::App, id: WorkspaceId) {
-        let hint = Self::all(cx).get(id).and_then(|view| display_hint(cx, view));
+        let hint = Self::all(cx)
+            .get(id)
+            .and_then(|view| display_hint(cx, view));
         let Some(store) = Self::try_store(cx) else {
             return;
         };
@@ -194,7 +198,7 @@ impl WorkspaceStore {
     pub fn record_agent_seen(
         cx: &mut gpui_kit::App,
         id: WorkspaceId,
-        agent: lyrel_core::core::cli_agent::CLIAgent,
+        agent: lyrel_protocol::core::cli_agent::CLIAgent,
     ) {
         let Some(store) = Self::try_store(cx) else {
             return;
@@ -220,7 +224,7 @@ impl WorkspaceStore {
         let Some(host) = Self::remote_ref(cx, id) else {
             return true;
         };
-        crate::desktop_lookups::HostLinks::get(cx, host.host_id()).is_some()
+        crate::desktop_lookups::has_remote_home(cx, host.host_id())
     }
 
     pub fn claim_remote(cx: &mut gpui_kit::App, mut host: RemoteRef) -> WorkspaceId {
@@ -379,7 +383,7 @@ mod tests {
     #[gpui_kit::test]
     fn restore_one_keeps_one_window_and_reports_the_rest(cx: &mut gpui_kit::TestAppContext) {
         // `restore_one` saves, and a test has no business writing the real views.
-        let _ = lyrel_core::core::config::set_config_dir(
+        let _ = lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
         );
         cx.update(|cx| {
@@ -413,7 +417,7 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         // `claim` saves, and a test has no business writing the real views.
-        let _ = lyrel_core::core::config::set_config_dir(
+        let _ = lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
         );
         cx.update(|cx| {
@@ -446,12 +450,12 @@ mod tests {
         // #485: the snapshot is written at creation, refreshed on every
         // re-open while the profile still exists, and — once the profile is
         // gone — kept as the last name the entry has.
-        let _ = lyrel_core::core::config::set_config_dir(
+        let _ = lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
         );
         cx.update(|cx| {
             let profile_id = uuid::Uuid::new_v4();
-            let mut profile = lyrel_core::core::ssh_profile::SshProfile::new("lager");
+            let mut profile = lyrel_protocol::core::ssh_profile::SshProfile::new("lager");
             profile.id = profile_id;
             profile.user = "qhw".into();
             profile.host = "222.29.101.16".into();
@@ -473,8 +477,7 @@ mod tests {
             assert_eq!(via.endpoint(), "qhw@222.29.101.16");
 
             // A rename lands on the next open, without piling up entries.
-            cx.global_mut::<crate::config::Config>().ssh_profiles[0].name =
-                "lager-renamed".into();
+            cx.global_mut::<crate::config::Config>().ssh_profiles[0].name = "lager-renamed".into();
             let again =
                 WorkspaceStore::claim_remote(cx, RemoteRef::new(target.clone(), machine_ws));
             assert_eq!(again, entry);
@@ -524,7 +527,7 @@ mod tests {
     #[gpui_kit::test]
     fn connect_time_sync_mirrors_the_machines_listing(cx: &mut gpui_kit::TestAppContext) {
         // `sync_remote` saves; a test has no business writing the real views.
-        let _ = lyrel_core::core::config::set_config_dir(
+        let _ = lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
         );
         cx.update(|cx| {

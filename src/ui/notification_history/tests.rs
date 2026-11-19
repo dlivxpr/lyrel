@@ -1,7 +1,10 @@
 use super::*;
+use crate::core::session::WorkspaceId;
 use crate::ui::app::test_window::{harness, harness_with_tabs};
+use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use lyrel_core::core::pane_sidecar::PaneOwner;
 
 fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();

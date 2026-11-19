@@ -183,7 +183,7 @@ actions!(
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
 #[action(namespace = lyrel, no_json)]
 pub struct LaunchAgent {
-    pub agent: lyrel_core::core::cli_agent::CLIAgent,
+    pub agent: lyrel_protocol::core::cli_agent::CLIAgent,
 }
 
 // The terminal, Markdown search and the PDF viewer share these actions.

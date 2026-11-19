@@ -93,7 +93,7 @@ pub(super) fn dim_fg(fg: Hsla, under: ColorRgb, legible: bool) -> Hsla {
 
 fn active_selection_bg(cx: &gpui_kit::App) -> ColorRgb {
     match cx.try_global::<crate::terminal::palette::ActivePalette>() {
-        Some(a) => a.sel_bg,
+        Some(a) => crate::terminal::palette::rgb_color(a.selection_bg()),
         None => ColorRgb {
             r: 0x4a,
             g: 0x43,
@@ -416,8 +416,11 @@ mod tests {
         colors.default_bg = to_hsla(bg);
         colors.fg_rgb = fg;
         colors.bg_rgb = bg;
-        let mut palette = crate::terminal::palette::build();
-        palette[..16].copy_from_slice(&t.active_palette(true).ansi16);
+        let palette = crate::terminal::palette::effective(
+            &crate::terminal::palette::build(),
+            Some(&t.active_palette(true)),
+            &Default::default(),
+        );
         (colors, palette)
     }
 

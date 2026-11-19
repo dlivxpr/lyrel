@@ -1512,8 +1512,8 @@ mod tests {
     fn profile_match_ink_clears_the_real_list_backgrounds(cx: &mut TestAppContext) {
         let (_app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
         fn packed(color: Hsla) -> u32 {
-            let rgb = crate::terminal::palette::hsla_to_rgb(color);
-            (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32
+            let [r, g, b] = lyrel_ui_base::palette::hsla_to_rgb(color);
+            (r as u32) << 16 | (g as u32) << 8 | b as u32
         }
         let warm = presets::Theme {
             id: "search-highlight-warm".into(),

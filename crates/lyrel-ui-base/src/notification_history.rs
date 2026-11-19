@@ -12,10 +12,8 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use gpui_kit::component::notification::{Notification as Toast, NotificationType};
-use gpui_kit::{
-    App, AppContext as _, ClickEvent, Context, ElementId, Entity, Global, SharedString, Window,
-};
-use lyrel_core::core::pane_sidecar::{PaneOwner, ScopedPane};
+use gpui_kit::{App, AppContext as _, ClickEvent, ElementId, Entity, Global, SharedString, Window};
+use lyrel_protocol::core::pane_sidecar::{PaneOwner, ScopedPane};
 use serde::{Deserialize, Serialize};
 
 use crate::session::WorkspaceId;
@@ -46,7 +44,7 @@ pub struct Source {
     pub workspace: WorkspaceId,
     pub machine_workspace: WorkspaceId,
     pub host: u64,
-    pub tab: Option<lyrel_core::core::machine::TabId>,
+    pub tab: Option<lyrel_protocol::core::machine::TabId>,
     pub pane: Option<u64>,
     #[serde(default)]
     pub pane_owner: Option<PaneOwner>,
@@ -217,19 +215,14 @@ impl From<SharedString> for Notification {
 /// registry, the machine mirrors and the app entity for the workspace/pane
 /// identity stays above this crate, behind this one typed callback.
 pub struct NotificationSourceResolver {
-    resolve: Box<
-        dyn Fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source>,
-    >,
+    resolve: fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source>,
 }
 
 impl NotificationSourceResolver {
     pub fn new(
-        resolve: impl Fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source>
-        + 'static,
+        resolve: fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source>,
     ) -> Self {
-        Self {
-            resolve: Box::new(resolve),
-        }
+        Self { resolve }
     }
 }
 
@@ -273,10 +266,13 @@ impl NotificationWindowExt for Window {
         // that lease is returned; persist it as an update, never an append.
         if needs_source {
             self.defer(cx, move |window, cx| {
-                let Some(resolver) = cx.try_global::<NotificationSourceResolver>() else {
+                let Some(resolve) = cx
+                    .try_global::<NotificationSourceResolver>()
+                    .map(|r| r.resolve)
+                else {
                     return;
                 };
-                let Some(source) = (resolver.resolve)(origin_pane, window, cx) else {
+                let Some(source) = resolve(origin_pane, window, cx) else {
                     return;
                 };
                 history(cx).clone().update(cx, |inbox, cx| {
@@ -302,8 +298,7 @@ pub fn ensure(cx: &mut App) {
     }
     #[cfg(any(test, feature = "test-guards"))]
     crate::config::pin_test_config_dir();
-    let dir =
-        lyrel_core::core::config::config_dir_path().unwrap_or_else(std::env::temp_dir);
+    let dir = lyrel_protocol::core::config::config_dir_path().unwrap_or_else(std::env::temp_dir);
     #[cfg(not(any(test, feature = "test-guards")))]
     let path = dir.join("notifications.json");
     #[cfg(any(test, feature = "test-guards"))]
@@ -447,6 +442,11 @@ impl Inbox {
     pub fn records(&self) -> impl DoubleEndedIterator<Item = &Record> + ExactSizeIterator {
         self.snapshot.records.iter()
     }
+
+    pub fn record_from_newest(&self, index: usize) -> Option<&Record> {
+        self.records().nth_back(index)
+    }
+
     pub fn unread_count(&self) -> usize {
         self.records().filter(|record| record.is_unread()).count()
     }
@@ -513,5 +513,5 @@ impl Drop for Inbox {
 
 fn save(path: &std::path::Path, snapshot: &Snapshot) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(snapshot).map_err(std::io::Error::other)?;
-    lyrel_core::core::config::write_atomic_private(path, &bytes)
+    lyrel_protocol::core::config::write_atomic_private(path, &bytes)
 }

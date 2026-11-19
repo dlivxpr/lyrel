@@ -80,6 +80,13 @@ src/ui/settings/ssh/credentials.rs|std::fs::read
 # a passphrase box for one — the same client-side key, never a workspace path.
 src/ui/settings/ssh/credentials.rs|std::fs::metadata
 
+# Desktop SSH client config starts at the local ~/.ssh/config; Include paths
+# resolve relative to those client files, never to a workspace or remote home.
+crates/lyrel-ui-base/src/ssh_config.rs|pattern.is_absolute()
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::read_dir(parent)
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::metadata(&path)
+crates/lyrel-ui-base/src/ssh_config.rs|std::fs::read_to_string(&path)
+
 # 统计设置只读取 config_path("statistics-settings.json")，不消费工作区路径。
 src/ui/settings/statistics/storage.rs|std::fs::read
 src/ui/settings/statistics/storage.rs|std::fs::metadata

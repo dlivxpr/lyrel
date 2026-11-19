@@ -4,7 +4,7 @@
 
 use gpui_kit::{App, Entity, Window};
 
-use crate::core::session::{WorkspaceId, WorkspaceStore};
+use crate::core::session::WorkspaceStore;
 use crate::ui::app::LyrelApp;
 use crate::ui::host_registry::HostId;
 use crate::ui::pane::PaneSlot;
@@ -16,11 +16,11 @@ mod tests;
 
 // The bounded inbox itself is foundation: re-exported for every consumer that
 // pushes toasts or reads the bell.
+#[cfg(test)]
+pub(crate) use lyrel_ui_base::notification_history::install;
 pub(crate) use lyrel_ui_base::notification_history::{
     Inbox, Notification, NotificationWindowExt, Record, Severity, Source, ensure, history,
 };
-#[cfg(test)]
-pub(crate) use lyrel_ui_base::notification_history::install;
 pub use lyrel_ui_base::notification_history::{
     NotificationSourceResolver, install_notification_source_resolver,
 };
@@ -52,10 +52,11 @@ pub(crate) fn install_source_resolver(cx: &mut App) {
             if origin_pane.is_none() && root_app(window, cx).is_none() {
                 Some(app.read(cx).notification_workspace_source(cx))
             } else {
-                Some(
-                    app.read(cx)
-                        .notification_source_for_pane(origin_pane.map(|(_, pane)| pane), window, cx),
-                )
+                Some(app.read(cx).notification_source_for_pane(
+                    origin_pane.map(|(_, pane)| pane),
+                    window,
+                    cx,
+                ))
             }
         }),
     );

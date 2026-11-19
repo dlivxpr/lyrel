@@ -316,10 +316,10 @@ impl Render for InboxView {
                                 count,
                                 move |range, window, cx| {
                                     range
-                                        .map(|index| {
+                                        .filter_map(|index| {
                                             let record =
-                                                &inbox.read(cx).snapshot.records[count - index - 1];
-                                            render_record(record, view.clone(), window, cx)
+                                                inbox.read(cx).record_from_newest(index)?;
+                                            Some(render_record(record, view.clone(), window, cx))
                                         })
                                         .collect()
                                 },

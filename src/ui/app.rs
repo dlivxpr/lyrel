@@ -5280,6 +5280,10 @@ pub(crate) mod test_window {
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             cx.set_global(Config::default());
+            lyrel_ui_base::host_registry::HostRegistry::insert(
+                cx,
+                lyrel_core::host::local::shared(),
+            );
             crate::ui::keymap::init(cx);
             crate::ui::windows::WindowRegistry::init(cx);
             crate::ui::notification_history::install_source_resolver(cx);
@@ -5584,7 +5588,7 @@ mod restart_server_gpui_tests {
     /// because the crash is in the part that runs either way, not in the
     /// restart itself.
     #[gpui_kit::test]
-    async fn settling_after_a_restart_does_not_lease_the_window_twice(cx: &mut …
+    async fn settling_after_a_restart_does_not_lease_the_window_twice(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
         cx.executor().allow_parking();
         cx.update(|cx| {

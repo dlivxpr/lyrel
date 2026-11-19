@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use lyrel_core::core::ssh_profile::{ForwardKind, ForwardRule, HostPort, SshProfile as ManagedProfile};
+use lyrel_protocol::core::ssh_profile::{
+    ForwardKind, ForwardRule, HostPort, SshProfile as ManagedProfile,
+};
 
 const MAX_INCLUDE_DEPTH: usize = 8;
 const MAX_CONFIG_FILES: usize = 256;
@@ -494,7 +496,7 @@ fn jump_alias(raw: &str) -> Option<String> {
     if first.is_empty() {
         return None;
     }
-    lyrel_core::core::ssh_profile::parse_quick_connect(first).map(|q| q.host)
+    lyrel_protocol::core::ssh_profile::parse_quick_connect(first).map(|q| q.host)
 }
 
 struct HostBlock {
@@ -1039,8 +1041,8 @@ mod tests {
 
     #[test]
     fn merge_upserts_by_name_preserving_user_fields_and_is_idempotent() {
-        use lyrel_core::core::keychain::CredentialRef;
-        use lyrel_core::core::ssh_profile::AuthMode;
+        use lyrel_protocol::core::keychain::CredentialRef;
+        use lyrel_protocol::core::ssh_profile::AuthMode;
 
         let root = temp_root("import-merge");
         let ssh = root.join(".ssh");

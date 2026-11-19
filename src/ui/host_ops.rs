@@ -3,5 +3,5 @@
 
 pub use lyrel_ui_base::host_ops::{
     ByHost, Entry, Host, HostId, HostOps, InFlight, MTime, Meta, Output, SearchHit, SharedHost,
-    WatchSub, explain_io, failure, off_thread,
+    WatchSub, failure, off_thread,
 };

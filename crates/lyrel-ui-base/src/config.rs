@@ -1,4 +1,4 @@
-//! The GPUI `Config` global: the GUI wrapper around `lyrel-core`'s pure
+//! The GPUI `Config` global: the GUI wrapper around `lyrel-protocol`'s pure
 //! configuration value, plus the scratch-directory guards that keep GUI tests
 //! off the real user config.
 //!
@@ -6,10 +6,10 @@
 //! name, never by glob, so `Config` below cannot shadow (or be shadowed by)
 //! another `Config` arriving through a wildcard.
 
-use lyrel_core::core::config::FontFeatures;
+use lyrel_protocol::core::config::FontFeatures;
 
-pub use lyrel_core::core::config::Config as CoreConfig;
-pub use lyrel_core::core::config::LoadOutcome;
+pub use lyrel_protocol::core::config::Config as CoreConfig;
+pub use lyrel_protocol::core::config::LoadOutcome;
 
 #[derive(Debug, Clone, Default)]
 pub struct Config(pub CoreConfig);
@@ -22,33 +22,32 @@ impl Config {
     }
 
     pub fn load_with_outcome() -> (Self, LoadOutcome) {
-    #[cfg(any(test, feature = "test-guards"))]
-    {
-        assert_scratch_config_dir("Config::load_with_outcome");
-        let _guard = Self::lock_config_file();
-        let (core, outcome) = CoreConfig::load_with_outcome();
-        return (Self(core), outcome);
+        #[cfg(any(test, feature = "test-guards"))]
+        {
+            assert_scratch_config_dir("Config::load_with_outcome");
+            let _guard = Self::lock_config_file();
+            let (core, outcome) = CoreConfig::load_with_outcome();
+            return (Self(core), outcome);
+        }
+        #[cfg(not(any(test, feature = "test-guards")))]
+        {
+            let (core, outcome) = CoreConfig::load_with_outcome();
+            (Self(core), outcome)
+        }
     }
-    #[cfg(not(any(test, feature = "test-guards")))]
-    {
-        let (core, outcome) = CoreConfig::load_with_outcome();
-        (Self(core), outcome)
-    }
-    }
-}
-
-/// GUI tests share the process's scratch config directory; any of them can
-/// save between a test's own write and the read that verifies it. Hold the
-/// returned guard across a whole save→load→assert sequence. It is a
-/// reentrant mutex because `try_save`/`load_with_outcome` take the same
-/// lock while the guard is held on this thread.
-#[cfg(any(test, feature = "test-guards"))]
-pub fn lock_config_file() -> parking_lot::ReentrantMutexGuard<'static, ()> {
-    WRITE_LOCK.lock()
 }
 
 #[cfg(any(test, feature = "test-guards"))]
 impl Config {
+    /// GUI tests share the process's scratch config directory; any of them can
+    /// save between a test's own write and the read that verifies it. Hold the
+    /// returned guard across a whole save→load→assert sequence. It is a
+    /// reentrant mutex because `try_save`/`load_with_outcome` take the same
+    /// lock while the guard is held on this thread.
+    pub fn lock_config_file() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+        WRITE_LOCK.lock()
+    }
+
     pub fn save(&self) {
         if let Err(error) = self.try_save() {
             log::warn!("failed to save config: {error}");
@@ -57,7 +56,7 @@ impl Config {
 
     pub fn try_save(&self) -> std::io::Result<()> {
         assert_scratch_config_dir("Config::try_save");
-        let _guard = WRITE_LOCK.lock();
+        let _guard = Self::lock_config_file();
         self.0.try_save()
     }
 }
@@ -72,16 +71,16 @@ static WRITE_LOCK: std::sync::LazyLock<parking_lot::ReentrantMutex<()>> =
 
 #[cfg(any(test, feature = "test-guards"))]
 fn is_real_user_config_dir(dir: Option<&std::path::Path>) -> bool {
-    dir.is_some() && dir == lyrel_core::core::config::default_config_dir().as_deref()
+    dir.is_some() && dir == lyrel_protocol::core::config::default_config_dir().as_deref()
 }
 
 #[cfg(any(test, feature = "test-guards"))]
 fn assert_scratch_config_dir(what: &str) {
     assert!(
-        !is_real_user_config_dir(lyrel_core::core::config::config_dir_path().as_deref()),
+        !is_real_user_config_dir(lyrel_protocol::core::config::config_dir_path().as_deref()),
         "{what} in a test would touch the real user config dir ({}). \
          Call `pin_test_config_dir()` at the top of the test/harness first.",
-        lyrel_core::core::config::config_dir_path()
+        lyrel_protocol::core::config::config_dir_path()
             .unwrap_or_default()
             .display(),
     );
@@ -97,7 +96,7 @@ pub fn pin_test_config_dir() {
             .prefix("lyrel-covtest-")
             .tempdir()
             .expect("create isolated GUI test config directory");
-        lyrel_core::core::config::set_config_dir(dir.keep());
+        lyrel_protocol::core::config::set_config_dir(dir.keep());
     });
 }
 
@@ -132,7 +131,7 @@ mod tests {
 
     #[test]
     fn the_real_config_dir_is_the_only_one_the_guard_rejects() {
-        if let Some(real) = lyrel_core::core::config::default_config_dir() {
+        if let Some(real) = lyrel_protocol::core::config::default_config_dir() {
             assert!(is_real_user_config_dir(Some(&real)));
             assert!(!is_real_user_config_dir(Some(&real.join("scratch"))));
         }
@@ -146,7 +145,7 @@ mod tests {
     fn pinning_lands_outside_the_real_config_dir() {
         pin_test_config_dir();
         assert!(!is_real_user_config_dir(
-            lyrel_core::core::config::config_dir_path().as_deref()
+            lyrel_protocol::core::config::config_dir_path().as_deref()
         ));
     }
 

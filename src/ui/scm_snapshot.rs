@@ -14,8 +14,8 @@ use lyrel_ui_base::scm_snapshot::ScmSnapshotSource;
 use crate::ui::host_ops::HostId;
 
 pub use lyrel_ui_base::scm_snapshot::{
-    GIT_RETRY_GAP, OPPORTUNISTIC_GIT_GAP, badge_status, epoch, index_of, repo_root_for,
-    retry_due, root_recheck_due,
+    GIT_RETRY_GAP, OPPORTUNISTIC_GIT_GAP, badge_status, epoch, index_of, repo_root_for, retry_due,
+    root_recheck_due,
 };
 
 /// Install the snapshot source the seam forwards to. Startup calls this once;

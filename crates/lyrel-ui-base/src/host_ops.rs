@@ -8,7 +8,7 @@ use gpui_kit::{App, Context, Window};
 use crate::i18n::L10nKey;
 use crate::notification_history::Notification;
 
-pub use lyrel_core::host::{
+pub use lyrel_protocol::host::{
     Entry, Host, HostId, MTime, Meta, Output, SearchHit, SharedHost, WatchSub,
 };
 
@@ -206,7 +206,7 @@ impl HostOps {
         F: FnOnce(&dyn Host) -> T + Send + 'static,
         L: FnOnce(&mut E, T, &mut Context<E>) + 'static,
     {
-        lyrel_core::host::register_ui_thread();
+        lyrel_protocol::host::register_ui_thread();
         cx.spawn(async move |this, cx| {
             let Some(out) = off_thread(move || f(&*host)).await else {
                 return;
@@ -223,7 +223,7 @@ impl HostOps {
         F: FnOnce(&dyn Host) -> T + Send + 'static,
         L: FnOnce(&mut App, T) + 'static,
     {
-        lyrel_core::host::register_ui_thread();
+        lyrel_protocol::host::register_ui_thread();
         cx.spawn(async move |_this, cx| {
             let Some(out) = off_thread(move || f(&*host)).await else {
                 return;
@@ -240,7 +240,7 @@ impl HostOps {
         F: FnOnce(&dyn Host) -> T + Send + 'static,
         L: FnOnce(&mut E, T, &mut Window, &mut Context<E>) + 'static,
     {
-        lyrel_core::host::register_ui_thread();
+        lyrel_protocol::host::register_ui_thread();
         cx.spawn_in(window, async move |this, cx| {
             let Some(out) = off_thread(move || f(&*host)).await else {
                 return;
@@ -354,7 +354,6 @@ impl<K: Eq + Hash + Clone> InFlight<K> {
         self.in_flight.iter()
     }
 
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.in_flight.len()
     }
@@ -540,7 +539,7 @@ mod gpui_tests {
         let _: () = pane.update(cx, |_pane: &mut Pane, cx: &mut Context<Pane>| {
             let d = Arc::clone(&detached);
             HostOps::run_detached(
-                lyrel_core::host::local::LocalHost::new(),
+                lyrel_protocol::host::local::LocalHost::new(),
                 cx,
                 |_h: &dyn Host| 7usize,
                 move |_app: &mut App, n: usize| {
@@ -549,7 +548,7 @@ mod gpui_tests {
             );
             let v = Arc::clone(&view_scoped);
             HostOps::run(
-                lyrel_core::host::local::LocalHost::new(),
+                lyrel_protocol::host::local::LocalHost::new(),
                 cx,
                 |_h: &dyn Host| 7usize,
                 move |_pane: &mut Pane, n: usize, _cx: &mut Context<Pane>| {

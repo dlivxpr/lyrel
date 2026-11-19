@@ -4,7 +4,7 @@
 //!
 //! Three kinds of things live here, all values or `Global` snapshots:
 //!
-//! - **Host facts** ([`HostLinks`], [`home_for_host`], the host-label listing):
+//! - **Host facts** ([`home_for_host`], the host-label listing):
 //!   what the control links reported and what the configured hosts call
 //!   themselves. The label listing is pure config/WSL reading — no
 //!   connection logic.
@@ -19,81 +19,43 @@
 //!   this module only forwards the call.
 //!
 //! Nothing here may hold a pane, a terminal entity, a tray action or any
-//! shell controller: only `lyrel-core` values and `gpui_kit` globals.
+//! shell controller: only protocol values and `gpui_kit` globals.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{App, AppContext as _, BorrowAppContext as _, Global};
 
 use crate::config::Config;
-use crate::session::{RemoteRef, RemoteTarget, WorkspaceId};
 use crate::i18n::{L10nKey, t};
 use crate::route::PaneRoute;
-use lyrel_core::host::remote::RemoteHost;
-use lyrel_core::host::{Host as _, HostId};
+use crate::session::{RemoteRef, RemoteTarget, WorkspaceId};
+use lyrel_protocol::host::HostId;
 
-/// A live control link to a remote machine, and the home that machine
-/// reported when the link came up.
-///
-/// The connection logic — establishing, dropping and supervising links —
-/// stays in `crate::ui::remote_connect`; this table is only what those
-/// transitions publish. Read through `try_global` (never `default_global`)
-/// on render paths: an absent table and an empty one are the same answer,
-/// and installing a global as a side effect of reading one is not.
 #[derive(Default)]
-pub struct HostLinks {
-    hosts: HashMap<HostId, Arc<RemoteHost>>,
-    homes: HashMap<HostId, PathBuf>,
+struct RemoteHomes(HashMap<HostId, PathBuf>);
+
+impl Global for RemoteHomes {}
+
+/// Publish the home from a remote control handshake, or clear it on disconnect.
+pub fn publish_remote_home(cx: &mut App, host: HostId, home: Option<PathBuf>) {
+    let homes = &mut cx.default_global::<RemoteHomes>().0;
+    match home {
+        Some(home) => {
+            homes.insert(host, home);
+        }
+        None => {
+            homes.remove(&host);
+        }
+    }
 }
 
-impl Global for HostLinks {}
-
-impl HostLinks {
-    pub fn get(cx: &mut App, id: HostId) -> Option<Arc<RemoteHost>> {
-        cx.default_global::<HostLinks>().hosts.get(&id).cloned()
-    }
-
-    /// The home directory the host reported when the link came up — the only
-    /// thing that can say what a `~` in one of its paths means (#580). Read
-    /// through `try_global` rather than `default_global` so a caller holding
-    /// nothing but `&App` (every renderer that draws a path) can ask; an
-    /// absent table and an empty one are the same answer here.
-    pub fn home(cx: &App, id: HostId) -> Option<PathBuf> {
-        cx.try_global::<HostLinks>()?.homes.get(&id).cloned()
-    }
-
-    /// Whether the daemon behind this host's link advertised `feature` on its
-    /// control hello — the per-host sibling of `local_daemon_supports`. `false`
-    /// while no link is up: a caller that cannot see the hello must assume
-    /// nothing of the far end, and every feature is gated so that "assume
-    /// nothing" degrades to the old behavior rather than breaking.
-    pub fn peer_supports(cx: &App, id: HostId, feature: &str) -> bool {
-        cx.try_global::<HostLinks>()
-            .and_then(|table| table.hosts.get(&id))
-            .is_some_and(|host| host.peer().has_feature(feature))
-    }
-
-    pub fn insert(cx: &mut App, host: Arc<RemoteHost>, home: PathBuf) {
-        let id = host.id();
-        crate::host_registry::HostRegistry::insert(cx, Arc::clone(&host).into_shared());
-        let table = cx.default_global::<HostLinks>();
-        table.hosts.insert(id, host);
-        table.homes.insert(id, home);
-    }
-
-    pub fn remove(cx: &mut App, id: HostId) {
-        let table = cx.default_global::<HostLinks>();
-        table.hosts.remove(&id);
-        table.homes.remove(&id);
-        crate::host_registry::HostRegistry::remove(cx, id);
-    }
-
-    pub fn len(cx: &mut App) -> usize {
-        cx.default_global::<HostLinks>().hosts.len()
-    }
+/// A completed control handshake has published this remote link's facts.
+pub(crate) fn has_remote_home(cx: &App, host: HostId) -> bool {
+    cx.try_global::<RemoteHomes>()
+        .is_some_and(|homes| homes.0.contains_key(&host))
 }
 
 /// The directory `~` stands for on the machine lyrel is running on, or `None`
@@ -112,14 +74,12 @@ pub fn local_home() -> Option<PathBuf> {
 /// The directory `~` stands for in a path that lives on `host`.
 ///
 /// A remote host reports its home during the control handshake and it is
-/// kept per host in [`HostLinks`], so this costs a map lookup and never a
-/// round trip. `None` means nothing here can say — no link to that host yet —
-/// and a path measured against nothing is shown whole, which is the honest
-/// answer and the one #568 settled on for the same question about file links.
+/// published per host by the shell, so this costs a map lookup and never a
+/// round trip. Without a link, return `None` so paths are shown whole (#568).
 pub fn home_for_host(cx: &App, host: HostId) -> Option<PathBuf> {
     match host.is_local() {
         true => local_home(),
-        false => HostLinks::home(cx, host),
+        false => cx.try_global::<RemoteHomes>()?.0.get(&host).cloned(),
     }
 }
 
@@ -233,7 +193,7 @@ fn live_label(cx: &App, target: &RemoteTarget) -> Option<String> {
 
 /// What a profile calls itself in a host listing: its name, or the address
 /// when it was saved without one.
-fn profile_label(profile: &lyrel_core::core::ssh_profile::SshProfile) -> String {
+fn profile_label(profile: &lyrel_protocol::core::ssh_profile::SshProfile) -> String {
     if profile.name.trim().is_empty() {
         profile.host.clone()
     } else {
@@ -326,7 +286,7 @@ pub fn sweep_wsl(cx: &mut App) {
     cx.update_global::<WslDistros, _>(|state, _| state.in_flight = true);
     cx.spawn(async move |cx| {
         let probed = cx
-            .background_spawn(async { lyrel_core::core::shells::wsl_distros_probed() })
+            .background_spawn(async { lyrel_protocol::core::shells::wsl_distros_probed() })
             .await;
         let _ = cx.update(|cx| {
             cx.update_global::<WslDistros, _>(|state, _| adopt_probe(state, probed));
@@ -410,7 +370,7 @@ pub fn publish_host_mirror(
 
 fn mirror_of<'a>(
     cx: &'a App,
-    entry: &lyrel_core::core::session::WindowView,
+    entry: &lyrel_protocol::core::session::WindowView,
 ) -> Option<&'a WorkspaceMirror> {
     let views = cx.try_global::<MirrorViews>()?;
     let machine_ws = entry.host.as_ref().map(|r| r.workspace).unwrap_or(entry.id);
@@ -425,7 +385,7 @@ fn mirror_of<'a>(
 /// liveness probe asks the daemon about. `None` when the machine has never
 /// been pulled; a pulled machine that never heard of the workspace answers
 /// `Some(Vec::new())`, the same two answers the mirror itself gave.
-pub fn pane_ids(cx: &App, entry: &lyrel_core::core::session::WindowView) -> Option<Vec<u64>> {
+pub fn pane_ids(cx: &App, entry: &lyrel_protocol::core::session::WindowView) -> Option<Vec<u64>> {
     let host = entry.host_id();
     match mirror_of(cx, entry) {
         Some(mirror) => Some(mirror.pane_ids.clone()),
@@ -443,7 +403,7 @@ pub fn pane_ids(cx: &App, entry: &lyrel_core::core::session::WindowView) -> Opti
 /// row shows. Falls back to the store entry's own label when the mirror has
 /// nothing to say, exactly as the mirror's display-name read always did.
 pub fn display_name_for(cx: &App, client_ws: WorkspaceId) -> Option<String> {
-    let entry = lyrel_core::core::session::WorkspaceStore::all(cx).get(client_ws)?;
+    let entry = crate::session::WorkspaceStore::all(cx).get(client_ws)?;
     match mirror_of(cx, entry) {
         Some(mirror) => Some(
             mirror

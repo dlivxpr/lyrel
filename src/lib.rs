@@ -846,6 +846,7 @@ pub fn run() {
         // The load above is reused rather than re-read: reading the same
         // file twice at launch would report the same failure twice.
         cx.set_global(config);
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, lyrel_core::host::local::shared());
         crate::ui::motion::apply(cx);
         crate::ui::theme::refresh_system_appearance(cx);
         crate::core::session::WorkspaceStore::init(cx);

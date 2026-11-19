@@ -3,10 +3,8 @@
 //! are the local modules and nothing here shadows them.
 
 pub use lyrel_core::core::{
-    agent_history, cli_agent, clipboard, codename, crash, git, gitignore, glyph_protocol,
-    graphics_state, group_key, kitty_graphics, logfile, machine, osc, pane_colors, pane_sidecar,
-    paste, path_spelling, proc, program_status, shell_quote, shells, tab_view, term_modes,
-    terminal_resize, threads, window_state, worktree, xtgettcap,
+    agent_history, agent_hooks, cli_agent, crash, git, group_key, logfile, machine, osc, proc,
+    shell_quote, shells, ssh_profile, threads, worktree,
 };
 
 pub mod actions;

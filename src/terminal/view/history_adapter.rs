@@ -183,7 +183,7 @@ impl TerminalView {
         if !host.is_connected() {
             return Vec::new();
         }
-        let Some(home) = crate::ui::desktop_lookups::HostLinks::home(cx, self.host_id) else {
+        let Some(home) = lyrel_ui_base::desktop_lookups::home_for_host(cx, self.host_id) else {
             return Vec::new();
         };
         crate::terminal::history::shell_history_names()

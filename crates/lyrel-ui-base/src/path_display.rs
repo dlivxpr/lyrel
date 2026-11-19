@@ -48,7 +48,7 @@ fn normalized(s: &str) -> String {
 /// entries — and `reveal_path` swallows that failure (it only logs), so
 /// handing it native separators is what makes "open folder" actually open.
 ///
-/// The rule itself lives in [`lyrel_core::core::path_spelling`], next to the
+/// The rule itself lives in [`lyrel_protocol::core::path_spelling`], next to the
 /// prefix rule the SCM caches need, because a path spelled two ways is one
 /// problem and it must not have two answers in two crates. This is the
 /// separators half on its own: a `\\?\` path is already something
@@ -60,7 +60,7 @@ fn normalized(s: &str) -> String {
 /// path on the clipboard that names nothing on either machine. Every caller
 /// sits behind a locality check for that reason.
 pub fn native_separators(path: &Path) -> Cow<'_, Path> {
-    lyrel_core::core::path_spelling::native_separators(path)
+    lyrel_protocol::core::path_spelling::native_separators(path)
 }
 
 /// A path as a person knows it, for reading only: macOS keeps `/tmp`, `/var`

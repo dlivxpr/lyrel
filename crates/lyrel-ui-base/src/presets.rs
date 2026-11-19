@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use gpui_kit::{App, Global, Hsla};
-use rio_vt::config::colors::ColorRgb;
 use serde::Deserialize;
 
 use crate::palette::ActivePalette;
@@ -477,7 +476,7 @@ impl Theme {
     pub fn active_palette(&self, legible: bool) -> ActivePalette {
         let bg = self.background_color();
         let fg = legible_foreground(bg, self.foreground);
-        let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
+        let mut ansi16 = [[0; 3]; 16];
         for (i, (r, g, b)) in self.ansi16.iter().enumerate() {
             let ink = (*r as u32) << 16 | (*g as u32) << 8 | *b as u32;
             // The bright half of the palette (SGR 90-97) is the shell's
@@ -496,10 +495,7 @@ impl Theme {
                 ink
             });
         }
-        ActivePalette {
-            ansi16,
-            sel_bg: rgb_bytes(mix(bg, fg, 0.24)),
-        }
+        ActivePalette::new(ansi16, rgb_bytes(mix(bg, fg, 0.24)))
     }
 
     fn from_builtin(b: &BuiltinSpec) -> Theme {
@@ -601,10 +597,6 @@ fn ink_on(fill: u32, fg: u32, target: f32) -> u32 {
 /// shipped theme; the foreground is the fallback for a caret close enough to
 /// the background to swallow it.
 pub fn caret_ink(caret: Hsla, background: Hsla, foreground: Hsla) -> Hsla {
-    let pack = |c: Hsla| {
-        let rgb = crate::palette::hsla_to_rgb(c);
-        (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32
-    };
     let (caret, bg, fg) = (pack(caret), pack(background), pack(foreground));
     if contrast(caret, bg) >= contrast(caret, fg) {
         background
@@ -617,16 +609,13 @@ pub fn caret_ink(caret: Hsla, background: Hsla, foreground: Hsla) -> Hsla {
 /// fixed value; a theme background is not, and pure black on a dark window is
 /// no shape at all.
 pub fn needs_edge(fill: u32, surface: Hsla) -> bool {
-    let rgb = crate::palette::hsla_to_rgb(surface);
-    let packed = (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32;
-    contrast(fill, packed) < 1.25
+    contrast(fill, pack(surface)) < 1.25
 }
 
 /// Whether a surface is dark enough that a halo cut in its own colour stops
 /// reading as a ring and starts reading as a hole.
 pub fn surface_is_dark(surface: Hsla) -> bool {
-    let rgb = crate::palette::hsla_to_rgb(surface);
-    is_dark((rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32)
+    is_dark(pack(surface))
 }
 
 pub fn mix(a: u32, b: u32, t: f32) -> u32 {
@@ -636,12 +625,12 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
     (ch(ar, br) << 16) | (ch(ag, bg) << 8) | ch(ab, bb)
 }
 
-fn rgb_bytes(n: u32) -> ColorRgb {
-    ColorRgb {
-        r: (n >> 16) as u8,
-        g: (n >> 8) as u8,
-        b: n as u8,
-    }
+fn rgb_bytes(n: u32) -> [u8; 3] {
+    [(n >> 16) as u8, (n >> 8) as u8, n as u8]
+}
+
+fn pack_rgb([r, g, b]: [u8; 3]) -> u32 {
+    (r as u32) << 16 | (g as u32) << 8 | b as u32
 }
 
 fn relative_luminance(c: u32) -> f32 {
@@ -793,8 +782,7 @@ pub fn resting_ink(ink: Hsla, beside: Hsla, surface: Hsla) -> Hsla {
 }
 
 fn pack(c: Hsla) -> u32 {
-    let rgb = crate::palette::hsla_to_rgb(c);
-    (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32
+    pack_rgb(crate::palette::hsla_to_rgb(c))
 }
 
 /// Hairlines are separators, not control outlines — the surfaces they divide
@@ -984,7 +972,7 @@ pub fn fork_to_file(t: &Theme) -> std::io::Result<String> {
     // `trim_end_matches(" (custom)")`, so it stays English in every locale —
     // a translated suffix would survive a language switch and stack up.
     copy.name = format!("{} (custom)", t.name.trim_end_matches(" (custom)"));
-    lyrel_core::core::config::write_atomic(
+    lyrel_protocol::core::config::write_atomic(
         &dir.join(format!("{stem}.yaml")),
         to_yaml(&copy).as_bytes(),
     )?;
@@ -995,7 +983,7 @@ pub fn write_theme_file(t: &Theme) -> std::io::Result<()> {
     let path = t.path.clone().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "theme is not file-backed")
     })?;
-    lyrel_core::core::config::write_atomic(&path, to_yaml(t).as_bytes())
+    lyrel_protocol::core::config::write_atomic(&path, to_yaml(t).as_bytes())
 }
 
 fn load_all() -> (Vec<Theme>, Vec<(String, String)>) {
@@ -1025,7 +1013,7 @@ fn dedupe_ids(themes: &mut [Theme]) {
 }
 
 pub fn themes_dir() -> Option<PathBuf> {
-    lyrel_core::core::config::config_path("themes")
+    lyrel_protocol::core::config::config_path("themes")
 }
 
 fn load_user_themes() -> (Vec<Theme>, Vec<(String, String)>) {
@@ -1140,8 +1128,8 @@ fn default_image_opacity() -> f32 {
 
 fn load_yaml_theme(path: &std::path::Path) -> Result<Theme, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let file: ThemeFile =
-        yaml_serde::from_str(lyrel_core::core::config::strip_bom(&text)).map_err(|e| e.to_string())?;
+    let file: ThemeFile = yaml_serde::from_str(lyrel_protocol::core::config::strip_bom(&text))
+        .map_err(|e| e.to_string())?;
     let (id, derived_name) = id_and_name(path);
 
     let background = file.background.into_fill()?;
@@ -1692,8 +1680,8 @@ mod tests {
         for t in builtins() {
             let bg = t.background_color();
             let ap = t.active_palette(true);
-            for (i, c) in ap.ansi16.iter().enumerate().skip(8) {
-                let ink = (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32;
+            for (i, &c) in ap.ansi16().iter().enumerate().skip(8) {
+                let ink = pack_rgb(c);
                 assert!(
                     contrast(ink, bg) >= TEXT_FLOOR - 0.01,
                     "{}/ansi16[{i}]: bright slot {ink:#08x} only {:.2}:1 on the background",
@@ -1713,9 +1701,7 @@ mod tests {
             let ap = t.active_palette(true);
             for (i, (r, g, b)) in t.ansi16.iter().enumerate().skip(8) {
                 let authored = (*r as u32) << 16 | (*g as u32) << 8 | *b as u32;
-                let rendered = (ap.ansi16[i].r as u32) << 16
-                    | (ap.ansi16[i].g as u32) << 8
-                    | ap.ansi16[i].b as u32;
+                let rendered = pack_rgb(ap.ansi16()[i]);
                 if contrast(authored, bg) >= TEXT_FLOOR {
                     assert_eq!(
                         rendered, authored,
@@ -1734,9 +1720,7 @@ mod tests {
         for t in builtins() {
             let ap = t.active_palette(false);
             for (i, (r, g, b)) in t.ansi16.iter().enumerate() {
-                let rendered = (ap.ansi16[i].r as u32) << 16
-                    | (ap.ansi16[i].g as u32) << 8
-                    | ap.ansi16[i].b as u32;
+                let rendered = pack_rgb(ap.ansi16()[i]);
                 assert_eq!(
                     rendered,
                     (*r as u32) << 16 | (*g as u32) << 8 | *b as u32,
@@ -1760,8 +1744,7 @@ mod tests {
             ("rose_pine", 0x6e6a86),
         ] {
             let t = builtins().into_iter().find(|t| t.id == id).unwrap();
-            let c = t.active_palette(true).ansi16[8];
-            let rendered = (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32;
+            let rendered = pack_rgb(t.active_palette(true).ansi16()[8]);
             assert_ne!(rendered, authored, "{id}: brightBlack was left as authored");
             assert!(
                 contrast(rendered, t.background_color()) >= TEXT_FLOOR - 0.01,
@@ -1775,8 +1758,7 @@ mod tests {
             .into_iter()
             .find(|t| t.id == "catppuccin_latte")
             .unwrap();
-        let c = latte.active_palette(true).ansi16[8];
-        let rendered = (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32;
+        let rendered = pack_rgb(latte.active_palette(true).ansi16()[8]);
         assert_ne!(
             rendered, 0xacb0be,
             "catppuccin_latte: brightBlack was left as authored"
@@ -1792,7 +1774,7 @@ mod tests {
     fn selection_surface_stays_on_the_background_side() {
         for t in builtins() {
             let ap = t.active_palette(true);
-            let sel = (ap.sel_bg.r as u32) << 16 | (ap.sel_bg.g as u32) << 8 | ap.sel_bg.b as u32;
+            let sel = pack_rgb(ap.selection_bg());
             let to_bg = contrast(sel, t.background_color());
             let to_fg = contrast(sel, t.foreground);
             assert!(
@@ -2196,8 +2178,8 @@ mod tests {
         assert_eq!(before.warning.ink, after.warning.ink);
         assert_eq!(before.link.ink, after.link.ink);
         assert_ne!(
-            theme.active_palette(false).ansi16[1],
-            theme.active_palette(false).ansi16[2]
+            theme.active_palette(false).ansi16()[1],
+            theme.active_palette(false).ansi16()[2]
         );
     }
 

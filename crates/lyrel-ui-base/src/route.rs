@@ -7,7 +7,7 @@
 //! consumers — the terminal-side forward client and SFTP client adapters own
 //! the daemon round trips these routes name.
 
-use lyrel_core::daemon::protocol::{WorkspaceOp, WorkspaceRequest};
+use lyrel_protocol::daemon::protocol::{WorkspaceOp, WorkspaceRequest};
 
 /// The workspace a pane belongs to and how its daemon is reached — the value
 /// a pane's title, relink and route questions are answered from. Built by the
@@ -15,9 +15,9 @@ use lyrel_core::daemon::protocol::{WorkspaceOp, WorkspaceRequest};
 /// keychain; everything downstream only reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneWorkspace {
-    pub workspace: lyrel_core::core::session::WorkspaceId,
-    pub target: lyrel_core::core::session::RemoteTarget,
-    pub spec: Option<Box<lyrel_core::daemon::protocol::NativeSshSpec>>,
+    pub workspace: lyrel_protocol::core::session::WorkspaceId,
+    pub target: lyrel_protocol::core::session::RemoteTarget,
+    pub spec: Option<Box<lyrel_protocol::daemon::protocol::NativeSshSpec>>,
     /// The name the workspace answers to — its own label, or its machine's
     /// when it has none. A pane keeps answering to this name when its link
     /// dies (#438 gave SSH panes their host here; without this, a workspace
@@ -34,12 +34,15 @@ pub struct PaneWorkspace {
 
 impl PaneWorkspace {
     pub fn shares_localhost(&self) -> bool {
-        matches!(self.target, lyrel_core::core::session::RemoteTarget::Wsl { .. })
+        matches!(
+            self.target,
+            lyrel_protocol::core::session::RemoteTarget::Wsl { .. }
+        )
     }
 
-    pub fn route_header(&self) -> anyhow::Result<lyrel_core::daemon::router::RouteHeader> {
-        use lyrel_core::core::session::RemoteTarget;
-        use lyrel_core::daemon::router::RouteHeader;
+    pub fn route_header(&self) -> anyhow::Result<lyrel_protocol::daemon::router::RouteHeader> {
+        use lyrel_protocol::core::session::RemoteTarget;
+        use lyrel_protocol::daemon::router::RouteHeader;
         let header = match (&self.target, &self.spec) {
             (RemoteTarget::Wsl { distro }, _) => RouteHeader::wsl(distro.clone()),
             (RemoteTarget::LocalStdio { program, args }, _) => {
@@ -94,7 +97,7 @@ pub enum PaneRoute {
     #[default]
     Local,
     Remote {
-        header: Box<lyrel_core::daemon::router::RouteHeader>,
+        header: Box<lyrel_protocol::daemon::router::RouteHeader>,
         /// Whether the daemon at the far end of this route echoes a `Size`
         /// frame when it applies a resize, per its host's control hello (see
         /// [`PaneWorkspace::resize_echo`]). Riding on the route puts the
@@ -119,7 +122,7 @@ impl PaneRoute {
         }
     }
 
-    pub fn header(&self) -> Option<&lyrel_core::daemon::router::RouteHeader> {
+    pub fn header(&self) -> Option<&lyrel_protocol::daemon::router::RouteHeader> {
         match self {
             PaneRoute::Remote { header, .. } => Some(header),
             PaneRoute::Local | PaneRoute::Unroutable(_) => None,
@@ -133,7 +136,9 @@ impl PaneRoute {
     pub fn allow_remote_clipboard_write(&self) -> bool {
         match self {
             PaneRoute::Remote { header, .. } => match &header.target {
-                lyrel_core::daemon::router::RouteTarget::Ssh(spec) => spec.remote_clipboard_write,
+                lyrel_protocol::daemon::router::RouteTarget::Ssh(spec) => {
+                    spec.remote_clipboard_write
+                }
                 _ => false,
             },
             PaneRoute::Local | PaneRoute::Unroutable(_) => false,
@@ -154,7 +159,7 @@ pub struct ForwardRoute {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ForwardOwnerKey {
     Pane(u64),
-    Workspace(lyrel_core::core::session::WorkspaceId),
+    Workspace(lyrel_protocol::core::session::WorkspaceId),
 }
 
 impl ForwardRoute {

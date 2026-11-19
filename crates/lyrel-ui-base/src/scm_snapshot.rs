@@ -29,9 +29,9 @@ use std::time::Duration;
 
 use gpui_kit::{App, Global};
 
-use lyrel_core::core::git::GitStatus;
-use lyrel_core::core::git::status::StatusIndex;
-use lyrel_core::host::HostId;
+use lyrel_protocol::core::git::GitStatus;
+use lyrel_protocol::core::git::status::StatusIndex;
+use lyrel_protocol::host::HostId;
 
 /// How long a pane with an unknown or negative repository answer waits before
 /// asking again. Shared by the pane-side read gate ([`retry_due`]) and the
@@ -92,7 +92,9 @@ pub fn index_of(cx: &App, host: HostId, root: &Path) -> Option<Arc<StatusIndex>>
 /// it is how a stage or a checkout a frame ago asks for one re-read, not a
 /// standing refresh.
 pub fn epoch(cx: &App, host: HostId, root: &Path) -> u64 {
-    source(cx).map(|source| source.epoch(cx, host, root)).unwrap_or(0)
+    source(cx)
+        .map(|source| source.epoch(cx, host, root))
+        .unwrap_or(0)
 }
 
 /// The `+N −M` badge a pane's tab wears: the cached answer for `cwd`'s
@@ -121,6 +123,5 @@ pub fn retry_due(cx: &App, host: HostId, cwd: &Path) -> bool {
 /// a check) on every quiet tick. Mirrors the early-out of the controller's
 /// root check without recording anything.
 pub fn root_recheck_due(cx: &App, host: HostId, cwd: &Path) -> bool {
-    source(cx)
-        .is_some_and(|source| source.root_recheck_due(cx, host, cwd))
+    source(cx).is_some_and(|source| source.root_recheck_due(cx, host, cwd))
 }
