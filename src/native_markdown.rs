@@ -4,13 +4,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-pub(crate) struct Case {
+pub struct Case {
     name: &'static str,
     run: fn(&mut TestAppContext),
 }
 
 impl Case {
-    pub(crate) const fn new(name: &'static str, run: fn(&mut TestAppContext)) -> Self {
+    pub const fn new(name: &'static str, run: fn(&mut TestAppContext)) -> Self {
         Self { name, run }
     }
 

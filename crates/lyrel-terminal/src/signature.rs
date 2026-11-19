@@ -139,6 +139,9 @@ impl CmdNode for Subcommand {
     }
 }
 
+const WORKSPACE_COMPLETIONS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/completions");
+
 fn spec_source() -> &'static [PathBuf] {
     static DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     DIRS.get_or_init(|| {
@@ -155,10 +158,7 @@ fn spec_source() -> &'static [PathBuf] {
                 dirs.push(dir.join("completions"));
             }
         }
-        dirs.push(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/completions"
-        )));
+        dirs.push(PathBuf::from(WORKSPACE_COMPLETIONS));
         dirs
     })
 }
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn every_shipped_spec_parses() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/completions");
+        let dir = WORKSPACE_COMPLETIONS;
         let mut count = 0;
         for entry in std::fs::read_dir(dir).expect("completions dir exists") {
             let path = entry.unwrap().path();

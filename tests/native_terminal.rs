@@ -1,5 +1,6 @@
+#[path = "native_terminal/cases.rs"]
+mod cases;
+
 fn main() -> std::process::ExitCode {
-    lyrel::run_native_terminal_tests(lyrel::NativeTerminalFixtureSupport::new(
-        lyrel_test_support::pty::pty_sender,
-    ))
+    cases::run_fixture().unwrap_or_else(|| lyrel::run_native_terminal_tests(cases::native_cases()))
 }

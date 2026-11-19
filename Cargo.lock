@@ -6560,6 +6560,7 @@ dependencies = [
  "cursor-icon",
  "fs2",
  "gpui-kit",
+ "hex",
  "image",
  "jieba-rs",
  "libc",

@@ -10,7 +10,11 @@ impl OmpReplayFixture {
         let omp = std::env::var_os("LYREL_TEST_OMP")
             .expect("set LYREL_TEST_OMP to an installed released omp executable");
         let script = std::env::var("LYREL_OMP_REPLAY_SCRIPT").unwrap_or_else(|_| {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").to_owned()
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/omp-native-replay.mjs"
+            )
+            .to_owned()
         });
         let root = tempfile::tempdir().unwrap();
         let status = std::process::Command::new("node")
@@ -38,7 +42,11 @@ impl OmpReplayFixture {
             program: "node".into(),
             args: vec![
                 std::env::var("LYREL_OMP_REPLAY_SCRIPT").unwrap_or_else(|_| {
-                    concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").to_owned()
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../scripts/omp-native-replay.mjs"
+                    )
+                    .to_owned()
                 }),
                 "run".into(),
                 "--wait-ready".into(),

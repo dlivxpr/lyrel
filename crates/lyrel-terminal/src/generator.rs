@@ -893,7 +893,7 @@ mod tests {
         .unwrap();
 
         let spec: Value =
-            serde_json::from_str(include_str!("../../assets/completions/ssh.json")).unwrap();
+            serde_json::from_str(include_str!("../../../assets/completions/ssh.json")).unwrap();
         let mut candidates = Vec::new();
         for generator in spec["args"][0]["generators"].as_array().unwrap() {
             let script = generator["script"]

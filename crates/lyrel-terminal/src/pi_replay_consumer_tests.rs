@@ -14,13 +14,21 @@ impl PiReplayPane {
         let shell = lyrel_core::daemon::protocol::ShellSpec {
             program: node,
             args: vec![
-                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/pi-image-replay.mjs").into(),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/pi-image-replay.mjs"
+                )
+                .into(),
                 "--pi".into(),
                 cli,
                 "--policy".into(),
                 policy.into(),
                 "--launch".into(),
-                if policy == "enabled" { "legacy".into() } else { "scoped".into() },
+                if policy == "enabled" {
+                    "legacy".into()
+                } else {
+                    "scoped".into()
+                },
                 "--pictures".into(),
                 "2".into(),
                 "--rounds".into(),
@@ -30,7 +38,9 @@ impl PiReplayPane {
             ],
             args_are_lyrel_defaults: false,
         };
-        let shell = if policy == "enabled" { shell } else {
+        let shell = if policy == "enabled" {
+            shell
+        } else {
             native_graphics_scoped_shell(lyrel_core::core::cli_agent::CLIAgent::Pi, shell)
         };
         let session = daemon
@@ -100,7 +110,6 @@ fn pi_replay_assert_card_geometry(view: &TerminalView, expected: [[u8; 4]; 5], i
     );
 }
 
-
 #[gpui_kit::test]
 #[ignore = "requires released Pi 1.4.0 and Node in LYREL_PI_GRAPHICS_CLI / LYREL_PI_GRAPHICS_NODE; no model calls"]
 fn graphics_consumer_pi_native_saved_tool_images_remount_delete_and_resume(
@@ -169,7 +178,9 @@ fn graphics_consumer_pi_native_saved_tool_images_remount_delete_and_resume(
 
 #[gpui_kit::test]
 #[ignore = "released Pi 1.4.0 + Node; production scoped discovery without a forced image protocol"]
-fn graphics_consumer_pi_native_scoped_discovery_replays_without_forcing_protocol(cx: &mut TestAppContext) {
+fn graphics_consumer_pi_native_scoped_discovery_replays_without_forcing_protocol(
+    cx: &mut TestAppContext,
+) {
     lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
@@ -189,11 +200,17 @@ fn graphics_consumer_pi_native_scoped_discovery_replays_without_forcing_protocol
         assert_eq!(graphics_visible_images(view).len(), 1);
     });
     view.read_with(cx, |view, _| view.terminal.write(vec![4]));
-    native_picture_wait(&view, cx, "scoped replay audit and parent restoration", |view| {
-        let text = view.scrollback_text();
-        text.contains("PI_REPLAY_FIXTURE_DONE") && text.contains("LYREL_PARENT_AFTER=lyrel")
-            && text.contains("PI_REPLAY_ROUND_1_NO_NEW_MESSAGES")
-    });
+    native_picture_wait(
+        &view,
+        cx,
+        "scoped replay audit and parent restoration",
+        |view| {
+            let text = view.scrollback_text();
+            text.contains("PI_REPLAY_FIXTURE_DONE")
+                && text.contains("LYREL_PARENT_AFTER=lyrel")
+                && text.contains("PI_REPLAY_ROUND_1_NO_NEW_MESSAGES")
+        },
+    );
     assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
     graphics_recovery_destroy(view, window, cx);
 }
@@ -217,7 +234,8 @@ fn graphics_consumer_pi_native_explicit_image_policies_take_precedence(cx: &mut 
         let (view, window) = fixture.mount(cx);
         native_picture_wait(&view, cx, "native policy loaded saved transcript", |view| {
             view.scrollback_text().contains("PI_REPLAY_TAIL")
-                && (policy != "settings-kitty" || native_picture_pixels(view, NATIVE_PICTURE_LAST).is_some())
+                && (policy != "settings-kitty"
+                    || native_picture_pixels(view, NATIVE_PICTURE_LAST).is_some())
         });
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {

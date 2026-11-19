@@ -14,12 +14,9 @@ fn capacity_wait(
     reason: &str,
     ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    graphics_recovery_wait_with(
-        cx,
-        std::time::Duration::from_secs(600),
-        ready,
-        |_| format!("full-size production consumer: {reason}"),
-    );
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(600), ready, |_| {
+        format!("full-size production consumer: {reason}")
+    });
 }
 
 impl CapacityConsumer {
@@ -33,7 +30,11 @@ impl CapacityConsumer {
         let shell = lyrel_core::daemon::protocol::ShellSpec {
             program: "node".into(),
             args: vec![
-                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/kitty-capacity.mjs").into(),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/kitty-capacity.mjs"
+                )
+                .into(),
                 "--pane".into(),
                 pane_index.to_string(),
                 "--manifest".into(),

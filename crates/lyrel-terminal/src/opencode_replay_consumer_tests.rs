@@ -1,6 +1,9 @@
 use super::*;
 
-const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/opencode-image-replay.mjs");
+const SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../scripts/opencode-image-replay.mjs"
+);
 
 struct OpenCodeReplay {
     root: tempfile::TempDir,
@@ -27,18 +30,35 @@ impl OpenCodeReplay {
 
     fn spawn(&self, daemon: &GraphicsDaemonProcess) -> u64 {
         use lyrel_core::daemon::protocol::{ShellSpec, WinSize};
-        let session = daemon.panes().spawn(
-            None,
-            WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 },
-            Some(native_graphics_scoped_shell(lyrel_core::core::cli_agent::CLIAgent::OpenCode, ShellSpec {
-                program: "node".into(),
-                args: vec![SCRIPT.into(), "--resume".into(), self.root.path().to_string_lossy().into_owned(),
-                    "--opencode".into(), std::env::var("LYREL_OPENCODE_GRAPHICS_CLI").unwrap_or_else(|_| "opencode".into())],
-                args_are_lyrel_defaults: false,
-            })),
-            None,
-            None,
-        ).unwrap();
+        let session = daemon
+            .panes()
+            .spawn(
+                None,
+                WinSize {
+                    cols: 120,
+                    rows: 60,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+                Some(native_graphics_scoped_shell(
+                    lyrel_core::core::cli_agent::CLIAgent::OpenCode,
+                    ShellSpec {
+                        program: "node".into(),
+                        args: vec![
+                            SCRIPT.into(),
+                            "--resume".into(),
+                            self.root.path().to_string_lossy().into_owned(),
+                            "--opencode".into(),
+                            std::env::var("LYREL_OPENCODE_GRAPHICS_CLI")
+                                .unwrap_or_else(|_| "opencode".into()),
+                        ],
+                        args_are_lyrel_defaults: false,
+                    },
+                )),
+                None,
+                None,
+            )
+            .unwrap();
         let pane = session.pane_id();
         session.detach().unwrap();
         pane
@@ -55,13 +75,15 @@ fn native_wait(
         cx,
         std::time::Duration::from_secs(90),
         |cx| view.read_with(cx, |view, _| ready(view)),
-        |cx| view.read_with(cx, |view, _| format!(
+        |cx| {
+            view.read_with(cx, |view, _| format!(
             "OpenCode {description}; child_exited={}; instances={:#?}; graphics={}; text={}",
             view.terminal.child_exited(),
             native_pictures(view, 1.),
             view.terminal.images().recovery_diagnostics(),
             view.scrollback_text()
-        )),
+        ))
+        },
     );
 }
 
@@ -82,29 +104,51 @@ struct NativePicture {
 
 fn native_pictures(view: &TerminalView, scale: f32) -> Vec<NativePicture> {
     let offset = view.terminal.term.lock().display_offset() as i32;
-    let (cell_width, line_height) = view.cell_geom
+    let (cell_width, line_height) = view
+        .cell_geom
         .map(|geom| (geom.cell_width, geom.line_height))
         .unwrap_or((px(10.), px(20.)));
-    graphics_visible_images(view).into_iter().filter_map(|image| {
-        let (bounds, _) = image.paint_bounds(point(px(0.), px(0.)), cell_width, line_height, 0, offset, scale);
-        let bytes = image.data.as_ref()?.as_bytes(0)?;
-        let mut counts = std::collections::BTreeMap::new();
-        for pixel in bytes.chunks_exact(4) {
-            *counts.entry([pixel[0], pixel[1], pixel[2], pixel[3]]).or_insert(0usize) += 1;
-        }
-        let color = counts.into_iter().max_by_key(|(_, count)| *count)?.0;
-        Some(NativePicture {
-            color,
-            bgra_sha256: { use sha2::Digest; sha2::Sha256::digest(bytes).into() },
-            dimensions: { let size = image.data.as_ref()?.size(0); (size.width.0 as u32, size.height.0 as u32) },
-            placement: image.placement,
-            bounds: [bounds.origin.x.as_f32() / cell_width.as_f32(), bounds.origin.y.as_f32() / line_height.as_f32(),
-                (bounds.origin.x + bounds.size.width).as_f32() / cell_width.as_f32(),
-                (bounds.origin.y + bounds.size.height).as_f32() / line_height.as_f32()],
-            painted: image.painted.load(std::sync::atomic::Ordering::Acquire),
-            evicted: image.evicted,
+    graphics_visible_images(view)
+        .into_iter()
+        .filter_map(|image| {
+            let (bounds, _) = image.paint_bounds(
+                point(px(0.), px(0.)),
+                cell_width,
+                line_height,
+                0,
+                offset,
+                scale,
+            );
+            let bytes = image.data.as_ref()?.as_bytes(0)?;
+            let mut counts = std::collections::BTreeMap::new();
+            for pixel in bytes.chunks_exact(4) {
+                *counts
+                    .entry([pixel[0], pixel[1], pixel[2], pixel[3]])
+                    .or_insert(0usize) += 1;
+            }
+            let color = counts.into_iter().max_by_key(|(_, count)| *count)?.0;
+            Some(NativePicture {
+                color,
+                bgra_sha256: {
+                    use sha2::Digest;
+                    sha2::Sha256::digest(bytes).into()
+                },
+                dimensions: {
+                    let size = image.data.as_ref()?.size(0);
+                    (size.width.0 as u32, size.height.0 as u32)
+                },
+                placement: image.placement,
+                bounds: [
+                    bounds.origin.x.as_f32() / cell_width.as_f32(),
+                    bounds.origin.y.as_f32() / line_height.as_f32(),
+                    (bounds.origin.x + bounds.size.width).as_f32() / cell_width.as_f32(),
+                    (bounds.origin.y + bounds.size.height).as_f32() / line_height.as_f32(),
+                ],
+                painted: image.painted.load(std::sync::atomic::Ordering::Acquire),
+                evicted: image.evicted,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn native_in_viewport(picture: &NativePicture) -> bool {
@@ -113,22 +157,51 @@ fn native_in_viewport(picture: &NativePicture) -> bool {
 }
 
 fn native_colors(view: &TerminalView) -> std::collections::BTreeSet<[u8; 4]> {
-    native_pictures(view, 1.).iter().filter(|picture| native_in_viewport(picture))
-        .map(|picture| picture.color).collect()
+    native_pictures(view, 1.)
+        .iter()
+        .filter(|picture| native_in_viewport(picture))
+        .map(|picture| picture.color)
+        .collect()
 }
 
-fn native_assert_cards(view: &Entity<TerminalView>, window: gpui_kit::AnyWindowHandle, cx: &mut TestAppContext, old: bool) {
+fn native_assert_cards(
+    view: &Entity<TerminalView>,
+    window: gpui_kit::AnyWindowHandle,
+    cx: &mut TestAppContext,
+    old: bool,
+) {
     let palette = if old {
-        [[0, 0, 220, 255], [0, 180, 0, 255], [220, 0, 0, 255],
-         [180, 180, 0, 255], [0, 180, 180, 255], [0, 100, 220, 255]]
+        [
+            [0, 0, 220, 255],
+            [0, 180, 0, 255],
+            [220, 0, 0, 255],
+            [180, 180, 0, 255],
+            [0, 180, 180, 255],
+            [0, 100, 220, 255],
+        ]
     } else {
-        [[70, 70, 240, 255], [70, 210, 70, 255], [240, 70, 70, 255],
-         [210, 210, 70, 255], [70, 210, 210, 255], [70, 140, 240, 255]]
+        [
+            [70, 70, 240, 255],
+            [70, 210, 70, 255],
+            [240, 70, 70, 255],
+            [210, 210, 70, 255],
+            [70, 210, 210, 255],
+            [70, 140, 240, 255],
+        ]
     };
-    let expected = palette.into_iter().collect::<std::collections::BTreeSet<_>>();
-    native_wait(view, cx, "expected six inline pictures after native navigation", |view| native_colors(view) == expected);
+    let expected = palette
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    native_wait(
+        view,
+        cx,
+        "expected six inline pictures after native navigation",
+        |view| native_colors(view) == expected,
+    );
     graphics_assert_production_paint_at(window, view, cx, TermSize::new(120, 60));
-    let scale = window.update(cx, |_, window, _| window.scale_factor()).unwrap();
+    let scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
     view.read_with(cx, |view, _| {
         let all = native_pictures(view, scale);
         let pictures: Vec<_> = all.iter().filter(|picture| native_in_viewport(picture)).collect();
@@ -208,7 +281,9 @@ fn native_assert_cards(view: &Entity<TerminalView>, window: gpui_kit::AnyWindowH
 }
 
 #[gpui_kit::test]
-fn graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id(cx: &mut TestAppContext) {
+fn graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id(
+    cx: &mut TestAppContext,
+) {
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     // The same public static protocol used by OpenTUI: upload independently,
     // position with CUP, and display with explicit image/placement IDs and C=1.
@@ -218,9 +293,23 @@ fn graphics_consumer_static_placements_count_coincident_instances_and_replace_by
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
         let pictures = native_pictures(view, 1.);
-        assert_eq!(pictures.len(), 2, "identical decoded color must not collapse independent placement instances");
-        assert!(pictures.iter().all(|picture| picture.color == [0, 0, 255, 255]));
-        assert_eq!(pictures.iter().map(|picture| picture.placement.placement_id).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(
+            pictures.len(),
+            2,
+            "identical decoded color must not collapse independent placement instances"
+        );
+        assert!(
+            pictures
+                .iter()
+                .all(|picture| picture.color == [0, 0, 255, 255])
+        );
+        assert_eq!(
+            pictures
+                .iter()
+                .map(|picture| picture.placement.placement_id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
     });
     // Replacing p=2 must keep its instance count, whereas a distinct p=3 at
     // p=1's exact origin remains a separate instance despite equal color/bounds.
@@ -229,15 +318,31 @@ fn graphics_consumer_static_placements_count_coincident_instances_and_replace_by
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
         let pictures = native_pictures(view, 1.);
-        assert_eq!(pictures.len(), 3, "coincident pictures are real instances, not a union bounding box");
-        assert_eq!(pictures.iter().map(|picture| picture.placement.placement_id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            pictures.len(),
+            3,
+            "coincident pictures are real instances, not a union bounding box"
+        );
+        assert_eq!(
+            pictures
+                .iter()
+                .map(|picture| picture.placement.placement_id)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
         assert_eq!(pictures[0].bounds, pictures[2].bounds);
         assert_ne!(pictures[0].placement.key, pictures[2].placement.key);
     });
     graphics_send_fixture(&view, cx, 3, b"\x1b_Ga=d,d=i,i=70,p=2,q=2\x1b\\");
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(native_pictures(view, 1.).iter().map(|picture| picture.placement.placement_id).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            native_pictures(view, 1.)
+                .iter()
+                .map(|picture| picture.placement.placement_id)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
     });
     graphics_send_fixture(&view, cx, 4, b"\x1b_Ga=d,d=I,i=70,q=2\x1b\\");
     assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
@@ -253,16 +358,36 @@ fn opencode_native_saved_images_paginate_remount_delete_without_inference(cx: &m
     let fixture = OpenCodeReplay::prepare("on");
     let daemon = GraphicsDaemonProcess::start();
     let pane = fixture.spawn(&daemon);
-    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
-    let size = lyrel_core::daemon::protocol::WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 };
-    let (view, window) = graphics_build_rooted_consumer_at(cx, pane,
-        daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size), Vec::new(), TermSize::new(120, 60),
-        if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw });
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let size = lyrel_core::daemon::protocol::WinSize {
+        cols: 120,
+        rows: 60,
+        cell_w: 10,
+        cell_h: 20,
+    };
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size),
+        Vec::new(),
+        TermSize::new(120, 60),
+        if cfg!(windows) {
+            PtySource::LocalConpty
+        } else {
+            PtySource::Raw
+        },
+    );
     native_assert_cards(&view, window, cx, false);
     view.read_with(cx, |view, _| view.terminal.write(b"\x1b[5~".repeat(4)));
-    native_wait(&view, cx, "native PageUp scrolls both cards out of the viewport", |view| {
-        native_colors(view).is_empty() && view.scrollback_text().contains("PAGE_")
-    });
+    native_wait(
+        &view,
+        cx,
+        "native PageUp scrolls both cards out of the viewport",
+        |view| native_colors(view).is_empty() && view.scrollback_text().contains("PAGE_"),
+    );
     view.read_with(cx, |view, _| view.terminal.write(b"\x1b[F".to_vec()));
     native_assert_cards(&view, window, cx, false);
     // Native session.first loads earlier HTTP pages and mounts older rows.
@@ -273,21 +398,40 @@ fn opencode_native_saved_images_paginate_remount_delete_without_inference(cx: &m
     // These F6/F7 overrides are public cli.json bindings, not agent hooks.
     // Closing the native tab unmounts its image nodes and emits deletions.
     view.read_with(cx, |view, _| view.terminal.write(b"\x1b[17~".to_vec()));
-    native_wait(&view, cx, "tab close deletes all placements", |view| graphics_visible_images(view).is_empty());
+    native_wait(&view, cx, "tab close deletes all placements", |view| {
+        graphics_visible_images(view).is_empty()
+    });
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
     view.read_with(cx, |view, _| view.terminal.write(b"\x1b[18~".to_vec()));
     native_assert_cards(&view, window, cx, false);
     view.read_with(cx, |view, _| view.terminal.write(vec![3]));
-    native_wait(&view, cx, "public export proves unchanged saved transcript and zero usage", |view| {
-        view.terminal.child_exited() && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
+    native_wait(
+        &view,
+        cx,
+        "public export proves unchanged saved transcript and zero usage",
+        |view| {
+            view.terminal.child_exited()
+                && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
+        },
+    );
+    native_wait(&view, cx, "native exit deletes images", |view| {
+        graphics_visible_images(view).is_empty()
     });
-    native_wait(&view, cx, "native exit deletes images", |view| graphics_visible_images(view).is_empty());
     graphics_recovery_destroy(view, window, cx);
     // Fresh decoder/window must not resurrect upstream-deleted pixels. This is
     // deliberately separate from resume, which retransmits native graphics.
-    let (fresh, fresh_window) = graphics_build_rooted_consumer_at(cx, pane,
-        daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size), Vec::new(), TermSize::new(120, 60),
-        if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw });
+    let (fresh, fresh_window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size),
+        Vec::new(),
+        TermSize::new(120, 60),
+        if cfg!(windows) {
+            PtySource::LocalConpty
+        } else {
+            PtySource::Raw
+        },
+    );
     graphics_assert_production_paint_at(fresh_window, &fresh, cx, TermSize::new(120, 60));
     assert!(fresh.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
     daemon.panes().kill(pane).unwrap();
@@ -303,22 +447,49 @@ fn opencode_native_disabled_previews_remain_text(cx: &mut TestAppContext) {
         let fixture = OpenCodeReplay::prepare(policy);
         let daemon = GraphicsDaemonProcess::start();
         let pane = fixture.spawn(&daemon);
-        cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
-        let size = lyrel_core::daemon::protocol::WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 };
-        let (view, window) = graphics_build_rooted_consumer_at(cx, pane,
-            daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size), Vec::new(), TermSize::new(120, 60),
-            if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw });
-        native_wait(&view, cx, "disabled tail transcript mounted", |view| view.scrollback_text().contains("TAIL_TOOL"));
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(Config::default());
+        });
+        let size = lyrel_core::daemon::protocol::WinSize {
+            cols: 120,
+            rows: 60,
+            cell_w: 10,
+            cell_h: 20,
+        };
+        let (view, window) = graphics_build_rooted_consumer_at(
+            cx,
+            pane,
+            daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size),
+            Vec::new(),
+            TermSize::new(120, 60),
+            if cfg!(windows) {
+                PtySource::LocalConpty
+            } else {
+                PtySource::Raw
+            },
+        );
+        native_wait(&view, cx, "disabled tail transcript mounted", |view| {
+            view.scrollback_text().contains("TAIL_TOOL")
+        });
         graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
         assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
         view.read_with(cx, |view, _| view.terminal.write(b"\x07".to_vec()));
-        native_wait(&view, cx, "disabled old transcript paginated", |view| view.scrollback_text().contains("OLD_USER"));
+        native_wait(&view, cx, "disabled old transcript paginated", |view| {
+            view.scrollback_text().contains("OLD_USER")
+        });
         graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
         assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
         view.read_with(cx, |view, _| view.terminal.write(vec![3]));
-        native_wait(&view, cx, "disabled replay exports unchanged zero-usage transcript", |view| {
-            view.terminal.child_exited() && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
-        });
+        native_wait(
+            &view,
+            cx,
+            "disabled replay exports unchanged zero-usage transcript",
+            |view| {
+                view.terminal.child_exited()
+                    && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
+            },
+        );
         daemon.panes().kill(pane).unwrap();
         graphics_recovery_destroy(view, window, cx);
     }

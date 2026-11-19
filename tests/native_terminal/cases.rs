@@ -1,17 +1,19 @@
 // Real font ink requires the OS-main-thread runner, not NoopTextSystem.
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{Bounds, Entity, MouseButton, TestAppContext, point};
+use lyrel::NativeCase;
+use lyrel_terminal::palette::{ActivePalette, hsla_to_rgb};
 use lyrel_terminal::test_support::*;
 use lyrel_terminal::view::*;
-use lyrel_ui_base::config::Config;
+use lyrel_test_support::graphics_fixture::GraphicsDaemonProcess;
 use lyrel_ui_base::desktop_file::OpenFileRequested;
 
 // Manual escape hatch only: normal consumer tests spawn the lightweight
 // `lyrel-graphics-fixture` process. Running this binary directly with one of
 // the selector arguments still starts the real daemon/sender in-process for
 // debugging that predates the fixture binary.
-pub(crate) fn run_fixture(pty_sender: fn()) -> Option<std::process::ExitCode> {
-    let scope = module_path!().split_once("::").unwrap().1;
+pub(super) fn run_fixture() -> Option<std::process::ExitCode> {
+    let scope = "terminal::view::native_terminal_tests";
     let arguments: Vec<_> = std::env::args().collect();
     if arguments
         .iter()
@@ -26,7 +28,7 @@ pub(crate) fn run_fixture(pty_sender: fn()) -> Option<std::process::ExitCode> {
         .iter()
         .any(|argument| argument == &format!("{scope}::graphics_fixture_sender"))
     {
-        pty_sender();
+        lyrel_test_support::pty::pty_sender();
         return Some(std::process::ExitCode::SUCCESS);
     }
     None
@@ -73,7 +75,6 @@ fn reading_painted_glyph_colors(
 }
 
 fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
     std::fs::write(daemon.dir.path().join("frozen.txt"), b"owned old file").unwrap();
@@ -81,11 +82,7 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
     // The sender really runs here: an injected git-status cwd would be
     // replaced by the next production foreground-process poll.
     let pane = daemon.spawn_with_cwd(Some(daemon.dir.path().to_path_buf()));
-    cx.update(|cx| {
-        crate::register_bundled_fonts(cx);
-        gpui_kit::component::init(cx);
-        cx.set_global(Config::default());
-    });
+    cx.update(lyrel::init_native_terminal_test);
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     graphics_send_fixture(&view, cx, 60, &b"HISTORY\r\n".repeat(72));
     graphics_send_fixture(&view, cx, 61, "\x1b[5;1H\x1b[2Kfrozen 宽e\u{301}\x1b[6;1H\x1b[2K\x1b]8;;https://old.example/\x1b\\old-link\x1b]8;;\x1b\\\x1b[7;1H\x1b[2K\x1b[3gA\x1b[5G\x1bHB\r\x1b[2C\tC\x1b[9;1H\x1b[2K\x1b[31mansi\x1b[0m\x1b[12;1H\x1b[2Kfrozen.txt:9:2".as_bytes());
@@ -186,7 +183,7 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
             [color.r, color.g, color.b]
         });
         ansi16[1] = [0, 255, 0];
-        cx.set_global(crate::terminal::palette::ActivePalette::new(ansi16, [0; 3]));
+        cx.set_global(ActivePalette::new(ansi16, [0; 3]));
     });
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);
@@ -209,7 +206,7 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
     assert!(
         ansi_ink
             .iter()
-            .all(|color| crate::terminal::palette::hsla_to_rgb(*color)
+            .all(|color| hsla_to_rgb(*color)
                 == rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 }),
         "retained ANSI glyph ink follows the active palette"
     );
@@ -239,15 +236,10 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
 /// the expected reply is derived from independent shaping evidence below —
 /// never from the query reply itself.
 fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
-    cx.update(|cx| {
-        crate::register_bundled_fonts(cx);
-        gpui_kit::component::init(cx);
-        cx.set_global(Config::default());
-    });
+    cx.update(lyrel::init_native_terminal_test);
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     let replies = tempfile::TempDir::new().unwrap();
 
@@ -458,15 +450,10 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
 /// asking the application to register again. Prepared for the native slot; the
 /// headless consumer covers the same inputs deterministically.
 fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
-    cx.update(|cx| {
-        crate::register_bundled_fonts(cx);
-        gpui_kit::component::init(cx);
-        cx.set_global(Config::default());
-    });
+    cx.update(lyrel::init_native_terminal_test);
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     let replies = tempfile::TempDir::new().unwrap();
     let reply_path = |serial: usize| replies.path().join(format!("r{serial}"));
@@ -595,20 +582,19 @@ fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
     );
 }
 
-pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    [
-        crate::native_markdown::Case::new(
+pub(super) fn native_cases() -> Vec<NativeCase> {
+    vec![
+        NativeCase::new(
             "terminal::view::native_terminal_tests::glyph_native_system_coverage_and_registered_paint",
             glyph_native_system_coverage_and_registered_paint,
         ),
-        crate::native_markdown::Case::new(
+        NativeCase::new(
             "terminal::view::native_terminal_tests::glyph_native_declared_layout_baseline_and_scale",
             glyph_native_declared_layout_baseline_and_scale,
         ),
-        crate::native_markdown::Case::new(
+        NativeCase::new(
             "terminal::view::gpui_tests::reading_copy_links_theme_and_ime_use_the_painted_semantic_rows",
             reading_copy_links_theme_and_ime_use_the_painted_semantic_rows,
         ),
     ]
-    .into_iter()
 }

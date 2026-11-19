@@ -22,31 +22,26 @@ pub fn run_native_markdown_tests() -> std::process::ExitCode {
     )
 }
 
-/// Fixture operations supplied by the `native_terminal` test binary. The
-/// ordinary application library does not link the dev-dependency.
 #[cfg(feature = "native-markdown-tests")]
-pub struct NativeTerminalFixtureSupport {
-    pty_sender: fn(),
+#[doc(hidden)]
+pub use native_markdown::Case as NativeCase;
+
+/// Run fixture-backed native terminal cases supplied by the test binary.
+#[cfg(feature = "native-markdown-tests")]
+#[doc(hidden)]
+pub fn run_native_terminal_tests(cases: Vec<NativeCase>) -> std::process::ExitCode {
+    native_markdown::main(cases, "native_terminal")
 }
 
 #[cfg(feature = "native-markdown-tests")]
-impl NativeTerminalFixtureSupport {
-    pub fn new(pty_sender: fn()) -> Self {
-        Self { pty_sender }
-    }
+#[doc(hidden)]
+pub fn init_native_terminal_test(cx: &mut App) {
+    register_bundled_fonts(cx);
+    gpui_kit::component::init(cx);
+    cx.set_global(lyrel_ui_base::config::Config::default());
 }
 
-/// Run the native-font terminal consumer on the process main thread.
-#[cfg(feature = "native-markdown-tests")]
-pub fn run_native_terminal_tests(fixture: NativeTerminalFixtureSupport) -> std::process::ExitCode {
-    use crate::terminal_tests::native_terminal_tests as suite;
-    if let Some(result) = suite::run_fixture(fixture.pty_sender) {
-        return result;
-    }
-    native_markdown::main(suite::native_cases().collect(), "native_terminal")
-}
-
-#[cfg(any(test, feature = "native-markdown-tests"))]
+#[cfg(test)]
 pub(crate) mod terminal_tests;
 
 use crate::core::config::Config;

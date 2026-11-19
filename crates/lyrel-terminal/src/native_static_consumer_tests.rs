@@ -12,18 +12,49 @@ impl NativeStaticFixture {
             lyrel_core::core::cli_agent::CLIAgent::Hermes => "LYREL_HERMES_GRAPHICS_SOURCE",
             other => panic!("unsupported native static agent: {}", other.slug()),
         };
-        let source = std::env::var(key).unwrap_or_else(|_| panic!("set {key} to an isolated pinned upstream source checkout with native dependencies"));
-        let daemon = GraphicsDaemonProcess::start();
-        let shell = native_graphics_scoped_shell(agent, lyrel_core::daemon::protocol::ShellSpec {
-            program: "node".into(),
-            args: vec![concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-static-images.mjs").into(),
-                "--agent".into(), agent.slug().into(), "--source".into(), source,
-                "--policy".into(), policy.into(), "--temp-parent".into(), daemon.dir.path().to_string_lossy().into_owned()],
-            args_are_lyrel_defaults: false,
+        let source = std::env::var(key).unwrap_or_else(|_| {
+            panic!(
+                "set {key} to an isolated pinned upstream source checkout with native dependencies"
+            )
         });
-        let session = daemon.panes().spawn(None, lyrel_core::daemon::protocol::WinSize {
-            cols: 80, rows: 24, cell_w: 10, cell_h: 20,
-        }, Some(shell), None, None).unwrap();
+        let daemon = GraphicsDaemonProcess::start();
+        let shell = native_graphics_scoped_shell(
+            agent,
+            lyrel_core::daemon::protocol::ShellSpec {
+                program: "node".into(),
+                args: vec![
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../scripts/native-static-images.mjs"
+                    )
+                    .into(),
+                    "--agent".into(),
+                    agent.slug().into(),
+                    "--source".into(),
+                    source,
+                    "--policy".into(),
+                    policy.into(),
+                    "--temp-parent".into(),
+                    daemon.dir.path().to_string_lossy().into_owned(),
+                ],
+                args_are_lyrel_defaults: false,
+            },
+        );
+        let session = daemon
+            .panes()
+            .spawn(
+                None,
+                lyrel_core::daemon::protocol::WinSize {
+                    cols: 80,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+                Some(shell),
+                None,
+                None,
+            )
+            .unwrap();
         let pane = session.pane_id();
         session.detach().unwrap();
         Self { daemon, pane }
@@ -31,19 +62,34 @@ impl NativeStaticFixture {
 }
 
 impl Drop for NativeStaticFixture {
-    fn drop(&mut self) { let _ = self.daemon.panes().kill(self.pane); }
+    fn drop(&mut self) {
+        let _ = self.daemon.panes().kill(self.pane);
+    }
 }
 
 fn native_static_exercise(cx: &mut TestAppContext, agent: lyrel_core::core::cli_agent::CLIAgent) {
     lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
     for policy in ["auto", "off"] {
         let fixture = NativeStaticFixture::start(agent, policy);
-        let (view, window) = graphics_build_rooted_consumer(cx, fixture.pane, fixture.daemon.stream(fixture.pane), Vec::new());
-        for (phase, pixels) in [("ATTACHMENT", NATIVE_PICTURE_FIRST), ("REMOUNT", NATIVE_PICTURE_FIRST), ("REPLACEMENT", NATIVE_PICTURE_LAST)] {
+        let (view, window) = graphics_build_rooted_consumer(
+            cx,
+            fixture.pane,
+            fixture.daemon.stream(fixture.pane),
+            Vec::new(),
+        );
+        for (phase, pixels) in [
+            ("ATTACHMENT", NATIVE_PICTURE_FIRST),
+            ("REMOUNT", NATIVE_PICTURE_FIRST),
+            ("REPLACEMENT", NATIVE_PICTURE_LAST),
+        ] {
             native_picture_wait(&view, cx, phase, |view| {
-                view.scrollback_text().contains(&format!("NATIVE_STATIC_{phase}"))
+                view.scrollback_text()
+                    .contains(&format!("NATIVE_STATIC_{phase}"))
                     && (policy == "off" || native_picture_pixels(view, pixels).is_some())
             });
             graphics_assert_production_paint(window, &view, cx);
@@ -89,16 +135,27 @@ fn native_static_exercise(cx: &mut TestAppContext, agent: lyrel_core::core::cli_
                 }
             });
             view.read_with(cx, |view, _| view.terminal.write(b"n".to_vec()));
-            native_picture_wait(&view, cx, "native unmount clears visible placements", |view| {
-                view.scrollback_text().contains("NATIVE_STATIC_EMPTY") && graphics_visible_images(view).is_empty()
-            });
+            native_picture_wait(
+                &view,
+                cx,
+                "native unmount clears visible placements",
+                |view| {
+                    view.scrollback_text().contains("NATIVE_STATIC_EMPTY")
+                        && graphics_visible_images(view).is_empty()
+                },
+            );
             graphics_assert_production_paint(window, &view, cx);
             view.read_with(cx, |view, _| view.terminal.write(b"n".to_vec()));
         }
-        native_picture_wait(&view, cx, "native component exit audit and shell restoration", |view| {
-            let text = view.scrollback_text();
-            text.contains("NATIVE_STATIC_AUDITED") && text.contains("LYREL_PARENT_AFTER=lyrel")
-        });
+        native_picture_wait(
+            &view,
+            cx,
+            "native component exit audit and shell restoration",
+            |view| {
+                let text = view.scrollback_text();
+                text.contains("NATIVE_STATIC_AUDITED") && text.contains("LYREL_PARENT_AFTER=lyrel")
+            },
+        );
         assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
         graphics_recovery_destroy(view, window, cx);
     }

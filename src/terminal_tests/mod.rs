@@ -3,11 +3,6 @@
 //! and the tab/pane fixtures. Everything here drives the terminal client
 //! through `lyrel_terminal`'s public and `test-support` surfaces.
 
-/// The native-font terminal consumer, run by the `native_terminal` test
-/// binary on the process main thread (see `lib.rs::run_native_terminal_tests`).
-#[cfg(feature = "native-markdown-tests")]
-pub(crate) mod native_terminal_tests;
-
 /// Suites that attach a production `TerminalView` to the whole-window
 /// `LyrelApp` harness, or drive real keystrokes through the root keymap.
 #[cfg(test)]
@@ -36,6 +31,7 @@ mod whole_window {
     };
     use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg};
     use lyrel_core::daemon::transport::Stream;
+    use lyrel_test_support::graphics_fixture::{GraphicsDaemonProcess, graphics_fixture_shell};
     use lyrel_test_support::hex::hex;
     use lyrel_ui_base::config::Config;
     use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};

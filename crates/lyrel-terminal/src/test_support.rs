@@ -5,15 +5,17 @@
 //! root package's whole-window and native consumer suites.
 
 use gpui_kit::{App, AppContext, Bounds, Entity, Pixels, TestAppContext, point, px};
+use hex::{decode, encode};
 use lyrel_core::daemon::transport::Stream;
-use lyrel_test_support::hex::{hex, unhex};
 
 use crate::remote::{PtySource, RemoteTerminal};
 use crate::size::TermSize;
 use crate::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView};
 
-pub use lyrel_test_support::graphics_fixture::GraphicsDaemonProcess;
-pub use lyrel_test_support::graphics_fixture::graphics_fixture_shell;
+#[cfg(test)]
+pub(crate) use lyrel_test_support::graphics_fixture::{
+    GraphicsDaemonProcess, graphics_fixture_shell,
+};
 
 /// Install the configured preset as the live theme exactly the way the
 /// shell's `apply_theme` does for a headless test (no window): resolve the
@@ -43,7 +45,7 @@ pub fn graphics_send_fixture_with_replies(
     replies: usize,
 ) {
     let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
-    let request = format!("{operation} {serial} {replies} {} 0\n", hex(bytes));
+    let request = format!("{operation} {serial} {replies} {} 0\n", encode(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     graphics_wait_fixture(view, cx, serial, input_bytes);
@@ -630,15 +632,15 @@ pub fn glyph_send(
     let path = reply_path.to_string_lossy();
     let request = format!(
         "SEND_ANY {serial} {replies} {} 0 {}\n",
-        hex(bytes),
-        hex(path.as_bytes()),
+        encode(bytes),
+        encode(path.as_bytes()),
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     graphics_wait_fixture(view, cx, serial, input_bytes);
     let text = std::fs::read_to_string(reply_path)
         .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
-    unhex(text.trim())
+    decode(text.trim()).expect("hex fixture reply")
 }
 
 pub fn glyph_cell_bounds(
