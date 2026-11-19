@@ -106,8 +106,7 @@ pub(crate) fn paint_editor(
             .unwrap_or(px(0.));
         let content_w = bounds.size.width;
         paint_nesting_guides(
-            i,
-            prepaint,
+            prepaint.marks.get(i).copied().flatten(),
             rtl,
             content_w,
             origin,
@@ -338,8 +337,7 @@ pub(crate) fn paint_editor(
 /// guide). The `outline` stack is the caller's — it spans the whole row walk
 /// so a visible row's guides can start above the viewport.
 fn paint_nesting_guides(
-    i: usize,
-    prepaint: &PrepaintState,
+    mark: Option<LineMark>,
     rtl: Option<&RtlRow>,
     content_w: Pixels,
     origin: Point<Pixels>,
@@ -350,7 +348,7 @@ fn paint_nesting_guides(
     // Nesting guides for a list/task row: a thin vertical line at each
     // ancestor bullet's x, spanning this row (contiguous rows stack into a
     // continuous guide).
-    match prepaint.marks.get(i).copied().flatten() {
+    match mark {
         Some(LineMark::List {
             bullet_x, color, ..
         })
@@ -842,7 +840,7 @@ fn paint_table_row_cell(
             t,
             point(content_left, origin.y),
             *lh,
-            &font,
+            font,
             font_size,
             base_lh,
             text_color,

@@ -30,7 +30,7 @@ fn install_harness(cx: &mut App, tree: &Entity<FileTree>) -> Harness {
     let sub = cx.subscribe(tree, move |_tree, event, cx| {
         recorded.borrow_mut().push(format!("{event:?}"));
         if let FileTreeEvent::FsEvents { host, paths } = event {
-            let _ = sink.update(cx, |tree, cx| {
+            sink.update(cx, |tree, cx| {
                 tree.apply_fs_events(*host, paths, true, true, *host, cx);
             });
         }
@@ -49,7 +49,7 @@ fn setup(cx: &mut TestAppContext, host: SharedHost) -> (Entity<FileTree>, Visual
         crate::ui::theme::apply_theme(None, cx);
         HostRegistry::insert(cx, host);
     });
-    let window = cx.add_window(|window, cx| FileTree::new(window, cx));
+    let window = cx.add_window(FileTree::new);
     let tree = window.root(cx).expect("the tree is the window root");
     window
         .update(cx, |_, window, _| window.activate_window())
@@ -115,7 +115,7 @@ fn local_host() -> SharedHost {
 }
 
 fn spelled(path: &Path) -> PathBuf {
-    lyrel_core::core::path_spelling::local_spelling_buf(path.to_path_buf())
+    lyrel_core::core::path_spelling::local_spelling_buf(path)
 }
 
 #[gpui_kit::test]

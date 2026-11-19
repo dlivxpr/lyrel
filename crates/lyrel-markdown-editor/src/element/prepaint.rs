@@ -135,11 +135,11 @@ pub(crate) fn prepaint_editor(
         )
     };
 
-    publish_shape_band(&editor, &el.editor, bounds, window);
+    publish_shape_band(editor, &el.editor, bounds, window);
     let line_tops = line_tops_for(&line_heights, &backgrounds, &tables, &wrap_rows);
     let rtl = rtl_row_geometry(bounds.size.width, &backgrounds, &marks, rtl_layout);
     let painter = RangePainter {
-        editor: &editor,
+        editor,
         starts: &starts,
         wrapped: &wrapped,
         line_heights: &line_heights,
@@ -163,41 +163,13 @@ pub(crate) fn prepaint_editor(
         &line_tops,
         window,
     );
-    let (checkbox_grips, chip_grips, alert_fold_grips) = gutter_pointer_hitboxes(
-        &marks,
-        &line_heights,
-        &rtl,
-        &widgets,
-        bounds,
-        &line_tops,
-        font_size,
-        window,
-    );
-    let (code_chips, code_card_rects) = code_card_chips(
-        &editor,
-        &backgrounds,
-        &line_tops,
-        &line_heights,
-        &wrap_rows,
-        bounds,
-        &font,
-        &starts,
-        window,
-    );
-    let (heading_chevrons, heading_fold_grips, heading_row_rects) = heading_fold_marks(
-        &editor,
-        &wrapped,
-        &backgrounds,
-        &marks,
-        &line_heights,
-        &starts,
-        bounds,
-        &line_tops,
-        font_size,
-        window,
-    );
+    let (checkbox_grips, chip_grips, alert_fold_grips) =
+        gutter_pointer_hitboxes(&painter, &widgets, window);
+    let (code_chips, code_card_rects) = code_card_chips(&painter, &wrap_rows, window);
+    let (heading_chevrons, heading_fold_grips, heading_row_rects) =
+        heading_fold_marks(&painter, window);
     let (link_grips, link_rects, inline_image_grips) = link_hitboxes(
-        &editor,
+        editor,
         &wrapped,
         &widgets,
         &backgrounds,
@@ -214,7 +186,7 @@ pub(crate) fn prepaint_editor(
     let prop_pill_grips =
         prop_pill_hitboxes(&widgets, bounds, &line_tops, &font, font_size, window);
     let (grip, grip_hb) = gutter_drag_grip(
-        &editor,
+        editor,
         bounds,
         &line_tops,
         &line_heights,
@@ -222,7 +194,7 @@ pub(crate) fn prepaint_editor(
         window,
     );
     let (table_zones, table_thumbs, row_aff, col_aff, caret_cell, col_resize_grips) =
-        table_affordances(&editor, &tables, &line_tops, &line_heights, bounds, window);
+        table_affordances(editor, &tables, &line_tops, &line_heights, bounds, window);
     // Find-match highlights (host-set): the reader's browser-style find
     // colors — soft yellow everywhere, stronger orange on the active
     // match. Behind the text, like the selection.
@@ -263,7 +235,7 @@ pub(crate) fn prepaint_editor(
         .unwrap_or_default();
     let (cursor, selections) = caret_and_selection(
         &painter,
-        &editor,
+        editor,
         &widgets,
         &tables,
         image_resize,
@@ -536,10 +508,10 @@ impl RangePainter<'_> {
                     }
                 };
                 let pa = (a > first_start && a < last_end)
-                    .then(|| table_caret_pos(t, a, tleft, &self.font, self.font_size, window))
+                    .then(|| table_caret_pos(t, a, tleft, self.font, self.font_size, window))
                     .flatten();
                 let pb = (b > first_start && b < last_end)
-                    .then(|| table_caret_pos(t, b, tleft, &self.font, self.font_size, window))
+                    .then(|| table_caret_pos(t, b, tleft, self.font, self.font_size, window))
                     .flatten();
                 match (pa, pb) {
                     // Both ends inside the SAME (possibly wrapped)
@@ -739,19 +711,23 @@ fn image_grip_hitboxes(
 /// the cursor flips to a hand over them. Bounds mirror the paint math; keyed
 /// by line so paint sets the cursor on each (see `set_cursor_style`).
 fn gutter_pointer_hitboxes(
-    marks: &[Option<LineMark>],
-    line_heights: &[Pixels],
-    rtl: &[Option<RtlRow>],
+    frame: &RangePainter<'_>,
     widgets: &[Option<Block>],
-    bounds: Bounds<Pixels>,
-    line_tops: &[Pixels],
-    font_size: Pixels,
     window: &mut Window,
 ) -> (
     Vec<(usize, Hitbox)>,
     Vec<(usize, Hitbox)>,
     Vec<(usize, Hitbox)>,
 ) {
+    let RangePainter {
+        marks,
+        line_heights,
+        rtl,
+        bounds,
+        line_tops,
+        font_size,
+        ..
+    } = *frame;
     // Pointer-cursor hitboxes for clickable gutter checkboxes + file chips, so
     // the cursor flips to a hand over them. Bounds mirror the paint math; keyed
     // by line so paint sets the cursor on each (see `set_cursor_style`).
@@ -810,16 +786,20 @@ fn gutter_pointer_hitboxes(
 /// button at each code block's top-right, inside the padded box. Laid out
 /// here (paint draws at these bounds; hitboxes flip the cursor).
 fn code_card_chips(
-    editor: &EditorState,
-    backgrounds: &[Option<CodeBg>],
-    line_tops: &[Pixels],
-    line_heights: &[Pixels],
+    frame: &RangePainter<'_>,
     wrap_rows: &[usize],
-    bounds: Bounds<Pixels>,
-    font: &Font,
-    starts: &[usize],
     window: &mut Window,
 ) -> (Vec<CodeChip>, Vec<(usize, Bounds<Pixels>)>) {
+    let RangePainter {
+        editor,
+        backgrounds,
+        line_tops,
+        line_heights,
+        bounds,
+        font,
+        starts,
+        ..
+    } = *frame;
     // Code-card chrome (Cditor-inspired, issue #16): a language tag + Copy
     // button at each code block's top-right, inside the padded box. Laid
     // out here (paint draws at these bounds; hitboxes flip the cursor).
@@ -930,21 +910,25 @@ fn code_card_chips(
 /// chevron (+ its hand-cursor hitbox) only when that row is hovered or
 /// already folded — one on every heading would clutter.
 fn heading_fold_marks(
-    editor: &EditorState,
-    wrapped: &[WrappedLine],
-    backgrounds: &[Option<CodeBg>],
-    marks: &[Option<LineMark>],
-    line_heights: &[Pixels],
-    starts: &[usize],
-    bounds: Bounds<Pixels>,
-    line_tops: &[Pixels],
-    font_size: Pixels,
+    frame: &RangePainter<'_>,
     window: &mut Window,
 ) -> (
     Vec<(usize, bool, Pixels)>,
     Vec<(usize, Hitbox)>,
     Vec<(usize, Bounds<Pixels>)>,
 ) {
+    let RangePainter {
+        editor,
+        wrapped,
+        backgrounds,
+        marks,
+        line_heights,
+        starts,
+        bounds,
+        line_tops,
+        font_size,
+        ..
+    } = *frame;
     // Heading fold chevrons: every heading row gets a hover-tracking rect;
     // a chevron (+ its hand-cursor hitbox) only when that row is hovered
     // or already folded — one on every heading would clutter.
@@ -1172,7 +1156,7 @@ fn prop_pill_hitboxes(
     for (i, w) in widgets.iter().enumerate() {
         if let Some(Block::Properties(p)) = w.as_ref() {
             let origin = point(bounds.origin.x, bounds.origin.y + line_tops[i]);
-            for b in prop_pill_bounds(p, origin, &font, font_size, window) {
+            for b in prop_pill_bounds(p, origin, font, font_size, window) {
                 prop_pill_grips.push(window.insert_hitbox(b, HitboxBehavior::Normal));
             }
         }
@@ -1523,7 +1507,7 @@ fn caret_and_selection(
                 t,
                 col,
                 editor.table_left(t, row, &painter.bounds),
-                &font,
+                font,
                 font_size,
                 window,
             )

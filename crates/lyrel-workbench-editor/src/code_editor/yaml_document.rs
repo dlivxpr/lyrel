@@ -613,7 +613,7 @@ fn anchor_notice(anchor: &str, aliases: usize, key: bool) -> SharedString {
         &[
             ("anchor", anchor),
             ("count", &aliases.to_string()),
-            ("field", &where_),
+            ("field", where_),
         ],
     )
     .into()

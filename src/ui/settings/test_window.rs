@@ -84,7 +84,6 @@ pub(crate) fn harness_standalone(
             root.view()
                 .clone()
                 .downcast::<SettingsWindow>()
-                .ok()
                 .expect("the window root wraps the settings window")
         })
         .unwrap();

@@ -270,22 +270,22 @@ impl StructuredViewFormat for JsonShell {
         let mut caps_remove = false;
         let mut record_root = false;
         let mut caps_remove_record = false;
-        if let Some(index) = selected {
-            if let Some(node) = projection.nodes().get(index) {
-                record_root = projection.is_record_root(index);
-                caps_value = record_root || value_editable(node);
-                caps_key = node.key_range.is_some();
-                caps_add = matches!(node.kind, JsonNodeKind::Object | JsonNodeKind::Array);
-                caps_add_is_array = node.kind == JsonNodeKind::Array;
-                caps_remove = node.parent.is_some_and(|parent| {
-                    node.key_range.is_some()
-                        || projection
-                            .nodes()
-                            .get(parent)
-                            .is_some_and(|parent| parent.kind == JsonNodeKind::Array)
-                });
-                caps_remove_record = record_root;
-            }
+        if let Some(index) = selected
+            && let Some(node) = projection.nodes().get(index)
+        {
+            record_root = projection.is_record_root(index);
+            caps_value = record_root || value_editable(node);
+            caps_key = node.key_range.is_some();
+            caps_add = matches!(node.kind, JsonNodeKind::Object | JsonNodeKind::Array);
+            caps_add_is_array = node.kind == JsonNodeKind::Array;
+            caps_remove = node.parent.is_some_and(|parent| {
+                node.key_range.is_some()
+                    || projection
+                        .nodes()
+                        .get(parent)
+                        .is_some_and(|parent| parent.kind == JsonNodeKind::Array)
+            });
+            caps_remove_record = record_root;
         }
         let mut buttons = vec![
             EditButton {

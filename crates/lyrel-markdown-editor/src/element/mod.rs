@@ -231,7 +231,7 @@ impl Element for EditorElement {
                     editor.frame.shape_band.get().map(|(a, b)| (px(a), px(b))),
                     &editor.affordances.folded_headings,
                 );
-                natural_width_publish(&editor, &shaped, &layout_entity, window);
+                natural_width_publish(editor, &shaped, &layout_entity, window);
                 let (new_tops, walked, needed) = measure_line_tops(
                     &shaped.heights,
                     &shaped.backgrounds,
@@ -239,7 +239,7 @@ impl Element for EditorElement {
                     &shaped.wrap_rows,
                 );
                 let total = walked.max(base_lh).max(needed);
-                compensate = scroll_compensation(&editor, &new_tops, total, wrap_width, sf);
+                compensate = scroll_compensation(editor, &new_tops, total, wrap_width, sf);
                 // Hand the shaping to this frame's prepaint (see ShapeMemo).
                 *editor.frame.shape_memo.borrow_mut() = Some(ShapeMemo {
                     wrap_width,

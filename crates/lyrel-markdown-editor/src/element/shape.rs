@@ -1586,7 +1586,7 @@ impl MarkdownLineShaper<'_> {
                     line,
                     self.base_font,
                     line_base,
-                    &line_diags,
+                    line_diags,
                     caret_col,
                     reveal_prefix,
                     hide_prefix,
@@ -1941,13 +1941,6 @@ fn shape_inline_math(
     (nd, nr, nm, inline)
 }
 
-/// Inline `![](src)` images: swap each ready image's glyphs for a spacer to
-/// paint the raster over, reusing the inline-math machinery — the returned
-/// [`InlineMath`] entries carry an empty `latex` (so the click-to-edit path
-/// treats them as images, not formulas). A caret strictly inside an image's
-/// `![…](…)` leaves it raw for editing. Sizing matches the reader: ~40px tall,
-/// capped 240px wide, aspect from the raster's pixels.
-#[allow(clippy::too_many_arguments)]
 /// Inline `![](src)` images: swap each ready image's glyphs for a spacer to
 /// paint the raster over, reusing the inline-math machinery — the returned
 /// [`InlineMath`] entries carry an empty `latex` (so the click-to-edit path
