@@ -3,8 +3,6 @@
 // preserves every existing test selector; the pure state tests moved with
 // the module and run in `lyrel-workbench-editor`'s library target.
 
-pub(crate) use lyrel_workbench_editor::code_editor::split::*;
-
 use lyrel_workbench_editor::code_editor::*;
 
 #[cfg(test)]

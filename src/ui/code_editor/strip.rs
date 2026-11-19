@@ -13,6 +13,7 @@ use lyrel_workbench_editor::code_editor::*;
 
 #[cfg(test)]
 mod gpui_tests {
+    use std::path::PathBuf;
 
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};

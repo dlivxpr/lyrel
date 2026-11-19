@@ -24,7 +24,7 @@ pub const ORIGIN: &str = "https://drawio.lyrel.invalid";
 pub const SHELL_PATH: &str = "/drawio/shell.html";
 pub const ENGINE_PATH: &str = "/drawio/engine.html";
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "test-support"))]
 pub const SHELL_URL: &str = "https://drawio.lyrel.invalid/drawio/shell.html";
 #[cfg(any(windows, test))]
 pub const ENGINE_URL: &str = "https://drawio.lyrel.invalid/drawio/engine.html";
