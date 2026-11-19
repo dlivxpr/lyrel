@@ -2942,7 +2942,7 @@ mod tests {
 /// differently — `socketpair` there, a loopback connect here — and every gpui
 /// test in this crate is portable once it goes through this instead of naming
 /// `UnixStream` itself.
-#[cfg(any(test, feature = "native-markdown-tests"))]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn test_stream_pair() -> (
     lyrel_core::daemon::transport::Stream,
     lyrel_core::daemon::transport::Stream,
