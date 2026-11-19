@@ -70,6 +70,9 @@ use tables::*;
 mod element;
 use element::*;
 
+mod render;
+mod render_menus;
+
 mod state;
 use state::*;
 
@@ -942,9 +945,9 @@ impl EditorState {
                             *selection =
                                 edit.map_offset(selection.start)..edit.map_offset(selection.end);
                         }
-                        this.selection.selected_range = edit.map_offset(
-                            this.selection.selected_range.start,
-                        )..edit.map_offset(this.selection.selected_range.end);
+                        this.selection.selected_range = edit
+                            .map_offset(this.selection.selected_range.start)
+                            ..edit.map_offset(this.selection.selected_range.end);
                     }
                     this.selection.retired_composition |= this.selection.marked_range.is_some();
                     this.selection.marked_range = None;
@@ -1397,7 +1400,8 @@ impl EditorState {
         if self.frame.last_bounds.is_none() || self.frame.last_paint_gen != self.frame.content_gen {
             return None;
         }
-        self.affordances.inline_math_rects
+        self.affordances
+            .inline_math_rects
             .iter()
             .find(|(source, latex, _)| source == range && !latex.is_empty())
             .map(|(_, _, bounds)| *bounds)
@@ -1542,7 +1546,8 @@ impl EditorState {
             let Some(inner) = zorite_markdown::syntax::embed_line(line) else {
                 continue;
             };
-            let (Some(top), Some((view, height))) = (self.frame.line_tops.get(row), provider(inner))
+            let (Some(top), Some((view, height))) =
+                (self.frame.line_tops.get(row), provider(inner))
             else {
                 continue;
             };
@@ -1591,10 +1596,15 @@ impl EditorState {
     /// surrounding text in place.
     fn editing_inline_overlay(&self) -> Option<gpui_kit::Div> {
         let ei = self.editing_inline.as_ref()?;
-        let (_, _, rect) = self.affordances.inline_math_rects
+        let (_, _, rect) = self
+            .affordances
+            .inline_math_rects
             .iter()
             .find(|(r, _, _)| *r == ei.range)?;
-        let origin = self.frame.last_bounds.map_or(Point::default(), |b| b.origin);
+        let origin = self
+            .frame
+            .last_bounds
+            .map_or(Point::default(), |b| b.origin);
         Some(
             div()
                 .absolute()
@@ -1678,7 +1688,8 @@ impl EditorState {
     /// no vertical advance (the next row's top equals theirs) — a gutter
     /// should skip those.
     pub fn row_layout(&self) -> Vec<(Pixels, Pixels)> {
-        self.frame.line_tops
+        self.frame
+            .line_tops
             .iter()
             .enumerate()
             .map(|(row, &top)| (top, self.line_h(row)))
@@ -1724,7 +1735,8 @@ impl EditorState {
     /// The wrap-row height of logical line `row` (a heading is taller). Falls
     /// back to the base `line_height` for unrecorded rows / the empty document.
     fn line_h(&self, row: usize) -> Pixels {
-        self.frame.line_heights
+        self.frame
+            .line_heights
             .get(row)
             .copied()
             .unwrap_or(self.frame.line_height)
@@ -1740,7 +1752,8 @@ impl EditorState {
     /// The right-align shift of an RTL row (zero everywhere else) — see
     /// [`RtlRow::shift`].
     fn rtl_shift(&self, row: usize) -> Pixels {
-        self.frame.rtl_rows
+        self.frame
+            .rtl_rows
             .get(row)
             .and_then(Option::as_ref)
             .and_then(|r| r.shifts.first().copied())
@@ -1760,7 +1773,8 @@ impl EditorState {
     /// visual arrows map to the opposite step.
     fn caret_table_is_rtl(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.frame.table_rows
+        self.frame
+            .table_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|t| t.rtl)
@@ -1774,7 +1788,8 @@ impl EditorState {
     /// one, so the two step functions swap.
     fn caret_row_is_rtl(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.frame.rtl_rows
+        self.frame
+            .rtl_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|r| r.base_rtl)
@@ -2352,7 +2367,9 @@ impl EditorState {
         // the table.
         if self.selection.selected_range.is_empty() && self.caret_in_table() {
             if let Some(off) = self.table_move_vertical(1)
-                && self.frame.table_rows
+                && self
+                    .frame
+                    .table_rows
                     .get(self.row_col(off).0)
                     .and_then(Option::as_ref)
                     .is_some_and(|t| !t.is_separator)
@@ -2362,7 +2379,9 @@ impl EditorState {
             }
             let (row, _) = self.row_col(self.cursor_offset());
             let mut last = row;
-            while self.frame.table_rows
+            while self
+                .frame
+                .table_rows
                 .get(last + 1)
                 .and_then(Option::as_ref)
                 .is_some()
@@ -2967,8 +2986,14 @@ impl EditorState {
     /// line kept its own. Raw mode (no markdown style) copies verbatim.
     fn copy_range(&self) -> std::ops::Range<usize> {
         let (start, end) = (
-            self.selection.selected_range.start.min(self.selection.selected_range.end),
-            self.selection.selected_range.start.max(self.selection.selected_range.end),
+            self.selection
+                .selected_range
+                .start
+                .min(self.selection.selected_range.end),
+            self.selection
+                .selected_range
+                .start
+                .max(self.selection.selected_range.end),
         );
         if self.markdown_style.is_none() || !self.content[start..end].contains('\n') {
             return start..end;
@@ -2990,7 +3015,10 @@ impl EditorState {
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
         if !self.selection.selected_range.is_empty() {
-            self.write_clipboard(self.content[self.selection.selected_range.clone()].to_string(), cx);
+            self.write_clipboard(
+                self.content[self.selection.selected_range.clone()].to_string(),
+                cx,
+            );
             self.replace_text_in_range(None, "", window, cx);
         }
     }
@@ -3349,7 +3377,9 @@ impl EditorState {
         if event.click_count == 1
             && !event.modifiers.shift
             && !event.modifiers.control
-            && let Some((_, hit)) = self.affordances.prop_pill_rects
+            && let Some((_, hit)) = self
+                .affordances
+                .prop_pill_rects
                 .iter()
                 .find(|(b, _)| b.contains(&event.position))
         {
@@ -3412,7 +3442,9 @@ impl EditorState {
             && self.markdown_style.is_some()
             && self.host_links
         {
-            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self.affordances.link_rects
+            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self
+                .affordances
+                .link_rects
                 .iter()
                 .find(|(bounds, _)| bounds.contains(&event.position))
             {
@@ -3475,11 +3507,18 @@ impl EditorState {
         }
         // A press on a wide table's scroll thumb starts a thumb drag — the
         // table scrolls with the pointer (see `on_mouse_move`).
-        if let Some(&TableThumb { header, .. }) = self.affordances.table_thumbs
+        if let Some(&TableThumb { header, .. }) = self
+            .affordances
+            .table_thumbs
             .iter()
             .find(|t| t.grab.contains(&event.position))
         {
-            let sx = self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.);
+            let sx = self
+                .affordances
+                .table_scroll_x
+                .get(&header)
+                .copied()
+                .unwrap_or(0.);
             self.affordances.table_thumb_drag = Some((header, event.position.x, sx));
             self.selection.is_selecting = false;
             cx.notify();
@@ -3489,7 +3528,9 @@ impl EditorState {
         // resizes live; release persists the width (issue #16). A DOUBLE-click
         // auto-fits the column to its content instead (the Excel/Sheets
         // convention for a column border).
-        if let Some(&(_, header_row, col, width)) = self.affordances.table_col_resize_rects
+        if let Some(&(_, header_row, col, width)) = self
+            .affordances
+            .table_col_resize_rects
             .iter()
             .find(|(band, ..)| band.contains(&event.position))
         {
@@ -3528,7 +3569,8 @@ impl EditorState {
                     return;
                 }
                 self.selection.is_selecting = false;
-                self.selection.selected_range = self.word_range_at(offset).unwrap_or(offset..offset);
+                self.selection.selected_range =
+                    self.word_range_at(offset).unwrap_or(offset..offset);
                 self.selection.selection_reversed = false;
                 cx.notify();
             }
@@ -3650,10 +3692,15 @@ impl EditorState {
             }
             return;
         }
-        if self.affordances.pending_link.as_ref().is_some_and(|(_, origin, _)| {
-            (event.position.x - origin.x).abs() >= px(4.)
-                || (event.position.y - origin.y).abs() >= px(4.)
-        }) {
+        if self
+            .affordances
+            .pending_link
+            .as_ref()
+            .is_some_and(|(_, origin, _)| {
+                (event.position.x - origin.x).abs() >= px(4.)
+                    || (event.position.y - origin.y).abs() >= px(4.)
+            })
+        {
             self.affordances.pending_link = None;
         }
         // Link under the pointer → `HoverLink` on change (a host shows a preview
@@ -3661,7 +3708,8 @@ impl EditorState {
         let over_link = self
             .host_links
             .then(|| {
-                self.affordances.link_rects
+                self.affordances
+                    .link_rects
                     .iter()
                     .chain(self.affordances.prop_pill_rects.iter())
                     .find(|(b, _)| b.contains(&event.position))
@@ -3691,7 +3739,9 @@ impl EditorState {
         // While dragging a wide table's scroll thumb, track the pointer: thumb
         // travel maps to content scroll through the committed factor.
         if let Some((header, grab_x, start_sx)) = self.affordances.table_thumb_drag {
-            let factor = self.affordances.table_thumbs
+            let factor = self
+                .affordances
+                .table_thumbs
                 .iter()
                 .find(|t| t.header == header)
                 .map_or(0., |t| t.factor);
@@ -3699,7 +3749,14 @@ impl EditorState {
             // Clamp at use like the wheel path — the paint clamps too, but a
             // sane stored value keeps other consumers simple.
             let sx = sx.max(0.);
-            if self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.) != sx {
+            if self
+                .affordances
+                .table_scroll_x
+                .get(&header)
+                .copied()
+                .unwrap_or(0.)
+                != sx
+            {
                 self.affordances.table_scroll_x.insert(header, sx);
                 cx.notify();
             }
@@ -3718,7 +3775,9 @@ impl EditorState {
             return;
         }
         if let Some(resize) = self.affordances.image_resize {
-            let avail = self.frame.last_bounds
+            let avail = self
+                .frame
+                .last_bounds
                 .map_or(f32::MAX, |b| f32::from(b.size.width))
                 - f32::from(self.line_inset(resize.line));
             let max_w = avail.max(IMG_MIN_W);
@@ -3748,14 +3807,18 @@ impl EditorState {
         // repaints on the caret blink).
         let region = self.table_hover_region_at(event.position);
         let cell = self.hovered_table_cell(event.position);
-        if region != self.affordances.table_hover_region || cell != self.affordances.table_hover_cell {
+        if region != self.affordances.table_hover_region
+            || cell != self.affordances.table_hover_cell
+        {
             self.affordances.table_hover_region = region;
             self.affordances.table_hover_cell = cell;
             cx.notify();
         }
         // Repaint the column-resize border accent as the pointer crosses a band
         // (the cursor comes from the hitbox; the painted line needs a frame).
-        let on_band = self.affordances.table_col_resize_rects
+        let on_band = self
+            .affordances
+            .table_col_resize_rects
             .iter()
             .position(|(b, ..)| b.contains(&event.position));
         if on_band != self.affordances.table_resize_hover {
@@ -3764,7 +3827,9 @@ impl EditorState {
         }
         // Repaint the property-panel hover border when the pointer moves between
         // rows (the border itself reads the live pointer during paint).
-        let prow = self.affordances.prop_row_rects
+        let prow = self
+            .affordances
+            .prop_row_rects
             .iter()
             .position(|(b, _)| b.contains(&event.position));
         if prow != self.affordances.prop_hover_row {
@@ -3773,7 +3838,9 @@ impl EditorState {
         }
         // Repaint the heading fold chevron when the pointer enters/leaves a
         // heading row (the chevron is hover-revealed).
-        let hrow = self.affordances.heading_row_rects
+        let hrow = self
+            .affordances
+            .heading_row_rects
             .iter()
             .find_map(|(row, b)| b.contains(&event.position).then_some(*row));
         if hrow != self.affordances.heading_hover_row {
@@ -3782,7 +3849,9 @@ impl EditorState {
         }
         // Repaint the code card's chrome (lang tag + Copy) when the pointer
         // enters/leaves a card — it's hover-revealed.
-        let ccard = self.affordances.code_card_rects
+        let ccard = self
+            .affordances
+            .code_card_rects
             .iter()
             .find_map(|(row, b)| b.contains(&event.position).then_some(*row));
         if ccard != self.affordances.code_chip_hover {
@@ -3827,7 +3896,8 @@ impl EditorState {
                 o.min(start + new_line.len())
             }
         };
-        self.selection.selected_range = remap(self.selection.selected_range.start)..remap(self.selection.selected_range.end);
+        self.selection.selected_range =
+            remap(self.selection.selected_range.start)..remap(self.selection.selected_range.end);
         cx.emit(EditorEvent::Changed);
         cx.notify();
     }
@@ -3884,7 +3954,9 @@ impl EditorState {
         // row renders as a picture, there's no text under the pointer to edit.
         // Only for real `![](src)` rows: mermaid/math rasters share the widget
         // type but delete as text (their menu would silently no-op).
-        if let Some(&(line, _)) = self.affordances.image_rects
+        if let Some(&(line, _)) = self
+            .affordances
+            .image_rects
             .iter()
             .find(|(_, rect)| rect.contains(&event.position))
             .filter(|&&(line, _)| self.image_row_range(line).is_some())
@@ -3897,7 +3969,9 @@ impl EditorState {
         }
         // Right-click a property-panel row: Edit / Delete property menu — the
         // panel renders as a widget, there's no text under the pointer.
-        if let Some(&(_, row)) = self.affordances.prop_row_rects
+        if let Some(&(_, row)) = self
+            .affordances
+            .prop_row_rects
             .iter()
             .find(|(rect, _)| rect.contains(&event.position))
         {
@@ -4443,7 +4517,9 @@ impl EditorState {
         let bounds = self.frame.last_bounds?;
         let (row, col) = self.row_col(self.cursor_offset());
         let lh = self.line_h(row);
-        let p = self.frame.wrapped
+        let p = self
+            .frame
+            .wrapped
             .get(row)?
             .position_for_index(self.display_col(row, col), lh)?;
         let top = bounds.top() + self.frame.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
@@ -4482,7 +4558,8 @@ impl EditorState {
         }
         if self.selection.selected_range.end < self.selection.selected_range.start {
             self.selection.selection_reversed = !self.selection.selection_reversed;
-            self.selection.selected_range = self.selection.selected_range.end..self.selection.selected_range.start;
+            self.selection.selected_range =
+                self.selection.selected_range.end..self.selection.selected_range.start;
         }
         self.frame.request_caret_reveal();
         cx.emit(EditorEvent::SelectionChanged);
@@ -4621,7 +4698,9 @@ impl EditorState {
         // A table separator (`|---|`) row isn't editable — skip past it (in the
         // direction of travel) so the caret lands on the header/body row rather
         // than dropping the whole table to raw source.
-        if self.frame.table_rows
+        if self
+            .frame
+            .table_rows
             .get(trow)
             .and_then(Option::as_ref)
             .is_some_and(|t| t.is_separator)
@@ -4785,7 +4864,8 @@ impl EditorState {
         if self.frame.last_bounds.is_none() || self.frame.last_paint_gen != self.frame.content_gen {
             return None;
         }
-        self.affordances.inline_math_rects
+        self.affordances
+            .inline_math_rects
             .iter()
             // Empty latex marks an inline IMAGE sharing this machinery — not a
             // formula, so a click on it shouldn't open the math editor.
@@ -4796,7 +4876,9 @@ impl EditorState {
     /// The inline image `src` under `position` (an empty-latex entry in
     /// `inline_math_rects`), parsed from its `![alt](src)` source.
     fn inline_image_at(&self, position: Point<Pixels>) -> Option<SharedString> {
-        let (range, _, _) = self.affordances.inline_math_rects
+        let (range, _, _) = self
+            .affordances
+            .inline_math_rects
             .iter()
             .find(|(_, latex, rect)| latex.is_empty() && rect.contains(&position))?;
         let text = self.content.get(range.clone())?;
@@ -4811,11 +4893,14 @@ impl EditorState {
     /// each image's painted corner (see [`Self::image_grip`]); checked against the
     /// last paint's window-space `image_rects`.
     fn grip_at(&self, position: Point<Pixels>) -> Option<(usize, f32)> {
-        self.affordances.image_rects.iter().find_map(|&(line, rect)| {
-            Self::image_grip(rect)
-                .contains(&position)
-                .then_some((line, f32::from(rect.size.width)))
-        })
+        self.affordances
+            .image_rects
+            .iter()
+            .find_map(|&(line, rect)| {
+                Self::image_grip(rect)
+                    .contains(&position)
+                    .then_some((line, f32::from(rect.size.width)))
+            })
     }
 
     /// The window-space bounds of an image's corner grip, given the image's
@@ -4917,14 +5002,17 @@ impl EditorState {
 
     fn checkbox_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.affordances.checkbox_rects.iter().find_map(|&(line, rect)| {
-            Bounds::new(
-                point(rect.origin.x - pad, rect.origin.y - pad),
-                size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
-            )
-            .contains(&position)
-            .then_some(line)
-        })
+        self.affordances
+            .checkbox_rects
+            .iter()
+            .find_map(|&(line, rect)| {
+                Bounds::new(
+                    point(rect.origin.x - pad, rect.origin.y - pad),
+                    size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
+                )
+                .contains(&position)
+                .then_some(line)
+            })
     }
 
     /// If `position` lands on a foldable callout's chevron painted last frame,
@@ -4932,14 +5020,17 @@ impl EditorState {
     /// like the task checkbox to stay easy to hit.
     fn alert_fold_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.affordances.alert_fold_rects.iter().find_map(|&(line, rect)| {
-            Bounds::new(
-                point(rect.origin.x - pad, rect.origin.y - pad),
-                size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
-            )
-            .contains(&position)
-            .then_some(line)
-        })
+        self.affordances
+            .alert_fold_rects
+            .iter()
+            .find_map(|&(line, rect)| {
+                Bounds::new(
+                    point(rect.origin.x - pad, rect.origin.y - pad),
+                    size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
+                )
+                .contains(&position)
+                .then_some(line)
+            })
     }
 
     /// If `position` lands on a heading's fold chevron painted last frame,
@@ -4947,14 +5038,17 @@ impl EditorState {
     /// like the callout chevron.
     fn heading_fold_at(&self, position: Point<Pixels>) -> Option<usize> {
         let pad = px(4.);
-        self.affordances.heading_fold_rects.iter().find_map(|&(line, rect)| {
-            Bounds::new(
-                point(rect.origin.x - pad, rect.origin.y - pad),
-                size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
-            )
-            .contains(&position)
-            .then_some(line)
-        })
+        self.affordances
+            .heading_fold_rects
+            .iter()
+            .find_map(|&(line, rect)| {
+                Bounds::new(
+                    point(rect.origin.x - pad, rect.origin.y - pad),
+                    size(rect.size.width + pad * 2., rect.size.height + pad * 2.),
+                )
+                .contains(&position)
+                .then_some(line)
+            })
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -5022,7 +5116,9 @@ impl EditorState {
             utf16 += ch.len_utf16();
             utf8 += ch.len_utf8();
         }
-        self.frame.utf16_anchor.set((self.frame.content_gen, utf8, utf16));
+        self.frame
+            .utf16_anchor
+            .set((self.frame.content_gen, utf8, utf16));
         utf8
     }
 
@@ -5035,7 +5131,9 @@ impl EditorState {
             utf8 += ch.len_utf8();
             utf16 += ch.len_utf16();
         }
-        self.frame.utf16_anchor.set((self.frame.content_gen, utf8, utf16));
+        self.frame
+            .utf16_anchor
+            .set((self.frame.content_gen, utf8, utf16));
         utf16
     }
 
@@ -5047,7 +5145,10 @@ impl EditorState {
     fn utf16_resume(&self, target: usize, by_utf8: bool) -> (usize, usize) {
         let (generation, utf8, utf16) = self.frame.utf16_anchor.get();
         let anchor_pos = if by_utf8 { utf8 } else { utf16 };
-        if generation == self.frame.content_gen && anchor_pos <= target && utf8 <= self.content.len() {
+        if generation == self.frame.content_gen
+            && anchor_pos <= target
+            && utf8 <= self.content.len()
+        {
             (utf8, utf16)
         } else {
             (0, 0)
@@ -5076,7 +5177,12 @@ impl EditorState {
             }
             let (row, col) = self.row_col(off);
             if row != row0
-                || self.frame.offset_maps.get(row).and_then(Option::as_ref).is_none()
+                || self
+                    .frame
+                    .offset_maps
+                    .get(row)
+                    .and_then(Option::as_ref)
+                    .is_none()
                 || self.display_col(row, col) != d0
             {
                 return off;
@@ -5096,7 +5202,12 @@ impl EditorState {
             }
             let (row, col) = self.row_col(off);
             if row != row0
-                || self.frame.offset_maps.get(row).and_then(Option::as_ref).is_none()
+                || self
+                    .frame
+                    .offset_maps
+                    .get(row)
+                    .and_then(Option::as_ref)
+                    .is_none()
                 || self.display_col(row, col) != d0
             {
                 return off;
@@ -5210,7 +5321,10 @@ impl EntityInputHandler for EditorState {
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.selection.marked_range.as_ref().map(|r| self.range_to_utf16(r))
+        self.selection
+            .marked_range
+            .as_ref()
+            .map(|r| self.range_to_utf16(r))
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -5236,7 +5350,9 @@ impl EntityInputHandler for EditorState {
         }
         self.selection.retired_composition = false;
         let completing_composition = self.selection.marked_range.is_some();
-        if range_utf16.is_none() && self.selection.marked_range.is_none() && !self.selection.extra_selections.is_empty()
+        if range_utf16.is_none()
+            && self.selection.marked_range.is_none()
+            && !self.selection.extra_selections.is_empty()
         {
             self.replace_occurrences(new_text, cx);
             return;
@@ -5353,7 +5469,9 @@ impl EntityInputHandler for EditorState {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        if self.frame.table_rows
+        if self
+            .frame
+            .table_rows
             .get(self.row_col(range.start).0)
             .and_then(Option::as_ref)
             .is_some_and(|table| !table.is_separator)
@@ -5418,1091 +5536,6 @@ impl Focusable for EditorState {
 }
 
 impl EventEmitter<EditorEvent> for EditorState {}
-
-impl Render for EditorState {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(provider) = &self.presentation_style_provider {
-            let style = provider(cx);
-            self.live_style = Some(style.clone());
-            if self.markdown_style.is_some() {
-                self.markdown_style = Some(style);
-            }
-        }
-        let scroll = div()
-            .relative()
-            .id("markdown-document-scroll")
-            .test_support()
-            .overflow_scroll()
-            .track_scroll(&self.frame.scroll)
-            .size_full()
-            // While a `$$` block OR an inline `$…$` formula is being edited, the hosted math
-            // editor is focused but lives *inside* this element — so the editor's own
-            // keybindings (arrows, typing, …) would capture keys before they reach it. Drop the
-            // key context for the duration so raw keys flow to the math editor's on_key_down.
-            .key_context(
-                if self.editing_block.is_some() || self.editing_inline.is_some() {
-                    ""
-                } else {
-                    CONTEXT
-                },
-            )
-            .track_focus(&self.focus_handle)
-            .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(|_, _: &InsertImage, _, cx| {
-                cx.emit(EditorEvent::InsertImages(Vec::new()))
-            }))
-            .on_drop(
-                cx.listener(|this, paths: &gpui_kit::ExternalPaths, window, cx| {
-                    cx.stop_propagation();
-                    let position = window.mouse_position();
-                    let offset = this.index_for_mouse_position(position);
-                    let affinity = this.affinity_for_mouse_position(offset, position);
-                    this.move_to_with_affinity(offset, affinity, cx);
-                    this.focus(window, cx);
-                    cx.emit(EditorEvent::InsertImages(paths.paths().to_vec()));
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Undo, window, cx| {
-                    this.undo(&Undo, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Redo, window, cx| {
-                    this.redo(&Redo, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Copy, window, cx| {
-                    this.copy(&Copy, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Cut, window, cx| {
-                    this.cut(&Cut, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Paste, window, cx| {
-                    this.paste(&Paste, window, cx)
-                }),
-            )
-            .on_action(cx.listener(
-                |this, _: &gpui_kit::component::input::SelectAll, window, cx| {
-                    this.select_all(&SelectAll, window, cx)
-                },
-            ))
-            .on_action(cx.listener(
-                |this, _: &gpui_kit::component::input::MoveToStart, window, cx| {
-                    this.doc_start(&DocStart, window, cx)
-                },
-            ))
-            .on_action(cx.listener(
-                |this, _: &gpui_kit::component::input::Backspace, window, cx| {
-                    this.backspace(&Backspace, window, cx)
-                },
-            ))
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Delete, window, cx| {
-                    this.delete(&Delete, window, cx)
-                }),
-            )
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::up))
-            .on_action(cx.listener(Self::down))
-            .on_action(cx.listener(Self::home))
-            .on_action(cx.listener(Self::end))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_up))
-            .on_action(cx.listener(Self::select_down))
-            .on_action(cx.listener(Self::word_left))
-            .on_action(cx.listener(Self::word_right))
-            .on_action(cx.listener(Self::select_word_left))
-            .on_action(cx.listener(Self::select_word_right))
-            .on_action(cx.listener(Self::delete_word_left))
-            .on_action(cx.listener(Self::delete_word_right))
-            .on_action(cx.listener(Self::select_home))
-            .on_action(cx.listener(Self::select_end))
-            .on_action(cx.listener(Self::doc_start))
-            .on_action(cx.listener(Self::doc_end))
-            .on_action(cx.listener(Self::select_doc_start))
-            .on_action(cx.listener(Self::select_doc_end))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::newline))
-            .on_action(cx.listener(Self::bold))
-            .on_action(cx.listener(Self::italic))
-            .on_action(cx.listener(Self::underline))
-            .on_action(cx.listener(Self::strike))
-            .on_action(cx.listener(Self::highlight))
-            .on_action(cx.listener(Self::code))
-            .on_action(cx.listener(Self::indent))
-            .on_action(cx.listener(Self::outdent))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::show_character_palette))
-            .on_action(cx.listener(Self::undo))
-            .on_action(cx.listener(Self::redo))
-            .on_action(cx.listener(Self::dismiss))
-            .on_action(cx.listener(Self::insert_writing_block))
-            .on_action(cx.listener(Self::text_color_picker))
-            .on_action(cx.listener(Self::highlight_color_picker))
-            .on_action(cx.listener(Self::toggle_heading_disclosure))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_scroll(cx.listener(Self::on_scroll_wheel))
-            .child({
-                let content = div().w_full().min_w_0();
-                // With soft wrap off, unwrapped lines become the scroll
-                // content's minimum width instead of being clipped.
-                let content = if !self.soft_wrap && self.frame.natural_width.get() > px(0.) {
-                    content.min_w(
-                        self.frame.natural_width.get() + window.rem_size() * (self.document_inset.0 * 2.),
-                    )
-                } else {
-                    content
-                };
-                content
-                    .px(gpui_kit::rems(self.document_inset.0))
-                    .py(gpui_kit::rems(self.document_inset.1))
-                    .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .min_w_0()
-                            .child(EditorElement {
-                                editor: cx.entity(),
-                            })
-                            .children(self.embed_overlays(window))
-                            .children(self.editing_block_overlay())
-                            .children(self.editing_inline_overlay()),
-                    )
-            })
-            .children(self.writing_overlay.clone())
-            // Right-click suggestions menu, absolutely positioned over the
-            // editor (anchored at the click). `Option`'s `IntoIterator` renders
-            // zero or one popup; clicking a row replaces the misspelled span.
-            .children(self.overlay_menu.diagnostics().cloned().map(|menu| {
-                let DiagMenu {
-                    anchor,
-                    range,
-                    suggestions,
-                    scroll,
-                    turn_into: menu_turn_into,
-                } = menu;
-                let count = suggestions.len();
-                // Menu chrome from the host's theme (fallbacks match the former
-                // hardcoded dark menu when no markdown style is set).
-                let st = self.markdown_style.as_ref();
-                let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
-                let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
-                let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
-                let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
-                let mut thumb_c = st.map_or(rgba(0xffffff66).into(), |s| s.marker);
-                thumb_c.a = 0.5;
-                // Collected eagerly (not a lazy iterator) so `cx` is only
-                // borrowed here and stays free for the menu's own listeners below.
-                let rows: Vec<_> = suggestions
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, sugg)| {
-                        let range = range.clone();
-                        let replacement = sugg.to_string();
-                        div()
-                            // A stable per-row id so gpui tracks hover state and
-                            // repaints as the pointer moves between rows. Without
-                            // an id, the hover style only shows on a forced
-                            // repaint (e.g. while scrolling).
-                            .id(("suggestion-row", i))
-                            // Don't let the scroll container's max-height squeeze
-                            // the rows; they keep their height and overflow.
-                            .flex_shrink_0()
-                            .px(px(10.))
-                            .py(px(3.))
-                            // Highlight the row under the pointer.
-                            .hover(move |s| s.bg(hover))
-                            .child(sugg)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
-                                    // Keep the editor's own mouse-down from clearing
-                                    // the menu / moving the caret out from under us.
-                                    cx.stop_propagation();
-                                    editor.apply_suggestion(
-                                        range.clone(),
-                                        &replacement,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                    })
-                    .collect();
-                // A thin scrollbar thumb, shown when the list overflows ~6 rows
-                // so the scroll affordance is visible. Sized from the row count
-                // (known now) and positioned from the live scroll offset — a
-                // wheel scroll calls window.refresh(), which re-renders this.
-                const ROW_H: f32 = 24.0;
-                const PAD: f32 = 4.0;
-                const MAX_H: f32 = 180.0;
-                let rows_h = count as f32 * ROW_H;
-                let view_h = MAX_H - 2.0 * PAD;
-                let thumb = (rows_h > view_h).then(|| {
-                    let scrolled = (-f32::from(scroll.offset().y)).clamp(0.0, rows_h - view_h);
-                    let thumb_h = (view_h * view_h / rows_h).max(24.0);
-                    let thumb_top = PAD + scrolled / (rows_h - view_h) * (view_h - thumb_h);
-                    div()
-                        .absolute()
-                        .top(px(thumb_top))
-                        .right(px(2.))
-                        .w(px(6.))
-                        .h(px(thumb_h))
-                        .rounded(px(3.))
-                        .bg(thumb_c)
-                });
-
-                // Cut / Copy need a selection; Paste always applies (the caret
-                // was seated at the click when it landed outside the selection).
-                let has_sel = !self.selection.selected_range.is_empty();
-                let clip_item = |id: &'static str, label: SharedString| {
-                    div()
-                        .id(id)
-                        .test_support()
-                        .role(gpui_kit::Role::MenuItem)
-                        .aria_label(label.clone())
-                        .flex_shrink_0()
-                        .px(px(10.))
-                        .py(px(3.))
-                        .hover(move |s| s.bg(hover))
-                        .child(label)
-                };
-                let mut clipboard = div().flex().flex_col().py(px(4.));
-                if has_sel {
-                    clipboard = clipboard
-                        .child(
-                            clip_item("menu-cut", self.labels.cut.clone()).on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    editor.overlay_menu.dismiss();
-                                    editor.cut(&Cut, window, cx);
-                                }),
-                            ),
-                        )
-                        .child(
-                            clip_item("menu-copy", self.labels.copy.clone()).on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    editor.overlay_menu.dismiss();
-                                    editor.copy(&Copy, window, cx);
-                                }),
-                            ),
-                        )
-                        // Plain-only: the raw markdown with no host flavors —
-                        // for pasting literal source into rich surfaces
-                        // (email, chat) where Copy's HTML flavor would win.
-                        .child(
-                            clip_item("menu-copy-md", self.labels.copy_as_markdown.clone())
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.copy_plain(window, cx);
-                                    }),
-                                ),
-                        );
-                }
-                let clipboard = clipboard.child(
-                    clip_item("menu-paste", self.labels.paste.clone()).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            editor.overlay_menu.dismiss();
-                            editor.paste(&Paste, window, cx);
-                        }),
-                    ),
-                );
-
-                // Inline-format bar (Cditor-style): with a selection, a strip of
-                // B / I / S / <> buttons across the menu's top — each toggles its
-                // markdown wrap on the selection and closes the menu.
-                let fmt_btn = |id: &'static str| {
-                    div()
-                        .id(id)
-                        .w(px(28.))
-                        .h(px(24.))
-                        .rounded(px(4.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .hover(move |s| s.bg(hover))
-                };
-                let format_bar = has_sel.then(|| {
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(2.))
-                        .px(px(6.))
-                        .py(px(4.))
-                        .child(
-                            fmt_btn("menu-fmt-bold")
-                                .font_weight(FontWeight::BOLD)
-                                .child("B")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.bold(&Bold, window, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            fmt_btn("menu-fmt-italic")
-                                .italic()
-                                .child("I")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.italic(&Italic, window, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            fmt_btn("menu-fmt-underline")
-                                .underline()
-                                .child("U")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.underline(&Underline, window, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            fmt_btn("menu-fmt-strike")
-                                .line_through()
-                                .child("S")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.strike(&Strike, window, cx);
-                                    }),
-                                ),
-                        )
-                        .child(
-                            fmt_btn("menu-fmt-code")
-                                .font_family(
-                                    self.markdown_style
-                                        .as_ref()
-                                        .map(|s| s.mono.family.clone())
-                                        .unwrap_or_else(|| "monospace".into()),
-                                )
-                                .text_size(px(12.))
-                                .child("<>")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.code(&Code, window, cx);
-                                    }),
-                                ),
-                        )
-                });
-
-                // Color swatches under the format bar: text colors, then
-                // highlights (theme tint first, then colored `<mark>`s).
-                let mark_bg = st.map_or(rgba(0xFFD60066).into(), |s| s.mark_bg);
-                let color_rows = has_sel.then(|| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(Self::color_row(
-                            ColorKind::Text,
-                            None,
-                            menu_border,
-                            hover,
-                            self.host_custom_colors,
-                            cx,
-                        ))
-                        .child(Self::color_row(
-                            ColorKind::Highlight,
-                            Some(mark_bg),
-                            menu_border,
-                            hover,
-                            self.host_custom_colors,
-                            cx,
-                        ))
-                });
-
-                // "Turn into" block conversion (Cditor-style): a row whose
-                // hover opens a kind-list flyout beside the menu, the caret
-                // block's current kind checked.
-                let cur_kind = self.block_kind_at(self.row_col(self.selection.selected_range.start).0);
-                let turn_row = div()
-                    .id("menu-turn-into")
-                    .flex_shrink_0()
-                    .px(px(10.))
-                    .py(px(3.))
-                    .hover(move |s| s.bg(hover))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(16.))
-                    .child(self.labels.turn_into.clone())
-                    .child(div().text_size(px(10.)).child("\u{25b8}"))
-                    .on_hover(cx.listener(|editor, hovered: &bool, _, cx| {
-                        if *hovered
-                            && let Some(m) = editor.overlay_menu.diagnostics_mut()
-                            && !m.turn_into
-                        {
-                            m.turn_into = true;
-                            cx.notify();
-                        }
-                    }));
-                let turn_labels = self.labels.clone();
-                let turn_flyout = menu_turn_into.then(|| {
-                    let rows: Vec<_> = TurnKind::ALL
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &k)| {
-                            let checked = k == cur_kind;
-                            div()
-                                .id(("turn-kind", i))
-                                .flex_shrink_0()
-                                .px(px(10.))
-                                .py(px(3.))
-                                .hover(move |s| s.bg(hover))
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(div().w(px(12.)).flex_shrink_0().child(if checked {
-                                    "\u{2713}"
-                                } else {
-                                    ""
-                                }))
-                                .child(k.label(&turn_labels))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        editor.overlay_menu.dismiss();
-                                        editor.turn_into(k, window, cx);
-                                    }),
-                                )
-                        })
-                        .collect();
-                    // An absolute sibling of the (overflow-clipped) menu box —
-                    // out of flow, so it can't inflate the anchored bounds and
-                    // re-trigger the window snap (the slash-flyout lesson).
-                    div()
-                        .absolute()
-                        .left(gpui_kit::relative(1.))
-                        .bottom(px(0.))
-                        .ml(px(2.))
-                        .occlude()
-                        .min_w(px(140.))
-                        .cursor(CursorStyle::Arrow)
-                        .bg(menu_bg)
-                        .border_1()
-                        .border_color(menu_border)
-                        .rounded(px(6.))
-                        .shadow_md()
-                        .text_color(menu_fg)
-                        .text_size(px(13.))
-                        .flex()
-                        .flex_col()
-                        .py(px(4.))
-                        .children(rows)
-                });
-
-                // Deferred + anchored to a window-space top layer with `.occlude()`,
-                // so it renders above the page chrome and captures the wheel — else a
-                // scroll over the popup scrolls the page behind it.
-                gpui_kit::deferred(
-                    gpui_kit::anchored()
-                        .position(anchor)
-                        .snap_to_window()
-                        .child(
-                            div().relative().children(turn_flyout).child(
-                                div()
-                                    .relative()
-                                    .occlude()
-                                    .min_w(px(150.))
-                                    // Override the editor's I-beam — the menu is a normal
-                                    // pointer surface (children inherit this hitbox's cursor).
-                                    .cursor(CursorStyle::Arrow)
-                                    .bg(menu_bg)
-                                    .border_1()
-                                    .border_color(menu_border)
-                                    .rounded(px(6.))
-                                    .shadow_md()
-                                    // Clip rows + thumb to the rounded box.
-                                    .overflow_hidden()
-                                    .text_color(menu_fg)
-                                    .text_size(px(13.))
-                                    // A click anywhere outside the menu dismisses it.
-                                    .on_mouse_down_out(cx.listener(
-                                        |editor, _: &MouseDownEvent, _, cx| {
-                                            editor.overlay_menu.dismiss();
-                                            cx.notify();
-                                        },
-                                    ))
-                                    .children(format_bar)
-                                    .children(color_rows)
-                                    .children(has_sel.then(|| div().h(px(1.)).bg(menu_border)))
-                                    .children((count > 0).then(|| {
-                                        // The scroll viewport: shows ~6 rows, the rest scroll.
-                                        div()
-                                            .id("suggestion-menu")
-                                            .max_h(px(MAX_H))
-                                            .overflow_y_scroll()
-                                            .track_scroll(&scroll)
-                                            .flex()
-                                            .flex_col()
-                                            .py(px(PAD))
-                                            .children(rows)
-                                    }))
-                                    .children((count > 0).then(|| div().h(px(1.)).bg(menu_border)))
-                                    .child(clipboard)
-                                    .child(div().h(px(1.)).bg(menu_border))
-                                    .child(div().flex().flex_col().py(px(4.)).child(turn_row))
-                                    .children(thumb),
-                            ),
-                        ),
-                )
-            }))
-            // The table right-click menu (Word-style row/column editing), anchored
-            // at the click; each row runs its action on the caret's table cell.
-            .children(self.overlay_menu.table().map(|(anchor, menu_scroll)| {
-                // Menu chrome from the host's theme (fallbacks match the former
-                // hardcoded dark menu when no markdown style is set).
-                let st = self.markdown_style.as_ref();
-                let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
-                let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
-                let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
-                let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
-                let divider = st.map_or(rgba(0xffffff2e).into(), |s| s.popover_divider);
-                let mut thumb_c = st.map_or(rgba(0xffffff66).into(), |s| s.marker);
-                thumb_c.a = 0.5;
-                const ROW_H: f32 = 24.0;
-                const DIV_H: f32 = 9.0;
-                const PAD: f32 = 4.0;
-                const MAX_H: f32 = 480.0;
-                // Cditor-style grouped rows: a glyph column, a checkmark on the
-                // current align/style, and the destructive group in red.
-                let danger = st.map_or(rgb(0xE5484D).into(), |s| s.popover_danger);
-                let cur_align = self.caret_table_align();
-                let cur_style = self
-                    .caret_table_region()
-                    .map(|r| r.style)
-                    .unwrap_or_default();
-                use markdown_syntax::TableStyle as TS;
-                enum Row {
-                    Div,
-                    Item {
-                        glyph: &'static str,
-                        label: SharedString,
-                        action: TableMenuAction,
-                        red: bool,
-                        checked: bool,
-                    },
-                }
-                let item = |glyph, label, action| Row::Item {
-                    glyph,
-                    label,
-                    action,
-                    red: false,
-                    checked: false,
-                };
-                let specs = [
-                    item(
-                        "↑",
-                        self.labels.insert_row_above.clone(),
-                        TableMenuAction::InsertRowAbove,
-                    ),
-                    item(
-                        "↓",
-                        self.labels.insert_row_below.clone(),
-                        TableMenuAction::InsertRowBelow,
-                    ),
-                    item(
-                        "⧉",
-                        self.labels.duplicate_row.clone(),
-                        TableMenuAction::DuplicateRow,
-                    ),
-                    Row::Div,
-                    item(
-                        "←",
-                        self.labels.insert_column_left.clone(),
-                        TableMenuAction::InsertColLeft,
-                    ),
-                    item(
-                        "→",
-                        self.labels.insert_column_right.clone(),
-                        TableMenuAction::InsertColRight,
-                    ),
-                    Row::Div,
-                    Row::Item {
-                        glyph: "",
-                        label: self.labels.align_left.clone(),
-                        action: TableMenuAction::AlignLeft,
-                        red: false,
-                        checked: cur_align == Some(CellAlign::Left),
-                    },
-                    Row::Item {
-                        glyph: "",
-                        label: self.labels.align_center.clone(),
-                        action: TableMenuAction::AlignCenter,
-                        red: false,
-                        checked: cur_align == Some(CellAlign::Center),
-                    },
-                    Row::Item {
-                        glyph: "",
-                        label: self.labels.align_right.clone(),
-                        action: TableMenuAction::AlignRight,
-                        red: false,
-                        checked: cur_align == Some(CellAlign::Right),
-                    },
-                    Row::Div,
-                    Row::Item {
-                        glyph: "▦",
-                        label: self.labels.grid_style.clone(),
-                        action: TableMenuAction::SetStyle(None),
-                        red: false,
-                        checked: cur_style == TS::Grid,
-                    },
-                    Row::Item {
-                        glyph: "▤",
-                        label: self.labels.striped_style.clone(),
-                        action: TableMenuAction::SetStyle(Some("striped")),
-                        red: false,
-                        checked: cur_style == TS::Striped,
-                    },
-                    Row::Item {
-                        glyph: "▥",
-                        label: self.labels.header_style.clone(),
-                        action: TableMenuAction::SetStyle(Some("header")),
-                        red: false,
-                        checked: cur_style == TS::Header,
-                    },
-                    Row::Item {
-                        glyph: "─",
-                        label: self.labels.minimal_style.clone(),
-                        action: TableMenuAction::SetStyle(Some("minimal")),
-                        red: false,
-                        checked: cur_style == TS::Minimal,
-                    },
-                    Row::Div,
-                    item(
-                        "⊞",
-                        self.labels.copy_as_markdown.clone(),
-                        TableMenuAction::CopyTable,
-                    ),
-                    Row::Div,
-                    Row::Item {
-                        glyph: "✕",
-                        label: self.labels.delete_row.clone(),
-                        action: TableMenuAction::DeleteRow,
-                        red: true,
-                        checked: false,
-                    },
-                    Row::Item {
-                        glyph: "✕",
-                        label: self.labels.delete_column.clone(),
-                        action: TableMenuAction::DeleteColumn,
-                        red: true,
-                        checked: false,
-                    },
-                    Row::Item {
-                        glyph: "✕",
-                        label: self.labels.delete_table.clone(),
-                        action: TableMenuAction::DeleteTable,
-                        red: true,
-                        checked: false,
-                    },
-                ];
-                let n_items = specs
-                    .iter()
-                    .filter(|r| matches!(r, Row::Item { .. }))
-                    .count();
-                let n_divs = specs.len() - n_items;
-                let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
-                for (i, spec) in specs.into_iter().enumerate() {
-                    match spec {
-                        Row::Div => rows.push(
-                            div()
-                                .flex_shrink_0()
-                                .h(px(1.))
-                                .my(px(4.))
-                                .mx(px(8.))
-                                .bg(divider)
-                                .into_any_element(),
-                        ),
-                        Row::Item {
-                            glyph,
-                            label,
-                            action,
-                            red,
-                            checked,
-                        } => {
-                            let fg = if red { danger } else { menu_fg };
-                            let mut glyph_c = fg;
-                            glyph_c.a *= 0.7;
-                            rows.push(
-                                div()
-                                    .id(("table-menu-row", i))
-                                    .flex_shrink_0()
-                                    .px(px(10.))
-                                    .py(px(3.))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .text_color(fg)
-                                    .hover(move |s| s.bg(hover))
-                                    .child(
-                                        div()
-                                            .w(px(16.))
-                                            .flex_none()
-                                            .text_color(glyph_c)
-                                            .child(glyph),
-                                    )
-                                    .child(div().flex_1().child(label))
-                                    .children(checked.then(|| div().text_color(glyph_c).child("✓")))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            action.apply(editor, cx);
-                                        }),
-                                    )
-                                    .into_any_element(),
-                            );
-                        }
-                    }
-                }
-                // Scrollbar thumb, shown when the items overflow the cap — sized from
-                // the content height + positioned from the live scroll offset.
-                let rows_h = n_items as f32 * ROW_H + n_divs as f32 * DIV_H;
-                let view_h = MAX_H - 2.0 * PAD;
-                let thumb = (rows_h > view_h).then(|| {
-                    let scrolled =
-                        (-f32::from(menu_scroll.offset().y)).clamp(0.0, rows_h - view_h);
-                    let thumb_h = (view_h * view_h / rows_h).max(24.0);
-                    let thumb_top = PAD + scrolled / (rows_h - view_h) * (view_h - thumb_h);
-                    div()
-                        .absolute()
-                        .top(px(thumb_top))
-                        .right(px(2.))
-                        .w(px(6.))
-                        .h(px(thumb_h))
-                        .rounded(px(3.))
-                        .bg(thumb_c)
-                });
-                gpui_kit::deferred(
-                    gpui_kit::anchored()
-                        .position(anchor)
-                        .snap_to_window()
-                        .child(
-                            div()
-                                .relative()
-                                .occlude()
-                                .min_w(px(190.))
-                                .cursor(CursorStyle::Arrow)
-                                .bg(menu_bg)
-                                .border_1()
-                                .border_color(menu_border)
-                                .rounded(px(6.))
-                                .shadow_md()
-                                .overflow_hidden()
-                                .text_color(menu_fg)
-                                .text_size(px(13.))
-                                .on_mouse_down_out(cx.listener(
-                                    |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.overlay_menu.dismiss();
-                                        cx.notify();
-                                    },
-                                ))
-                                .child(
-                                    // Inner scroll viewport: caps the height + scrolls the
-                                    // overflow (max_h on a separate flex-col div, like the
-                                    // suggestion menu — combining it with the styled box
-                                    // above doesn't cap).
-                                    div()
-                                        .id("table-menu")
-                                        .max_h(px(MAX_H))
-                                        .overflow_y_scroll()
-                                        .track_scroll(menu_scroll)
-                                        .flex()
-                                        .flex_col()
-                                        .py(px(PAD))
-                                        .children(rows),
-                                )
-                                .children(thumb),
-                        ),
-                )
-            }))
-            // The image right-click menu: Word-style object actions on an inline
-            // image (Delete), anchored at the click. Chrome matches the table menu.
-            .children(self.overlay_menu.property().map(|(row, anchor)| {
-                let st = self.markdown_style.as_ref();
-                let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
-                let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
-                let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
-                let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
-                let item = |id: &'static str, label: SharedString| {
-                    div()
-                        .id(id)
-                        .px(px(10.))
-                        .py(px(3.))
-                        .hover(move |s| s.bg(hover))
-                        .child(label)
-                };
-                gpui_kit::deferred(
-                    gpui_kit::anchored()
-                        .position(anchor)
-                        .snap_to_window()
-                        .child(
-                            div()
-                                .occlude()
-                                .min_w(px(160.))
-                                .cursor(CursorStyle::Arrow)
-                                .bg(menu_bg)
-                                .border_1()
-                                .border_color(menu_border)
-                                .rounded(px(6.))
-                                .shadow_md()
-                                .overflow_hidden()
-                                .text_color(menu_fg)
-                                .text_size(px(13.))
-                                .py(px(4.))
-                                .on_mouse_down_out(cx.listener(
-                                    |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.overlay_menu.dismiss();
-                                        cx.notify();
-                                    },
-                                ))
-                                .child(
-                                    item("prop-menu-edit", self.labels.edit_properties.clone())
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                move |editor, _: &MouseDownEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    editor.overlay_menu.dismiss();
-                                                    if let Some((range, source)) =
-                                                        editor.property_block_at(row)
-                                                    {
-                                                        let block_row =
-                                                            row - editor.row_col(range.start).0;
-                                                        cx.emit(EditorEvent::EditProperties {
-                                                            range,
-                                                            source,
-                                                            at_end: false,
-                                                            row: Some(block_row),
-                                                        });
-                                                    }
-                                                },
-                                            ),
-                                        ),
-                                )
-                                .child(
-                                    item("prop-menu-delete", self.labels.delete_property.clone())
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                move |editor, _: &MouseDownEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    editor.overlay_menu.dismiss();
-                                                    editor.delete_property_row(row, cx);
-                                                },
-                                            ),
-                                        ),
-                                ),
-                        ),
-                )
-            }))
-            .children(self.overlay_menu.image().map(|(line, anchor)| {
-                let st = self.markdown_style.as_ref();
-                let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
-                let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
-                let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
-                let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
-                gpui_kit::deferred(
-                    gpui_kit::anchored()
-                        .position(anchor)
-                        .snap_to_window()
-                        .child(
-                            div()
-                                .occlude()
-                                .min_w(px(140.))
-                                .cursor(CursorStyle::Arrow)
-                                .bg(menu_bg)
-                                .border_1()
-                                .border_color(menu_border)
-                                .rounded(px(6.))
-                                .shadow_md()
-                                .overflow_hidden()
-                                .text_color(menu_fg)
-                                .text_size(px(13.))
-                                .py(px(4.))
-                                .on_mouse_down_out(cx.listener(
-                                    |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.overlay_menu.dismiss();
-                                        cx.notify();
-                                    },
-                                ))
-                                .child(
-                                    div()
-                                        .id("image-menu-delete")
-                                        .px(px(10.))
-                                        .py(px(3.))
-                                        .hover(move |s| s.bg(hover))
-                                        .child(self.labels.delete_image.clone())
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                move |editor, _: &MouseDownEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    editor.overlay_menu.dismiss();
-                                                    editor.delete_image_row(line, cx);
-                                                },
-                                            ),
-                                        ),
-                                ),
-                        ),
-                )
-            }))
-            .children(self.overlay_menu.code_lang().map(|(row, anchor, menu_scroll)| {
-                // The code block's language picker (Cditor-inspired): the host's
-                // highlighter languages, scrollable past the cap, current one
-                // checked. Selecting rewrites the opening fence (one undo step).
-                let st = self.markdown_style.as_ref();
-                let menu_bg = st.map_or(rgb(0x26262b).into(), |s| s.popover_bg);
-                let menu_border = st.map_or(rgb(0x45454c).into(), |s| s.popover_border);
-                let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
-                let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
-                let mut thumb_c = st.map_or(rgba(0xffffff66).into(), |s| s.marker);
-                thumb_c.a = 0.5;
-                let current = self.code_block_at(row).map(|(l, _)| l).unwrap_or_default();
-                const ROW_H: f32 = 22.0;
-                const MAX_H: f32 = 260.0;
-                const PAD: f32 = 4.0;
-                let langs = self.code_langs.clone();
-                let rows_h = langs.len() as f32 * ROW_H;
-                let view_h = MAX_H - 2.0 * PAD;
-                let thumb = (rows_h > view_h).then(|| {
-                    let scrolled =
-                        (-f32::from(menu_scroll.offset().y)).clamp(0.0, rows_h - view_h);
-                    let thumb_h = (view_h * view_h / rows_h).max(24.0);
-                    let thumb_top = PAD + scrolled / (rows_h - view_h) * (view_h - thumb_h);
-                    div()
-                        .absolute()
-                        .top(px(thumb_top))
-                        .right(px(2.))
-                        .w(px(6.))
-                        .h(px(thumb_h))
-                        .rounded(px(3.))
-                        .bg(thumb_c)
-                });
-                gpui_kit::deferred(
-                    gpui_kit::anchored()
-                        .position(anchor)
-                        .snap_to_window()
-                        .child(
-                            div()
-                                .relative()
-                                .occlude()
-                                .min_w(px(140.))
-                                .cursor(CursorStyle::Arrow)
-                                .bg(menu_bg)
-                                .border_1()
-                                .border_color(menu_border)
-                                .rounded(px(6.))
-                                .shadow_md()
-                                .overflow_hidden()
-                                .text_color(menu_fg)
-                                .text_size(px(13.))
-                                .py(px(PAD))
-                                .on_mouse_down_out(cx.listener(
-                                    |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.overlay_menu.dismiss();
-                                        cx.notify();
-                                    },
-                                ))
-                                .child(
-                                    div()
-                                        .id("code-lang-list")
-                                        .max_h(px(MAX_H - 2.0 * PAD))
-                                        .overflow_y_scroll()
-                                        .track_scroll(menu_scroll)
-                                        .children(langs.into_iter().enumerate().map(
-                                            |(i, lang)| {
-                                                let is_current = *lang == current
-                                                    || (current.is_empty() && *lang == *"text");
-                                                let label: SharedString = if is_current {
-                                                    format!("{lang} ✓").into()
-                                                } else {
-                                                    lang.clone()
-                                                };
-                                                div()
-                                            .id(("code-lang-row", i))
-                                            .flex_shrink_0()
-                                            .h(px(ROW_H))
-                                            .px(px(10.))
-                                            .py(px(2.))
-                                            .hover(move |s| s.bg(hover))
-                                            .child(label)
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(
-                                                    move |editor, _: &MouseDownEvent, _, cx| {
-                                                        cx.stop_propagation();
-                                                        editor.overlay_menu.dismiss();
-                                                        editor.set_code_lang(row, &lang, cx);
-                                                    },
-                                                ),
-                                            )
-                                            .into_any_element()
-                                            },
-                                        )),
-                                )
-                                .children(thumb),
-                        ),
-                )
-            }));
-        // Wide tables, code and unbroken lines can exceed the note width; the
-        // bar is the only pointer affordance for that axis and stays visible so
-        // the overflow is discoverable without touching the wheel.
-        div().relative().size_full().child(scroll).child(
-            div().absolute().inset_0().child(
-                Scrollbar::horizontal(&self.frame.scroll)
-                    .id("markdown-horizontal-scrollbar")
-                    .mode(ScrollbarMode::Always),
-            ),
-        )
-    }
-}
 
 /// The shaped width of `text` at `font_size` — used to inset a gutter line's body
 /// to exactly where its (hidden) source prefix ends, so the rendered + raw views
@@ -7457,7 +6490,8 @@ mod tests {
                 // A plain `==` highlight hides its markers the same way.
                 let plain = "a ==yellow mark==, b";
                 e.set_text(plain, cx);
-                e.selection.selected_range = plain.find("yellow").unwrap()..plain.find(',').unwrap();
+                e.selection.selected_range =
+                    plain.find("yellow").unwrap()..plain.find(',').unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
                 assert_eq!(
                     e.content.as_str(),
@@ -7465,7 +6499,8 @@ mod tests {
                 );
                 // And a selection starting on the hidden opening tag.
                 e.set_text(&text, cx);
-                e.selection.selected_range = text.find("<mark").unwrap()..text.find("</mark>").unwrap();
+                e.selection.selected_range =
+                    text.find("<mark").unwrap()..text.find("</mark>").unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
                 assert_eq!(
                     e.text(),

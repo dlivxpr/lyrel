@@ -66,7 +66,8 @@ impl EditorState {
         &self.document
     }
     pub fn occurrence_range(&self) -> Range<usize> {
-        self.selection.extra_selections
+        self.selection
+            .extra_selections
             .last()
             .unwrap_or(&self.selection.selected_range)
             .clone()
@@ -79,7 +80,9 @@ impl EditorState {
             ..self
                 .content
                 .floor_char_boundary(range.end.min(self.content.len()));
-        if range != self.selection.selected_range && !self.selection.extra_selections.contains(&range) {
+        if range != self.selection.selected_range
+            && !self.selection.extra_selections.contains(&range)
+        {
             self.selection.extra_selections.push(range);
         }
         self.last_edit = EditKind::Other;
@@ -469,19 +472,21 @@ impl EditorState {
         let before_selection = self.selection.selected_range.clone();
         let after_caret = range.start + text.len() - text.matches("\r\n").count();
         let coalesced = self.pending_coalesce;
-        let composing = self.selection.marked_range.is_some() && document.read(cx).has_composition();
-        let snapshot = if self.selection.marked_range.is_some() && document.read(cx).has_composition() {
-            let owner = cx.weak_entity();
-            document.update(cx, |document, cx| {
-                document.compose(range.clone(), text, owner, caret, cx);
-                document.finish_composition(origin, false, range.start + text.len(), cx)
-            })
-        } else {
-            let coalesce = self.pending_coalesce;
-            document.update(cx, |document, cx| {
-                document.replace(range, text, origin, caret, coalesce, cx)
-            })
-        };
+        let composing =
+            self.selection.marked_range.is_some() && document.read(cx).has_composition();
+        let snapshot =
+            if self.selection.marked_range.is_some() && document.read(cx).has_composition() {
+                let owner = cx.weak_entity();
+                document.update(cx, |document, cx| {
+                    document.compose(range.clone(), text, owner, caret, cx);
+                    document.finish_composition(origin, false, range.start + text.len(), cx)
+                })
+            } else {
+                let coalesce = self.pending_coalesce;
+                document.update(cx, |document, cx| {
+                    document.replace(range, text, origin, caret, coalesce, cx)
+                })
+            };
         if !composing {
             document.update(cx, |document, _| {
                 document.set_history_selection(

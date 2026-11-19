@@ -80,7 +80,9 @@ impl EditorState {
         let Some(region) = self.caret_table_region() else {
             return;
         };
-        let Some(width) = self.frame.table_rows
+        let Some(width) = self
+            .frame
+            .table_rows
             .get(region.lines.start)
             .and_then(Option::as_ref)
             .and_then(|row| row.col_widths.get(col))
@@ -108,7 +110,9 @@ impl EditorState {
         window: &mut Window,
     ) -> Option<Bounds<Pixels>> {
         let (row, col) = self.row_col(range.start.min(self.content.len()));
-        let Some(table) = self.frame.table_rows
+        let Some(table) = self
+            .frame
+            .table_rows
             .get(row)
             .and_then(Option::as_ref)
             .filter(|table| !table.is_separator)
@@ -116,7 +120,9 @@ impl EditorState {
             return self.range_to_bounds(range);
         };
         let bounds = self.frame.last_bounds?;
-        let font = self.frame.paint_font
+        let font = self
+            .frame
+            .paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
         let (x, y, _, _) = table_caret_pos(
@@ -138,15 +144,21 @@ impl EditorState {
     /// hover zone / 1 = on the below "+" strip / 2 = on the right "+" strip)`, or
     /// `None` off every table. Drives `on_mouse_move`'s repaint-on-change.
     pub(crate) fn table_hover_region_at(&self, pos: Point<Pixels>) -> Option<(usize, u8)> {
-        let i = self.affordances.table_hover_zones
+        let i = self
+            .affordances
+            .table_hover_zones
             .iter()
             .position(|(z, _)| z.contains(&pos))?;
-        let strip = if self.affordances.table_row_add_rects
+        let strip = if self
+            .affordances
+            .table_row_add_rects
             .iter()
             .any(|(b, _)| b.contains(&pos))
         {
             1
-        } else if self.affordances.table_col_add_rects
+        } else if self
+            .affordances
+            .table_col_add_rects
             .iter()
             .any(|(b, _, _)| b.contains(&pos))
         {
@@ -174,7 +186,9 @@ impl EditorState {
     /// The clamped horizontal scroll of the table headed at `header_row`.
     pub(crate) fn table_sx(&self, header_row: usize, total: Pixels, avail: Pixels) -> Pixels {
         let max = f32::from((total - avail).max(px(0.)));
-        px(self.affordances.table_scroll_x
+        px(self
+            .affordances
+            .table_scroll_x
             .get(&header_row)
             .copied()
             .unwrap_or(0.)
@@ -206,7 +220,9 @@ impl EditorState {
         // paint), not the text row model — table paint runs taller than its
         // logical rows (top gutter, cell padding), which left the lower rows
         // of a tall table unresponsive to the wheel.
-        let Some(&(_, header)) = self.affordances.table_hover_zones
+        let Some(&(_, header)) = self
+            .affordances
+            .table_hover_zones
             .iter()
             .find(|(z, _)| z.contains(&event.position))
         else {
@@ -236,7 +252,12 @@ impl EditorState {
             return;
         }
         let max = f32::from(total - avail);
-        let cur = self.affordances.table_scroll_x.get(&header).copied().unwrap_or(0.);
+        let cur = self
+            .affordances
+            .table_scroll_x
+            .get(&header)
+            .copied()
+            .unwrap_or(0.);
         // An RTL table's scroll offset runs the other way (see `table_left_x`),
         // so the same physical swipe moves its content the same physical way.
         let new = if t.rtl { cur + dx } else { cur - dx }.clamp(0., max);
@@ -294,7 +315,8 @@ impl EditorState {
 
     /// Hit-test the hovered row's border "+" → the row a new row lands after.
     pub(crate) fn table_add_row_at(&self, position: Point<Pixels>) -> Option<usize> {
-        self.affordances.table_row_add_rects
+        self.affordances
+            .table_row_add_rects
             .iter()
             .find_map(|&(rect, row)| rect.contains(&position).then_some(row))
     }
@@ -302,7 +324,8 @@ impl EditorState {
     /// Hit-test the hovered column's border "+" → `(header row, column)` — a new
     /// column lands right of it.
     pub(crate) fn table_add_col_at(&self, position: Point<Pixels>) -> Option<(usize, usize)> {
-        self.affordances.table_col_add_rects
+        self.affordances
+            .table_col_add_rects
             .iter()
             .find_map(|&(rect, row, col)| rect.contains(&position).then_some((row, col)))
     }
@@ -346,7 +369,9 @@ impl EditorState {
         let rel = point(position.x - self.table_left(t, row, bounds), rel.y);
         // Measure at the last paint's font + size — the style stack is unwound
         // during event dispatch, so `text_style()` here reports the root style.
-        let font = self.frame.paint_font
+        let font = self
+            .frame
+            .paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
         let font_size = self.frame.font_size;
@@ -412,7 +437,8 @@ impl EditorState {
     /// separator) — so Tab navigates cells instead of indenting.
     pub(crate) fn caret_in_table(&self) -> bool {
         let (row, _) = self.row_col(self.cursor_offset());
-        self.frame.table_rows
+        self.frame
+            .table_rows
             .get(row)
             .and_then(Option::as_ref)
             .is_some_and(|t| !t.is_separator)
@@ -929,7 +955,9 @@ impl EditorState {
         // Measure with the PAINT font — the shaping that lays the table out
         // uses it, and the root font event dispatch reports has different
         // metrics (autofit widths were off by the family drift).
-        let font = self.frame.paint_font
+        let font = self
+            .frame
+            .paint_font
             .clone()
             .unwrap_or_else(|| window.text_style().font());
         let natural = table_column_widths(
@@ -975,7 +1003,9 @@ impl EditorState {
             return;
         };
         // The header row's committed display widths already carry the live drag.
-        let Some(t) = self.frame.table_rows
+        let Some(t) = self
+            .frame
+            .table_rows
             .get(resize.header_row)
             .and_then(Option::as_ref)
         else {
