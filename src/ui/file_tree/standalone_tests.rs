@@ -431,15 +431,16 @@ fn inline_rename_and_delete_emit_narrow_events_and_land(cx: &mut TestAppContext)
             tree.commit_edit(window, cx);
         });
     });
-    wait_until(&mut vcx, "the rename on disk", |_| {
-        root.join("new.txt").exists() && !root.join("old.txt").exists()
+    // The Host write can be visible on disk before its GPUI completion runs.
+    wait_until(&mut vcx, "the PathMoved event", |_| {
+        harness
+            .events
+            .borrow()
+            .iter()
+            .any(|e| e.starts_with("PathMoved"))
     });
-    let events = harness.events.borrow();
-    assert!(
-        events.iter().any(|e| e.starts_with("PathMoved")),
-        "a rename must reach the editor as a move: {events:?}"
-    );
-    drop(events);
+    assert!(root.join("new.txt").is_file());
+    assert!(!root.join("old.txt").exists());
 
     // Inline delete: the prompt answers, the file disappears, and the tree
     // announces the removal.
@@ -453,14 +454,15 @@ fn inline_rename_and_delete_emit_narrow_events_and_land(cx: &mut TestAppContext)
         vcx.has_pending_prompt()
     });
     vcx.simulate_prompt_answer(t(L10nKey::Delete));
-    wait_until(&mut vcx, "the delete on disk", |_| {
-        !root.join("doomed.txt").exists()
+    wait_until(&mut vcx, "the PathRemoved event", |_| {
+        harness
+            .events
+            .borrow()
+            .iter()
+            .any(|e| e.starts_with("PathRemoved"))
     });
+    assert!(!root.join("doomed.txt").exists());
     let events = harness.events.borrow();
-    assert!(
-        events.iter().any(|e| e.starts_with("PathRemoved")),
-        "a delete must reach the editor as a removal: {events:?}"
-    );
     assert!(
         events.iter().any(|e| e.starts_with("ViewStateChanged")),
         "selection updates must reach the tab record: {events:?}"
