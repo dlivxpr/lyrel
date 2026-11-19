@@ -5,7 +5,6 @@ pub use lyrel_core::core::{
     osc, proc, shell_quote, shells, ssh_profile, worktree,
 };
 
-#[cfg(target_os = "windows")]
 pub mod cli_install;
 pub mod default_terminal;
 pub mod explorer_context_menu;
