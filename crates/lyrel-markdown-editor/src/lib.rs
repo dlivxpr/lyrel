@@ -3441,19 +3441,17 @@ impl EditorState {
             && !event.modifiers.platform
             && self.markdown_style.is_some()
             && self.host_links
-        {
-            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self
+            && let Some((_, markdown_syntax::LinkHit::Url(url))) = self
                 .affordances
                 .link_rects
                 .iter()
                 .find(|(bounds, _)| bounds.contains(&event.position))
-            {
-                self.affordances.pending_link = Some((
-                    url.clone().into(),
-                    event.position,
-                    self.document.read(cx).revision(),
-                ));
-            }
+        {
+            self.affordances.pending_link = Some((
+                url.clone().into(),
+                event.position,
+                self.document.read(cx).revision(),
+            ));
         }
         // A press on a table's hover "+" strip adds a row (below) or column (right).
         // The insert APIs are caret-driven, so seat the caret in the table to target
