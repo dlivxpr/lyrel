@@ -1,5 +1,4 @@
 use super::*;
-use gpui_kit::Focusable as _;
 
 /// One active projection, never a per-project listing store. Host listings remain
 /// authoritative; selection and decoration only affect the viewport renderer.
@@ -12,7 +11,7 @@ pub(super) struct DerivedRows {
     rows: Rc<Vec<TreeRow>>,
 }
 
-impl FileTreeState {
+impl FileTree {
     pub(super) fn invalidate_rows(&mut self) {
         self.derived_rows.get_mut().take();
     }
@@ -67,7 +66,11 @@ pub(super) struct TreeLayout {
     rows: Rc<Vec<PresentedRow>>,
 }
 
-impl LyrelApp {
+impl FileTree {
+    /// Splice the virtual list from the difference between the rows it holds
+    /// and the rows this frame wants. Pure viewport bookkeeping: the inputs
+    /// are the logical rows, the panel-search section and whether the search
+    /// field holds a query.
     pub(super) fn sync_tree_layout(
         &mut self,
         logical: Rc<Vec<TreeRow>>,
@@ -75,7 +78,7 @@ impl LyrelApp {
         searching: bool,
         cx: &App,
     ) -> Rc<Vec<PresentedRow>> {
-        let edit = self.file_tree.editing.as_ref().map(|edit| match edit {
+        let edit = self.editing.as_ref().map(|edit| match edit {
             TreeEdit::NewFile { dir, input } => {
                 (TreeEditKind::NewFile, dir.clone(), input.entity_id())
             }
@@ -86,7 +89,7 @@ impl LyrelApp {
                 (TreeEditKind::Rename, path.clone(), input.entity_id())
             }
         });
-        if let Some(held) = &self.file_tree.layout
+        if let Some(held) = &self.layout
             && Rc::ptr_eq(&held.logical, &logical)
             && Rc::ptr_eq(&held.contents, &contents)
             && held.edit == edit
@@ -107,7 +110,7 @@ impl LyrelApp {
             rows.push(PresentedRow::Gap);
             rows.extend(contents.iter().cloned().map(PresentedRow::Contents));
         }
-        let held = self.file_tree.layout.as_ref();
+        let held = self.layout.as_ref();
         let old = held.map(|held| held.rows.as_slice()).unwrap_or(&[]);
         let same = |a: &PresentedRow, b: &PresentedRow| match (a, b) {
             (PresentedRow::Tree(a), PresentedRow::Tree(b)) => {
@@ -129,7 +132,7 @@ impl LyrelApp {
             .count();
         // Splice preserves the logical top row when entries are inserted above
         // the viewport. Unlike reset, it does not undo deliberate scrolling.
-        let list = &self.file_tree.list;
+        let list = &self.list;
         let top = list.logical_scroll_top();
         let anchor = if top.item_ix == 0 && top.offset_in_item == px(0.) {
             // Pending rows may have no surviving identity. Inserting results
@@ -161,7 +164,7 @@ impl LyrelApp {
                 }
             }
         }
-        if let Some(edit) = &self.file_tree.editing {
+        if let Some(edit) = &self.editing {
             let path = match edit {
                 TreeEdit::NewFile { dir, .. } | TreeEdit::NewFolder { dir, .. } => dir,
                 TreeEdit::Rename { path, .. } => path,
@@ -188,7 +191,7 @@ impl LyrelApp {
             list.scroll_to(gpui_kit::ListOffset { item_ix: ix, offset_in_item: px(0.) });
         }
         let rows = Rc::new(rows);
-        self.file_tree.layout = Some(TreeLayout {
+        self.layout = Some(TreeLayout {
             logical,
             contents,
             edit,

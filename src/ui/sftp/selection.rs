@@ -84,7 +84,7 @@ impl LyrelApp {
         if !paths.is_empty()
             && let Some(host) = self.sftp_editor_host(cx)
         {
-            Self::copy_file_paths(host, paths, cx);
+            crate::ui::file_tree::FileTree::copy_file_paths(host, paths, cx);
         }
     }
 
@@ -94,7 +94,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((source, paths)) = Self::file_tree_clipboard(cx) else {
+        let Some((source, paths)) = crate::ui::file_tree::FileTree::clipboard(cx) else {
             return;
         };
         let Some(destination) = self.sftp_editor_host(cx) else {

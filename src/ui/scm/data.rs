@@ -941,12 +941,13 @@ impl LyrelApp {
 
         let window_key = cx.entity_id().as_u64();
         let tree_host = self.spawn_host(cx);
-        let tree_roots = if self.file_tree_on_screen(cx) {
-            self.tab_code()
-                .map_or(&[][..], |code| code.roots.as_slice())
+        // The tree owns its view state; the tab record is only a mirror of it.
+        let tree_roots: Vec<PathBuf> = if self.file_tree_on_screen(cx) {
+            self.file_tree.read(cx).roots().to_vec()
         } else {
-            &[]
+            Vec::new()
         };
+        let tree_roots = &tree_roots[..];
         let git_cache = cx.try_global::<GitStatusCache>();
         let repository_roots = || {
             tree_roots.iter().filter_map(move |root| {

@@ -157,11 +157,11 @@ impl LyrelApp {
         }
         if !self
             .active_host(cx)
-            .is_some_and(|host| self.file_tree.host_matches(&host))
+            .is_some_and(|host| self.file_tree.read(cx).host_matches(&host))
         {
             return FileList::Indexing;
         }
-        self.file_tree.file_list(&key)
+        self.file_tree.read(cx).file_list(&key)
     }
 
     /// In-place entry and reconnect also replace retired catalog rows when
@@ -182,7 +182,10 @@ impl LyrelApp {
             return;
         };
         self.file_tree_sync_host(&host, cx);
-        let Some(generation) = self.file_tree.begin_file_index(&key) else {
+        let Some(generation) = self
+            .file_tree
+            .update(cx, |tree, _| tree.begin_file_index(&key))
+        else {
             return;
         };
         // Only this computer's home is known here, and it is the common case:
@@ -195,7 +198,7 @@ impl LyrelApp {
         let cwds = key.cwds().to_vec();
         #[cfg(test)]
         let landing_host = InstanceTicket::of(&host);
-        let authority = self.file_tree.read_authority(&host);
+        let authority = self.file_tree.read(cx).read_authority(&host);
         HostOps::run_in(
             host,
             window,
@@ -204,14 +207,16 @@ impl LyrelApp {
             move |app, list, window, cx| {
                 #[cfg(test)]
                 app.file_tree
-                    .read_probe
-                    .record(ReadKind::Index, landing_host);
-                if !authority.is_current(&app.file_tree, cx) {
+                    .update(cx, |tree, _| {
+                        tree.read_probe.record(ReadKind::Index, landing_host);
+                    });
+                let tree = app.file_tree.read(cx);
+                if !authority.is_current(tree, cx) {
                     return;
                 }
                 if !app
                     .file_tree
-                    .finish_file_index(generation, key.clone(), list)
+                    .update(cx, |tree, _| tree.finish_file_index(generation, key.clone(), list))
                 {
                     return;
                 }

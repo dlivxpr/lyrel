@@ -213,7 +213,7 @@ impl LyrelApp {
                 }
                 #[cfg(test)]
                 let landing_host = InstanceTicket::of(&host);
-                let authority = app.file_tree.read_authority(&host);
+                let authority = app.file_tree.read(cx).read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
                     host,
@@ -228,9 +228,11 @@ impl LyrelApp {
                     move |app, outcome, cx| {
                         #[cfg(test)]
                         app.file_tree
-                            .read_probe
-                            .record(ReadKind::Contents, landing_host);
-                        if !authority.is_current(&app.file_tree, cx) {
+                            .update(cx, |tree, _| {
+                                tree.read_probe.record(ReadKind::Contents, landing_host);
+                            });
+                        let tree = app.file_tree.read(cx);
+                        if !authority.is_current(tree, cx) {
                             return;
                         }
                         if app.panel_search.run.accept(generation, outcome) {

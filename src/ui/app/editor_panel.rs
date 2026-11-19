@@ -435,7 +435,7 @@ impl LyrelApp {
                 editor.set_had_focus(None);
                 editor.dismiss_bar();
             });
-            self.file_tree.cancel_edit();
+            self.file_tree.update(cx, |tree, _| tree.cancel_edit());
             self.focus_active(window, cx);
             cx.notify();
             return;
@@ -461,7 +461,8 @@ impl LyrelApp {
                     cx,
                 );
             }
-            self.file_tree.focus_handle.focus(window, cx);
+            self.file_tree
+                .update(cx, |tree, cx| tree.focus_handle(cx).focus(window, cx));
         }
         cx.notify();
     }
@@ -1080,7 +1081,12 @@ impl LyrelApp {
             .is_some_and(|c| c.visible && c.files.is_empty());
         // ⌘⇧E on an empty panel hands the focus to the file tree, so from
         // there ⌘W is the empty panel's too.
-        let tree = empty && self.file_tree.focus_handle.contains_focused(window, cx);
+        let tree = empty
+            && self
+                .file_tree
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx);
         if !(tree || self.editor_panel_has_focus(window, cx)) {
             return false;
         }
@@ -1093,7 +1099,7 @@ impl LyrelApp {
                 editor.set_had_focus(None);
                 editor.dismiss_bar();
             });
-            self.file_tree.cancel_edit();
+            self.file_tree.update(cx, |tree, _| tree.cancel_edit());
             self.focus_active(window, cx);
             cx.notify();
             return true;
@@ -1831,6 +1837,7 @@ impl LyrelApp {
             .unwrap_or(&[]);
         let spelled = self
             .file_tree
+            .read(cx)
             .project_spelling(self.spawn_host(cx), roots, path);
         let dir = spelled.parent().map(|parent| {
             self.tab_code()

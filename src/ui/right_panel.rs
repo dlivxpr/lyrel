@@ -280,13 +280,6 @@ pub(crate) struct RightPanelState {
         std::collections::HashSet<u16>,
     >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
-    /// A path the tree should scroll onto, and how many more renders it may
-    /// take to get there. The row is usually not drawn yet when the request is
-    /// made — its parents were only just expanded and their listings are still
-    /// on their way — so the index has to be recomputed until it appears. The
-    /// countdown is what stops a path that never arrives from being compared
-    /// against every row forever.
-    pub(crate) tree_reveal: Option<(PathBuf, u8)>,
 }
 
 /// How many renders a reveal waits for its row to show up. Generous: it costs
@@ -2078,12 +2071,49 @@ impl LyrelApp {
             self.file_search
                 .update(cx, |input, cx| input.focus(window, cx));
         }
+        // Roots follow the panes' working directories; the tree announces
+        // what changed and the panel below renders the entity itself.
+        self.file_tree_refresh_roots(window, cx);
         let title = self.panel_title(t(L10nKey::PanelFilesTitle), None, None, window, cx);
         // One field for names and text alike. The switches only shape the
         // text search; names are always matched loosely.
         let toggles = self.panel_search_toggles(cx);
         let search = self.panel_search_with(&self.file_search.clone(), Some(toggles), cx);
-        let rows = self.render_file_tree_rows(window, cx);
+        // The frame's presentation for the tree: which host, what the shared
+        // field holds, which decorations the SCM cache produced, and how the
+        // "In file contents" rows render. The tree owns everything else.
+        let host = self.active_host(cx);
+        let host_id = self.spawn_host(cx);
+        let roots = self.file_tree.read(cx).roots().to_vec();
+        let decor = self.file_tree_decorations(host.as_ref(), host_id, &roots, cx);
+        let contents = self.panel_search_section(window, cx);
+        let render_content_row = {
+            let app = cx.entity().downgrade();
+            std::rc::Rc::new(
+                move |row: &crate::ui::panel_search::PanelSearchRow, cx: &mut gpui_kit::App| {
+                    app.update(cx, |app, cx| app.render_panel_search_row(row, cx))
+                        .unwrap_or_else(|_| div().into_any_element())
+                },
+            )
+        };
+        let query = self.file_tree_query(cx);
+        let searching = !query.is_empty();
+        let machine_label: gpui_kit::SharedString = self.remote_machine_label(cx).into();
+        self.file_tree.update(cx, |tree, cx| {
+            tree.sync_view(
+                crate::ui::file_tree::FileTreeView {
+                    host: host_id,
+                    active_host: host,
+                    query,
+                    searching,
+                    machine_label,
+                    decor,
+                    contents,
+                    render_content_row,
+                },
+                cx,
+            );
+        });
         v_flex()
             .flex_1()
             .min_h_0()
@@ -2092,7 +2122,7 @@ impl LyrelApp {
             // list: a pause between them, the same 10px the Changes tab keeps
             // between its pinned parts.
             .child(div().flex_none().pb(px(FILES_SEARCH_GAP)).child(search))
-            .child(rows)
+            .child(self.file_tree.clone())
             .into_any_element()
     }
 

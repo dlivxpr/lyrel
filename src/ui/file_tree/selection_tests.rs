@@ -1,12 +1,11 @@
-mod host;
+pub(crate) mod host;
 mod instance;
 
 use super::render_idle_gpui_tests::{files_panel_on, serial, settle};
 use super::*;
+use crate::ui::app::LyrelApp;
 use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt};
-use gpui_kit::{
-    ClipboardEntry, ClipboardItem, Focusable as _, Modifiers, TestAppContext, VisualTestContext,
-};
+use gpui_kit::{ClipboardEntry, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
 
 fn primary() -> Modifiers {
     Modifiers {
@@ -72,7 +71,7 @@ fn wait_for(
     }
 }
 
-fn temp() -> tempfile::TempDir {
+pub(super) fn temp() -> tempfile::TempDir {
     // Match the spelling reported by the daemon fixture on macOS and Windows.
     let root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     tempfile::tempdir_in(root).unwrap()
@@ -183,6 +182,7 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     app.update_in(&mut vcx, |app, window, cx| {
         let input = app
             .file_tree
+            .read(cx)
             .editing
             .as_ref()
             .expect("new-file input remains active")
@@ -243,6 +243,7 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     app.update_in(&mut vcx, |app, window, cx| {
         let input = app
             .file_tree
+            .read(cx)
             .editing
             .as_ref()
             .expect("rename input remains active")
@@ -511,8 +512,12 @@ fn context_copy_and_delete_preserve_the_set_and_deduplicate_descendants(cx: &mut
     let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
     click(&mut vcx, &folder, Modifiers::none());
     wait(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.children.get(HostId::LOCAL, &folder).is_some()
+        app.read_with(vcx, |app, cx| {
+            app.file_tree
+                .read(cx)
+                .children
+                .get(HostId::LOCAL, &folder)
+                .is_some()
         })
     });
     click(&mut vcx, &child, primary());
@@ -733,9 +738,10 @@ fn a_partial_paste_keeps_successful_files_and_does_not_silently_retry_other_host
         "survives another source failing"
     );
     assert!(!root.path().join("missing.txt").exists());
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert!(
             app.file_tree
+                .read(cx)
                 .children
                 .get(HostId::LOCAL, root.path())
                 .unwrap()

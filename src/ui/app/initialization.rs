@@ -180,11 +180,17 @@ impl LyrelApp {
             )
         };
         let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
-        let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
         let editor =
             cx.new(|cx| lyrel_workbench_editor::code_editor::EditorPanelState::new(window, cx));
         let editor_events = Self::watch_editor_panel(&editor, window, cx);
         let editor_observer = cx.observe(&editor, |_, _, cx| cx.notify());
+        // The file tree is a standalone entity: it owns its caches, watcher,
+        // searches, inline operations and rendering, and reaches the rest of
+        // the app only through the FileTreeEvent subscription installed here.
+        let file_tree = cx.new(|cx| crate::ui::file_tree::FileTree::new(window, cx));
+        file_tree.update(cx, |tree, _| tree.set_editor(editor.downgrade()));
+        let file_tree_events = Self::watch_file_tree(&file_tree, window, cx);
+        let file_tree_observer = cx.observe(&file_tree, |_, _, cx| cx.notify());
         let loopback_panel = Forwarding::new(window, cx);
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
@@ -378,6 +384,8 @@ impl LyrelApp {
             github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes: Default::default(),
             file_tree,
+            _file_tree_events: file_tree_events,
+            _file_tree_observer: file_tree_observer,
             panel_search,
             editor,
             _editor_events: editor_events,

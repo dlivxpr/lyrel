@@ -1837,7 +1837,7 @@ impl LyrelApp {
                     danger,
                     &app,
                     paste_into,
-                    Self::file_tree_can_paste(cx),
+                    crate::ui::file_tree::FileTree::can_paste(cx),
                 )
             })
             .into_any_element()

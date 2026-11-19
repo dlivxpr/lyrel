@@ -43,6 +43,7 @@ mod editor_links;
 mod editor_navigation;
 mod editor_panel;
 mod editor_render;
+mod file_tree_bridge;
 mod initialization;
 mod pane_binding;
 mod settings_bridge;
@@ -266,7 +267,9 @@ pub struct LyrelApp {
     /// spawn, what coalesces, what landing is allowed to install — so the app
     /// only supplies the registry lookup and the spawn itself.
     pub(crate) diff_probes: crate::ui::diff_probe::DiffProbeTracker,
-    pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
+    pub(crate) file_tree: Entity<crate::ui::file_tree::FileTree>,
+    _file_tree_events: Subscription,
+    _file_tree_observer: Subscription,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
     _editor_events: Subscription,
@@ -3155,6 +3158,7 @@ impl LyrelApp {
         if index < self.tabs.len() && index != self.tabs.active_index() {
             self.cancel_pane_drag(window, cx);
             self.tabs.activate(index, &mut self.maximized, window, cx);
+            self.seed_file_tree_tab_view(cx);
             self.maybe_refresh_diff_overlay(cx);
             *self.sidebar_reveal.borrow_mut() = Some(
                 crate::ui::tab_sidebar::SidebarNavTarget::Tab(self.tabs[index].id()),
@@ -3163,7 +3167,8 @@ impl LyrelApp {
                 self.sync_window_title(window, cx);
             } else if self.code_panel_visible() {
                 self.file_tree_refresh_roots(window, cx);
-                self.file_tree.focus_handle.focus(window, cx);
+                self.file_tree
+                    .update(cx, |tree, cx| tree.focus_handle(cx).focus(window, cx));
             } else {
                 self.focus_active(window, cx);
             }

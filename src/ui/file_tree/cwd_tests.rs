@@ -1,7 +1,7 @@
 use super::*;
 use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::pane::{Pane, PaneSlot};
-use gpui_kit::{Focusable as _, TestAppContext};
+use gpui_kit::TestAppContext;
 use lyrel_core::daemon::control::ControlHello;
 use lyrel_core::host::remote::RemoteHost;
 use lyrel_terminal::view::quiet_test_pane;
@@ -45,7 +45,8 @@ fn remote_browsing_follows_the_foreground_cwd_not_repository_roots(cx: &mut Test
         app.workspace = window_workspace;
         HostRegistry::insert(cx, host.clone());
         let shared = app.active_host(cx).unwrap();
-        app.file_tree.sync_watch(shared, HashSet::new(), cx);
+        app.file_tree
+            .update(cx, |tree, cx| tree.sync_watch(shared, HashSet::new(), cx));
         let left = app.tabs[0]
             .pane
             .first_leaf()
@@ -65,21 +66,23 @@ fn remote_browsing_follows_the_foreground_cwd_not_repository_roots(cx: &mut Test
             Pane::leaf(PaneSlot::Ready(left.clone())),
             Pane::leaf(PaneSlot::Ready(right.clone())),
         );
-        app.file_tree.repo_roots.insert(
-            id,
-            PathBuf::from("/srv/repo/src"),
-            PathBuf::from("/srv/repo"),
-        );
-        app.file_tree.repo_roots.insert(
-            id,
-            PathBuf::from("/srv/repo/tests"),
-            PathBuf::from("/srv/repo"),
-        );
-        app.file_tree.repo_roots.insert(
-            id,
-            PathBuf::from("/tmp/outside"),
-            PathBuf::from("/tmp/outside"),
-        );
+        app.file_tree.update(cx, |tree, _| {
+            tree.repo_roots.insert(
+                id,
+                PathBuf::from("/srv/repo/src"),
+                PathBuf::from("/srv/repo"),
+            );
+            tree.repo_roots.insert(
+                id,
+                PathBuf::from("/srv/repo/tests"),
+                PathBuf::from("/srv/repo"),
+            );
+            tree.repo_roots.insert(
+                id,
+                PathBuf::from("/tmp/outside"),
+                PathBuf::from("/tmp/outside"),
+            );
+        });
         left.update(cx, |pane, _| {
             pane.set_git_status_cwd_for_test(Some(PathBuf::from("/srv/repo/src")))
         });

@@ -1286,7 +1286,7 @@ impl LyrelApp {
             false => path.display().to_string(),
         };
         menu = menu.item(copy(L10nKey::FileTreeContextCopyPath, full));
-        if let Some(rel) = self.path_under_tree_root(&path) {
+        if let Some(rel) = self.file_tree.read(cx).path_under_root(&path) {
             let rel = match local {
                 true => lyrel_ui_base::path_display::native_separators(&rel)
                     .display()

@@ -616,7 +616,8 @@ fn another_client_parking_a_zoomed_native_pane_unmounts_it_even_with_toolbar_foc
     app.update_in(&mut vcx, |app, window, cx| {
         app.maximized = native.terminal().cloned();
         app.tabs[0].park_zoom(native.terminal().cloned());
-        window.focus(&app.file_tree.focus_handle, cx);
+        let focus = app.file_tree.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
         cx.notify();
     });
     park_native_in_sidecar(&mut sidecar);

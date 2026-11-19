@@ -1,5 +1,6 @@
-//! File-tree transitions. GPUI adapters supply Host/tab context, run I/O and
-//! execute navigation; they never manipulate cache or operation bookkeeping.
+//! File-tree transitions. The entity owns its cache and operation
+//! bookkeeping; the app only supplies Host/tab context through the view and
+//! receives cross-panel intents through `FileTreeEvent`.
 
 use super::*;
 use lyrel_ui_base::file_search::{FileList, IndexKey};
@@ -20,25 +21,25 @@ pub(super) struct FileIndexStore {
     generation: u64,
 }
 
-pub(super) struct Refresh {
+pub(crate) struct Refresh {
     pub notify: bool,
     pub reload: bool,
 }
 
 /// Browsing may fall back to HOME; no search consumer receives this fallback.
-pub(super) fn browsable_roots(mut roots: Vec<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn browsable_roots(mut roots: Vec<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
     if roots.is_empty() {
         roots.extend(home);
     }
     roots
 }
 
-impl FileTreeState {
-    pub(super) fn resolve_project_roots(
+impl FileTree {
+    pub(crate) fn resolve_project_roots(
         &mut self,
         host: &SharedHost,
         cwds: &[PathBuf],
-        cx: &mut Context<LyrelApp>,
+        cx: &mut Context<Self>,
     ) -> Option<Vec<PathBuf>> {
         let mut roots = Vec::new();
         let mut resolved = true;
@@ -58,7 +59,7 @@ impl FileTreeState {
         resolved.then_some(roots)
     }
 
-    fn request_repo_root(&mut self, host: &SharedHost, cwd: PathBuf, cx: &mut Context<LyrelApp>) {
+    fn request_repo_root(&mut self, host: &SharedHost, cwd: PathBuf, cx: &mut Context<Self>) {
         let key = (host.id(), cwd.clone());
         if !self.repo_root_loads.begin(key.clone()) {
             return;
@@ -77,15 +78,13 @@ impl FileTreeState {
                     (root, real)
                 }
             },
-            move |app, (root, real), cx| {
+            move |tree: &mut FileTree, (root, real), cx| {
                 #[cfg(test)]
-                app.file_tree
-                    .read_probe
-                    .record(ReadKind::Root, landing_host);
-                if !authority.is_current(&app.file_tree, cx) {
+                tree.read_probe.record(ReadKind::Root, landing_host);
+                if !authority.is_current(tree, cx) {
                     return;
                 }
-                app.file_tree.finish_repo_root(&key, cwd, root, real);
+                tree.finish_repo_root(&key, cwd, root, real);
                 cx.notify();
             },
         );
@@ -175,13 +174,17 @@ impl FileTreeState {
         Some((events, self.watched != *opened_with))
     }
 
-    pub(super) fn apply_fs_events(
+    /// Apply a batch of filesystem events to the caches. The caller decides
+    /// what is on screen; the reload of a visible listing is the tree's own
+    /// follow-up, on the current adapter only.
+    pub(crate) fn apply_fs_events(
         &mut self,
         host: HostId,
         paths: &HashSet<PathBuf>,
         on_screen: bool,
         listings_on_screen: bool,
         active_host: HostId,
+        cx: &mut Context<Self>,
     ) -> Refresh {
         let roots_moved = paths.iter().any(|path| {
             path.file_name().is_some_and(|name| name == ".git")
@@ -209,10 +212,19 @@ impl FileTreeState {
         for dir in paths {
             touched |= self.invalidate_dir(host, dir);
         }
-        Refresh {
+        let refresh = Refresh {
             notify: roots_moved && on_screen,
             reload: touched && listings_on_screen && active_host == host,
+        };
+        if refresh.reload
+            && let Some(shared) = HostRegistry::lookup(cx, self.view.host)
+        {
+            self.sync_host(&shared);
+            let roots = self.roots.clone();
+            let expanded = self.expanded.clone();
+            self.request_loads(&shared, &roots, &expanded, cx);
         }
+        refresh
     }
 
     pub(super) fn finish_repo_root(
@@ -270,7 +282,7 @@ impl FileTreeState {
         }
     }
 
-    pub(super) fn retire_file_index(&mut self) {
+    pub(crate) fn retire_file_index(&mut self) {
         self.quick_open.generation += 1;
         self.quick_open.walking = None;
         self.quick_open.last = None;
@@ -351,111 +363,119 @@ mod tests {
     #[gpui_kit::test]
     fn invalidated_load_is_visible_and_reloads_only_its_host(cx: &mut TestAppContext) {
         let (app, mut vcx) = test_window::harness(cx);
-        app.update_in(&mut vcx, |app, _, _| {
-            let tree = &mut app.file_tree;
-            let dir = PathBuf::from("/project");
-            let local = (HostId::LOCAL, dir.clone());
-            let remote = (HostId(99), dir.clone());
-            tree.loads.begin(local.clone());
-            tree.loads.begin(remote.clone());
-            let paths = HashSet::from([dir.join("changed.rs")]);
-            assert!(
-                tree.apply_fs_events(local.0, &paths, true, true, local.0)
-                    .reload
-            );
-            let landed = tree.finish_listing(
-                &local,
-                dir.clone(),
-                true,
-                vec![entry("old.rs")],
-                Some(local.0),
-            );
-            assert!(landed.superseded);
-            assert!(tree.loads.is_pending(&local));
-            let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
-            assert_eq!(rows[1].entry.name, "old.rs");
-            tree.invalidate_dir(remote.0, &dir);
-            let landed = tree.finish_listing(
-                &remote,
-                dir.clone(),
-                true,
-                vec![entry("remote.rs")],
-                Some(local.0),
-            );
-            assert!(!landed.superseded);
-            assert!(!tree.loads.is_pending(&remote));
-            tree.finish_listing(
-                &local,
-                dir.clone(),
-                true,
-                vec![entry("new.rs")],
-                Some(local.0),
-            );
-            let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
-            assert_eq!(rows[1].entry.name, "new.rs");
-            let rows = tree.visible_rows(remote.0, &[dir], &HashSet::new());
-            assert_eq!(rows[1].entry.name, "remote.rs");
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.file_tree.update(cx, |tree, cx| {
+                let dir = PathBuf::from("/project");
+                let local = (HostId::LOCAL, dir.clone());
+                let remote = (HostId(99), dir.clone());
+                tree.loads.begin(local.clone());
+                tree.loads.begin(remote.clone());
+                let paths = HashSet::from([dir.join("changed.rs")]);
+                assert!(
+                    tree.apply_fs_events(local.0, &paths, true, true, local.0, cx)
+                        .reload
+                );
+                let landed = tree.finish_listing(
+                    &local,
+                    dir.clone(),
+                    true,
+                    vec![entry("old.rs")],
+                    Some(local.0),
+                );
+                assert!(landed.superseded);
+                assert!(tree.loads.is_pending(&local));
+                let rows =
+                    tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
+                assert_eq!(rows[1].entry.name, "old.rs");
+                tree.invalidate_dir(remote.0, &dir);
+                let landed = tree.finish_listing(
+                    &remote,
+                    dir.clone(),
+                    true,
+                    vec![entry("remote.rs")],
+                    Some(local.0),
+                );
+                assert!(!landed.superseded);
+                assert!(!tree.loads.is_pending(&remote));
+                tree.finish_listing(
+                    &local,
+                    dir.clone(),
+                    true,
+                    vec![entry("new.rs")],
+                    Some(local.0),
+                );
+                let rows =
+                    tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
+                assert_eq!(rows[1].entry.name, "new.rs");
+                let rows = tree.visible_rows(remote.0, &[dir], &HashSet::new());
+                assert_eq!(rows[1].entry.name, "remote.rs");
+            });
         });
     }
 
     #[gpui_kit::test]
     fn write_outcomes_relist_without_restoring_an_obsolete_snapshot(cx: &mut TestAppContext) {
         let (app, mut vcx) = test_window::harness(cx);
-        app.update_in(&mut vcx, |app, _, _| {
-            let tree = &mut app.file_tree;
-            let dir = PathBuf::from("/project");
-            let key = (HostId::LOCAL, dir.clone());
-            tree.children
-                .insert(key.0, dir.clone(), vec![entry("old.rs")]);
-            let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFile, &entry("new.rs"));
-            tree.children
-                .insert(key.0, dir.clone(), vec![entry("external.rs")]);
-            let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-            assert!(
-                tree.finish_write::<()>(key.0, &dir, Err(denied), before)
-                    .is_err()
-            );
-            let rows = tree.visible_rows(key.0, std::slice::from_ref(&dir), &HashSet::new());
-            assert_eq!(rows[1].note, Some(TreeNote::Loading));
-            tree.children
-                .insert(key.0, dir.clone(), vec![entry("external.rs")]);
-            let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFolder, &entry("created"));
-            tree.finish_write(key.0, &dir, Ok(()), before).unwrap();
-            assert!(tree.stale.contains(&key));
-            let rows = tree.visible_rows(key.0, &[dir], &HashSet::new());
-            assert!(rows.iter().any(|row| row.entry.name == "created"));
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.file_tree.update(cx, |tree, _| {
+                let dir = PathBuf::from("/project");
+                let key = (HostId::LOCAL, dir.clone());
+                tree.children
+                    .insert(key.0, dir.clone(), vec![entry("old.rs")]);
+                let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFile, &entry("new.rs"));
+                tree.children
+                    .insert(key.0, dir.clone(), vec![entry("external.rs")]);
+                let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+                assert!(
+                    tree.finish_write::<()>(key.0, &dir, Err(denied), before)
+                        .is_err()
+                );
+                let rows =
+                    tree.visible_rows(key.0, std::slice::from_ref(&dir), &HashSet::new());
+                assert_eq!(rows[1].note, Some(TreeNote::Loading));
+                tree.children
+                    .insert(key.0, dir.clone(), vec![entry("external.rs")]);
+                let before =
+                    tree.optimistic(key.0, &dir, &TreeWrite::NewFolder, &entry("created"));
+                tree.finish_write(key.0, &dir, Ok(()), before).unwrap();
+                assert!(tree.stale.contains(&key));
+                let rows = tree.visible_rows(key.0, &[dir], &HashSet::new());
+                assert!(rows.iter().any(|row| row.entry.name == "created"));
+            });
         });
     }
 
     #[gpui_kit::test]
     fn index_revalidation_keeps_usable_files_and_fences_host_changes(cx: &mut TestAppContext) {
         let (app, mut vcx) = test_window::harness(cx);
-        app.update_in(&mut vcx, |app, _, _| {
-            let tree = &mut app.file_tree;
-            let local = IndexKey::new(HostId::LOCAL, vec![PathBuf::from("/project")]);
-            let remote = IndexKey::new(HostId(99), vec![PathBuf::from("/project")]);
-            let old = tree.begin_file_index(&local).unwrap();
-            assert!(tree.begin_file_index(&local).is_none());
-            let current = tree.begin_file_index(&remote).unwrap();
-            assert!(!tree.finish_file_index(old, local.clone(), FileList::Failed));
-            let index = Arc::new(lyrel_ui_base::file_search::build_index(
-                &[PathBuf::from("/project")],
-                vec![PathBuf::from("/project/main.rs")],
-                false,
-            ));
-            assert!(tree.finish_file_index(
-                current,
-                remote.clone(),
-                FileList::Ready(index.clone())
-            ));
-            assert!(matches!(tree.file_list(&local), FileList::Indexing));
-            tree.quick_open.last.as_mut().unwrap().at = Instant::now() - Duration::from_secs(6);
-            let refresh = tree.begin_file_index(&remote).unwrap();
-            assert!(tree.finish_file_index(refresh, remote.clone(), FileList::Failed));
-            let FileList::Ready(kept) = tree.file_list(&remote) else {
-                panic!("lost usable files")
-            };
-            assert!(Arc::ptr_eq(&index, &kept));
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.file_tree.update(cx, |tree, _| {
+                let local = IndexKey::new(HostId::LOCAL, vec![PathBuf::from("/project")]);
+                let remote = IndexKey::new(HostId(99), vec![PathBuf::from("/project")]);
+                let old = tree.begin_file_index(&local).unwrap();
+                assert!(tree.begin_file_index(&local).is_none());
+                let current = tree.begin_file_index(&remote).unwrap();
+                assert!(!tree.finish_file_index(old, local.clone(), FileList::Failed));
+                let index = Arc::new(lyrel_ui_base::file_search::build_index(
+                    &[PathBuf::from("/project")],
+                    vec![PathBuf::from("/project/main.rs")],
+                    false,
+                ));
+                assert!(tree.finish_file_index(
+                    current,
+                    remote.clone(),
+                    FileList::Ready(index.clone())
+                ));
+                assert!(matches!(tree.file_list(&local), FileList::Indexing));
+                tree.quick_open.last.as_mut().unwrap().at =
+                    Instant::now() - Duration::from_secs(6);
+                let refresh = tree.begin_file_index(&remote).unwrap();
+                assert!(tree.finish_file_index(refresh, remote.clone(), FileList::Failed));
+                let FileList::Ready(kept) = tree.file_list(&remote) else {
+                    panic!("lost usable files")
+                };
+                assert!(Arc::ptr_eq(&index, &kept));
+            });
         });
     }
 
