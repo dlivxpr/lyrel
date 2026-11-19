@@ -15,7 +15,8 @@ use std::sync::Arc;
 /// input ceiling; parsing never raises the text or control-frame limits.
 const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
-use super::toml_document::{TomlDocument, TomlMode, TomlView};
+use super::json_document::JsonShell;
+use super::toml_document::{TomlDocument, TomlMode, TomlShell, TomlView};
 use super::xml_document::{XmlDocument, XmlMode, XmlView};
 use super::yaml_document::{YamlDocument, YamlMode, YamlView};
 use lyrel_document::json::projection::JsonFormat;
@@ -975,7 +976,7 @@ impl EditorBuffers {
                     edited(view, id, cx);
                 },
             );
-            let json_document = cx.new(|cx| JsonDocument::new(document, json_format, cx));
+            let json_document = cx.new(|cx| JsonDocument::new(document, JsonShell::new(json_format), cx));
             let presentation = cx.new(|cx| {
                 JsonView::new(
                     json_document,
@@ -1019,7 +1020,7 @@ impl EditorBuffers {
                     edited(view, id, cx);
                 },
             );
-            let toml_document = cx.new(|cx| TomlDocument::new(document, cx));
+            let toml_document = cx.new(|cx| TomlDocument::new(document, TomlShell, cx));
             let presentation = cx.new(|cx| {
                 TomlView::new(
                     toml_document,

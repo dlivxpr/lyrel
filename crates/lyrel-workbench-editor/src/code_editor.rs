@@ -61,6 +61,8 @@ pub use split::GroupId;
 pub mod sqlite_document;
 pub mod sqlite_grid;
 pub mod strip;
+pub mod structured_document;
+pub mod structured_view;
 use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
 pub use saving::{AfterUnsaved, BarKind};
