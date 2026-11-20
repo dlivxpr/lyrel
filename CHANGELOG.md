@@ -5,6 +5,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [0.3.7] - 2026-11-21
+
+### 修复
+
+- 左侧标签栏恢复与 `tty7` 一致的单行／双行展示逻辑：移除 `#318` 多余的程序状态行（如 `"程序 · 空闲"` / `"Program · Idle"`）与悬停程序状态段，仅保留 git 分支副行与尾部智能体状态点。
+- 修复升级 `gpui-fast-windows 0.1.16` 后 Windows 11 22H2+ 下 `WindowBackdrop::Blur`（及 `Auto + window_blur`）失效的问题：为 `BackdropAppearance::Blurred` 清除 `DWMWA_SYSTEMBACKDROP_TYPE`（`DWMSBT_NONE`）并重新启用经典 WCA acrylic（`ACCENT_ENABLE_ACRYLICBLURBEHIND`），避免被误设为 `DWMSBT_TRANSIENTWINDOW`。
+- 移除底部全局状态栏重复的 `status-agent` 槽位，仅保留 OSC 7501 `status-program` 程序运行状态展示。
+
+### 开发与 CI
+
+- 调整图片、工作台视图与 Markdown 资源测试异步等待辅助的轮询休眠间隔（`15ms`）与超时余量（`45s`），避免 Windows CI 高并发渲染时阻塞后台加载线程。
+
 ## [0.3.6] - 2026-11-20
 
 ### 开发与 CI
