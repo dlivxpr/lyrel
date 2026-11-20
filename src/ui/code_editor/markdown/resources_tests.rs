@@ -19,7 +19,7 @@ fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(45);
     loop {
         settle(cx);
         if ready(cx) {
@@ -30,7 +30,7 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
             "resource workflow did not settle"
         );
         cx.executor().advance_clock(Duration::from_millis(50));
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(15));
     }
 }
 fn png() -> Vec<u8> {

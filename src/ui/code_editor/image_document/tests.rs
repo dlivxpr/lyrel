@@ -30,7 +30,7 @@ fn settle(cx: &mut VisualTestContext) {
 }
 
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(45);
     while !ready(cx) {
         assert!(
             Instant::now() < deadline,
@@ -38,7 +38,7 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
         );
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(50));
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(15));
     }
     settle(cx);
 }

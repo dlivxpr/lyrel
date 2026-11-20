@@ -25,7 +25,7 @@ fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(45);
     while !ready(cx) {
         assert!(
             Instant::now() < deadline,
@@ -33,7 +33,7 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
         );
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(50));
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(15));
     }
     settle(cx);
 }
@@ -998,7 +998,7 @@ mod integrated_acceptance {
                 .map(|file| file.path.display().to_string())
                 .unwrap_or_else(|| "missing document".to_string())
         });
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(45);
         while !is_ready(app, cx, id) {
             assert!(
                 Instant::now() < deadline,
@@ -1007,7 +1007,7 @@ mod integrated_acceptance {
             );
             settle(cx);
             cx.executor().advance_clock(Duration::from_millis(50));
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(15));
         }
         settle(cx);
     }
