@@ -386,6 +386,7 @@ impl crate::ui::app::LyrelApp {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn program_unread_count(
         &self,
         tab: &crate::ui::tab::Tab,

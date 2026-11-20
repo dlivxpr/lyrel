@@ -28,24 +28,24 @@ fn program_observer_stream(daemon: &GraphicsDaemonProcess, pane: u64) -> Stream 
     stream
 }
 
-fn program_assert_unread(vcx: &mut gpui_kit::VisualTestContext, expected: usize) {
+fn program_assert_unread(
+    app: &gpui_kit::Entity<crate::ui::app::LyrelApp>,
+    vcx: &mut gpui_kit::VisualTestContext,
+    expected: usize,
+) {
     use gpui_kit::test::TestWindowExt as _;
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        if expected == 0 {
-            assert!(
-                window
-                    .try_find(("sidebar-program-unread", 0usize))
-                    .is_none()
-            );
-        } else {
-            let label = format!("New results · {expected}");
-            let reminder = window.find(("sidebar-program-unread", 0usize));
-            assert!(reminder.visible());
-            assert_eq!(reminder.label(), Some(label.as_str()));
-        }
+        assert!(
+            window
+                .try_find(("sidebar-program-unread", 0usize))
+                .is_none(),
+            "left sidebar must not render a program unread row"
+        );
     });
+    let actual = app.read_with(vcx, |app, cx| app.program_unread_count(&app.tabs[0], cx));
+    assert_eq!(actual, expected);
 }
 
 #[gpui_kit::test]
@@ -80,8 +80,8 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     });
     av.deactivate_window();
     bv.deactivate_window();
-    program_assert_unread(&mut av, 0);
-    program_assert_unread(&mut bv, 0);
+    program_assert_unread(&first, &mut av, 0);
+    program_assert_unread(&second, &mut bv, 0);
     assert!(
         command_notification_take().is_empty(),
         "a cold baseline is silent"
@@ -99,8 +99,8 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
             })
         })
     });
-    program_assert_unread(&mut av, 1);
-    program_assert_unread(&mut bv, 1);
+    program_assert_unread(&first, &mut av, 1);
+    program_assert_unread(&second, &mut bv, 1);
     let notes = command_notification_take();
     assert_eq!(
         notes.len(),
@@ -116,8 +116,8 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     // The viewing window clears its own reminder, never the other window's
     // cursor or the daemon's blocked record. No approval is implied.
     av.update(|window, _| window.activate_window());
-    program_assert_unread(&mut av, 0);
-    program_assert_unread(&mut bv, 1);
+    program_assert_unread(&first, &mut av, 0);
+    program_assert_unread(&second, &mut bv, 1);
     a.read_with(cx, |view, _| {
         view.with_program_status(|status| {
             assert_eq!(
@@ -134,7 +134,7 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     );
     av.run_until_parked();
     bv.run_until_parked();
-    program_assert_unread(&mut av, 0);
+    program_assert_unread(&first, &mut av, 0);
     assert!(
         command_notification_take().is_empty(),
         "routine text cannot re-notify or mark an acknowledged result unread"
@@ -161,8 +161,8 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
         751604,
         b"\x1b]7501;state=done:id=task:app=builder:msg=RG9uZQ==\x07",
     );
-    program_assert_unread(&mut av, 0);
-    program_assert_unread(&mut bv, 1);
+    program_assert_unread(&first, &mut av, 0);
+    program_assert_unread(&second, &mut bv, 1);
     assert!(
         command_notification_take().is_empty(),
         "done is visual, not another completion notice"
@@ -170,7 +170,7 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
 
     av.deactivate_window();
     bv.update(|window, _| window.activate_window());
-    program_assert_unread(&mut bv, 0);
+    program_assert_unread(&second, &mut bv, 0);
     let old_version = b.read_with(cx, |view, _| {
         view.with_program_status(|status| status.result_version())
     });
@@ -207,15 +207,15 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
             })
         },
     );
-    program_assert_unread(&mut bv, 1);
-    program_assert_unread(&mut av, 1);
+    program_assert_unread(&second, &mut bv, 1);
+    program_assert_unread(&first, &mut av, 1);
     assert!(
         command_notification_take().is_empty(),
         "reattachment never replays an OS notice"
     );
     bv.update(|window, _| window.activate_window());
-    program_assert_unread(&mut bv, 0);
-    program_assert_unread(&mut av, 1);
+    program_assert_unread(&second, &mut bv, 0);
+    program_assert_unread(&first, &mut av, 1);
 }
 
 #[gpui_kit::test]
@@ -240,7 +240,7 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
         b"\x1b]7501;state=done:id=cold:app=builder\x07",
     );
     program_summary_wait_records(cx, &a, 1, "the first window observes done");
-    program_assert_unread(&mut av, 0);
+    program_assert_unread(&first, &mut av, 0);
     av.deactivate_window();
 
     let (second, mut bv) = crate::ui::app::test_window::harness(cx);
@@ -252,7 +252,7 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
         &mut bv,
     );
     program_summary_wait_records(cx, &b, 1, "the cold baseline contains the old done record");
-    program_assert_unread(&mut bv, 0);
+    program_assert_unread(&second, &mut bv, 0);
     second.update_in(&mut bv, |app, _, cx| {
         app.tabs.clear();
         cx.notify();
@@ -265,7 +265,7 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
         &mut bv,
     );
     program_summary_wait_records(cx, &b, 1, "unchanged reconnect restores the current record");
-    program_assert_unread(&mut bv, 0);
+    program_assert_unread(&second, &mut bv, 0);
     assert!(
         command_notification_take().is_empty(),
         "cold and unchanged baselines never replay OS notices"
@@ -277,11 +277,11 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
         751621,
         b"\x1b]7501;state=clear:id=cold\x07\x1b]7501;state=done:id=cold:app=builder\x07",
     );
-    program_assert_unread(&mut av, 1);
-    program_assert_unread(&mut bv, 1);
+    program_assert_unread(&first, &mut av, 1);
+    program_assert_unread(&second, &mut bv, 1);
     av.update(|window, _| window.activate_window());
-    program_assert_unread(&mut av, 0);
-    program_assert_unread(&mut bv, 1);
+    program_assert_unread(&first, &mut av, 0);
+    program_assert_unread(&second, &mut bv, 1);
     av.deactivate_window();
 
     graphics_send_fixture(&a, cx, 751622, b"\x1b]7501;state=clear\x07");
@@ -293,17 +293,17 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
     graphics_send_fixture(&a, cx, 751623, &reports);
     program_summary_wait_records(cx, &a, 256, "the bounded public record table fills");
     program_summary_wait_records(cx, &b, 256, "the observer receives the same bounded table");
-    program_assert_unread(&mut av, 256);
-    program_assert_unread(&mut bv, 256);
+    program_assert_unread(&first, &mut av, 256);
+    program_assert_unread(&second, &mut bv, 256);
     av.update(|window, _| window.activate_window());
-    program_assert_unread(&mut av, 0);
-    program_assert_unread(&mut bv, 256);
+    program_assert_unread(&first, &mut av, 0);
+    program_assert_unread(&second, &mut bv, 256);
     av.deactivate_window();
     graphics_send_fixture(&a, cx, 751624, b"\x1b]7501;state=done:id=extra\x07");
-    program_assert_unread(&mut av, 1);
+    program_assert_unread(&first, &mut av, 1);
     graphics_send_fixture(&a, cx, 751625, b"\x1b]7501;state=done:id=evict0\x07");
-    program_assert_unread(&mut av, 2);
-    program_assert_unread(&mut bv, 256);
+    program_assert_unread(&first, &mut av, 2);
+    program_assert_unread(&second, &mut bv, 256);
     assert!(
         command_notification_take().is_empty(),
         "eviction/recreation of done stays visual only"
@@ -328,10 +328,10 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
             })
         })
     });
-    program_assert_unread(&mut av, 0);
+    program_assert_unread(&first, &mut av, 0);
     graphics_send_fixture(&next, cx, 751626, b"\x1b]7501;state=done:id=evict0\x07");
-    program_assert_unread(&mut av, 1);
-    program_assert_unread(&mut bv, 256);
+    program_assert_unread(&first, &mut av, 1);
+    program_assert_unread(&second, &mut bv, 256);
 }
 
 #[gpui_kit::test]
@@ -357,7 +357,7 @@ fn program_attention_budget_is_per_source_not_a_same_pane_mute(cx: &mut TestAppC
         );
     }
     graphics_send_fixture(&view, cx, 751640, &burst);
-    program_assert_unread(&mut vcx, 7);
+    program_assert_unread(&app, &mut vcx, 7);
     let notes = command_notification_take();
     assert_eq!(
         notes.len(),

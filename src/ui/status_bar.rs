@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, 
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems, svg};
 
 use crate::ui::app::LyrelApp;
-use lyrel_ui_base::actions::{OpenSettings, ShowRightPanelInfo, ToggleSwitcher};
+use lyrel_ui_base::actions::{OpenSettings, ToggleSwitcher};
 use lyrel_ui_base::i18n::{L10nKey, t};
 
 pub(crate) struct Clock {
@@ -169,13 +169,6 @@ impl LyrelApp {
                     .map(|git| git.branch)
             })
             .flatten();
-        let agent = (!document)
-            .then(|| {
-                self.tabs
-                    .get(self.tabs.active_index())
-                    .and_then(|tab| tab.agent_row(cx))
-            })
-            .flatten();
         let program = (!document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
@@ -261,25 +254,6 @@ impl LyrelApp {
             )
             .child(context)
             .children(program)
-            .when_some(agent, |bar, (agent, status)| {
-                let label = match crate::ui::tab_strip::agent_status_label(Some(status)) {
-                    Some(state) => format!("{} · {state}", agent.display_name()),
-                    None => agent.display_name().to_string(),
-                };
-                bar.child(
-                    Button::new("status-agent")
-                        .ghost()
-                        .xsmall()
-                        .flex_1()
-                        .min_w(rems(1.5))
-                        .max_w(rems(12.))
-                        .label(label.clone())
-                        .tooltip(label)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ShowRightPanelInfo), cx)
-                        }),
-                )
-            })
             // Document state lives in the editor panel's own bottom bar now;
             // the global bar only carries window context.
             .child(
@@ -540,6 +514,86 @@ mod tests {
             assert!(
                 document.bottom() <= global.top(),
                 "Markdown status sits above, not inside, the global status bar"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn status_bar_shows_only_osc7501_program_status_without_duplicate_agent_slot(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
+        use crate::daemon::protocol::DaemonMsg;
+        use lyrel_core::core::program_status::{
+            ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
+        };
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx, mut stream) = harness_with_pane(cx);
+        let leaf = app.read_with(&vcx, |app, _| {
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .and_then(|slot| slot.terminal().cloned())
+                .expect("test pane")
+        });
+
+        DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
+            .encode(&mut stream)
+            .unwrap();
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+            status: AgentStatus::Working,
+            rich: true,
+            turns: 1,
+            ..Default::default()
+        })))
+        .encode(&mut stream)
+        .unwrap();
+        DaemonMsg::ProgramStatus(ProgramStatusFrame::Baseline(ProgramSnapshot::new(
+            "sess-1".into(),
+            1,
+            0,
+            vec![ProgramRecord::new(
+                String::new(),
+                ProgramState::Working,
+                None,
+                Some("omp".into()),
+                None,
+                None,
+                None,
+                1,
+                1,
+                0,
+            )],
+        )))
+        .encode(&mut stream)
+        .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            vcx.run_until_parked();
+            let ready = leaf.read_with(&vcx, |view, _| {
+                view.agent() == Some(CLIAgent::OhMyPi)
+                    && view.with_program_status(|status| status.records().count() == 1)
+            });
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for agent and program status"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let program = window.find("status-program");
+            assert!(program.visible());
+            assert_eq!(program.label(), Some("Program · omp · Working"));
+            assert!(
+                window.try_find("status-agent").is_none(),
+                "status bar must not render a duplicate agent status slot"
             );
         });
     }

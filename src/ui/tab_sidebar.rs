@@ -52,12 +52,6 @@ const ROW_HEIGHT: f32 = 30.;
 /// A row with a branch line under its title.
 const ROW_HEIGHT_TWO_LINE: f32 = 42.;
 
-/// A row carrying the title, a program-status line and a branch/progress
-/// line. Program state gets its own full-width line rather than sharing the
-/// metadata line: at the narrowest sidebar a shared line would elide the state
-/// itself, and OSC 9;4 progress must keep owning its line unmodified.
-const ROW_HEIGHT_THREE_LINE: f32 = 54.;
-
 /// The air between two groups — what makes a group a group without a box.
 const GROUP_GAP: f32 = 16.;
 
@@ -204,9 +198,6 @@ struct SidebarRowShown {
     title: Option<(SharedString, SharedString)>,
     branch: Option<(SharedString, SharedString, u32, u32)>,
     cwd: Option<(SharedString, SharedString)>,
-    /// The program states the row is presenting, already cached by the tab;
-    /// the hover card clones this handle rather than resummarizing records.
-    program: Option<Rc<crate::ui::program_summary::ProgramSummary>>,
 }
 
 #[derive(Clone)]
@@ -220,9 +211,7 @@ impl Render for DragGroup {
 
 /// Every detail a sidebar row could not fit, collected so the hover card can
 /// be rendered from cloneable data (an `AnyElement` cannot be cloned, but the
-/// tooltip closure has to rebuild its content on every hover). Current program
-/// records are here even when nothing was elided: the row line is compact, and
-/// the card is where the remaining records and their pane attribution live.
+/// tooltip closure has to rebuild its content on every hover).
 #[derive(Clone)]
 struct SidebarInfo {
     /// Full path, when the row's title was elided.
@@ -233,8 +222,6 @@ struct SidebarInfo {
     cwd: Option<SharedString>,
     /// Remote host, when the avatar only shows a dot for it.
     host: Option<SharedString>,
-    /// Current program records, listed with their pane and app attribution.
-    program: Option<Rc<crate::ui::program_summary::ProgramSummary>>,
 }
 
 impl LyrelApp {
@@ -902,11 +889,6 @@ impl LyrelApp {
                 let agent = tab.agent(cx).or_else(|| tab.asleep_agent());
                 let agent_status = tab.agent_status(cx);
                 let agent_unread = tab.agent_unread_count(cx);
-                // The tab's own program records, across every logical leaf
-                // including parked ones. Cached by the tab: this read costs a
-                // per-leaf version comparison, not a record rebuild.
-                let program = tab.program_summary(cx);
-                let program_status_text = program.as_ref().map(|summary| summary.row_label());
                 let git_cwd = git_click(tab, window, cx);
                 let badge_extra = if show_badges && badge_pos < 9 {
                     row_metrics::BADGE + row_metrics::GAP
@@ -1156,7 +1138,6 @@ impl LyrelApp {
                     title: full_title.map(|full| (shown_title.clone(), full)),
                     branch: branch_shown.clone(),
                     cwd: cwd_shown.clone(),
-                    program: program.clone(),
                 };
                 let info = self.sidebar_info(tab, window, cx, &shown);
                 // Colors are captured by value so the tooltip builder (which
@@ -1165,65 +1146,12 @@ impl LyrelApp {
                 let success = added_ink;
                 let danger = removed_ink;
 
-                // The program line is its own text row: sharing the metadata
-                // line would either elide the state at narrow widths or
-                // displace the OSC 9;4 progress that owns that line. The line
-                // names both origins in words, so the state never relies on
-                // the semantic color alone.
-                let program_unread = self.program_unread_count(tab, cx);
-                let program_line = program_status_text.as_ref().map(|label| {
-                    let color = program.as_ref().map_or_else(
-                        || cx.theme().muted_foreground,
-                        |summary| {
-                            crate::ui::program_summary::state_color(
-                                summary.representative().record(),
-                                cx,
-                            )
-                        },
-                    );
-                    h_flex()
-                        .id(("sidebar-program", i))
-                        .w_full()
-                        .min_w_0()
-                        .gap_1()
-                        .text_size(px(meta_size))
-                        .child(
-                            div()
-                                .id(("sidebar-program-status", i))
-                                .test_support()
-                                .flex_1()
-                                .min_w_0()
-                                .aria_label(label.clone())
-                                .truncate()
-                                .text_color(color)
-                                .child(label.clone()),
-                        )
-                        .when(program_unread != 0, |row| {
-                            let reminder = lyrel_ui_base::i18n::t_fmt(
-                                L10nKey::ProgramNewResults,
-                                &[("count", &program_unread.to_string())],
-                            );
-                            row.child(
-                                div()
-                                    .id(("sidebar-program-unread", i))
-                                    .test_support()
-                                    .aria_label(reminder.clone())
-                                    .flex_none()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(reminder),
-                            )
-                        })
-                });
-
-                // Title, program line and branch/progress line each stand on
-                // their own row; the program line never borrows the OSC 9;4
-                // line. A row with nothing but a title stays one line tall.
-                let extra_lines =
-                    usize::from(program_line.is_some()) + usize::from(git_line.is_some());
-                let row_h = match extra_lines {
-                    0 => ROW_HEIGHT,
-                    1 => ROW_HEIGHT_TWO_LINE,
-                    _ => ROW_HEIGHT_THREE_LINE,
+                // A row that grows a branch line under its title stands at
+                // `ROW_HEIGHT_TWO_LINE`; a one-line row at `ROW_HEIGHT`.
+                let two_line = git_line.is_some();
+                let row_h = match two_line {
+                    true => ROW_HEIGHT_TWO_LINE,
+                    false => ROW_HEIGHT,
                 };
                 let label_region = match rename_input {
                     Some(input) => div()
@@ -1254,7 +1182,7 @@ impl LyrelApp {
                                 // per call instead of being moved out.
                                 let info = info.clone();
                                 gpui_kit::component::tooltip::Tooltip::element(
-                                    move |_window, cx| {
+                                    move |_window, _cx| {
                                         v_flex()
                                             .gap_1()
                                             // The card is the one place that
@@ -1329,11 +1257,6 @@ impl LyrelApp {
                                                         .child(div().truncate().child(host)),
                                                 )
                                             })
-                                            .when_some(info.program.clone(), |c, program| {
-                                                c.child(crate::ui::program_summary::card_section(
-                                                    &program, cx,
-                                                ))
-                                            })
                                     },
                                 )
                                 .build(window, cx)
@@ -1367,7 +1290,6 @@ impl LyrelApp {
                                     )
                                 }),
                         )
-                        .when_some(program_line, |col, line| col.child(line))
                         .children(git_line)
                         .into_any_element(),
                 };
@@ -1380,11 +1302,6 @@ impl LyrelApp {
                     .role(gpui_kit::Role::Tab)
                     .aria_label(SharedString::from(title_text.to_string()))
                     .aria_selected(is_active)
-                    // The visible program line is muted metadata; the row's
-                    // description carries it to assistive technology too.
-                    .when_some(program_status_text, |row, status| {
-                        row.aria_description(status)
-                    })
                     .when(nav_row, |row| {
                         row.child(
                             div()
@@ -2518,10 +2435,6 @@ impl LyrelApp {
             // repeating the cwd under it would be noise, not information.
             cwd: elided(&shown.cwd),
             host: None,
-            // Current program records are the card's own reason to exist even
-            // when nothing was elided: the row line is compact, so the card is
-            // where the remaining records and their pane attribution live.
-            program: shown.program.clone(),
         };
         // The host is read off the same leaf the title and cwd came from; a
         // split tab whose panes sit on different machines would otherwise
@@ -2533,12 +2446,8 @@ impl LyrelApp {
         }) {
             info.host = Some(target);
         }
-        (info.title.is_some()
-            || info.branch.is_some()
-            || info.cwd.is_some()
-            || info.host.is_some()
-            || info.program.is_some())
-        .then_some(info)
+        (info.title.is_some() || info.branch.is_some() || info.cwd.is_some() || info.host.is_some())
+            .then_some(info)
     }
 
     /// Where a tab being dragged in the sidebar would land if let go now,
@@ -4952,6 +4861,79 @@ mod navigation_tests {
         app.update_in(&mut vcx, |app, window, _| {
             assert!(!app.sidebar_nav_focus.is_focused(window));
         });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_follows_tty7_without_program_idle_row(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
+        use lyrel_core::core::program_status::{
+            ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
+        };
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+        app.update(&mut vcx, |app, cx| {
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        let frame = ProgramStatusFrame::Baseline(ProgramSnapshot::new(
+            "sess-1".into(),
+            1,
+            0,
+            vec![ProgramRecord::new(
+                String::new(),
+                ProgramState::Idle,
+                None,
+                Some("omp".into()),
+                None,
+                None,
+                None,
+                1,
+                1,
+                0,
+            )],
+        ));
+        crate::daemon::protocol::DaemonMsg::ProgramStatus(frame)
+            .encode(&mut streams[0])
+            .unwrap();
+        let leaf = app.read_with(&vcx, |app, _| {
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .and_then(|slot| slot.terminal().cloned())
+                .expect("test pane")
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            vcx.run_until_parked();
+            let ready = leaf.read_with(&vcx, |view, _| {
+                view.with_program_status(|status| status.records().count() == 1)
+            });
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for program status frame"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window
+                    .try_find(("sidebar-program-status", 0usize))
+                    .is_none(),
+                "left sidebar must not add a program status row like 'Program · Idle'"
+            );
+        });
+        let row_height = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0].size.height);
+        assert_eq!(
+            row_height,
+            px(ROW_HEIGHT),
+            "sidebar row must remain single-line height without a git branch"
+        );
     }
 }
 

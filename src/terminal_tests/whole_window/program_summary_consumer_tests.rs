@@ -88,21 +88,18 @@ fn program_summary_wait_representative(
     });
 }
 
-/// The row's own registered status element, as a reader sees it.
-fn program_summary_row(vcx: &mut gpui_kit::VisualTestContext) -> Option<String> {
+/// The left sidebar follows tty7 and never adds a separate program status row.
+fn program_summary_assert_no_sidebar_row(vcx: &mut gpui_kit::VisualTestContext) {
     use gpui_kit::test::TestWindowExt as _;
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window
-            .try_find(("sidebar-program-status", 0usize))
-            .filter(|status| status.visible())
-            .and_then(|status| status.label().map(str::to_owned))
-    })
-}
-
-fn program_summary_expected(key: lyrel_ui_base::i18n::L10nKey) -> String {
-    use lyrel_ui_base::i18n::{L10nKey, t};
-    format!("{} · {}", t(L10nKey::ProgramSource), t(key))
+        assert!(
+            window
+                .try_find(("sidebar-program-status", 0usize))
+                .is_none(),
+            "left sidebar must not render a program status row"
+        );
+    });
 }
 
 fn program_summary_of(
@@ -118,7 +115,7 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::test::TestWindowExt as _;
-    use lyrel_core::core::program_status::ProgramState;
+    use lyrel_core::core::program_status::{BlockedKind, ProgramState};
     use lyrel_ui_base::i18n::L10nKey;
     lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
@@ -145,10 +142,7 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     program_summary_wait_records(cx, &left_view, 1, "left working record");
     program_summary_wait_records(cx, &right_view, 1, "right done record");
     vcx.run_until_parked();
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramWorking).as_str())
-    );
+    program_summary_assert_no_sidebar_row(&mut vcx);
     let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(summary.representative().pane_id(), left);
     assert_eq!(
@@ -170,13 +164,15 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     );
     program_summary_wait_records(cx, &right_view, 2, "right blocked child");
     vcx.run_until_parked();
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramPermission).as_str())
-    );
+    program_summary_assert_no_sidebar_row(&mut vcx);
     let summary = program_summary_of(&app, &mut vcx);
     let representative = summary.representative();
     assert_eq!(representative.pane_id(), right);
+    assert_eq!(representative.record().state(), ProgramState::Blocked);
+    assert_eq!(
+        representative.record().kind(),
+        Some(BlockedKind::Permission)
+    );
     assert_eq!(representative.record().id(), "build/check");
     assert_eq!(representative.record().app(), Some("tests"));
     let label = representative.tooltip_label();
@@ -225,11 +221,10 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
                 .as_str()
             )
         );
-        let program = window.find(("sidebar-program-status", 0usize));
-        assert!(program.visible());
-        assert_eq!(
-            program.label(),
-            Some(program_summary_expected(L10nKey::ProgramPermission).as_str())
+        assert!(
+            window
+                .try_find(("sidebar-program-status", 0usize))
+                .is_none()
         );
     });
 
@@ -237,11 +232,13 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     graphics_send_fixture(&left_view, cx, 31504, b"\x1b]7501;state=error:id=build\x07");
     program_summary_wait_records(cx, &left_view, 2, "left error child");
     vcx.run_until_parked();
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramPermission).as_str())
+        summary.representative().record().state(),
+        ProgramState::Blocked
     );
-    // Clearing the blocked subtree hands the row to the error.
+    // Clearing the blocked subtree hands the summary to the error.
     graphics_send_fixture(
         &right_view,
         cx,
@@ -250,9 +247,11 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     );
     program_summary_wait_records(cx, &right_view, 1, "right blocked subtree cleared");
     vcx.run_until_parked();
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramError).as_str())
+        summary.representative().record().state(),
+        ProgramState::Error
     );
 
     // A parked leaf is still a logical pane of this tab: its program state is
@@ -273,9 +272,15 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
             app.tabs[0].is_parked_slot(&crate::ui::pane::PaneSlot::Ready(right_view.clone()), cx)
         );
     });
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramAuth).as_str())
+        summary.representative().record().state(),
+        ProgramState::Blocked
+    );
+    assert_eq!(
+        summary.representative().record().kind(),
+        Some(BlockedKind::Auth)
     );
 
     let before = right_view.read_with(cx, |view, _| {
@@ -291,9 +296,11 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     // Removing the pane from the tree drops it from the answer immediately.
     program_summary_show_tab(&app, &mut vcx, std::slice::from_ref(&left_view));
     vcx.run_until_parked();
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramError).as_str())
+        summary.representative().record().state(),
+        ProgramState::Error
     );
     drop(right_view);
 
@@ -317,11 +324,12 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     );
     program_summary_show_tab(&app, &mut vcx, &[left_view, fresh]);
     vcx.run_until_parked();
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramAuth).as_str())
-    );
+    program_summary_assert_no_sidebar_row(&mut vcx);
     let summary = program_summary_of(&app, &mut vcx);
+    assert_eq!(
+        summary.representative().record().kind(),
+        Some(BlockedKind::Auth)
+    );
     assert_eq!(summary.representative().record().id(), "login");
     assert_eq!(summary.representative().record().app(), Some("tests"));
 }
@@ -330,7 +338,6 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
 fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
     cx: &mut TestAppContext,
 ) {
-    use lyrel_ui_base::i18n::L10nKey;
     lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
@@ -359,10 +366,7 @@ fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
     program_summary_wait_representative(cx, &view, "second", "newer done record wins the tie");
     let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(summary.representative().record().id(), "second");
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramDone).as_str())
-    );
+    program_summary_assert_no_sidebar_row(&mut vcx);
 
     // An identical report is not a new result. It only refreshes daemon
     // recency, so the representative flips while both counters stay put —
@@ -410,18 +414,19 @@ fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
         "either direction of the tie is recency-only"
     );
 
-    // No current records means no row line at all; idle is the one state
-    // below done and still reports in words.
+    // Clear removes current records; idle stays out of the left sidebar.
     graphics_send_fixture(&view, cx, 31515, b"\x1b]7501;state=clear\x07");
     program_summary_wait_records(cx, &view, 0, "clear removes current records");
     vcx.run_until_parked();
-    assert_eq!(program_summary_row(&mut vcx), None);
+    program_summary_assert_no_sidebar_row(&mut vcx);
     graphics_send_fixture(&view, cx, 31516, b"\x1b]7501;state=idle:app=checks\x07");
     program_summary_wait_records(cx, &view, 1, "idle record");
     vcx.run_until_parked();
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramIdle).as_str())
+        summary.representative().record().state(),
+        lyrel_core::core::program_status::ProgramState::Idle
     );
 
     // The card is bounded: the representative plus six others are listed and
@@ -446,7 +451,6 @@ fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
 fn program_summary_consumer_same_pane_representative_refresh_beats_another_pane(
     cx: &mut TestAppContext,
 ) {
-    use lyrel_ui_base::i18n::L10nKey;
     lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let left = daemon.spawn();
@@ -499,10 +503,7 @@ fn program_summary_consumer_same_pane_representative_refresh_beats_another_pane(
         "the same pane keeps its representative id and produces no new result"
     );
     vcx.run_until_parked();
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramDone).as_str())
-    );
+    program_summary_assert_no_sidebar_row(&mut vcx);
     let summary = program_summary_of(&app, &mut vcx);
     assert_eq!(summary.representative().pane_id(), left);
     assert!(
@@ -517,7 +518,6 @@ fn program_summary_consumer_same_pane_representative_refresh_beats_another_pane(
 fn program_summary_consumer_keeps_agent_authority_beside_program_state(cx: &mut TestAppContext) {
     use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
     use lyrel_core::core::program_status::ProgramState;
-    use lyrel_ui_base::i18n::L10nKey;
     lyrel_ui_base::i18n::set_locale("en");
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
@@ -558,12 +558,9 @@ fn program_summary_consumer_keeps_agent_authority_beside_program_state(cx: &mut 
     );
     program_summary_wait_records(cx, &program, 1, "blocked program record");
     vcx.run_until_parked();
-    assert_eq!(
-        program_summary_row(&mut vcx).as_deref(),
-        Some(program_summary_expected(L10nKey::ProgramQuestion).as_str())
-    );
-    // The agent's own authority is untouched by the program line in the same
-    // tab: both read from their own leaves, and the row draws both.
+    program_summary_assert_no_sidebar_row(&mut vcx);
+    // The agent's own authority is untouched by the program state in the same
+    // tab: both read from their own leaves.
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tabs[0].agent_status(cx), Some(AgentStatus::Done));
         assert_eq!(app.tabs[0].agent_unread_count(cx), 1);

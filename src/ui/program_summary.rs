@@ -13,15 +13,20 @@
 //! bounded current projection, because daemon recency can move without either
 //! counter. Ordinary output never clones a record set or rebuilds a tooltip.
 
-use crate::ui::program_status::{record_label, state_label};
+use crate::ui::program_status::record_label;
 use crate::ui::tab::Tab;
-use gpui_kit::component::{ActiveTheme as _, v_flex};
-use gpui_kit::{AnyElement, App, Entity, EntityId, SharedString, Window, div, prelude::*, px};
+#[cfg(test)]
+use gpui_kit::Entity;
+use gpui_kit::{App, EntityId, SharedString, Window};
+#[cfg(test)]
 use lyrel_core::core::program_status::{
     ProgramRecord, ProgramState, ProgramStatusClient, plain_program_text,
 };
+#[cfg(test)]
 use lyrel_terminal::view::TerminalView;
-use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+#[cfg(test)]
+use lyrel_ui_base::i18n::{L10nKey, t_fmt};
+#[cfg(test)]
 use std::rc::Rc;
 
 /// How many records besides the representative the hover card lists.
@@ -29,15 +34,18 @@ use std::rc::Rc;
 /// A pane may hold up to 256 records; a card that enumerated every one would
 /// be neither readable nor worth laying out on hover. The count of what stayed
 /// out is still shown.
+#[cfg(test)]
 const TOOLTIP_RECORDS: usize = 6;
 
 /// A current record, with the pane whose daemon produced it.
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct ProgramEntry {
     pane_id: u64,
     record: ProgramRecord,
 }
 
+#[cfg(test)]
 impl ProgramEntry {
     /// The daemon pane id this record belongs to, as the notifications and
     /// close prompts already spell panes (`#3`).
@@ -84,6 +92,7 @@ impl ProgramEntry {
 
 /// The one program state a tab presents, plus the current records a hover
 /// card can name after it.
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct ProgramSummary {
     representative: ProgramEntry,
@@ -95,6 +104,7 @@ pub(crate) struct ProgramSummary {
 /// Two summaries are the same presentation when every drawn line and its
 /// order match. Versions and recency are selection inputs, not text: a frame
 /// that only refreshes them is not a reason to paint.
+#[cfg(test)]
 impl PartialEq for ProgramSummary {
     fn eq(&self, other: &Self) -> bool {
         self.hidden == other.hidden
@@ -108,8 +118,10 @@ impl PartialEq for ProgramSummary {
     }
 }
 
+#[cfg(test)]
 impl Eq for ProgramSummary {}
 
+#[cfg(test)]
 impl ProgramSummary {
     pub(crate) fn representative(&self) -> &ProgramEntry {
         &self.representative
@@ -123,66 +135,6 @@ impl ProgramSummary {
     pub(crate) fn hidden(&self) -> usize {
         self.hidden
     }
-
-    /// The compact, visible line: program origin, state and the progress the
-    /// program itself reported. OSC 9;4 owns its own pane progress line and is
-    /// never replaced by this.
-    pub(crate) fn row_label(&self) -> SharedString {
-        let record = self.representative.record();
-        let mut label = String::from(t(L10nKey::ProgramSource));
-        label.push_str(" · ");
-        label.push_str(state_label(record));
-        if let Some(progress) = record.progress() {
-            label.push_str(" · ");
-            label.push_str(&progress.to_string());
-            label.push('%');
-        }
-        label.into()
-    }
-
-    /// The representative and then the other records a card lists.
-    fn tooltip_entries(&self) -> impl Iterator<Item = &ProgramEntry> {
-        std::iter::once(&self.representative).chain(self.others().iter())
-    }
-}
-
-/// The semantic colour of a program state, shared by the row and the card.
-/// `Done` and `Working` stay neutral: a finished turn is not a success action,
-/// and blocked/error are the only states that ask the reader to step in.
-pub(crate) fn state_color(record: &ProgramRecord, cx: &App) -> gpui_kit::Hsla {
-    match record.state() {
-        ProgramState::Blocked => cx.theme().warning,
-        ProgramState::Error => cx.theme().danger,
-        _ => cx.theme().muted_foreground,
-    }
-}
-
-/// The program records a tab's hover card adds below the title, cwd and host.
-pub(crate) fn card_section(summary: &ProgramSummary, cx: &App) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let mut card = v_flex().gap_1();
-    for entry in summary.tooltip_entries() {
-        card = card.child(
-            div()
-                .max_w(px(420.))
-                .text_xs()
-                .text_color(state_color(entry.record(), cx))
-                .child(entry.tooltip_label()),
-        );
-    }
-    if summary.hidden() > 0 {
-        card = card.child(
-            div()
-                .max_w(px(420.))
-                .text_xs()
-                .text_color(muted)
-                .child(t_fmt(
-                    L10nKey::ProgramMoreRecords,
-                    &[("count", &summary.hidden().to_string())],
-                )),
-        );
-    }
-    card.into_any_element()
 }
 
 /// One leaf's program projection, reduced to what can tell two frames apart.
@@ -190,6 +142,7 @@ pub(crate) fn card_section(summary: &ProgramSummary, cx: &App) -> AnyElement {
 /// Session identity and both counters are stored verbatim — never rebuilt from
 /// payload hashes — and the representative's id and recency make an
 /// identical-refresh tie change visible without a version bump.
+#[cfg(test)]
 struct LeafKey {
     leaf: EntityId,
     session: Option<String>,
@@ -199,6 +152,7 @@ struct LeafKey {
     representative: Option<(String, u64)>,
 }
 
+#[cfg(test)]
 impl LeafKey {
     fn of(leaf: EntityId, status: &ProgramStatusClient) -> Self {
         Self {
@@ -237,7 +191,9 @@ impl LeafKey {
 /// The tab summary the last refresh produced, and what it was produced from.
 #[derive(Default)]
 pub(crate) struct ProgramSummaryCache {
+    #[cfg(test)]
     keys: Vec<LeafKey>,
+    #[cfg(test)]
     summary: Option<Rc<ProgramSummary>>,
     current: CurrentProgram,
 }
@@ -255,6 +211,7 @@ struct CurrentProgram {
 
 impl ProgramSummaryCache {
     /// The current summary, rebuilt only when a leaf's projection moved.
+    #[cfg(test)]
     fn summary(&mut self, leaves: &[Entity<TerminalView>], cx: &App) -> Option<Rc<ProgramSummary>> {
         if !self.matches(leaves, cx) {
             let (keys, next) = collect(leaves, cx);
@@ -273,6 +230,7 @@ impl ProgramSummaryCache {
     /// What is suppressed is the repaint: an update another pane outranks, or
     /// one whose record order and text are unchanged, leaves the previous
     /// value in place and returns `false`.
+    #[cfg(test)]
     fn refresh(&mut self, leaves: &[Entity<TerminalView>], cx: &App) -> bool {
         let (keys, next) = collect(leaves, cx);
         self.keys = keys;
@@ -301,6 +259,7 @@ impl ProgramSummaryCache {
         changed
     }
 
+    #[cfg(test)]
     fn matches(&self, leaves: &[Entity<TerminalView>], cx: &App) -> bool {
         leaves.len() == self.keys.len()
             && leaves
@@ -317,6 +276,7 @@ impl Tab {
     /// the answer, and a closed, moved or restored pane is simply a different
     /// set of leaves on the next read. The cache only pays for a rebuild when
     /// that set's authoritative projections differ.
+    #[cfg(test)]
     pub(crate) fn program_summary(&self, cx: &App) -> Option<Rc<ProgramSummary>> {
         let leaves = self.pane.terminals();
         self.program_summary_cache.borrow_mut().summary(&leaves, cx)
@@ -324,6 +284,7 @@ impl Tab {
 
     /// Recompute after a program-status frame; `true` when the visible summary
     /// changed and the window has a reason to paint again.
+    #[cfg(test)]
     pub(crate) fn refresh_program_summary(&self, cx: &App) -> bool {
         let leaves = self.pane.terminals();
         self.program_summary_cache.borrow_mut().refresh(&leaves, cx)
@@ -348,6 +309,7 @@ impl Tab {
     }
 }
 
+#[cfg(test)]
 fn collect(leaves: &[Entity<TerminalView>], cx: &App) -> (Vec<LeafKey>, Option<ProgramSummary>) {
     let mut keys = Vec::with_capacity(leaves.len());
     let mut entries = Vec::with_capacity(TOOLTIP_RECORDS + 1);
@@ -404,6 +366,7 @@ fn collect(leaves: &[Entity<TerminalView>], cx: &App) -> (Vec<LeafKey>, Option<P
     (keys, summary)
 }
 
+#[cfg(test)]
 fn urgency(record: &ProgramRecord) -> u8 {
     match record.state() {
         ProgramState::Blocked => 4,
@@ -415,6 +378,7 @@ fn urgency(record: &ProgramRecord) -> u8 {
 }
 
 /// Ascending order, best first.
+#[cfg(test)]
 fn record_order(
     left: &ProgramRecord,
     left_pane: u64,

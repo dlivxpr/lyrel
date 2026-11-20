@@ -351,12 +351,26 @@ impl BackdropAppearance {
 /// - `DWMWA_SYSTEMBACKDROP_TYPE` (`DwmSetWindowAttribute`), which the backend
 ///   sets for Mica/Mica Alt but never clears on the way back to a WCA
 ///   appearance, and which has no Acrylic value in the published enum at all.
+/// What the app's native sync must do to the WCA accent (`WCA_ACCENT_POLICY`)
+/// after `gpui`'s `set_background_appearance` has run.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WcaPolicy {
+    /// Leave whatever `gpui` just wrote (`Opaque`/`Transparent`, or pre-22H2 `Blurred`).
+    Keep,
+    /// Disable the WCA accent (`ACCENT_DISABLED`) so DWM honors `DWMWA_SYSTEMBACKDROP_TYPE`.
+    Disable,
+    /// Enable classic WCA acrylic (`ACCENT_ENABLE_ACRYLICBLURBEHIND`). `gpui-fast` 0.1.16
+    /// switched `Blurred` on Windows 11 22H2+ to disable WCA and set `DWMSBT_TRANSIENTWINDOW`,
+    /// which would collapse `Blur` onto `Acrylic` and lose real-time blur on unfocused windows.
+    EnableAcrylic,
+}
+
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MaterialPlan {
-    /// Disable the WCA accent (`ACCENT_DISABLED`), so DWM honors the system
-    /// backdrop type being requested.
-    pub(crate) wca_disable: bool,
+    /// How `WCA_ACCENT_POLICY` should be adjusted after `gpui` runs.
+    pub(crate) wca: WcaPolicy,
     /// Value to write to `DWMWA_SYSTEMBACKDROP_TYPE`: the material to select,
     /// or `DWMSBT_NONE` to clear one set earlier. `None` below build 22621,
     /// where the attribute does not exist.
@@ -371,7 +385,7 @@ pub(crate) struct MaterialPlan {
 #[cfg(any(target_os = "windows", test))]
 impl MaterialPlan {
     pub(crate) const NOOP: Self = Self {
-        wca_disable: false,
+        wca: WcaPolicy::Keep,
         dwmsbt: None,
         refresh_frame: false,
     };
@@ -399,7 +413,7 @@ pub(crate) fn material_plan(target: BackdropAppearance, build: u32) -> MaterialP
     }
     match target {
         MicaBackdrop | MicaAltBackdrop | AcrylicBackdrop => MaterialPlan {
-            wca_disable: true,
+            wca: WcaPolicy::Disable,
             dwmsbt: Some(match target {
                 MicaBackdrop => DWMSBT_MAINWINDOW,
                 MicaAltBackdrop => DWMSBT_TABBEDWINDOW,
@@ -407,11 +421,19 @@ pub(crate) fn material_plan(target: BackdropAppearance, build: u32) -> MaterialP
             }),
             refresh_frame: true,
         },
-        Opaque | Transparent | Blurred => MaterialPlan {
+        Blurred => MaterialPlan {
+            // Clear any DWM system backdrop (including the DWMSBT_TRANSIENTWINDOW
+            // that `gpui-fast` 0.1.16 sets for `Blurred`), then apply classic WCA
+            // acrylic so `Blur` stays distinct from `Acrylic` and blurs live.
+            wca: WcaPolicy::EnableAcrylic,
+            dwmsbt: Some(DWMSBT_NONE),
+            refresh_frame: true,
+        },
+        Opaque | Transparent => MaterialPlan {
             // The backend's WCA arms leave a previously set DWMSBT untouched;
             // without clearing it the old Mica/acrylic keeps fighting the
             // accent that was just requested.
-            wca_disable: false,
+            wca: WcaPolicy::Keep,
             dwmsbt: Some(DWMSBT_NONE),
             refresh_frame: true,
         },
@@ -1297,7 +1319,7 @@ mod tests {
         assert_eq!(
             material_plan(MicaBackdrop, 22_621),
             MaterialPlan {
-                wca_disable: true,
+                wca: WcaPolicy::Disable,
                 dwmsbt: Some(DWMSBT_MAINWINDOW),
                 refresh_frame: true,
             }
@@ -1305,7 +1327,7 @@ mod tests {
         assert_eq!(
             material_plan(AcrylicBackdrop, 26_000),
             MaterialPlan {
-                wca_disable: true,
+                wca: WcaPolicy::Disable,
                 dwmsbt: Some(DWMSBT_TRANSIENTWINDOW),
                 refresh_frame: true,
             }
@@ -1313,19 +1335,29 @@ mod tests {
         assert_eq!(
             material_plan(MicaAltBackdrop, 22_621),
             MaterialPlan {
-                wca_disable: true,
+                wca: WcaPolicy::Disable,
                 dwmsbt: Some(DWMSBT_TABBEDWINDOW),
                 refresh_frame: true,
             }
         );
+        // `Blurred` clears any DWM system backdrop (including the transient
+        // backdrop `gpui-fast` 0.1.16 sets) and restores classic WCA acrylic.
+        assert_eq!(
+            material_plan(Blurred, 22_621),
+            MaterialPlan {
+                wca: WcaPolicy::EnableAcrylic,
+                dwmsbt: Some(DWMSBT_NONE),
+                refresh_frame: true,
+            }
+        );
         // The WCA family: the backend sets the accent itself, but leaves a
-        // previously selected DWMSBT behind — switching Mica → Blurred must
+        // previously selected DWMSBT behind — switching Mica → Transparent must
         // clear it or both materials fight.
-        for target in [Opaque, Transparent, Blurred] {
+        for target in [Opaque, Transparent] {
             assert_eq!(
                 material_plan(target, 22_621),
                 MaterialPlan {
-                    wca_disable: false,
+                    wca: WcaPolicy::Keep,
                     dwmsbt: Some(DWMSBT_NONE),
                     refresh_frame: true,
                 },

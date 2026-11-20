@@ -358,13 +358,17 @@ impl LyrelApp {
     ) {
         let reminder_changed = self.observe_program_attention(view, frames, window, cx);
         let active = self.tabs.active_index();
+        #[cfg(test)]
         let mut summary_changed = false;
         let mut in_active_tab = false;
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             if !tab.contains_leaf(view.entity_id()) {
                 continue;
             }
-            summary_changed |= tab.refresh_program_summary(cx);
+            #[cfg(test)]
+            {
+                summary_changed |= tab.refresh_program_summary(cx);
+            }
             in_active_tab |= index == active;
         }
         // The bar presents the focused-or-first pane's representative, which
@@ -373,7 +377,11 @@ impl LyrelApp {
         let current_changed = in_active_tab
             && self.status_document_context(window, cx).is_none()
             && self.tabs[active].refresh_current_program_status(window, cx);
-        if reminder_changed || summary_changed || current_changed {
+        #[cfg(test)]
+        let notify = reminder_changed || summary_changed || current_changed;
+        #[cfg(not(test))]
+        let notify = reminder_changed || current_changed;
+        if notify {
             cx.notify();
         }
     }
