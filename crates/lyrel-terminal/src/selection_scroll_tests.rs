@@ -14,8 +14,10 @@ fn copy_on_select_copies_the_buffer_the_gesture_touched() {
 
 #[test]
 fn a_collapsed_click_does_not_pin_reading_rows() {
-    let mut scroll = SelectionScroll::default();
-    scroll.presented = Some(super::super::presentation::PresentedSelection::new(5..5, 1));
+    let mut scroll = SelectionScroll {
+        presented: Some(super::super::presentation::PresentedSelection::new(5..5, 1)),
+        ..Default::default()
+    };
     assert!(!scroll.has_selection());
     assert!(scroll.has_presented());
 

@@ -1,4 +1,4 @@
-pub(super) use crate::ui::file_tree::read_probe::ReadKind;
+pub(crate) use crate::ui::file_tree::read_probe::ReadKind;
 use lyrel_core::host::{Entry, Host, HostId, Meta, Output, SearchHit, SharedHost, WatchSub};
 use std::collections::HashMap;
 use std::io;
@@ -7,17 +7,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, mpsc};
 
-pub(super) struct ReadGate {
+pub(crate) struct ReadGate {
     entered: Arc<AtomicBool>,
     release: Option<mpsc::Sender<()>>,
 }
 
 impl ReadGate {
-    pub(super) fn entered(&self) -> bool {
+    pub(crate) fn entered(&self) -> bool {
         self.entered.load(Ordering::Acquire)
     }
 
-    pub(super) fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         if let Some(release) = self.release.take() {
             let _ = release.send(());
         }
@@ -38,25 +38,35 @@ struct PausedRead {
 
 /// Real filesystem namespace adapter: identical wire paths on two Hosts map
 /// to distinct temporary directories. No operation reads a desktop alias.
-pub(super) struct NamespaceHost {
+pub(crate) struct NamespaceHost {
     id: HostId,
     root: PathBuf,
     local: SharedHost,
+    watch: bool,
     paused: Mutex<Vec<PausedRead>>,
     reads: Mutex<HashMap<ReadKind, usize>>,
 }
 
 impl NamespaceHost {
-    pub(super) fn new(id: HostId, root: &Path) -> Arc<Self> {
+    pub(crate) fn new(id: HostId, root: &Path) -> Arc<Self> {
+        Self::with_watch(id, root, true)
+    }
+
+    pub(crate) fn new_unwatched(id: HostId, root: &Path) -> Arc<Self> {
+        Self::with_watch(id, root, false)
+    }
+
+    fn with_watch(id: HostId, root: &Path, watch: bool) -> Arc<Self> {
         Arc::new(Self {
             id,
-            root: lyrel_core::core::path_spelling::local_spelling_buf(root.to_path_buf()),
+            root: lyrel_core::core::path_spelling::local_spelling_buf(root),
             local: lyrel_core::host::local::LocalHost::new(),
+            watch,
             paused: Mutex::new(Vec::new()),
             reads: Mutex::new(HashMap::new()),
         })
     }
-    pub(super) fn pause(&self, kind: ReadKind) -> ReadGate {
+    pub(crate) fn pause(&self, kind: ReadKind) -> ReadGate {
         let (release, receiver) = mpsc::channel();
         let entered = Arc::new(AtomicBool::new(false));
         self.paused.lock().unwrap().push(PausedRead {
@@ -70,7 +80,7 @@ impl NamespaceHost {
         }
     }
 
-    pub(super) fn read_count(&self, kind: ReadKind) -> usize {
+    pub(crate) fn read_count(&self, kind: ReadKind) -> usize {
         self.reads.lock().unwrap().get(&kind).copied().unwrap_or(0)
     }
 
@@ -225,6 +235,9 @@ impl Host for NamespaceHost {
         self.local.shells()
     }
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
+        if !self.watch {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
         self.local
             .watch(&dirs.iter().map(|path| self.path(path)).collect::<Vec<_>>())
     }

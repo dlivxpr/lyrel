@@ -2370,27 +2370,26 @@ mod tests {
     #[test]
     fn opencode_gets_each_attachment_as_a_paste_of_its_own() {
         let attached = vec!["/tmp/a b.png".to_string(), "/src/x.rs".to_string()];
-        for agent in [CLIAgent::OpenCode] {
-            let steps = submit_message(agent, "look\n", &attached, Some("zsh"), true);
-            assert_eq!(
-                bytes(&steps),
-                [
-                    &b"\x1b[200~look\x1b[201~"[..],
-                    b" ",
-                    b"\x1b[200~/tmp/a b.png\x1b[201~",
-                    b" ",
-                    b"\x1b[200~/src/x.rs\x1b[201~",
-                    b"\r",
-                ],
-                "{agent:?}"
-            );
-            // Attachments alone: nothing to space them from.
-            let steps = submit_message(agent, "", &attached[..1], None, true);
-            assert_eq!(
-                bytes(&steps),
-                [&b"\x1b[200~/tmp/a b.png\x1b[201~"[..], b"\r"]
-            );
-        }
+        let agent = CLIAgent::OpenCode;
+        let steps = submit_message(agent, "look\n", &attached, Some("zsh"), true);
+        assert_eq!(
+            bytes(&steps),
+            [
+                &b"\x1b[200~look\x1b[201~"[..],
+                b" ",
+                b"\x1b[200~/tmp/a b.png\x1b[201~",
+                b" ",
+                b"\x1b[200~/src/x.rs\x1b[201~",
+                b"\r",
+            ],
+            "{agent:?}"
+        );
+        // Attachments alone: nothing to space them from.
+        let steps = submit_message(agent, "", &attached[..1], None, true);
+        assert_eq!(
+            bytes(&steps),
+            [&b"\x1b[200~/tmp/a b.png\x1b[201~"[..], b"\r"]
+        );
         // Everyone else still gets them as words after the text.
         let steps = submit_message(CLIAgent::Pi, "look", &attached, Some("zsh"), true);
         assert_eq!(

@@ -99,19 +99,21 @@ fn relayed_exit_status_is_not_reused_for_the_outer_prompt() {
         state,
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(Chunks {
-            chunks: [
-                (false, b"]133;C;ssh box;aid=lyrel".to_vec()),
-                (true, b"]133;D;23".to_vec()),
-                (false, b"]133;A]133;B".to_vec()),
-                (false, b"]133;C;fixture;aid=lyrel".to_vec()),
-                (false, b"]133;D;7".to_vec()),
-            ]
-            .into_iter()
-            .collect(),
-            foreground,
-        }),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(Chunks {
+                chunks: [
+                    (false, b"]133;C;ssh box;aid=lyrel".to_vec()),
+                    (true, b"]133;D;23".to_vec()),
+                    (false, b"]133;A]133;B".to_vec()),
+                    (false, b"]133;C;fixture;aid=lyrel".to_vec()),
+                    (false, b"]133;D;7".to_vec()),
+                ]
+                .into_iter()
+                .collect(),
+                foreground,
+            }),
+            writer: null_writer(),
+        },
         move || running.load(Ordering::SeqCst),
         ForegroundProbes {
             group: Box::new(|| None),
@@ -235,15 +237,15 @@ fn a_shutdown_after_the_foreground_exit_does_not_reclaim_the_pane() {
     use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
 
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| {
+    state.with_facts(|facts, emit| {
         apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
     });
-    (&mut state).with_facts(|facts, emit| apply_agent(facts, None, emit));
+    state.with_facts(|facts, emit| apply_agent(facts, None, emit));
     let ended = parse_agent_event_body(
         br#"{"agent":"omp","event":"session-end","session_id":"already-exited"}"#,
     )
     .unwrap();
-    (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![ended], None, emit));
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![ended], None, emit));
     assert!(state.facts.agent.is_none());
     assert!(state.facts.agent_session.is_none());
     assert!(observed_facts(&state.facts).agent.is_none());
@@ -257,7 +259,7 @@ fn probed_cwd_corrects_a_pane_whose_shell_never_reports_osc7() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
     });
 
@@ -265,9 +267,7 @@ fn probed_cwd_corrects_a_pane_whose_shell_never_reports_osc7() {
         st.facts.cwd.as_deref(),
         Some(Path::new("/Users/alice/dev/lyrel"))
     );
-    assert!(
-        matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/dev/lyrel"))
-    );
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == *"/Users/alice/dev/lyrel"));
 }
 
 #[cfg(unix)]
@@ -286,9 +286,7 @@ fn probed_cwd_keeps_the_shells_spelling_for_a_symlinked_path() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| {
-        apply_probed_cwd(facts, Some(real.canonicalize().unwrap()), emit)
-    });
+    st.with_facts(|facts, emit| apply_probed_cwd(facts, Some(real.canonicalize().unwrap()), emit));
 
     assert_eq!(st.facts.cwd.as_deref(), Some(link.as_path()));
     assert!(rx.try_recv().is_err(), "same directory → nothing to tell");
@@ -304,7 +302,7 @@ fn probed_cwd_matching_the_reported_one_says_nothing() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
     });
 
@@ -328,7 +326,7 @@ fn probed_cwd_declines_to_speak_for_a_remote_pane() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
     });
 
@@ -344,7 +342,7 @@ fn probed_cwd_absent_leaves_the_reported_cwd_alone() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, None, emit));
+    st.with_facts(|facts, emit| apply_probed_cwd(facts, None, emit));
 
     assert_eq!(st.facts.cwd.as_deref(), Some(Path::new("/work")));
     assert!(rx.try_recv().is_err());
@@ -394,15 +392,17 @@ fn a_prompt_mark_reprobes_the_foreground_inside_the_poll_interval() {
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(Chunks(
-            [
-                b"\x1b]133;C;ssh box\x07".to_vec(),
-                b"\x1b]133;D;0\x07".to_vec(),
-            ]
-            .into_iter()
-            .collect(),
-        )),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(Chunks(
+                [
+                    b"\x1b]133;C;ssh box\x07".to_vec(),
+                    b"\x1b]133;D;0\x07".to_vec(),
+                ]
+                .into_iter()
+                .collect(),
+            )),
+            writer: null_writer(),
+        },
         || false,
         ForegroundProbes {
             group: Box::new(|| None),
@@ -482,14 +482,16 @@ fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries
             Arc::new(Mutex::new(test_state(true))),
             Arc::new(AtomicBool::new(false)),
             Arc::new(OutputGate::new()),
-            Box::new(Chunks {
-                chunks: chunks
-                    .into_iter()
-                    .filter(|(_, bytes)| !bytes.is_empty())
-                    .collect(),
-                phase,
-            }),
-            Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
+            ReaderEnds {
+                reader: Box::new(Chunks {
+                    chunks: chunks
+                        .into_iter()
+                        .filter(|(_, bytes)| !bytes.is_empty())
+                        .collect(),
+                    phase,
+                }),
+                writer: Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(move || {
@@ -517,8 +519,8 @@ fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries
         )
         .join()
         .unwrap();
-        let replies = sink.lock().unwrap().clone();
-        replies
+
+        sink.lock().unwrap().clone()
     };
     let remote_query = query(2);
     for same_group in [false, true] {
@@ -580,8 +582,10 @@ fn reader_poll_applies_the_probed_cwd() {
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(std::io::Cursor::new(b"alice@host ~ % ".to_vec())),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(std::io::Cursor::new(b"alice@host ~ % ".to_vec())),
+            writer: null_writer(),
+        },
         || false,
         ForegroundProbes {
             group: Box::new(|| None),
@@ -599,9 +603,7 @@ fn reader_poll_applies_the_probed_cwd() {
         Some(Path::new("/Users/alice/dev/lyrel"))
     );
     assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(_))));
-    assert!(
-        matches!(sub_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/dev/lyrel"))
-    );
+    assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == *"/Users/alice/dev/lyrel"));
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
@@ -611,13 +613,15 @@ fn live_pane_reports_an_uninstrumented_shells_cwd() {
     let (tx, rx) = mpsc::channel();
     let pane = DaemonPane::spawn(
         1,
-        Some(PathBuf::from("/")),
-        ws(80, 24),
-        Some(ShellSpec {
-            program: "sh".into(),
-            args: vec!["-c".into(), "cd /usr && exec cat".into()],
-            args_are_lyrel_defaults: false,
-        }),
+        PaneSpawnSpec {
+            cwd: Some(PathBuf::from("/")),
+            size: ws(80, 24),
+            shell: Some(ShellSpec {
+                program: "sh".into(),
+                args: vec!["-c".into(), "cd /usr && exec cat".into()],
+                args_are_lyrel_defaults: false,
+            }),
+        },
         None,
         None,
         None,

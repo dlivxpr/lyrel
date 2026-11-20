@@ -2180,7 +2180,7 @@ pub(crate) fn response(control: &Control, image_id: u32, status: &str) -> Option
 /// Expand tightly packed RGB into RGBA with an opaque alpha channel.
 fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
-    for px in rgb.chunks_exact(3) {
+    for px in rgb.as_chunks::<3>().0 {
         out.extend_from_slice(px);
         out.push(0xff);
     }

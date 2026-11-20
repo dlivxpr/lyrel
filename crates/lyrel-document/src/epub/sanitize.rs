@@ -491,16 +491,16 @@ impl Builder {
             self.push_html("\"");
             self.anchors.push((id.to_owned(), self.text.len()));
         }
-        if tag == "a" {
-            if let Some(href) = attribute(node, "href") {
-                match resolve(owner.base, href) {
-                    Some(resolved) => {
-                        self.push_html(" href=\"");
-                        push_attribute(&resolved, &mut self.parts);
-                        self.push_html("\"");
-                    }
-                    None => owner.omissions.blocked_links += 1,
+        if tag == "a"
+            && let Some(href) = attribute(node, "href")
+        {
+            match resolve(owner.base, href) {
+                Some(resolved) => {
+                    self.push_html(" href=\"");
+                    push_attribute(&resolved, &mut self.parts);
+                    self.push_html("\"");
                 }
+                None => owner.omissions.blocked_links += 1,
             }
         }
         if tag == "img" {
@@ -791,20 +791,23 @@ mod tests {
     fn search_marks_span_inline_tags_and_use_only_safe_colors() {
         let (blocks, _) = sanitize("<p>alpha <em>beta</em> gamma</p>");
         let block = &blocks[0];
-        let ranges = vec![6..10];
-        let marked = html_with_marks(block, &ranges, "#123456");
+        let range = 6..10;
+        let ranges = std::slice::from_ref(&range);
+        let marked = html_with_marks(block, ranges, "#123456");
         assert!(marked.contains("<mark color=\"#123456\">"));
         assert!(marked.contains("alpha "));
         assert!(marked.contains("</em>"));
-        let invalid = html_with_marks(block, &ranges, "\"/><script>");
+        let invalid = html_with_marks(block, ranges, "\"/><script>");
         assert!(!invalid.contains("<script>"));
         assert!(invalid.contains("yellow"));
     }
 
     #[test]
     fn a_single_block_over_the_limit_fails_explicitly() {
-        let mut limits = Limits::default();
-        limits.block_bytes = 64;
+        let limits = Limits {
+            block_bytes: 64,
+            ..Limits::default()
+        };
         let text = format!("<html><body><p>{}</p></body></html>", "word ".repeat(100));
         let document = roxmltree::Document::parse(&text).unwrap();
         let error =

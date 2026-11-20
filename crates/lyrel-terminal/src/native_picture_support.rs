@@ -32,9 +32,13 @@ fn native_graphics_scoped_shell(
             .unwrap()
     };
     let line = if cfg!(windows) {
-        format!("Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {line}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)")
+        format!(
+            "Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {line}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)"
+        )
     } else {
-        format!("printf 'LYREL_PARENT_BEFORE=%s\\n' \"$TERM_PROGRAM\"; {line}; printf 'LYREL_PARENT_AFTER=%s\\n' \"$TERM_PROGRAM\"")
+        format!(
+            "printf 'LYREL_PARENT_BEFORE=%s\\n' \"$TERM_PROGRAM\"; {line}; printf 'LYREL_PARENT_AFTER=%s\\n' \"$TERM_PROGRAM\""
+        )
     };
     shell.program = program.into();
     shell.args = if cfg!(windows) {
@@ -103,16 +107,21 @@ fn native_picture_pixels(
             return false;
         }
         // Compare the complete raster, not just dominant color or landmarks.
-        bytes.chunks_exact(4).enumerate().all(|(index, pixel)| {
-            let (x, y) = (index % 48, index / 48);
-            let quadrant = if (22..26).contains(&x) && (10..14).contains(&y) {
-                4
-            } else if y < 12 {
-                usize::from(x >= 24)
-            } else {
-                2 + usize::from(x >= 24)
-            };
-            pixel == expected[quadrant]
-        })
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .all(|(index, pixel)| {
+                let (x, y) = (index % 48, index / 48);
+                let quadrant = if (22..26).contains(&x) && (10..14).contains(&y) {
+                    4
+                } else if y < 12 {
+                    usize::from(x >= 24)
+                } else {
+                    2 + usize::from(x >= 24)
+                };
+                *pixel == expected[quadrant]
+            })
     })
 }

@@ -9,7 +9,7 @@ use crate::core::group_key::{AutoKey, GroupId, WorkspaceGroups};
 use crate::core::session::WorkspaceId;
 use crate::daemon::protocol::{NativeSshSpec, ShellSpec};
 
-use super::layout::{Side, Tab, TabId};
+use super::layout::{Axis, Side, Tab, TabId};
 
 pub const MAX_WORKSPACES: usize = 1024;
 
@@ -313,6 +313,18 @@ pub enum TabCloseReason {
     Emptied,
 }
 
+/// The split half of a pane split: the seed for the new pane, the axis and
+/// ratio it opens at, and which side of the old leaf it takes. Grouped so
+/// the store method stays within the argument lint; the wire request keeps
+/// its flat shape.
+#[derive(Clone, Debug)]
+pub struct PaneSplitSpec {
+    pub axis: Axis,
+    pub ratio: f32,
+    pub new: PaneSeed,
+    pub first: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutDelta {
@@ -355,7 +367,9 @@ pub enum LayoutDelta {
         groups: WorkspaceGroups,
     },
     TabRestructured {
-        tab: Tab,
+        /// Boxed so the delta stays near `PaneFacts`' size; a box is free at
+        /// the serde boundary.
+        tab: Box<Tab>,
         pane: Option<PaneRecord>,
     },
     RatioChanged {

@@ -49,7 +49,7 @@ impl TerminalView {
         let (visual_rows, caret_vrow) = input_overlay_rows(
             &chars,
             self.input.editor().cursor(),
-            &self.input.marked(),
+            self.input.marked(),
             input_start(ccol, cols.max(1)),
             cols.max(1),
         );
@@ -551,12 +551,10 @@ mod tests {
                             "{text:?}"
                         );
                     }
-                    for caret in cell.start..cell.end {
-                        assert_eq!(
-                            (positions[caret].0, positions[caret].1),
-                            (row, col),
-                            "{text:?}"
-                        );
+                    for (caret, position) in
+                        positions.iter().enumerate().take(cell.end).skip(cell.start)
+                    {
+                        assert_eq!((position.0, position.1), (row, col), "{text:?}");
                         assert_eq!(input_overlay_rows(&chars, caret, "", (0, 0), cols).1, row);
                     }
                 }
@@ -627,8 +625,13 @@ mod tests {
                     cell.width
                 };
                 assert_eq!(positions[cell.start].2, drawn, "{text:?} at {}", cell.start);
-                for i in cell.start + 1..cell.end {
-                    assert_eq!(positions[i].2, 0, "{text:?} at {i}");
+                for (i, position) in positions
+                    .iter()
+                    .enumerate()
+                    .take(cell.end)
+                    .skip(cell.start + 1)
+                {
+                    assert_eq!(position.2, 0, "{text:?} at {i}");
                 }
             }
         }

@@ -345,7 +345,7 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 });
                 context.update(|window, cx| window.input("X", cx));
                 let mut expected = source.clone();
-                expected.insert_str(next.0, "X");
+                expected.insert(next.0, 'X');
                 view.read_with(&context, |view, _| assert_eq!(view.text(), expected));
                 context.dispatch_action(gpui_kit::component::input::Undo);
                 settle(&mut context);

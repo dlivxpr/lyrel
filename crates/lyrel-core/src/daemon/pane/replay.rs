@@ -469,7 +469,7 @@ mod tests {
         let mut ring = ReplayRing::new(ws(80, 24));
         ring.append(&vec![b'a'; RING_CAP]);
         assert_eq!(ring.len, RING_CAP);
-        ring.append(&vec![b'b'; 100]);
+        ring.append(&[b'b'; 100]);
         assert_eq!(ring.len, RING_CAP);
         let flat = ring.flatten();
         assert_eq!(&flat[..RING_CAP - 100], &vec![b'a'; RING_CAP - 100][..]);

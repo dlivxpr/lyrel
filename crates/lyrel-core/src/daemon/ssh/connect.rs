@@ -729,9 +729,11 @@ mod tests {
             .await
             .expect("bind a loopback port");
         let addr = listener.local_addr().expect("bound address");
-        let mut server_config = russh::server::Config::default();
-        server_config.inactivity_timeout = None;
-        server_config.preferred = preferred.clone();
+        let mut server_config = russh::server::Config {
+            inactivity_timeout: None,
+            preferred: preferred.clone(),
+            ..Default::default()
+        };
         server_config
             .keys
             .push(PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32])));

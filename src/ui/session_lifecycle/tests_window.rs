@@ -37,7 +37,6 @@ fn dispatching_close_window_takes_the_window_down_with_its_registration(cx: &mut
             root.view()
                 .clone()
                 .downcast::<LyrelApp>()
-                .ok()
                 .expect("window root wraps a LyrelApp")
         })
         .unwrap();

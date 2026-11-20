@@ -61,6 +61,8 @@ pub use split::GroupId;
 pub mod sqlite_document;
 pub mod sqlite_grid;
 pub mod strip;
+pub mod structured_document;
+pub mod structured_view;
 use csv_document::{CsvDocument, CsvMode, CsvView};
 use json_document::{JsonDocument, JsonMode, JsonView};
 pub use saving::{AfterUnsaved, BarKind};
@@ -112,6 +114,8 @@ pub const NAV_OR_STRIP_KEY_CONTEXT: &str = "Input || DocumentStrip";
 pub use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
 pub use pdf_document::{PdfActualSize, PdfCopy, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
 pub use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
+/// TOML 结构树的键盘上下文。
+pub use toml_document::KEY_CONTEXT as TOML_KEY_CONTEXT;
 /// XML 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
 pub use xml_document::KEY_CONTEXT as XML_KEY_CONTEXT;
 /// YAML 结构树的键盘上下文。
@@ -131,6 +135,12 @@ impl BufferId {
     /// Stable numeric identity for the desktop element tree.
     pub fn as_u64(self) -> u64 {
         self.0
+    }
+}
+
+impl Default for BufferId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -525,6 +535,12 @@ impl TabCode {
             self.active = self.active.saturating_sub(1);
         }
         true
+    }
+}
+
+impl Default for TabCode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -2605,7 +2621,6 @@ impl EditorPanelState {
             .and_then(|f| f.format(cx))
             .map(|format| format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
-        let lsp = lsp;
 
         let item = |id: &'static str, label: SharedString| {
             Button::new(id).ghost().xsmall().flex_none().label(label)

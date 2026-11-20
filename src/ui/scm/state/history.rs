@@ -213,10 +213,11 @@ impl ScmPanelState {
         page: &Arc<CommitPage>,
         query: Option<&str>,
     ) -> Arc<Vec<usize>> {
-        if let Some((held_query, held_page, rows)) = &self.graph.filter_cache {
-            if held_page.ptr_eq(&Arc::downgrade(page)) && held_query.as_deref() == query {
-                return rows.clone();
-            }
+        if let Some((held_query, held_page, rows)) = &self.graph.filter_cache
+            && held_page.ptr_eq(&Arc::downgrade(page))
+            && held_query.as_deref() == query
+        {
+            return rows.clone();
         }
         let rows = Arc::new(match query {
             None => (0..page.commits.len()).collect(),

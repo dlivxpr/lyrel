@@ -22,7 +22,7 @@ impl Render for TerminalView {
         let entity = cx.entity();
         let search_bar = self
             .search
-            .as_ref()
+            .session()
             .map(|s| self.render_search_bar(s, window, cx));
 
         let focused = self.focus_handle.is_focused(window);
@@ -196,14 +196,14 @@ impl Render for TerminalView {
             // gives back Ctrl+S — otherwise the action swallows the key and
             // the shell never sees it (#834).
             .on_action(cx.listener(|this, _: &FindNext, _w, cx| {
-                if this.search.is_none() {
+                if !this.search.is_open() {
                     cx.propagate();
                     return;
                 }
                 this.step_match(Direction::Right, cx);
             }))
             .on_action(cx.listener(|this, _: &FindPrevious, _w, cx| {
-                if this.search.is_none() {
+                if !this.search.is_open() {
                     cx.propagate();
                     return;
                 }

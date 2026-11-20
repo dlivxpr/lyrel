@@ -18,11 +18,17 @@ pub(crate) type SessionSources = Vec<(
 )>;
 
 /// 只读工作区资料按需获取，避免复制 pane 树，也不向设置模块暴露工作区实体。
+///
+/// `credentials` 与 `usage_vault` 是系统凭据存储的注入缝：生产桥接传
+/// `OsCredentialStore`，独立测试传 `InMemoryCredentialStore`，设置页本身
+/// 不再直接触碰具体存储。
 pub(crate) struct SettingsContext {
     pub owner: gpui_kit::AnyWindowHandle,
     pub shells: Rc<dyn Fn(&App) -> Vec<crate::core::shells::DetectedShell>>,
     pub live_profiles: Rc<dyn Fn(&App) -> std::collections::HashSet<uuid::Uuid>>,
     pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
+    pub credentials: std::sync::Arc<dyn crate::core::keychain::CredentialStore>,
+    pub usage_vault: std::sync::Arc<dyn lyrel_insights::usage::accounts::SecretVault>,
 }
 
 #[derive(Clone)]
@@ -32,9 +38,24 @@ pub(crate) enum SettingsEvent {
     OpenFile(lyrel_ui_base::host_ops::SharedHost, std::path::PathBuf),
     RestartDaemon,
     RefreshShells,
-    TerminalCursorChanged { force_visible: bool },
+    TerminalCursorChanged {
+        force_visible: bool,
+    },
     EditorGitGutter(bool),
     LocaleChanged,
+    /// A keybinding edit was persisted; the shell rebinds the app-wide keymap.
+    RebindKeymap,
+    /// Repaint theme and menus for the current in-memory `Config`. The theme
+    /// picker and theme editor pass `persist: false` for live previews, which
+    /// must repaint without writing `config.json`; committed changes pass
+    /// `persist: true`. `refresh_windows` additionally re-lays out every open
+    /// window (the interface-font family changes the rem size).
+    /// `rebuild_editor` is false when the settings window already rebuilt it.
+    ApplyTheme {
+        persist: bool,
+        refresh_windows: bool,
+        rebuild_editor: bool,
+    },
 }
 
 const DEFAULT_SIZE: (f32, f32) = (960., 700.);
@@ -149,6 +170,8 @@ impl SettingsWindow {
     }
     pub(crate) fn close_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.reset_settings_navigation_frames();
+        // Drop the unconfirmed preview lease before the settings state goes away.
+        self.cancel_preset_preview(cx);
         if let Some(mut state) = self.settings.take() {
             state.shortcuts.retire();
             state

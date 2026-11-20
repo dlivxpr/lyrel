@@ -80,7 +80,7 @@ fn the_passphrase_follows_the_first_key_that_is_really_there() {
         Some(real.to_string_lossy().to_string())
     );
     assert_eq!(
-        first_readable_key_in(&[missing.clone()], "example.com", "ada"),
+        first_readable_key_in(std::slice::from_ref(&missing), "example.com", "ada"),
         None
     );
     // An empty field falls back to the defaults the handshake offers —
@@ -91,7 +91,12 @@ fn the_passphrase_follows_the_first_key_that_is_really_there() {
         Some(real.to_string_lossy().to_string())
     );
     assert_eq!(
-        first_readable_key_or(&[missing.clone()], "example.com", "ada", defaults),
+        first_readable_key_or(
+            std::slice::from_ref(&missing),
+            "example.com",
+            "ada",
+            defaults
+        ),
         None
     );
     assert_eq!(
@@ -246,7 +251,7 @@ fn a_jump_host_that_exists_is_kept_by_id() {
         jump: "bastion".to_string(),
         ..draft_with_host()
     };
-    let (profile, errors) = validate_ssh_draft(draft, &[bastion.clone()]);
+    let (profile, errors) = validate_ssh_draft(draft, std::slice::from_ref(&bastion));
     assert_eq!(profile.jump_host, Some(bastion.id));
     assert!(errors.is_empty());
 }
@@ -786,4 +791,98 @@ fn ssh_form_round_trip_preserves_windows_paths_and_raw_command_spelling(cx: &mut
         assert_eq!(collected, profile);
         assert!(!app.ssh_form_dirty(cx));
     });
+}
+
+/// A standalone `SettingsWindow` — no `LyrelApp`, no shell bridge — takes its
+/// credential seam from the `SettingsContext`: secrets saved from the form
+/// land in the injected in-memory store, load back into the form from it, and
+/// leave it when the profile is deleted. The OS keychain is never involved.
+#[gpui_kit::test]
+fn standalone_window_round_trips_credentials_through_the_injected_store(cx: &mut TestAppContext) {
+    use crate::ui::settings::test_window::harness_standalone;
+    let (view, store, mut vcx) = harness_standalone(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("standalone-identity");
+    std::fs::write(&key, b"standalone settings key").unwrap();
+    let account = key_account_from_contents(b"standalone settings key");
+    store
+        .set_password("tester", "standalone.invalid", 22, "seeded password")
+        .unwrap();
+
+    view.update_in(&mut vcx, |view, window, cx| {
+        view.open_settings_section(SettingsSection::Ssh, window, cx);
+        let mut profile = SshProfile::new("standalone");
+        profile.user = "tester".to_string();
+        profile.host = "standalone.invalid".to_string();
+        profile.port = 22;
+        profile.identity_files = vec![key.to_string_lossy().into_owned()];
+        cx.global_mut::<Config>().ssh_profiles.push(profile.clone());
+        view.ssh_form_load(&profile, window, cx);
+
+        // Load: the form reads the stored secret through the injected store.
+        let form = view
+            .active_settings()
+            .and_then(|s| s.ssh.form.as_ref())
+            .expect("the form opened");
+        assert_eq!(
+            form.loaded_password, "seeded password",
+            "the password box shows what the injected store holds"
+        );
+        assert_eq!(
+            form.password.read(cx).value(),
+            "seeded password",
+            "and the box itself carries it"
+        );
+
+        // Save: a typed secret replaces the stored one.
+        let (password, passphrase) = {
+            let form = view
+                .active_settings()
+                .and_then(|s| s.ssh.form.as_ref())
+                .expect("the form is open");
+            (form.password.clone(), form.passphrase.clone())
+        };
+        password.update(cx, |i, cx| i.set_value("standalone secret", window, cx));
+        passphrase.update(cx, |i, cx| i.set_value("standalone passphrase", window, cx));
+        assert_eq!(
+            view.save_editing_profile(window, cx),
+            Some(profile.id),
+            "the profile saves"
+        );
+    });
+    assert_eq!(
+        store
+            .password_for("tester", "standalone.invalid", 22)
+            .unwrap()
+            .as_deref(),
+        Some("standalone secret"),
+        "the saved password reached the injected store"
+    );
+    assert_eq!(
+        store.passphrase_for_key(&account).unwrap().as_deref(),
+        Some("standalone passphrase"),
+        "and the key passphrase with it"
+    );
+
+    // Delete: the profile's secrets leave the store with it.
+    let profile_id = vcx.update(|_, cx| cx.global::<Config>().ssh_profiles[0].id);
+    view.update_in(&mut vcx, |view, _, cx| {
+        view.delete_profile_confirmed(profile_id, cx);
+    });
+    assert_eq!(
+        store
+            .password_for("tester", "standalone.invalid", 22)
+            .unwrap(),
+        None,
+        "the password is forgotten with the profile"
+    );
+    assert_eq!(
+        store.passphrase_for_key(&account).unwrap(),
+        None,
+        "and the passphrase is not stranded"
+    );
+    assert!(
+        store.is_empty(),
+        "the in-memory store ends empty: nothing leaked anywhere else"
+    );
 }

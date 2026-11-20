@@ -214,16 +214,7 @@ impl gpui_kit::Element for PipViewport {
         cx: &mut App,
     ) -> Self::PrepaintState {
         self.state.viewport.set(Some(bounds));
-        let mut content = render_in_viewport(
-            self.slot.clone(),
-            self.tab_id,
-            self.intent,
-            self.state.clone(),
-            &self.chrome,
-            bounds,
-            window,
-            cx,
-        );
+        let mut content = render_in_viewport(self, bounds, window, cx);
         content.prepaint_as_root(
             bounds.origin,
             size(
@@ -251,15 +242,19 @@ impl gpui_kit::Element for PipViewport {
 }
 
 fn render_in_viewport(
-    slot: PaneSlot,
-    tab_id: TabId,
-    intent: Option<PipGeometry>,
-    state: Rc<PipInteraction>,
-    chrome: &PaneChrome,
+    pip: &PipViewport,
     viewport: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
+    let PipViewport {
+        slot,
+        tab_id,
+        intent,
+        state,
+        chrome,
+    } = pip;
+    let tab_id = *tab_id;
     let id = slot.entity_id();
     if !window.is_window_active()
         || state
@@ -275,7 +270,7 @@ fn render_in_viewport(
         .gesture
         .get()
         .map(|g| g.geometry)
-        .or(intent)
+        .or(*intent)
         .filter(|g| g.is_valid())
         .unwrap_or_default();
     let resolved = resolve(intent, viewport, rem);
@@ -381,7 +376,7 @@ fn render_in_viewport(
     } else {
         Vec::new()
     };
-    let title: gpui_kit::SharedString = match &slot {
+    let title: gpui_kit::SharedString = match slot {
         PaneSlot::Ready(view) => view.read(cx).title.clone().into(),
         PaneSlot::Connecting(view) => view.read(cx).title(),
     };

@@ -121,7 +121,7 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
             cx.read_from_clipboard()
                 .and_then(|item| item.text())
                 .as_deref(),
-            Some(t(L10nKey::AppNoAgentNeedsAttention).as_ref())
+            Some(t(L10nKey::AppNoAgentNeedsAttention))
         );
     });
 }
@@ -339,7 +339,7 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
     });
     settle(&mut main);
     let settings = app.read_with(&main, |app, _| app.settings_window.unwrap().0);
-    cx.update_window(settings.into(), |_, window, cx| {
+    cx.update_window(settings, |_, window, cx| {
         lyrel_ui_base::host_ops::HostOps::notify_err(
             window,
             cx,

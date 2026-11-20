@@ -301,7 +301,7 @@ fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
     open(&app, &mut cx, &broken);
     match content(&app, &cx) {
         ImageContent::Failed(message) => assert!(
-            message.contains(&t(L10nKey::EditorImageUndecodable)),
+            message.contains(t(L10nKey::EditorImageUndecodable)),
             "the failure names the decode, got: {message}"
         ),
         ImageContent::Ready(_) => panic!("a truncated png decoded"),
@@ -353,7 +353,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
     open(&app, &mut cx, &big);
     match content(&app, &cx) {
         ImageContent::Failed(message) => assert!(
-            message.contains(&t(L10nKey::MarkdownImageLimit)),
+            message.contains(t(L10nKey::MarkdownImageLimit)),
             "the byte budget is named, got: {message}"
         ),
         ImageContent::Ready(_) => panic!("a file over the image budget decoded"),
@@ -375,7 +375,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
     open(&app, &mut cx, &wide);
     match content(&app, &cx) {
         ImageContent::Failed(message) => {
-            assert!(message.contains(&t(L10nKey::MarkdownImageLimit)))
+            assert!(message.contains(t(L10nKey::MarkdownImageLimit)))
         }
         ImageContent::Ready(_) => panic!("a 8193-pixel-wide picture decoded"),
         ImageContent::Loading => panic!("a 8193-pixel-wide picture is loading"),
@@ -864,7 +864,9 @@ fn frame_pixels_of(view: &Entity<ImageView>, cx: &VisualTestContext) -> Vec<[u8;
     image
         .as_bytes(0)
         .expect("one frame")
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
         .collect()
 }

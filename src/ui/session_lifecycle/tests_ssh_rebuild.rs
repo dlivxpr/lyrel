@@ -48,7 +48,10 @@ fn a_tree_rebuild_keeps_the_native_ssh_split_a_remote_tab_holds(cx: &mut TestApp
             presentation: Default::default(),
         };
         app.apply_layout_delta(
-            &LayoutDelta::TabRestructured { tab, pane: None },
+            &LayoutDelta::TabRestructured {
+                tab: Box::new(tab),
+                pane: None,
+            },
             window,
             cx,
         )

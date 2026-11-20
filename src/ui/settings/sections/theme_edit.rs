@@ -1,6 +1,4 @@
 use super::*;
-use crate::ui::theme::apply_theme;
-use crate::ui::theme::set_menus;
 use gpui_kit::component::color_picker::ColorPickerEvent;
 use lyrel_ui_base::presets::Fill;
 
@@ -53,7 +51,10 @@ impl Default for ThemeEditing {
 }
 
 impl ThemeEditing {
-    fn select_preset(config: &mut Config, id: &str, system_dark: bool) {
+    /// Points whichever preset slot is live at `id`. Shared by the committed
+    /// picks and the theme menu's live preview, which only differs in that it
+    /// never persists.
+    pub(super) fn select_preset(config: &mut Config, id: &str, system_dark: bool) {
         if config.theme_follow_system {
             Self::select_slot(config, system_dark, id);
         } else {
@@ -93,7 +94,7 @@ impl ThemeEditing {
         self.draft.is_some()
     }
 
-    pub(super) fn error(&self) -> Option<&str> {
+    pub(crate) fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
@@ -170,7 +171,7 @@ impl ThemeEditing {
 
     /// Leaving the page invalidates a native image dialog, not the retained
     /// color controls, which are still used when returning to Appearance.
-    pub(super) fn leave_page(&mut self) {
+    pub(crate) fn leave_page(&mut self) {
         self.image_generation = self.image_generation.wrapping_add(1);
     }
 
@@ -370,6 +371,8 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Discard the live override before applying the confirmed slot.
+        self.cancel_preset_preview(cx);
         if cx.global::<Config>().theme_follow_system {
             self.set_slot_preset(dark_slot, id, window, cx);
             return;
@@ -394,15 +397,17 @@ impl SettingsWindow {
         self.apply_theme_change(true, window, cx);
     }
 
-    /// Repaints everything a theme change touches. `persist` is false for a
+    /// Asks the shell to repaint everything a theme change touches; the
+    /// window side only rebuilds its own editor. `persist` is false for a
     /// palette preview, which repaints on every arrow key and must not turn
-    /// each of those keystrokes into a `config.json` write.
+    /// each of those keystrokes into a `config.json` write — the bridge
+    /// owns both the repaint and the save.
     fn apply_theme_change(&mut self, persist: bool, window: &mut Window, cx: &mut Context<Self>) {
-        apply_theme(Some(window), cx);
-        set_menus(cx);
-        if persist {
-            self.persist_settings_config(cx);
-        }
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist,
+            refresh_windows: false,
+            rebuild_editor: false,
+        });
         self.rebuild_theme_editor(window, cx);
         cx.notify();
     }
@@ -462,7 +467,11 @@ impl SettingsWindow {
                 *slot = original;
             }
             cx.set_global(lyrel_ui_base::presets::Themes(themes));
-            apply_theme(Some(window), cx);
+            cx.emit(SettingsEvent::ApplyTheme {
+                persist: false,
+                refresh_windows: false,
+                rebuild_editor: false,
+            });
             self.rebuild_theme_editor(window, cx);
             cx.notify();
         }
@@ -472,7 +481,7 @@ impl SettingsWindow {
         &mut self,
         id: &str,
         change: ThemeChange,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let theme = lyrel_ui_base::presets::by_id(cx, id);
@@ -487,7 +496,11 @@ impl SettingsWindow {
             *slot = theme;
         }
         cx.set_global(lyrel_ui_base::presets::Themes(themes));
-        apply_theme(Some(window), cx);
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
         cx.notify();
     }
 
@@ -514,12 +527,16 @@ impl SettingsWindow {
     pub(crate) fn set_window_blur(
         &mut self,
         on: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.global_mut::<Config>().window_blur = Some(on);
-        apply_theme(Some(window), cx);
         self.persist_settings_config(cx);
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
         cx.notify();
     }
 
@@ -527,22 +544,30 @@ impl SettingsWindow {
     pub(crate) fn set_window_backdrop(
         &mut self,
         backdrop: WindowBackdrop,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.global_mut::<Config>().window_backdrop = backdrop;
-        apply_theme(Some(window), cx);
         self.persist_settings_config(cx);
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
         cx.notify();
     }
 
-    pub(crate) fn reset_window_overrides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reset_window_overrides(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         {
             let config = cx.global_mut::<Config>();
             clear_window_override_values(config, cfg!(target_os = "windows"));
         }
-        apply_theme(Some(window), cx);
         self.persist_settings_config(cx);
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
         cx.notify();
     }
 
@@ -561,12 +586,12 @@ impl SettingsWindow {
             prompt: None,
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = rx.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.apply_theme_image_selection(selection, path, window, cx);
-                    });
-                }
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.apply_theme_image_selection(selection, path, window, cx);
+                });
             }
         })
         .detach();
@@ -715,5 +740,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "theme_edit_tests.rs"]
+#[path = "edit_tests.rs"]
 mod consumer_tests;

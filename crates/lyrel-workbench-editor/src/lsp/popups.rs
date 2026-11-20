@@ -155,10 +155,8 @@ impl EditorPopups {
                                 this.dismiss_completions(cx);
                             }
                         }
-                        InputEvent::Blur => {
-                            if !input.read(cx).has_selection_focus(window, cx) {
-                                this.dismiss_all(cx);
-                            }
+                        InputEvent::Blur if !input.read(cx).has_selection_focus(window, cx) => {
+                            this.dismiss_all(cx);
                         }
                         _ => {}
                     },
@@ -910,7 +908,6 @@ mod tests {
                     .view()
                     .clone()
                     .downcast::<PopupHost>()
-                    .ok()
                     .expect("window root wraps the production editor and popup");
                 let host = host.read(cx);
                 (host.input.clone(), host.popup.clone())

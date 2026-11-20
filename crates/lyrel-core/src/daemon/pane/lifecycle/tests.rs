@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use super::super::test_support::ws;
 #[cfg(windows)]
-use super::super::{DaemonMsg, DaemonPane, ShellSpec};
+use super::super::{DaemonMsg, DaemonPane, PaneSpawnSpec, ShellSpec};
 use super::*;
 use std::sync::mpsc;
 #[test]
@@ -89,7 +89,11 @@ fn closing_a_pane_reaps_console_clients_but_preserves_detached_services() {
                 .stderr(Stdio::null())
                 .spawn()
                 .unwrap();
-            std::fs::write(directory.join(role), child.id().to_string()).unwrap();
+            let pid = child.id();
+            // The harness opens and waits on this PID across the launcher's
+            // exit. Closing our handle must not kill or wait for either client.
+            drop(OwnedHandle::from(child));
+            std::fs::write(directory.join(role), pid.to_string()).unwrap();
         }
         while !directory.join("exit").exists() {
             std::thread::sleep(Duration::from_millis(20));
@@ -122,18 +126,20 @@ fn closing_a_pane_reaps_console_clients_but_preserves_detached_services() {
         .unwrap();
         let pane = DaemonPane::spawn(
             u64::MAX - 10,
-            Some(directory.path().into()),
-            ws(80, 24),
-            Some(ShellSpec {
-                program: "powershell.exe".into(),
-                args: vec![
-                    "-NoProfile".into(),
-                    "-NonInteractive".into(),
-                    "-File".into(),
-                    script.to_string_lossy().into_owned(),
-                ],
-                args_are_lyrel_defaults: false,
-            }),
+            PaneSpawnSpec {
+                cwd: Some(directory.path().into()),
+                size: ws(80, 24),
+                shell: Some(ShellSpec {
+                    program: "powershell.exe".into(),
+                    args: vec![
+                        "-NoProfile".into(),
+                        "-NonInteractive".into(),
+                        "-File".into(),
+                        script.to_string_lossy().into_owned(),
+                    ],
+                    args_are_lyrel_defaults: false,
+                }),
+            },
             None,
             None,
             None,

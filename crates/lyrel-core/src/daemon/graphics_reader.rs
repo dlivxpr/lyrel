@@ -1,4 +1,5 @@
 //! Ordered PTY consumption with desktop admission outside the pane lock.
+use super::graphics_admission::OfferSpec;
 use super::*;
 use crate::core::clipboard::{
     Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed,
@@ -432,11 +433,13 @@ fn command(
     if resource {
         let Some(grant) = broker.request_after_release(
             None,
-            key,
-            image.image.width,
-            image.image.height,
-            image.packet.as_ref().unwrap().len(),
-            crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+            OfferSpec {
+                key,
+                width: image.image.width,
+                height: image.image.height,
+                encoded_bytes: image.packet.as_ref().unwrap().len(),
+                metadata_bytes: crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+            },
             || {
                 state
                     .lock()
@@ -469,11 +472,13 @@ fn command(
         if let Some(placement_key) = image.placement_key() {
             let Some(grant) = broker.request_after_release(
                 None,
-                placement_key,
-                0,
-                0,
-                0,
-                crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+                OfferSpec {
+                    key: placement_key,
+                    width: 0,
+                    height: 0,
+                    encoded_bytes: 0,
+                    metadata_bytes: crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+                },
                 || {
                     state
                         .lock()
@@ -548,11 +553,13 @@ fn display(
     let grant = if placement.needs_offer {
         match broker.request_after_release(
             None,
-            placement.key,
-            0,
-            0,
-            0,
-            crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+            OfferSpec {
+                key: placement.key,
+                width: 0,
+                height: 0,
+                encoded_bytes: 0,
+                metadata_bytes: crate::core::graphics_state::GRAPHICS_METADATA_BYTES,
+            },
             || {
                 state
                     .lock()

@@ -497,10 +497,10 @@ impl SettingsWindow {
                     .checked(state.replace)
                     .label(t(L10nKey::SkillsUpdateReplace))
                     .on_click(cx.listener(|app, checked, _, cx| {
-                        if let Some(s) = app.active_settings_mut() {
-                            if !s.skills.maintenance.busy {
-                                s.skills.maintenance.replace = *checked;
-                            }
+                        if let Some(s) = app.active_settings_mut()
+                            && !s.skills.maintenance.busy
+                        {
+                            s.skills.maintenance.replace = *checked;
                         }
                         cx.notify();
                     }))

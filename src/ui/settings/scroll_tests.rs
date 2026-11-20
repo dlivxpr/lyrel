@@ -137,8 +137,7 @@ fn ssh_host_wheel_moves_the_list_without_moving_the_settings_page(cx: &mut TestA
     let (outer, first) = app.update_in(&mut vcx, |app, window, cx| {
         cx.global_mut::<Config>().ssh_profiles = (0..40)
             .map(|i| {
-                let mut profile =
-                    crate::core::ssh_profile::SshProfile::new(&format!("host-{i:02}"));
+                let mut profile = crate::core::ssh_profile::SshProfile::new(format!("host-{i:02}"));
                 profile.host = format!("h{i}.example.invalid");
                 profile
             })

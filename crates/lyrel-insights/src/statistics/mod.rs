@@ -620,18 +620,17 @@ impl StatisticsCache {
             .iter()
             .find_map(|source| source.discovery_issue.as_ref())
             .cloned()
+            && let Some(previous) = previous
         {
-            if let Some(previous) = previous {
-                for old in &previous.sources {
-                    if found.iter().any(|source| source.scope == old.scope)
-                        && !found
-                            .iter()
-                            .any(|source| source.root == old.root && source.scope == old.scope)
-                    {
-                        let mut failed = old.clone();
-                        failed.discovery_issue = Some(issue.clone());
-                        found.push(failed);
-                    }
+            for old in &previous.sources {
+                if found.iter().any(|source| source.scope == old.scope)
+                    && !found
+                        .iter()
+                        .any(|source| source.root == old.root && source.scope == old.scope)
+                {
+                    let mut failed = old.clone();
+                    failed.discovery_issue = Some(issue.clone());
+                    found.push(failed);
                 }
             }
         }
@@ -745,10 +744,7 @@ pub fn scan(
         issues: Vec::new(),
         pricing: pricing::Pricing::default(),
     };
-    let mut seen = HashSet::new();
-    let mut dirs = 0;
-    let mut files = 0;
-    let mut bytes = 0;
+    let mut counters = kimi::ScanCounters::default();
     for source in sources {
         if let Some(reason) = &source.discovery_issue {
             snapshot = snapshot.with_issue(source.root.clone(), reason.clone());
@@ -764,14 +760,12 @@ pub fn scan(
                         .cloned(),
                 );
             }
-            if source.agent == "opencode" {
-                if let Some((old, facts, _)) =
+            if source.agent == "opencode"
+                && let Some((old, facts, _)) =
                     cache.opencode.get(&(host.id().0, source.scope.clone()))
-                {
-                    if old.root == source.root {
-                        snapshot.files.extend(facts.iter().cloned());
-                    }
-                }
+                && old.root == source.root
+            {
+                snapshot.files.extend(facts.iter().cloned());
             }
             continue;
         }
@@ -784,16 +778,7 @@ pub fn scan(
             continue;
         }
         if source.agent == "kimi" {
-            kimi::scan_source(
-                host,
-                source,
-                cache,
-                &mut snapshot,
-                &mut seen,
-                &mut dirs,
-                &mut files,
-                &mut bytes,
-            );
+            kimi::scan_source(host, source, cache, &mut snapshot, &mut counters);
             continue;
         }
         if source.agent != "omp" && source.agent != "pi" {
@@ -847,8 +832,8 @@ pub fn scan(
                 .is_ok_and(|m| !m.is_dir);
         let mut pending = vec![(initial, root_is_child, 0u8)];
         while let Some((path, child, depth)) = pending.pop() {
-            dirs += 1;
-            if dirs > MAX_DIRS {
+            counters.dirs += 1;
+            if counters.dirs > MAX_DIRS {
                 snapshot.issues.push(ScanIssue {
                     path,
                     reason: "directory scan limit reached".into(),
@@ -915,11 +900,14 @@ pub fn scan(
                         continue;
                     }
                 };
-                if !seen.insert((source.agent.clone(), source.scope.clone(), path.clone())) {
+                if !counters
+                    .seen
+                    .insert((source.agent.clone(), source.scope.clone(), path.clone()))
+                {
                     continue;
                 }
-                files += 1;
-                if files > MAX_FILES {
+                counters.files += 1;
+                if counters.files > MAX_FILES {
                     snapshot.issues.push(ScanIssue {
                         path,
                         reason: "file scan limit reached".into(),
@@ -935,21 +923,21 @@ pub fn scan(
                 );
                 let result = (|| {
                     let meta = host.stat(&path)?;
-                    if let Some((old, facts)) = cache.files.get_mut(&key) {
-                        if *old == meta {
-                            // Directory lineage can change without touching this history file.
-                            facts.child = child;
-                            snapshot.files.push(facts.clone());
-                            return Ok(None);
-                        }
+                    if let Some((old, facts)) = cache.files.get_mut(&key)
+                        && *old == meta
+                    {
+                        // Directory lineage can change without touching this history file.
+                        facts.child = child;
+                        snapshot.files.push(facts.clone());
+                        return Ok(None);
                     }
-                    if meta.len > MAX_FILE_BYTES || bytes + meta.len > MAX_SCAN_BYTES {
+                    if meta.len > MAX_FILE_BYTES || counters.bytes + meta.len > MAX_SCAN_BYTES {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "statistics byte scan limit reached",
                         ));
                     }
-                    bytes += meta.len;
+                    counters.bytes += meta.len;
                     let data = host.read_file(&path, MAX_FILE_BYTES)?;
                     let session = match source.agent.as_str() {
                         "omp" => omp::parse(&data)?,
@@ -1013,25 +1001,24 @@ pub fn scan(
     pi::resolve_inheritance(&mut snapshot, host, original_sources);
     // Restrict lineage claims rather than silently treating an unresolved parent as reliable.
     for file in &snapshot.files {
-        if let Some(parent) = &file.session.parent {
-            if !snapshot.files.iter().any(|f| {
+        if let Some(parent) = &file.session.parent
+            && !snapshot.files.iter().any(|f| {
                 f.source.agent == file.source.agent
                     && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
-            }) {
-                snapshot.issues.push(ScanIssue {
-                    path: file.path.clone(),
-                    reason:
-                        "parentSession lineage is unavailable; inherited usage cannot be verified"
-                            .into(),
-                });
-            }
+            })
+        {
+            snapshot.issues.push(ScanIssue {
+                path: file.path.clone(),
+                reason: "parentSession lineage is unavailable; inherited usage cannot be verified"
+                    .into(),
+            });
         }
     }
-    if !snapshot.issues.is_empty() {
-        if let Some(oldest) = snapshot.files.iter().map(|f| f.observed).min() {
-            snapshot.updated = oldest;
-        }
+    if !snapshot.issues.is_empty()
+        && let Some(oldest) = snapshot.files.iter().map(|f| f.observed).min()
+    {
+        snapshot.updated = oldest;
     }
     if snapshot.issues.is_empty() {
         cache.files.retain(|(id, agent, scope, path), _| {
@@ -1039,7 +1026,9 @@ pub fn scan(
                 || !sources
                     .iter()
                     .any(|s| s.agent == *agent && s.scope == *scope)
-                || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
+                || counters
+                    .seen
+                    .contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }
     Ok(snapshot)

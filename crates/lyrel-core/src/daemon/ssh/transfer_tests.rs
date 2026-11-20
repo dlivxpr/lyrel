@@ -509,8 +509,10 @@ async fn connect_zlib(root: &Path, scratch: &Path) -> ZlibLink {
         .expect("bind a loopback port");
     let addr = listener.local_addr().expect("bound address");
 
-    let mut server_config = server::Config::default();
-    server_config.inactivity_timeout = None;
+    let mut server_config = server::Config {
+        inactivity_timeout: None,
+        ..Default::default()
+    };
     server_config.preferred.compression = Cow::Owned(vec![russh::compression::ZLIB]);
     server_config
         .keys

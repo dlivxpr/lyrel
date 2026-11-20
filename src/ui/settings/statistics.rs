@@ -229,10 +229,8 @@ impl SettingsWindow {
             return;
         }
         INTERACTIVE_REQUESTED.store(true, Ordering::Relaxed);
-        if refresh {
-            if let Some(settings) = self.active_settings_mut() {
-                settings.statistics.pending_refresh = true;
-            }
+        if refresh && let Some(settings) = self.active_settings_mut() {
+            settings.statistics.pending_refresh = true;
         }
         if !self.ensure_statistics_settings(cx) {
             return;
@@ -356,10 +354,10 @@ impl SettingsWindow {
                             && cx.global::<Config>().agent_launch == expected_launch
                             && cache::shared().accepts(host_id, agent, update.revision);
                         if !valid {
-                            if let Some(settings) = this.active_settings_mut() {
-                                if settings.statistics.scan_generation == Some(generation) {
-                                    settings.statistics.invalidate();
-                                }
+                            if let Some(settings) = this.active_settings_mut()
+                                && settings.statistics.scan_generation == Some(generation)
+                            {
+                                settings.statistics.invalidate();
                             }
                             this.load_statistics(cx);
                             return false;

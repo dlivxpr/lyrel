@@ -78,8 +78,14 @@ impl ParsePresentation {
             return;
         }
         self.tab_stops.resize(cols, false);
-        for col in previous..cols {
-            self.tab_stops[col] = col.is_multiple_of(8);
+        for (col, stop) in self
+            .tab_stops
+            .iter_mut()
+            .enumerate()
+            .take(cols)
+            .skip(previous)
+        {
+            *stop = col.is_multiple_of(8);
         }
     }
 
@@ -361,14 +367,14 @@ impl<'a> PresentedGrid<'a> {
         };
         let mut start = ix;
         while start > 0
-            && (start % self.cols != 0 || self.wraps(start / self.cols - 1))
+            && (!start.is_multiple_of(self.cols) || self.wraps(start / self.cols - 1))
             && same(start - 1)
         {
             start -= 1;
         }
         let mut end = ix;
         while end + 1 < self.len()
-            && ((end + 1) % self.cols != 0 || self.wraps(end / self.cols))
+            && (!(end + 1).is_multiple_of(self.cols) || self.wraps(end / self.cols))
             && same(end + 1)
         {
             end += 1;

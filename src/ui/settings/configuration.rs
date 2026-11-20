@@ -1,5 +1,4 @@
 use super::*;
-use crate::ui::theme::{apply_theme, set_menus};
 use lyrel_core::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN};
 use lyrel_ui_base::i18n::set_locale;
 use std::sync::Arc;
@@ -74,7 +73,11 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    pub(crate) fn discard_unsaved_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn discard_unsaved_settings(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let snapshot = self
             .active_settings()
             .filter(|s| s.save_error.is_some())
@@ -85,7 +88,11 @@ impl SettingsWindow {
             if let Some(s) = self.active_settings_mut() {
                 s.save_error = None;
             }
-            apply_theme(Some(window), cx);
+            cx.emit(SettingsEvent::ApplyTheme {
+                persist: false,
+                refresh_windows: false,
+                rebuild_editor: true,
+            });
         }
     }
 
@@ -432,11 +439,19 @@ impl SettingsWindow {
             }
             L10nKey::SettingsOpacity => {
                 self.update_config(cx, |cfg| cfg.window_opacity = None);
-                apply_theme(Some(window), cx);
+                cx.emit(SettingsEvent::ApplyTheme {
+                    persist: false,
+                    refresh_windows: false,
+                    rebuild_editor: true,
+                });
             }
             L10nKey::SettingsBlur => {
                 self.update_config(cx, |cfg| cfg.window_blur = None);
-                apply_theme(Some(window), cx);
+                cx.emit(SettingsEvent::ApplyTheme {
+                    persist: false,
+                    refresh_windows: false,
+                    rebuild_editor: true,
+                });
             }
             #[cfg(target_os = "windows")]
             L10nKey::SettingsBackdrop => {
@@ -536,11 +551,8 @@ impl SettingsWindow {
         }
         set_locale(code);
         self.persist_settings_config(cx);
-        set_menus(cx);
-        // Explorer reads its menu wording from the registry, so it is the one
-        // surface a language change does not reach on its own. No-op unless
-        // the user installed the context menu, and off Windows entirely.
-        crate::core::explorer_context_menu::refresh_labels();
+        // Menus and the explorer's context-menu wording move to the bridge,
+        // which owns both surfaces; the window side only relabels its inputs.
         self.refresh_locale_state(window, cx);
         cx.emit(SettingsEvent::LocaleChanged);
     }
@@ -571,7 +583,7 @@ impl SettingsWindow {
     pub(crate) fn commit_ui_font_family(
         &mut self,
         name: String,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let family = (name != crate::ui::settings::ui_font_default_label()).then_some(name);
@@ -581,8 +593,13 @@ impl SettingsWindow {
         }
         cfg.ui_font_family = family;
         self.persist_settings_config(cx);
-        apply_theme(Some(window), cx);
-        cx.refresh_windows();
+        // The interface font changes the rem size, so every open window has
+        // to re-lay-out, not just this one.
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: true,
+            rebuild_editor: true,
+        });
         cx.notify();
     }
     pub(crate) fn change_font_size(&mut self, delta: f32, cx: &mut Context<Self>) {

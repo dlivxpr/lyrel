@@ -379,13 +379,12 @@ impl LyrelApp {
                 SidebarNavTarget::Group(_) => None,
             })
             .collect();
-        if let Some(at) = tabs.iter().position(|id| *id == closing) {
-            if let Some(next) = tabs
+        if let Some(at) = tabs.iter().position(|id| *id == closing)
+            && let Some(next) = tabs
                 .get(at + 1)
                 .or_else(|| at.checked_sub(1).and_then(|previous| tabs.get(previous)))
-            {
-                return Some(SidebarNavTarget::Tab(*next));
-            }
+        {
+            return Some(SidebarNavTarget::Tab(*next));
         }
         let at = self.tabs.index_of(closing)?;
         let key = self.sidebar_group_keys(cx).get(at).cloned().flatten();
@@ -993,11 +992,11 @@ impl LyrelApp {
                         .text_size(px(meta_size))
                         .text_color(cx.theme().muted_foreground)
                         .font_features(tabular());
-                    let counts_w = counts_width(&window.text_system(), &meta_font, meta_size, &g);
+                    let counts_w = counts_width(window.text_system(), &meta_font, meta_size, &g);
                     // Branch: cut from the end, the way any other label is.
                     let branch_avail = (label_avail - counts_w).max(0.);
                     let shown = elide_end_clusters(
-                        &window.text_system(),
+                        window.text_system(),
                         &meta_font,
                         meta_size,
                         &g.branch,
@@ -1112,14 +1111,14 @@ impl LyrelApp {
                 // asked for, which cuts the longer string hardest.
                 let cwd_want = cwd_full.as_ref().map(|full| {
                     row_metrics::META_GAP
-                        + measure_text(&window.text_system(), &font, meta_size, full)
+                        + measure_text(window.text_system(), &font, meta_size, full)
                 });
                 let title_avail = match cwd_want {
                     Some(want) => (label_avail - want.min(label_avail * 0.5)).max(ROW_TITLE_FLOOR),
                     None => label_avail,
                 };
                 let shown_title = elide_label(
-                    &window.text_system(),
+                    window.text_system(),
                     title_font,
                     title_size,
                     &title_text,
@@ -1130,17 +1129,12 @@ impl LyrelApp {
                     // it was allowed to: a short title hands the slack back
                     // instead of leaving the path elided around a gap.
                     let avail = (label_avail
-                        - measure_text(
-                            &window.text_system(),
-                            title_font,
-                            title_size,
-                            &shown_title,
-                        )
+                        - measure_text(window.text_system(), title_font, title_size, &shown_title)
                         - row_metrics::META_GAP)
                         .max(0.);
                     if avail >= ROW_CWD_FLOOR {
                         let shown = elide_path_keep_tail(
-                            &window.text_system(),
+                            window.text_system(),
                             &font,
                             meta_size,
                             &full,
@@ -1258,7 +1252,7 @@ impl LyrelApp {
                                 let info = info.clone();
                                 gpui_kit::component::tooltip::Tooltip::element(
                                     move |_window, cx| {
-                                        let card = v_flex()
+                                        v_flex()
                                             .gap_1()
                                             // The card is the one place that
                                             // promised the whole string, so a long
@@ -1336,8 +1330,7 @@ impl LyrelApp {
                                                 c.child(crate::ui::program_summary::card_section(
                                                     &program, cx,
                                                 ))
-                                            });
-                                        card
+                                            })
                                     },
                                 )
                                 .build(window, cx)
@@ -1703,7 +1696,7 @@ impl LyrelApp {
                 }
                 let count_label = row_count.to_string();
                 if folded {
-                    avail -= measure_text(&ts, &meta_font, header_size, &count_label)
+                    avail -= measure_text(ts, &meta_font, header_size, &count_label)
                         + row_metrics::META_GAP;
                 }
                 let avail = avail.max(HEADER_NAME_FLOOR);
@@ -1713,19 +1706,19 @@ impl LyrelApp {
                 // branch sits in.
                 // Drawn as a bare `·` with a gap on either side; the gap before
                 // it is the one `counts_width` already reserves.
-                let sep_w = measure_text(&ts, &meta_font, header_size, META_SEP_TRIMMED)
+                let sep_w = measure_text(ts, &meta_font, header_size, META_SEP_TRIMMED)
                     + row_metrics::META_GAP;
                 let git_want = shared_git.as_ref().map(|shared| {
-                    let counts = counts_width(&ts, &meta_font, header_size, &shared.status);
+                    let counts = counts_width(ts, &meta_font, header_size, &shared.status);
                     let sep = if counts > 0. { sep_w } else { 0. };
                     2. * row_metrics::META_GAP
-                        + measure_text(&ts, &meta_font, header_size, &shared.status.branch)
+                        + measure_text(ts, &meta_font, header_size, &shared.status.branch)
                         + sep
                         + counts
                 });
                 let name_avail = header_name_avail(avail, git_want);
-                let label = elide_label(&ts, &header_font, header_size, &name, name_avail);
-                let name_w = measure_text(&ts, &header_font, header_size, &label);
+                let label = elide_label(ts, &header_font, header_size, &name, name_avail);
+                let name_w = measure_text(ts, &header_font, header_size, &label);
                 let hover_group = SharedString::from(format!("sidebar-group-{group_ix}"));
                 let header_nav = nav_focused && header_target.as_ref() == nav_target.as_ref();
                 let bar = h_flex()
@@ -1885,13 +1878,13 @@ impl LyrelApp {
                             click,
                             rows,
                         } = shared;
-                        let counts_w = counts_width(&ts, &meta_font, header_size, &status);
+                        let counts_w = counts_width(ts, &meta_font, header_size, &status);
                         let sep = if counts_w > 0. { sep_w } else { 0. };
                         let branch_avail =
                             (avail - name_w - 2. * row_metrics::META_GAP - sep - counts_w).max(0.);
                         // Cut from the end, like a row's.
                         let branch = elide_end_clusters(
-                            &ts,
+                            ts,
                             &meta_font,
                             header_size,
                             &status.branch,
@@ -4947,12 +4940,9 @@ mod navigation_tests {
         vcx.simulate_keystrokes("tab");
         let mut input = Vec::new();
         while let Ok(message) = ClientMsg::read(&mut streams[0]) {
-            match message {
-                ClientMsg::Input(bytes) => {
-                    input.extend(bytes);
-                    break;
-                }
-                _ => {}
+            if let ClientMsg::Input(bytes) = message {
+                input.extend(bytes);
+                break;
             }
         }
         assert_eq!(input, b"\t", "Tab reaches the shell, not the sidebar");

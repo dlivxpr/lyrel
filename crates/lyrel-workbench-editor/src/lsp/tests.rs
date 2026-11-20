@@ -34,11 +34,11 @@ fn file_uris_round_trip_including_spaces_and_non_ascii() {
 
 #[test]
 fn a_workspace_edit_is_grouped_by_file_from_either_shape() {
-    let mut changes = HashMap::new();
-    changes.insert(uri("/b.rs"), vec![edit(1, "b")]);
-    changes.insert(uri("/a.rs"), vec![edit(0, "a")]);
     let files = workspace_edit_files(WorkspaceEdit {
-        changes: Some(changes),
+        changes: Some(HashMap::from([
+            (uri("/b.rs"), vec![edit(1, "b")]),
+            (uri("/a.rs"), vec![edit(0, "a")]),
+        ])),
         ..Default::default()
     });
     let names: Vec<&str> = files.iter().map(|(u, _)| u.as_str()).collect();
@@ -456,16 +456,14 @@ fn an_edit_is_stale_when_a_file_it_touches_changed_opened_or_closed() {
 fn a_workspace_edit_for_a_changed_buffer_is_not_applied(cx: &mut gpui_kit::TestAppContext) {
     let s = harness::setup(cx);
     let rename = |cx: &mut gpui_kit::App, baseline| {
-        let mut changes = HashMap::new();
-        changes.insert(
-            path_to_uri(&s.path).unwrap(),
-            vec![TextEdit {
-                range: Range::new(Position::new(0, 3), Position::new(0, 6)),
-                new_text: "bar".into(),
-            }],
-        );
         let edit = WorkspaceEdit {
-            changes: Some(changes),
+            changes: Some(HashMap::from([(
+                path_to_uri(&s.path).unwrap(),
+                vec![TextEdit {
+                    range: Range::new(Position::new(0, 3), Position::new(0, 6)),
+                    new_text: "bar".into(),
+                }],
+            )])),
             ..Default::default()
         };
         apply_workspace_edit(edit, Encoding::Utf16, Some(baseline), cx)

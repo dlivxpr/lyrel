@@ -734,29 +734,49 @@ fn frame_raw(generation: u64, declared: u32, entries: &[u8]) -> Vec<u8> {
     out
 }
 
-/// One frame entry laid out exactly as `GlyphFrame::decode` reads it:
-/// cp(4) upm(2) width(1) flags(1) align(1) optional aw/lh/ymin pad(16)
-/// len(4) glyf. `flags` bits 3..=5 carry the size tag, bits 0..=2 mark which
-/// optional fields `options` supplies; `align` is h in bits 0..=1 and v in
-/// bits 2..=4.
-fn frame_entry(
+/// Header fields of one frame entry. `flags` bits 3..=5 carry the size tag,
+/// bits 0..=2 mark which optional fields `options` supplies; `align` is h in
+/// bits 0..=1 and v in bits 2..=4.
+struct FrameEntryHeader<'a> {
     cp: u32,
     upm: u16,
     width: u8,
     flags: u8,
     align: u8,
-    options: &[u8],
+    options: &'a [u8],
     pad: [f32; 4],
-    glyf: &[u8],
-) -> Vec<u8> {
+}
+
+impl FrameEntryHeader<'static> {
+    /// flags 0x10 = size tag `contain` (2 << 3), no optional fields; align
+    /// 0x05 = horizontal center (1) | vertical center (1 << 2) — the protocol
+    /// defaults a plain `r` body produces, so this entry is reachable from
+    /// real traffic.
+    fn plain(cp: u32) -> Self {
+        Self {
+            cp,
+            upm: 1000,
+            width: 1,
+            flags: 0x10,
+            align: 0x05,
+            options: &[],
+            pad: [0.0; 4],
+        }
+    }
+}
+
+/// One frame entry laid out exactly as `GlyphFrame::decode` reads it:
+/// cp(4) upm(2) width(1) flags(1) align(1) optional aw/lh/ymin pad(16)
+/// len(4) glyf.
+fn frame_entry(header: &FrameEntryHeader<'_>, glyf: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&cp.to_le_bytes());
-    out.extend_from_slice(&upm.to_le_bytes());
-    out.push(width);
-    out.push(flags);
-    out.push(align);
-    out.extend_from_slice(options);
-    for value in pad {
+    out.extend_from_slice(&header.cp.to_le_bytes());
+    out.extend_from_slice(&header.upm.to_le_bytes());
+    out.push(header.width);
+    out.push(header.flags);
+    out.push(header.align);
+    out.extend_from_slice(header.options);
+    for value in header.pad {
         out.extend_from_slice(&value.to_bits().to_le_bytes());
     }
     out.extend_from_slice(&(glyf.len() as u32).to_le_bytes());
@@ -765,11 +785,7 @@ fn frame_entry(
 }
 
 fn frame_entry_default(cp: u32, glyf: &[u8]) -> Vec<u8> {
-    // flags 0x10 = size tag `contain` (2 << 3), no optional fields; align 0x05
-    // = horizontal center (1) | vertical center (1 << 2) — the protocol
-    // defaults a plain `r` body produces, so this entry is reachable from
-    // real traffic.
-    frame_entry(cp, 1000, 1, 0x10, 0x05, &[], [0.0; 4], glyf)
+    frame_entry(&FrameEntryHeader::plain(cp), glyf)
 }
 
 #[test]
@@ -885,13 +901,55 @@ fn a_frame_decoder_refuses_out_of_domain_input() {
     // unknown horizontal-align tag, a vertical-align tag above 3, reserved
     // align bits.
     for entry in [
-        frame_entry(0xE000, 1000, 3, 0x10, 0x05, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 0, 0x10, 0x05, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x40, 0x05, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x28, 0x05, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x10, 0x07, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x10, 0x15, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x10, 0x20, &[], [0.0; 4], &square(100)),
+        frame_entry(
+            &FrameEntryHeader {
+                width: 3,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                width: 0,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                flags: 0x40,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                flags: 0x28,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                align: 0x07,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                align: 0x15,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                align: 0x20,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
     ] {
         assert!(GlyphFrame::decode(&ok(&entry)).is_none(), "{entry:?}");
     }
@@ -902,19 +960,19 @@ fn a_frame_decoder_refuses_out_of_domain_input() {
         [1.5, 0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, -0.5],
     ] {
-        let entry = frame_entry(0xE000, 1000, 1, 0x10, 0x05, &[], bad_pad, &square(100));
+        let entry = frame_entry(
+            &FrameEntryHeader {
+                pad: bad_pad,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        );
         assert!(GlyphFrame::decode(&ok(&entry)).is_none(), "{bad_pad:?}");
     }
     // A per-entry payload past the 64 KiB wire limit, and a declared length
     // the frame does not actually carry.
     let oversized = frame_entry(
-        0xE000,
-        1000,
-        1,
-        0x10,
-        0x05,
-        &[],
-        [0.0; 4],
+        &FrameEntryHeader::plain(0xE000),
         &vec![0u8; MAX_GLYF_BYTES + 1],
     );
     assert!(GlyphFrame::decode(&ok(&oversized)).is_none());
@@ -949,9 +1007,29 @@ fn a_frame_refuses_scalar_values_the_wire_parser_would_reject() {
     // the GUI applies decoded entries without a second domain check, and the
     // handoff path rebuilds a session from them.
     for entry in [
-        frame_entry(0xE000, 0, 1, 0x10, 0x05, &[], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x11, 0x05, &[0, 0], [0.0; 4], &square(100)),
-        frame_entry(0xE000, 1000, 1, 0x12, 0x05, &[0, 0], [0.0; 4], &square(100)),
+        frame_entry(
+            &FrameEntryHeader {
+                upm: 0,
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                flags: 0x11,
+                options: &[0, 0],
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
+        frame_entry(
+            &FrameEntryHeader {
+                flags: 0x12,
+                options: &[0, 0],
+                ..FrameEntryHeader::plain(0xE000)
+            },
+            &square(100),
+        ),
     ] {
         assert!(
             GlyphFrame::decode(&frame_raw(7, 1, &entry)).is_none(),

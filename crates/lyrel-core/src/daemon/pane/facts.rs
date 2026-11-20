@@ -135,7 +135,9 @@ impl PaneFacts {
             send(DaemonMsg::Agent(self.agent));
         }
         if self.agent_session.is_some() {
-            send(DaemonMsg::AgentStatus(self.agent_session.clone()));
+            send(DaemonMsg::AgentStatus(
+                self.agent_session.clone().map(Box::new),
+            ));
         }
     }
 
@@ -209,7 +211,9 @@ impl PaneFacts {
                     && session.message.as_deref() != Some(message.as_str())
                 {
                     session.message = Some(message);
-                    emit(DaemonMsg::AgentStatus(self.agent_session.clone()));
+                    emit(DaemonMsg::AgentStatus(
+                        self.agent_session.clone().map(Box::new),
+                    ));
                 }
             }
         }
@@ -360,11 +364,11 @@ fn apply_signals(st: &mut PaneFacts, signals: SniffSignals, emit: &mut dyn FnMut
         st.progress = progress;
         emit(DaemonMsg::Progress(progress));
     }
-    if let Some(cwd) = signals.cwd {
-        if st.cwd.as_ref() != Some(&cwd) {
-            emit(DaemonMsg::Cwd(cwd.clone()));
-            st.cwd = Some(cwd);
-        }
+    if let Some(cwd) = signals.cwd
+        && st.cwd.as_ref() != Some(&cwd)
+    {
+        emit(DaemonMsg::Cwd(cwd.clone()));
+        st.cwd = Some(cwd);
     }
     if let Some(title) = signals.title {
         // No `notify`: a window renders its own tabs from its own terminal,
@@ -526,7 +530,9 @@ fn apply_agent_signals(
     }
 
     if ended_session || st.agent_session != before {
-        emit(DaemonMsg::AgentStatus(st.agent_session.clone()));
+        emit(DaemonMsg::AgentStatus(
+            st.agent_session.clone().map(Box::new),
+        ));
     }
 }
 
@@ -664,7 +670,9 @@ fn stamp_launch_argv(
         && sess.launch_argv.as_ref() != Some(&argv)
     {
         sess.launch_argv = Some(argv);
-        emit(DaemonMsg::AgentStatus(st.agent_session.clone()));
+        emit(DaemonMsg::AgentStatus(
+            st.agent_session.clone().map(Box::new),
+        ));
     }
 }
 

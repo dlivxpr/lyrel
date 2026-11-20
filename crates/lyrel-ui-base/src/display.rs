@@ -33,6 +33,17 @@ pub fn human_bytes(n: u64) -> String {
     unreachable!("the loop returns on its last iteration")
 }
 
+/// Inline-code highlighting for the Markdown surfaces the workbench editor and
+/// the shell's detail views share.
+pub fn markdown_style(cx: &gpui_kit::App) -> gpui_kit::component::text::TextViewStyle {
+    use gpui_kit::component::ActiveTheme as _;
+
+    gpui_kit::component::text::TextViewStyle::default().inline_code(gpui_kit::HighlightStyle {
+        background_color: Some(cx.theme().foreground.opacity(0.08)),
+        ..Default::default()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,15 +55,4 @@ mod tests {
         assert_eq!(human_bytes(2048), "2.0 KiB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MiB");
     }
-}
-
-/// Inline-code highlighting for the Markdown surfaces the workbench editor and
-/// the shell's detail views share.
-pub fn markdown_style(cx: &gpui_kit::App) -> gpui_kit::component::text::TextViewStyle {
-    use gpui_kit::component::ActiveTheme as _;
-
-    gpui_kit::component::text::TextViewStyle::default().inline_code(gpui_kit::HighlightStyle {
-        background_color: Some(cx.theme().foreground.opacity(0.08)),
-        ..Default::default()
-    })
 }

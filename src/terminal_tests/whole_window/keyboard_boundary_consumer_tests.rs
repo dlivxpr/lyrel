@@ -230,9 +230,11 @@ fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(
                             client,
                             Vec::new(),
                             &lyrel_ui_base::route::PaneRoute::Local,
-                            TermSize::new(80, 24),
-                            10,
-                            20,
+                            lyrel_terminal::remote::RelinkLayout {
+                                size: TermSize::new(80, 24),
+                                cell_w: 10,
+                                cell_h: 20,
+                            },
                             cx,
                         )
                         .unwrap();

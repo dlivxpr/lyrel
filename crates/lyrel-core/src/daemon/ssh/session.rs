@@ -502,6 +502,12 @@ impl SshConnection {
     }
 }
 
+impl Drop for SshConnection {
+    fn drop(&mut self) {
+        self.mark_dead();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{Exec, FakeSshd};
@@ -676,11 +682,5 @@ mod tests {
             ChannelOpenFailure::AdministrativelyProhibited
         )));
         assert!(!refuses_every_session(&russh::Error::Disconnect));
-    }
-}
-
-impl Drop for SshConnection {
-    fn drop(&mut self) {
-        self.mark_dead();
     }
 }

@@ -61,6 +61,17 @@ pub const VIEW_MAX_AGE: Duration = Duration::from_secs(180);
 /// Read views one process-wide service keeps open at once.
 pub const MAX_VIEWS: usize = 64;
 
+/// Which cell a read view returns and the byte window of the value: `row` and
+/// `column` select the cell; `offset` and `max_bytes` bound the chunk TEXT
+/// and BLOB values return (INTEGER and REAL ignore the window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SqliteCellRead {
+    pub row: u32,
+    pub column: u32,
+    pub offset: u64,
+    pub max_bytes: u64,
+}
+
 /// The read-only SQLite browsing engine a full local Host carries.
 ///
 /// One engine per Host, so a remote control connection tracks and closes only
@@ -85,10 +96,7 @@ pub trait SqliteEngine: Send + Sync {
         &self,
         view: u64,
         query: &SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: SqliteCellRead,
         cancel: &SqliteCancel,
     ) -> io::Result<SqliteValue>;
 

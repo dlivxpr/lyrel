@@ -24,7 +24,7 @@ fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
         });
     }
 
-    DaemonMsg::AgentStatus(Some(AgentSessionState {
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
         status: AgentStatus::Idle,
         message: None,
         session_id: Some("sid-abc".into()),
@@ -38,7 +38,7 @@ fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
         pending_stop: false,
         readout: Default::default(),
         since_ms: None,
-    }))
+    })))
     .encode(&mut daemon)
     .unwrap();
     for _ in 0..200 {
@@ -111,7 +111,7 @@ fn report_agent_turn(
         readout: Default::default(),
         since_ms: None,
     };
-    DaemonMsg::AgentStatus(Some(state.clone()))
+    DaemonMsg::AgentStatus(Some(Box::new(state.clone())))
         .encode(daemon)
         .unwrap();
     for _ in 0..200 {
@@ -489,9 +489,11 @@ fn a_turn_that_finished_while_the_link_was_down_still_badges(cx: &mut TestAppCon
             new_client,
             Vec::new(),
             &lyrel_ui_base::route::PaneRoute::Local,
-            TermSize::new(80, 24),
-            8,
-            17,
+            crate::remote::RelinkLayout {
+                size: TermSize::new(80, 24),
+                cell_w: 8,
+                cell_h: 17,
+            },
             cx,
         )
         .expect("the swap itself cannot fail");

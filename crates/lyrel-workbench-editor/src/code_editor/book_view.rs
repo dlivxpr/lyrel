@@ -382,11 +382,11 @@ impl BookView {
             self.prefs_key = prefs_key;
             self.list.remeasure_items(0..self.blocks);
         }
-        if let BookState::Unsupported(message) | BookState::Failed(message) = state {
-            if self.data.is_none() {
-                self.loading = false;
-                self.chapter_error = Some(message);
-            }
+        if let BookState::Unsupported(message) | BookState::Failed(message) = state
+            && self.data.is_none()
+        {
+            self.loading = false;
+            self.chapter_error = Some(message);
         }
         let data = self.document.read(cx).chapter_data(self.chapter);
         if let Some(data) = data {

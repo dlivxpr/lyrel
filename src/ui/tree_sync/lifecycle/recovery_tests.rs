@@ -123,7 +123,7 @@ fn a_deletion_nothing_has_open_forgets_the_workspace_here_too(cx: &mut gpui_kit:
     cx.update(|cx| {
         // Removing a workspace saves the views, and a test has no business
         // writing the real ones.
-        let _ = lyrel_core::core::config::set_config_dir(
+        lyrel_core::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-deleted-test-{}", std::process::id())),
         );
         crate::ui::windows::WindowRegistry::init(cx);

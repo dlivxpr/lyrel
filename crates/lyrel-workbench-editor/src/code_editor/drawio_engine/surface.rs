@@ -135,12 +135,12 @@ impl ParentWindow {
         {
             let handle = raw_window_handle::HasWindowHandle::window_handle(window)
                 .map_err(|_| SurfaceError::Window)?;
-            return match handle.as_raw() {
+            match handle.as_raw() {
                 raw_window_handle::RawWindowHandle::Win32(handle) => Ok(Self {
                     hwnd: windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _),
                 }),
                 _ => Err(SurfaceError::Window),
-            };
+            }
         }
         #[cfg(target_os = "macos")]
         {
@@ -178,6 +178,13 @@ impl TestSurface {
             commands: std::cell::RefCell::new(Vec::new()),
             sequence: std::cell::Cell::new(0),
         }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Default for TestSurface {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -230,11 +237,11 @@ impl SurfaceHost {
     ) -> Result<Self, SurfaceError> {
         #[cfg(windows)]
         {
-            return windows_host::Host::start(parent, bounds, scale, document, theme, events).map(
-                |host| Self {
+            windows_host::Host::start(parent, bounds, scale, document, theme, events).map(|host| {
+                Self {
                     inner: Inner::Windows(host),
-                },
-            );
+                }
+            })
         }
         #[cfg(target_os = "macos")]
         {

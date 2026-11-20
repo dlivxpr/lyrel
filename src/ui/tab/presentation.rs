@@ -153,11 +153,11 @@ impl Tab {
         else {
             return;
         };
-        if let Some(presentation) = &mut self.foreign_presentation {
-            if let Some(old_key) = crate::ui::pane_sidecar::scoped_pane(&slot, cx) {
-                let new_key = crate::ui::pane_sidecar::scoped_pane(new, cx);
-                presentation.remap_panes(|key| if key == old_key { new_key } else { Some(key) });
-            }
+        if let Some(presentation) = &mut self.foreign_presentation
+            && let Some(old_key) = crate::ui::pane_sidecar::scoped_pane(&slot, cx)
+        {
+            let new_key = crate::ui::pane_sidecar::scoped_pane(new, cx);
+            presentation.remap_panes(|key| if key == old_key { new_key } else { Some(key) });
         }
         let old_id = match slot {
             PaneSlot::Ready(view) if remote && view.read(cx).pane_route().is_local() => None,

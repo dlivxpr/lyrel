@@ -1026,7 +1026,8 @@ fn session_pane_from_node(node: &PaneNode, panes: &[PaneRecord]) -> SessionPane 
                 agent_session_scope: agent
                     .as_ref()
                     .and_then(|a| a.session_scope.as_ref())
-                    .map(lyrel_core::host::session_operations::durable_scope),
+                    .map(lyrel_core::host::session_operations::durable_scope)
+                    .map(Box::new),
             }
         }
         PaneNode::Split { axis, ratio, a, b } => SessionPane::Split {
@@ -1394,7 +1395,7 @@ fn arm_rehydrate_retry(cx: &mut App, client_ws: WorkspaceId, epoch: u64, attempt
     let delay = rehydrate_backoff(attempts);
     cx.spawn(async move |cx| {
         cx.background_executor().timer(delay).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             if !still_owed(cx, client_ws, epoch) {
                 return;
             }
@@ -2138,12 +2139,14 @@ impl LyrelApp {
                     return Some(Pane::Leaf(slot));
                 }
                 let slot = Self::new_terminal(
-                    self.window_workspace(cx),
-                    Some(self.workspace),
-                    self.font_size,
-                    None,
-                    Some(*pane),
-                    None,
+                    crate::ui::app::PendingTerminalRequest::shell(
+                        self.window_workspace(cx),
+                        Some(self.workspace),
+                        self.font_size,
+                        None,
+                        Some(*pane),
+                        None,
+                    ),
                     window,
                     cx,
                 );

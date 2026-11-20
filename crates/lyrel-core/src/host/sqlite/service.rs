@@ -27,9 +27,9 @@ use rusqlite::{
 };
 
 use super::{
-    MAX_VIEWS, QUERY_SECONDS, QUERY_SECONDS_MAX, SqliteCancel, SqliteColumns, SqliteEngine,
-    SqliteObject, SqliteOpened, SqlitePage, SqliteQuery, SqliteValue, VALUE_CHUNK_BYTES, VIEW_IDLE,
-    VIEW_MAX_AGE, browser, stale_view,
+    MAX_VIEWS, QUERY_SECONDS, QUERY_SECONDS_MAX, SqliteCancel, SqliteCellRead, SqliteColumns,
+    SqliteEngine, SqliteObject, SqliteOpened, SqlitePage, SqliteQuery, SqliteValue,
+    VALUE_CHUNK_BYTES, VIEW_IDLE, VIEW_MAX_AGE, browser, stale_view,
 };
 
 /// Lifetime knobs for read views. Production uses [`SqliteLimits::default`];
@@ -140,7 +140,7 @@ impl SqliteService {
             .map_err(|error| open_error(path, error))?;
         connection
             .busy_timeout(Duration::from_millis(super::BUSY_MILLIS))
-            .map_err(|error| map_error(error))?;
+            .map_err(map_error)?;
         for (config, value) in [
             (DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true),
             (DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true),
@@ -283,30 +283,41 @@ impl SqliteService {
         &self,
         view: u64,
         query: &SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: SqliteCellRead,
         cancel: &SqliteCancel,
     ) -> io::Result<SqliteValue> {
-        if max_bytes == 0 || max_bytes > VALUE_CHUNK_BYTES {
+        if cell.max_bytes == 0 || cell.max_bytes > VALUE_CHUNK_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("a value chunk must be 1..={VALUE_CHUNK_BYTES} bytes, not {max_bytes}"),
+                format!(
+                    "a value chunk must be 1..={VALUE_CHUNK_BYTES} bytes, not {}",
+                    cell.max_bytes
+                ),
             ));
         }
-        if row as u64 >= super::PAGE_ROWS {
+        if cell.row as u64 >= super::PAGE_ROWS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("row {row} is outside a {} row page", super::PAGE_ROWS),
+                format!(
+                    "row {} is outside a {} row page",
+                    cell.row,
+                    super::PAGE_ROWS
+                ),
             ));
         }
         let columns = self.columns(view, &query.table, cancel)?;
         browser::validate(query, &columns).map_err(map_error)?;
         let handle = self.live_view(view, cancel)?;
         let operation = self.operation(view, &handle, cancel, seconds(query))?;
-        let value = browser::value(&operation.connection, query, row, column, offset, max_bytes)
-            .map_err(map_error)?;
+        let value = browser::value(
+            &operation.connection,
+            query,
+            cell.row,
+            cell.column,
+            cell.offset,
+            cell.max_bytes,
+        )
+        .map_err(map_error)?;
         Ok(value)
     }
 
@@ -470,7 +481,7 @@ impl Drop for ViewOperation<'_> {
 }
 
 fn seconds(query: &SqliteQuery) -> u64 {
-    query.seconds.max(QUERY_SECONDS).min(QUERY_SECONDS_MAX)
+    query.seconds.clamp(QUERY_SECONDS, QUERY_SECONDS_MAX)
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -665,13 +676,10 @@ impl SqliteEngine for SqliteService {
         &self,
         view: u64,
         query: &SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: SqliteCellRead,
         cancel: &SqliteCancel,
     ) -> io::Result<SqliteValue> {
-        self.value(view, query, row, column, offset, max_bytes, cancel)
+        self.value(view, query, cell, cancel)
     }
 
     fn close(&self, view: u64) {

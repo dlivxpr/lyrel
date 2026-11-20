@@ -446,10 +446,7 @@ pub trait Host: Send + Sync + 'static {
         &self,
         _view: u64,
         _query: &sqlite::SqliteQuery,
-        _row: u32,
-        _column: u32,
-        _offset: u64,
-        _max_bytes: u64,
+        _cell: sqlite::SqliteCellRead,
         _cancel: &sqlite::SqliteCancel,
     ) -> io::Result<sqlite::SqliteValue> {
         guard_off_ui();

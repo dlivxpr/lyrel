@@ -54,14 +54,14 @@ fn resumed_output_marks_do_not_release_the_running_agent() {
 
     let mut sniffer = OscSniffer::new();
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| {
+    state.with_facts(|facts, emit| {
         apply_signals(facts, sniffer.feed(b"\x1b]133;C;omp;aid=lyrel\x07"), emit)
     });
     assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
 
     // Minimized from a real omp /resume: replayed output contains its own
     // prompt/output block, but the enclosing shell command has not exited.
-    (&mut state).with_facts(|facts, emit| {
+    state.with_facts(|facts, emit| {
         apply_signals(
             facts,
             sniffer.feed(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07"),
@@ -70,7 +70,7 @@ fn resumed_output_marks_do_not_release_the_running_agent() {
     });
     assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
     assert_eq!(state.facts.shell.command.as_deref(), Some("omp"));
-    (&mut state).with_facts(|facts, emit| {
+    state.with_facts(|facts, emit| {
         apply_signals(facts, sniffer.feed(b"\x1b]133;D;0;aid=lyrel\x07"), emit)
     });
     assert!(
@@ -132,11 +132,10 @@ fn kimi_late_hooks_cannot_reopen_a_completed_durable_main_turn() {
     state.facts.agent = Some(CLIAgent::Kimi);
     let start = parse_agent_event_body(br#"{"agent":"kimi","event":"session-start","session_id":"s","session_scope":{"session_file":"/isolated/s/state.json"}}"#).unwrap();
     let ended = parse_agent_event_body(br#"{"agent":"kimi","event":"stop","session_id":"s","source":"kimi-durable-wire","requests":[],"result":{"outcome":"succeeded"}}"#).unwrap();
-    (&mut state)
-        .with_facts(|facts, emit| apply_agent_signals(facts, vec![start, ended], None, emit));
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![start, ended], None, emit));
     let snapshot = state.facts.agent_session.clone().unwrap();
     let late = parse_agent_event_body(br#"{"agent":"kimi","event":"permission-request","session_id":"s","request":{"id":"late-p","kind":"permission","resolved":false}}"#).unwrap();
-    (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![late], None, emit));
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![late], None, emit));
     assert_eq!(
         state.facts.agent_session.as_ref().unwrap().status,
         AgentStatus::Done
@@ -192,8 +191,10 @@ fn a_pane_killed_with_its_agent_keeps_the_facts_a_resume_needs() {
             Arc::new(Mutex::new(state)),
             Arc::new(AtomicBool::new(shutting_down)),
             Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(b"\x1b]133;D;0\x07".to_vec())),
-            null_writer(),
+            ReaderEnds {
+                reader: Box::new(std::io::Cursor::new(b"\x1b]133;D;0\x07".to_vec())),
+                writer: null_writer(),
+            },
             || false,
             ForegroundProbes {
                 group: Box::new(|| None),
@@ -253,7 +254,7 @@ fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
         launch_argv: state.facts.agent_argv.clone(),
         ..Default::default()
     });
-    publish_facts(PANE, true, observed_facts(&(&state).facts));
+    publish_facts(PANE, true, observed_facts(&state.facts));
     store.flush();
     assert!(
         MachineStore::open(&path)
@@ -273,8 +274,10 @@ fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(std::io::Cursor::new(stream.as_bytes().to_vec())),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(std::io::Cursor::new(stream.as_bytes().to_vec())),
+            writer: null_writer(),
+        },
         || false,
         ForegroundProbes {
             group: Box::new(|| None),
@@ -317,20 +320,20 @@ fn a_late_shutdown_from_the_previous_session_does_not_clear_the_current_agent() 
     use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
 
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| {
+    state.with_facts(|facts, emit| {
         apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
     });
     let start = parse_agent_event_body(
         br#"{"agent":"omp","event":"session-start","session_id":"current-session"}"#,
     )
     .unwrap();
-    (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![start], None, emit));
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![start], None, emit));
     let before = state.facts.agent_session.clone();
     let ended = parse_agent_event_body(
         br#"{"agent":"omp","event":"session-end","session_id":"previous-session"}"#,
     )
     .unwrap();
-    (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![ended], None, emit));
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![ended], None, emit));
     assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
     assert_eq!(state.facts.agent_session, before);
 }
@@ -353,7 +356,7 @@ fn sentinel_events_drive_agent_session_state() {
         r#"{"v":1,"agent":"omp","event":"prompt-submit"}"#,
         "\x07",
     );
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(stream.as_bytes()), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(stream.as_bytes()), emit));
 
     assert_eq!(st.facts.agent, Some(CLIAgent::OhMyPi));
     let sess = st
@@ -379,8 +382,7 @@ fn sentinel_events_drive_agent_session_state() {
         r#"{"agent":"omp","event":"permission-request","message":"OhMyPi needs your permission to use Bash","request":{"id":"tool-9","kind":"permission"}}"#,
         "\x07",
     );
-    (&mut st)
-        .with_facts(|facts, emit| apply_signals(facts, sniffer.feed(waiting.as_bytes()), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(waiting.as_bytes()), emit));
     assert_eq!(
         st.facts.agent_session.as_ref().unwrap().status,
         AgentStatus::Waiting
@@ -390,7 +392,7 @@ fn sentinel_events_drive_agent_session_state() {
         Ok(DaemonMsg::AgentStatus(Some(s))) if s.message.as_deref().unwrap().contains("permission")
     ));
 
-    (&mut st).with_facts(|facts, emit| apply_agent(facts, None, emit));
+    st.with_facts(|facts, emit| apply_agent(facts, None, emit));
     assert!(st.facts.agent_session.is_none());
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::AgentStatus(None))));
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Agent(None))));
@@ -436,17 +438,19 @@ fn negative_process_probes_preserve_rich_turn_until_the_shell_prompt() {
         state,
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(Chunks {
-            parts: [
-                hook.as_bytes(),
-                b"agent output\n",
-                b"\x1b]133;D;0;aid=lyrel\x07",
-            ]
-            .into_iter()
-            .collect(),
-            group,
-        }),
-        null_writer(),
+        ReaderEnds {
+            reader: Box::new(Chunks {
+                parts: [
+                    hook.as_bytes(),
+                    b"agent output\n",
+                    b"\x1b]133;D;0;aid=lyrel\x07",
+                ]
+                .into_iter()
+                .collect(),
+                group,
+            }),
+            writer: null_writer(),
+        },
         || false,
         ForegroundProbes {
             // A changed identity forces a real reader probe on every chunk,
@@ -506,7 +510,7 @@ fn a_foreign_agent_hook_does_not_replace_the_foreground_session() {
         r#"{"v":1,"agent":"omp","event":"session-start","session_id":"01a0d21f-2f79-72e0-bb16-d6d908aaa6e0"}"#,
         "\x07",
     );
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(omp.as_bytes()), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(omp.as_bytes()), emit));
     assert_eq!(st.facts.agent, Some(CLIAgent::OhMyPi));
 
     let pi = concat!(
@@ -514,7 +518,7 @@ fn a_foreign_agent_hook_does_not_replace_the_foreground_session() {
         r#"{"v":1,"agent":"pi","event":"session-start","session_id":"e18a20ff-4c8c-4b94-867b-dd4b79032a6c"}"#,
         "\x07",
     );
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(pi.as_bytes()), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(pi.as_bytes()), emit));
     assert_eq!(
         st.facts
             .agent_session
@@ -526,9 +530,7 @@ fn a_foreign_agent_hook_does_not_replace_the_foreground_session() {
         "a Pi hook on an omp pane must not steal the session id"
     );
 
-    (&mut st).with_facts(|facts, emit| {
-        apply_agent(facts, Some((CLIAgent::Pi, vec!["pi".into()])), emit)
-    });
+    st.with_facts(|facts, emit| apply_agent(facts, Some((CLIAgent::Pi, vec!["pi".into()])), emit));
     assert!(
         st.facts.agent_session.is_none(),
         "switching the foreground agent drops the previous session"
@@ -542,7 +544,7 @@ fn a_kitty_notification_marks_a_hookless_agent_waiting() {
     let mut st = test_state(true);
     st.facts.agent = Some(CLIAgent::OhMyPi);
     let mut sniffer = OscSniffer::new();
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(
         b"\x1b]99;i=7:d=0:p=title;Oh My Pi\x07\x1b]99;i=7:p=body;OhMyPi needs your permission\x07\x1b]99;i=7:d=1:a=focus;\x07",
     ), emit));
     let sess = st.facts.agent_session.clone().unwrap();
@@ -573,9 +575,9 @@ fn agent_state_snapshot_reports_only_panes_with_a_session() {
         session_id: Some("sess-1".into()),
         ..Default::default()
     });
-    let snap = (&st)
+    let snap = st
         .facts
-        .agent_state((&st).id)
+        .agent_state(st.id)
         .expect("a session state is the fact");
     assert_eq!(snap.pane_id, 42);
     assert_eq!(snap.agent, Some(CLIAgent::OhMyPi));
@@ -587,13 +589,15 @@ fn a_hook_report_counts_only_from_inside_the_pane() {
     let (tx, rx) = mpsc::channel();
     let pane = DaemonPane::spawn(
         1,
-        Some(PathBuf::from("/")),
-        ws(80, 24),
-        Some(ShellSpec {
-            program: "sh".into(),
-            args: vec!["-c".into(), "exec cat".into()],
-            args_are_lyrel_defaults: false,
-        }),
+        PaneSpawnSpec {
+            cwd: Some(PathBuf::from("/")),
+            size: ws(80, 24),
+            shell: Some(ShellSpec {
+                program: "sh".into(),
+                args: vec!["-c".into(), "exec cat".into()],
+                args_are_lyrel_defaults: false,
+            }),
+        },
         None,
         None,
         None,

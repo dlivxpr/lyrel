@@ -875,8 +875,8 @@ fn iterm2_fragmented_cancelled_truncated_and_oversized_inputs_are_nondestructive
         // After it, every refused body must leave the cursor untouched: tails
         // land contiguously in write order — a refusal moving the cursor as
         // if placed would shift every later position.
-        let mut expected: Vec<(usize, &str)> = vec![(col as usize, "BASE")];
-        let mut offset = col as usize + "BASE".len() + span_cols as usize;
+        let mut expected: Vec<(usize, &str)> = vec![(col, "BASE")];
+        let mut offset = col + "BASE".len() + span_cols as usize;
         for text in ["FRAG_TAIL", "CANCELLED_TAIL", "TRUNC_TAIL", "TAIL"] {
             expected.push((offset, text));
             offset += text.len();

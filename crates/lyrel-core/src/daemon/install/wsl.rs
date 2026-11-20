@@ -103,7 +103,9 @@ fn decode_wsl_line(line: &[u8]) -> String {
         return strip_bom(&String::from_utf8_lossy(line));
     }
     let units: Vec<u16> = line
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     strip_bom(&String::from_utf16_lossy(&units))

@@ -644,7 +644,7 @@ impl EditorPanelState {
                 true => nav.history.go_forward(current),
                 false => nav.history.go_back(current),
             };
-            let Some(target) = target else { return None };
+            let target = target?;
             if let Some(open) = self.nav_consider(tab, target, cx) {
                 return Some(open);
             }
@@ -657,9 +657,7 @@ impl EditorPanelState {
     fn nav_consider(&mut self, tab: TabId, target: NavLocation, cx: &App) -> Option<NavOpen> {
         let at = Instant::now();
         if let Some(id) = target.buffer {
-            if self.buffers.get(id).is_none() {
-                return None;
-            }
+            self.buffers.get(id)?;
             self.nav
                 .tabs
                 .entry(tab)
@@ -718,7 +716,7 @@ impl EditorPanelState {
         // Symbols are facts about text: a document without text has no outline.
         let text = f.input.text()?.read(cx).text().clone();
         let native_markdown = f.input.markdown().is_some();
-        if !outline::supports(&language) {
+        if !outline::supports(language) {
             return None;
         }
         if let Some(cache) = self.nav.outlines.get(&id) {

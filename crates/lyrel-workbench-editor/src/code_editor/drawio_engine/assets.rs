@@ -303,8 +303,7 @@ pub fn respond_from(
             SessionRest::Document => return (EngineResponse::forbidden(), None),
         };
         let Some(session) = session
-            .as_mut()
-            .map(|session| &mut **session)
+            .as_deref_mut()
             .filter(|session| session.document().id == session_id)
         else {
             return (EngineResponse::forbidden(), None);

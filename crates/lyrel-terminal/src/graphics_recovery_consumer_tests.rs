@@ -971,7 +971,9 @@ fn three_png_frame(seed: u64) -> (Vec<u8>, Vec<u8>) {
         .write_to(&mut png, image::ImageFormat::Png)
         .unwrap();
     let bgra = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
         .collect();
     (png.into_inner(), bgra)

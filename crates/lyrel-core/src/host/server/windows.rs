@@ -25,21 +25,20 @@ pub fn spawn_control_listener_with(host: SharedHost, services: Services) -> io::
     // whether the daemon that wrote the port is still alive — when it is
     // gone the port cannot hold a live control server, and the bind below
     // simply overwrites the stale file.
-    if !crate::daemon::spawn::recorded_daemon_is_dead() {
-        if let Ok(live) =
+    if !crate::daemon::spawn::recorded_daemon_is_dead()
+        && let Ok(live) =
             transport::connect_endpoint(lyrel_protocol::daemon::control_endpoint::CONTROL_PORT_FILE)
-        {
-            drop(live);
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                format!(
-                    "a control server is already listening at {}",
-                    transport::endpoint_display_named(
-                        lyrel_protocol::daemon::control_endpoint::CONTROL_PORT_FILE
-                    )
-                ),
-            ));
-        }
+    {
+        drop(live);
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!(
+                "a control server is already listening at {}",
+                transport::endpoint_display_named(
+                    lyrel_protocol::daemon::control_endpoint::CONTROL_PORT_FILE
+                )
+            ),
+        ));
     }
     let (listener, token) =
         transport::bind_endpoint(lyrel_protocol::daemon::control_endpoint::CONTROL_PORT_FILE)

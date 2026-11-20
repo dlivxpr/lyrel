@@ -44,7 +44,7 @@ fn deltas_advance_the_mirror_exactly_as_the_writers_operations_did() {
     assert!(apply_to_mirror(
         &mut watcher,
         &LayoutDelta::TabRestructured {
-            tab: TreeTab {
+            tab: Box::new(TreeTab {
                 id,
                 name: None,
                 group: None,
@@ -57,7 +57,7 @@ fn deltas_advance_the_mirror_exactly_as_the_writers_operations_did() {
                     b: Box::new(PaneNode::Leaf { pane: 2 }),
                 },
                 hibernated: false,
-            },
+            }),
             pane: None,
         },
     ));

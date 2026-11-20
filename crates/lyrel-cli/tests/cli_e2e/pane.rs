@@ -148,12 +148,11 @@ pub(super) fn retired_executable_names_still_run_as_ordinary_pty_commands(daemon
     );
     daemon.run_ok(&["send", &address, "finish", "--enter"]);
     loop {
-        match pane.recv().expect("the fixture must exit after its input") {
-            DaemonMsg::Exited { code } => {
-                assert_eq!(code, Some(0));
-                break;
-            }
-            _ => {}
+        if let DaemonMsg::Exited { code } =
+            pane.recv().expect("the fixture must exit after its input")
+        {
+            assert_eq!(code, Some(0));
+            break;
         }
     }
 }

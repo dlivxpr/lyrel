@@ -498,10 +498,10 @@ impl<'a> HookTarget<'a> {
     /// back to the quoted full path.
     fn hook_command_exe(&self) -> Option<String> {
         #[cfg(windows)]
-        if self.is_local() {
-            if let Some(name) = path_resolvable_name(&self.exe) {
-                return Some(name);
-            }
+        if self.is_local()
+            && let Some(name) = path_resolvable_name(&self.exe)
+        {
+            return Some(name);
         }
         None
     }
@@ -1023,7 +1023,7 @@ fn owned_file_content(target: &HookTarget, agent: HookAgent) -> Option<String> {
 fn owned_file_is_marked(contents: &str, marker: &str) -> bool {
     // Generated bridges declare their owner in the header, independently of
     // the path they invoke (which can become outdated after an upgrade).
-    if contents
+    contents
         .lines()
         .next()
         .and_then(|line| {
@@ -1036,10 +1036,6 @@ fn owned_file_is_marked(contents: &str, marker: &str) -> bool {
                 .strip_prefix(marker)
                 .is_some_and(|rest| rest.starts_with(char::is_whitespace))
         })
-    {
-        return true;
-    }
-    false
 }
 
 fn owned_file_state(target: &HookTarget, path: &Path, expected: &str, marker: &str) -> HooksState {
@@ -1869,38 +1865,35 @@ mod tests {
         let sandbox = tempfile::tempdir().unwrap();
         let host = FakeRemote::shared();
         let target = HookTarget::remote(&*host, sandbox.path().to_path_buf());
-        for agent in [HookAgent::Kimi] {
-            let path = agent.target_path(&target).unwrap();
-            let original = "# user settings\n[[hooks]]\nevent = 'Stop'\ncommand = '\"/opt/lyrel/otherterm-server-c12p7\" agent-hook kimi stop'\n";
-            target.write(&path, original.as_bytes()).unwrap();
-            assert_eq!(hooks_state(&target, agent), HooksState::NotInstalled);
-            assert_eq!(refresh_hooks(&target), 0);
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-            assert_eq!(
-                uninstall_hooks(&target, agent).unwrap(),
-                HookOutcome::NoLyrelHooks
-            );
-            install_hooks(&target, agent).unwrap();
-            install_hooks(&target, agent).unwrap();
-            assert_eq!(hooks_state(&target, agent), HooksState::Installed);
-            uninstall_hooks(&target, agent).unwrap();
-            let after = std::fs::read_to_string(&path).unwrap();
-            let after = after.parse::<toml_edit::DocumentMut>().unwrap();
-            let before = original.parse::<toml_edit::DocumentMut>().unwrap();
-            if agent == HookAgent::Kimi {
-                let entries = after["hooks"].as_array_of_tables().unwrap();
-                assert_eq!(entries.len(), 1);
-                assert_eq!(
-                    entries.get(0).unwrap()["command"].as_str(),
-                    before["hooks"]
-                        .as_array_of_tables()
-                        .unwrap()
-                        .get(0)
-                        .unwrap()["command"]
-                        .as_str()
-                );
-            }
-        }
+        let agent = HookAgent::Kimi;
+        let path = agent.target_path(&target).unwrap();
+        let original = "# user settings\n[[hooks]]\nevent = 'Stop'\ncommand = '\"/opt/lyrel/otherterm-server-c12p7\" agent-hook kimi stop'\n";
+        target.write(&path, original.as_bytes()).unwrap();
+        assert_eq!(hooks_state(&target, agent), HooksState::NotInstalled);
+        assert_eq!(refresh_hooks(&target), 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            uninstall_hooks(&target, agent).unwrap(),
+            HookOutcome::NoLyrelHooks
+        );
+        install_hooks(&target, agent).unwrap();
+        install_hooks(&target, agent).unwrap();
+        assert_eq!(hooks_state(&target, agent), HooksState::Installed);
+        uninstall_hooks(&target, agent).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        let after = after.parse::<toml_edit::DocumentMut>().unwrap();
+        let before = original.parse::<toml_edit::DocumentMut>().unwrap();
+        let entries = after["hooks"].as_array_of_tables().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries.get(0).unwrap()["command"].as_str(),
+            before["hooks"]
+                .as_array_of_tables()
+                .unwrap()
+                .get(0)
+                .unwrap()["command"]
+                .as_str()
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<Ent
                     body,
                 });
         });
+        #[cfg(any(target_os = "macos", not(test)))]
         return;
     }
 

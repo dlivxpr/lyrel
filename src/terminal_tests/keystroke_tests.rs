@@ -1,65 +1,64 @@
-
-    #[gpui_kit::test]
-    fn a_disconnected_remote_pane_keeps_the_line_instead_of_handing_it_to_nowhere(
-        cx: &mut TestAppContext,
-    ) {
-        lyrel_ui_base::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        cx.update(|cx| crate::ui::keymap::init(cx));
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait_for_input_active(&window, cx);
-
-        window
-            .update(cx, |view, window, cx| {
-                window.activate_window();
-                view.focus_handle.focus(window, cx);
-                view.input.editor_mut().set("zzqqx");
-                bind_to_a_disconnected_remote_workspace(view, cx);
-            })
-            .unwrap();
-
-        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-        vcx.simulate_keystrokes("tab");
-
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(
-                    view.input.editor().text(),
-                    "zzqqx",
-                    "a Tab dispatched through SendTab must not empty the line"
-                );
-                assert!(
-                    !view.input.has_handoff(),
-                    "nothing was handed off, so the editor keeps the prompt"
-                );
-
-                view.submit_command(cx);
-                assert_eq!(
-                    view.input.editor().text(),
-                    "zzqqx",
-                    "submit_command guards the link too, even though on_key_down already does"
-                );
-            })
-            .unwrap();
-        assert_eq!(
-            next_input_until_timeout(&mut daemon),
-            None,
-            "not one byte reached the wire"
-        );
+#[gpui_kit::test]
+fn a_disconnected_remote_pane_keeps_the_line_instead_of_handing_it_to_nowhere(
+    cx: &mut TestAppContext,
+) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    let (window, mut daemon) = harness(cx);
+    cx.update(crate::ui::keymap::init);
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
     }
+    .encode(&mut daemon)
+    .unwrap();
+    wait_for_input_active(&window, cx);
+
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+            view.input.editor_mut().set("zzqqx");
+            bind_to_a_disconnected_remote_workspace(view, cx);
+        })
+        .unwrap();
+
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("tab");
+
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.input.editor().text(),
+                "zzqqx",
+                "a Tab dispatched through SendTab must not empty the line"
+            );
+            assert!(
+                !view.input.has_handoff(),
+                "nothing was handed off, so the editor keeps the prompt"
+            );
+
+            view.submit_command(cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "zzqqx",
+                "submit_command guards the link too, even though on_key_down already does"
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "not one byte reached the wire"
+    );
+}
 
 #[cfg(not(target_os = "macos"))]
 #[gpui_kit::test]
 fn ctrl_v_pastes_at_a_prompt(cx: &mut TestAppContext) {
     lyrel_ui_base::config::pin_test_config_dir();
     let (window, mut daemon) = harness(cx);
-    cx.update(|cx| crate::ui::keymap::init(cx));
+    cx.update(crate::ui::keymap::init);
     cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("echo hi".into())));
     window
         .update(cx, |view, window, cx| {
@@ -83,7 +82,7 @@ fn ctrl_v_pastes_at_a_prompt(cx: &mut TestAppContext) {
 fn ctrl_v_reaches_a_full_screen_program_as_syn(cx: &mut TestAppContext) {
     lyrel_ui_base::config::pin_test_config_dir();
     let (window, mut daemon) = harness(cx);
-    cx.update(|cx| crate::ui::keymap::init(cx));
+    cx.update(crate::ui::keymap::init);
     cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("echo hi".into())));
     alt_screen_ready(&window, cx, &mut daemon);
     window
@@ -108,218 +107,218 @@ fn ctrl_v_reaches_a_full_screen_program_as_syn(cx: &mut TestAppContext) {
 /// the clipboard never lands in a program that would run it as commands.
 #[gpui_kit::test]
 
-    /// Ctrl+digit off macOS — nothing has claimed those chords since tabs
-    /// moved to Alt+1..9.
-    #[gpui_kit::test]
-    fn ctrl_6_reaches_the_pty_as_rs(cx: &mut TestAppContext) {
-        lyrel_ui_base::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        cx.update(|cx| crate::ui::keymap::init(cx));
-        window
-            .update(cx, |view, window, cx| {
-                window.activate_window();
-                view.focus_handle.focus(window, cx);
-            })
-            .unwrap();
+/// Ctrl+digit off macOS — nothing has claimed those chords since tabs
+/// moved to Alt+1..9.
+#[gpui_kit::test]
+fn ctrl_6_reaches_the_pty_as_rs(cx: &mut TestAppContext) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    let (window, mut daemon) = harness(cx);
+    cx.update(crate::ui::keymap::init);
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
 
-        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-        vcx.simulate_keystrokes("ctrl-6");
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("ctrl-6");
 
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x1e]));
-    }
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x1e]));
+}
 
-    #[cfg(target_os = "macos")]
+#[cfg(target_os = "macos")]
 use super::*;
 use lyrel_terminal::view::notices::INTEGRATION_GRACE;
 
 #[gpui_kit::test]
 fn insert_newline_action_extends_the_line_and_enter_submits_it(cx: &mut TestAppContext) {
-lyrel_ui_base::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
 
-let (window, mut daemon) = harness(cx);
-prompt_ready(&window, cx, &mut daemon);
+    let (window, mut daemon) = harness(cx);
+    prompt_ready(&window, cx, &mut daemon);
 
-window
-.update(cx, |view, _, cx| {
-assert!(view.input_active(), "the editor owns an idle prompt");
-view.commit_text("echo a", cx);
-view.insert_newline_action(cx);
-view.commit_text("echo b", cx);
-assert_eq!(view.input.editor().text(), "echo a\necho b");
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.input_active(), "the editor owns an idle prompt");
+            view.commit_text("echo a", cx);
+            view.insert_newline_action(cx);
+            view.commit_text("echo b", cx);
+            assert_eq!(view.input.editor().text(), "echo a\necho b");
 
-view.handle_editor_key(&key("enter"), false, cx);
-assert!(
-view.input.editor().is_empty(),
-"Enter submits the whole buffer"
-);
-})
-.unwrap();
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"echo a\recho b\r".to_vec()),
-"the multi-line command reaches the PTY in one submit"
-);
+            view.handle_editor_key(&key("enter"), false, cx);
+            assert!(
+                view.input.editor().is_empty(),
+                "Enter submits the whole buffer"
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"echo a\recho b\r".to_vec()),
+        "the multi-line command reaches the PTY in one submit"
+    );
 }
 
 #[gpui_kit::test]
 fn shift_enter_reaches_a_foreground_tui_with_kitty_encoding(cx: &mut TestAppContext) {
-lyrel_ui_base::config::pin_test_config_dir();
-let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
-cx.update(|cx| crate::ui::keymap::init(cx));
-DaemonMsg::Output(b"\x1b[>1u".to_vec())
-.encode(&mut daemon)
-.unwrap();
-for _ in 0..200 {
-cx.run_until_parked();
-if window
-.update(cx, |view, _, _| view.key_flags().kitty_active())
-.unwrap()
-{
-break;
-}
-std::thread::sleep(std::time::Duration::from_millis(5));
-}
-window
-.update(cx, |view, window, cx| {
-assert!(!view.input_active(), "the foreground TUI owns input");
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
+    lyrel_ui_base::config::pin_test_config_dir();
+    let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
+    cx.update(crate::ui::keymap::init);
+    DaemonMsg::Output(b"\x1b[>1u".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if window
+            .update(cx, |view, _, _| view.key_flags().kitty_active())
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.input_active(), "the foreground TUI owns input");
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-vcx.simulate_keystrokes("shift-enter");
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("shift-enter");
 
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[13;2u".to_vec())
-);
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[13;2u".to_vec())
+    );
 
-vcx.simulate_keystrokes("ctrl-j");
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[106;5u".to_vec())
-);
+    vcx.simulate_keystrokes("ctrl-j");
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[106;5u".to_vec())
+    );
 }
 
 #[gpui_kit::test]
 fn shift_enter_reaches_a_foreground_tui_as_lf_without_kitty(cx: &mut TestAppContext) {
-lyrel_ui_base::config::pin_test_config_dir();
-let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-cx.update(|cx| crate::ui::keymap::init(cx));
-window
-.update(cx, |view, window, cx| {
-assert!(!view.input_active(), "the foreground TUI owns input");
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
+    lyrel_ui_base::config::pin_test_config_dir();
+    let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+    cx.update(crate::ui::keymap::init);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.input_active(), "the foreground TUI owns input");
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-vcx.simulate_keystrokes("shift-enter");
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("shift-enter");
 
-assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\n".to_vec()));
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\n".to_vec()));
 
-vcx.simulate_keystrokes("ctrl-j");
-assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\n".to_vec()));
+    vcx.simulate_keystrokes("ctrl-j");
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\n".to_vec()));
 }
 
 #[gpui_kit::test]
 fn newline_chords_reach_conpty_as_ctrl_j_without_kitty(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
-cx.update(|cx| crate::ui::keymap::init(cx));
-window
-.update(cx, |view, window, cx| {
-assert!(!view.input_active());
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
+    let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
+    cx.update(crate::ui::keymap::init);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.input_active());
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-for chord in ["shift-enter", "ctrl-j"] {
-vcx.simulate_keystrokes(chord);
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_".to_vec()),
-"{chord} must preserve Ctrl+J for native console readers"
-);
-}
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    for chord in ["shift-enter", "ctrl-j"] {
+        vcx.simulate_keystrokes(chord);
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_".to_vec()),
+            "{chord} must preserve Ctrl+J for native console readers"
+        );
+    }
 }
 
 #[gpui_kit::test]
 fn alt_enter_keeps_its_legacy_encoding_in_a_foreground_tui(cx: &mut TestAppContext) {
-lyrel_ui_base::config::pin_test_config_dir();
-let (window, mut daemon) = harness(cx);
-cx.update(|cx| crate::ui::keymap::init(cx));
-window
-.update(cx, |view, window, cx| {
-assert!(!view.input_active(), "the foreground TUI owns input");
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
+    lyrel_ui_base::config::pin_test_config_dir();
+    let (window, mut daemon) = harness(cx);
+    cx.update(crate::ui::keymap::init);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.input_active(), "the foreground TUI owns input");
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-vcx.simulate_keystrokes("alt-enter");
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("alt-enter");
 
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b\r".to_vec())
-);
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b\r".to_vec())
+    );
 }
 
 #[gpui_kit::test]
 fn insert_newline_action_declines_when_the_editor_is_not_live(cx: &mut TestAppContext) {
-let (window, _daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("keep me");
-view.terminal.exited = true;
-assert!(!view.input_active());
-view.insert_newline_action(cx);
-assert_eq!(view.input.editor().text(), "keep me", "no newline inserted");
-})
-.unwrap();
+    let (window, _daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("keep me");
+            view.terminal.exited = true;
+            assert!(!view.input_active());
+            view.insert_newline_action(cx);
+            assert_eq!(view.input.editor().text(), "keep me", "no newline inserted");
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
 fn the_keymap_routes_both_newline_chords_to_the_action(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-cx.update(|cx| crate::ui::keymap::init(cx));
-prompt_ready(&window, cx, &mut daemon);
-window
-.update(cx, |view, window, cx| {
-window.activate_window();
-view.focus_handle.focus(window, cx);
-view.commit_text("echo a", cx);
-})
-.unwrap();
+    let (window, mut daemon) = harness(cx);
+    cx.update(crate::ui::keymap::init);
+    prompt_ready(&window, cx, &mut daemon);
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+            view.commit_text("echo a", cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-vcx.simulate_keystrokes("shift-enter");
-vcx.simulate_keystrokes("alt-enter");
-window
-.update(cx, |view, _, _| {
-assert_eq!(
-view.input.editor().text(),
-"echo a\n\n",
-"both chords dispatched InsertNewline instead of submitting"
-);
-})
-.unwrap();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_keystrokes("shift-enter");
+    vcx.simulate_keystrokes("alt-enter");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.input.editor().text(),
+                "echo a\n\n",
+                "both chords dispatched InsertNewline instead of submitting"
+            );
+        })
+        .unwrap();
 
-cx.update(|cx| crate::ui::keymap::rebind(cx));
-vcx.simulate_keystrokes("shift-enter");
-window
-.update(cx, |view, _, _| {
-assert_eq!(
-view.input.editor().text(),
-"echo a\n\n\n",
-"the chord survives a rebind"
-);
-})
-.unwrap();
+    cx.update(crate::ui::keymap::rebind);
+    vcx.simulate_keystrokes("shift-enter");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.input.editor().text(),
+                "echo a\n\n\n",
+                "the chord survives a rebind"
+            );
+        })
+        .unwrap();
 }
 
 /// The whole chain for #834, through the real dispatch tree: F3 is bound
@@ -332,51 +331,51 @@ view.input.editor().text(),
 #[cfg(not(target_os = "macos"))]
 #[gpui_kit::test]
 fn an_unused_find_binding_gives_f3_back_to_the_shell(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-cx.update(|cx| crate::ui::keymap::init(cx));
-prompt_ready(&window, cx, &mut daemon);
-window
-.update(cx, |view, window, cx| {
-window.activate_window();
-view.focus_handle.focus(window, cx);
-view.commit_text("echo a", cx);
-})
-.unwrap();
+    let (window, mut daemon) = harness(cx);
+    cx.update(crate::ui::keymap::init);
+    prompt_ready(&window, cx, &mut daemon);
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+            view.commit_text("echo a", cx);
+        })
+        .unwrap();
 
-let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-for (chord, seq) in [("f3", b"\x1bOR".to_vec()), ("f7", b"\x1b[18~".to_vec())] {
-window
-.update(cx, |view, _, _| {
-// The previous handoff gave this prompt to the shell for
-// good; take it back so both keys are tested from the
-// same starting state.
-view.input.reset_handoff();
-view.input.editor_mut().set("echo a");
-assert!(view.search.is_none(), "no find bar is open");
-})
-.unwrap();
-vcx.simulate_keystrokes(chord);
-window
-.update(cx, |view, _, _| {
-assert!(view.search.is_none(), "{chord} did not open the find bar");
-assert_eq!(
-view.input.editor().text(),
-"",
-"{chord} handed the line over"
-);
-})
-.unwrap();
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"echo a".to_vec()),
-"{chord} puts the line on the shell's prompt first"
-);
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(seq),
-"{chord} reaches the PTY"
-);
-}
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    for (chord, seq) in [("f3", b"\x1bOR".to_vec()), ("f7", b"\x1b[18~".to_vec())] {
+        window
+            .update(cx, |view, _, _| {
+                // The previous handoff gave this prompt to the shell for
+                // good; take it back so both keys are tested from the
+                // same starting state.
+                view.input.reset_handoff();
+                view.input.editor_mut().set("echo a");
+                assert!(!view.is_search_open(), "no find bar is open");
+            })
+            .unwrap();
+        vcx.simulate_keystrokes(chord);
+        window
+            .update(cx, |view, _, _| {
+                assert!(!view.is_search_open(), "{chord} did not open the find bar");
+                assert_eq!(
+                    view.input.editor().text(),
+                    "",
+                    "{chord} handed the line over"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"echo a".to_vec()),
+            "{chord} puts the line on the shell's prompt first"
+        );
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(seq),
+            "{chord} reaches the PTY"
+        );
+    }
 }
 
 /// The second half of #834. Even once the encoder knew the F keys, the
@@ -387,85 +386,85 @@ Some(seq),
 /// the line goes over first, then the key.
 #[gpui_kit::test]
 fn function_keys_hand_the_line_to_the_shell(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-for (chord, seq) in [
-("f8", b"\x1b[19~".to_vec()),
-("shift-f8", b"\x1b[19;2~".to_vec()),
-("alt-f7", b"\x1b[18;3~".to_vec()),
-("f3", b"\x1bOR".to_vec()),
-] {
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("git st");
-view.handle_editor_key(&key(chord), false, cx);
-assert_eq!(
-view.input.editor().text(),
-"",
-"{chord} handed the line over"
-);
-})
-.unwrap();
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"git st".to_vec()),
-"{chord} puts the line on the shell's prompt first"
-);
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(seq),
-"{chord} follows the line"
-);
-}
+    let (window, mut daemon) = harness(cx);
+    for (chord, seq) in [
+        ("f8", b"\x1b[19~".to_vec()),
+        ("shift-f8", b"\x1b[19;2~".to_vec()),
+        ("alt-f7", b"\x1b[18;3~".to_vec()),
+        ("f3", b"\x1bOR".to_vec()),
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                view.input.editor_mut().set("git st");
+                view.handle_editor_key(&key(chord), false, cx);
+                assert_eq!(
+                    view.input.editor().text(),
+                    "",
+                    "{chord} handed the line over"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"git st".to_vec()),
+            "{chord} puts the line on the shell's prompt first"
+        );
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(seq),
+            "{chord} follows the line"
+        );
+    }
 }
 
 #[gpui_kit::test]
 fn ctrl_j_and_ctrl_m_submit_the_line_like_enter(cx: &mut TestAppContext) {
-lyrel_ui_base::config::pin_test_config_dir();
+    lyrel_ui_base::config::pin_test_config_dir();
 
-let (window, mut daemon) = harness(cx);
-for (chord, line) in [("ctrl-j", "echo j"), ("ctrl-m", "echo m")] {
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set(line);
-view.handle_editor_key(&key(chord), false, cx);
-assert!(view.input.editor().is_empty(), "{chord} clears the editor");
-})
-.unwrap();
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(format!("{line}\r").into_bytes()),
-"{chord} ships the line to the PTY"
-);
-}
+    let (window, mut daemon) = harness(cx);
+    for (chord, line) in [("ctrl-j", "echo j"), ("ctrl-m", "echo m")] {
+        window
+            .update(cx, |view, _, cx| {
+                view.input.editor_mut().set(line);
+                view.handle_editor_key(&key(chord), false, cx);
+                assert!(view.input.editor().is_empty(), "{chord} clears the editor");
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(format!("{line}\r").into_bytes()),
+            "{chord} ships the line to the PTY"
+        );
+    }
 }
 
 #[gpui_kit::test]
 fn history_search_off_sends_ctrl_r_to_the_shell(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-cx.update(|cx| {
-let mut cfg = cx.global::<Config>().clone();
-cfg.history_search = false;
-cx.set_global(cfg);
-});
-window
-.update(cx, |view, _, cx| {
-seed_history(view, ["git status"].into_iter().map(String::from).collect());
+    let (window, mut daemon) = harness(cx);
+    cx.update(|cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.history_search = false;
+        cx.set_global(cfg);
+    });
+    window
+        .update(cx, |view, _, cx| {
+            seed_history(view, ["git status"].into_iter().map(String::from).collect());
 
-view.input.editor_mut().set("gi");
-view.handle_editor_key(&key("ctrl-r"), false, cx);
-assert!(
-view.history.search().is_none(),
-"no lyrel menu while opted out"
-);
-assert_eq!(view.input.editor().text(), "", "the line went to the shell");
-})
-.unwrap();
-assert_eq!(next_input_until_timeout(&mut daemon), Some(b"gi".to_vec()));
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(vec![0x12]),
-"the raw ^R follows the handed-over line"
-);
+            view.input.editor_mut().set("gi");
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
+            assert!(
+                view.history.search().is_none(),
+                "no lyrel menu while opted out"
+            );
+            assert_eq!(view.input.editor().text(), "", "the line went to the shell");
+        })
+        .unwrap();
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"gi".to_vec()));
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(vec![0x12]),
+        "the raw ^R follows the handed-over line"
+    );
 }
 
 /// The whole point of `prompt_editor: false`: a prefix and an arrow key
@@ -474,68 +473,68 @@ Some(vec![0x12]),
 /// widget reading the shell's own, shared history.
 #[gpui_kit::test]
 fn prompt_editor_off_hands_typing_and_arrows_to_the_shell(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-DaemonMsg::Prompt {
-active: true,
-at_prompt: true,
-last_exit: None,
-}
-.encode(&mut daemon)
-.unwrap();
-// The editor engages first: this is a pane with working shell
-// integration, which the mode has to keep working.
-wait_for_input_active(&window, cx);
+    let (window, mut daemon) = harness(cx);
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    // The editor engages first: this is a pane with working shell
+    // integration, which the mode has to keep working.
+    wait_for_input_active(&window, cx);
 
-window
-.update(cx, |view, window, cx| {
-seed_history(view, ["quit"].into_iter().map(String::from).collect());
+    window
+        .update(cx, |view, window, cx| {
+            seed_history(view, ["quit"].into_iter().map(String::from).collect());
 
-view.set_prompt_editor(false, cx);
-assert!(
-!view.input_active(),
-"the shell owns the prompt in native input mode"
-);
-assert!(
-view.terminal.at_prompt(),
-"OSC 133 prompt tracking stays live"
-);
+            view.set_prompt_editor(false, cx);
+            assert!(
+                !view.input_active(),
+                "the shell owns the prompt in native input mode"
+            );
+            assert!(
+                view.terminal.at_prompt(),
+                "OSC 133 prompt tracking stays live"
+            );
 
-type_char(view, "h", window, cx);
-let up = KeyDownEvent {
-keystroke: key("up"),
-is_held: false,
-prefer_character_input: false,
-};
-view.on_key_down(&up, window, cx);
+            type_char(view, "h", window, cx);
+            let up = KeyDownEvent {
+                keystroke: key("up"),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            view.on_key_down(&up, window, cx);
 
-assert_eq!(
-view.input.editor().text(),
-"",
-"nothing was typed into lyrel's editor"
-);
-assert!(
-!view.history.is_navigating(),
-"Up never touched lyrel's own history"
-);
-})
-.unwrap();
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "nothing was typed into lyrel's editor"
+            );
+            assert!(
+                !view.history.is_navigating(),
+                "Up never touched lyrel's own history"
+            );
+        })
+        .unwrap();
 
-assert_eq!(next_input_until_timeout(&mut daemon), Some(b"h".to_vec()));
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[A".to_vec()),
-"the physical Up key reaches the PTY for ZLE to bind"
-);
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"h".to_vec()));
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[A".to_vec()),
+        "the physical Up key reaches the PTY for ZLE to bind"
+    );
 
-window
-.update(cx, |view, _, cx| {
-view.set_prompt_editor(true, cx);
-assert!(
-view.input_active(),
-"turning it back on re-arms the editor at the same prompt"
-);
-})
-.unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.set_prompt_editor(true, cx);
+            assert!(
+                view.input_active(),
+                "turning it back on re-arms the editor at the same prompt"
+            );
+        })
+        .unwrap();
 }
 
 /// Tab and Ctrl-R are the two keys with their own opt-outs; turning the
@@ -544,39 +543,39 @@ view.input_active(),
 /// it.
 #[gpui_kit::test]
 fn prompt_editor_off_hands_over_tab_and_ctrl_r(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-DaemonMsg::Prompt {
-active: true,
-at_prompt: true,
-last_exit: None,
-}
-.encode(&mut daemon)
-.unwrap();
-wait_for_input_active(&window, cx);
+    let (window, mut daemon) = harness(cx);
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    wait_for_input_active(&window, cx);
 
-window
-.update(cx, |view, window, cx| {
-view.set_prompt_editor(false, cx);
-view.created_at = std::time::Instant::now() - INTEGRATION_GRACE * 2;
-view.tab_pressed(true, cx);
+    window
+        .update(cx, |view, window, cx| {
+            view.set_prompt_editor(false, cx);
+            view.created_at = std::time::Instant::now() - INTEGRATION_GRACE * 2;
+            view.tab_pressed(true, cx);
 
-let ctrl_r = KeyDownEvent {
-keystroke: key("ctrl-r"),
-is_held: false,
-prefer_character_input: false,
-};
-view.on_key_down(&ctrl_r, window, cx);
-assert!(!view.completion.is_open(), "no lyrel completion menu");
-assert!(view.history.search().is_none(), "no lyrel history menu");
-assert!(
-view.integration_notice.is_none(),
-"the shell owning ^R is what was asked for, not a gap to report"
-);
-})
-.unwrap();
+            let ctrl_r = KeyDownEvent {
+                keystroke: key("ctrl-r"),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            view.on_key_down(&ctrl_r, window, cx);
+            assert!(!view.completion.is_open(), "no lyrel completion menu");
+            assert!(view.history.search().is_none(), "no lyrel history menu");
+            assert!(
+                view.integration_notice.is_none(),
+                "the shell owning ^R is what was asked for, not a gap to report"
+            );
+        })
+        .unwrap();
 
-assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
-assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x12]));
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x12]));
 }
 
 /// Turning the setting off mid-line must not eat what is already typed —
@@ -584,415 +583,415 @@ assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x12]));
 /// still on the prompt for the shell to finish.
 #[gpui_kit::test]
 fn turning_the_prompt_editor_off_hands_the_typed_line_over(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-DaemonMsg::Prompt {
-active: true,
-at_prompt: true,
-last_exit: None,
-}
-.encode(&mut daemon)
-.unwrap();
-wait_for_input_active(&window, cx);
+    let (window, mut daemon) = harness(cx);
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    wait_for_input_active(&window, cx);
 
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("git status");
-view.set_prompt_editor(false, cx);
-assert_eq!(view.input.editor().text(), "", "the editor let the line go");
-})
-.unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("git status");
+            view.set_prompt_editor(false, cx);
+            assert_eq!(view.input.editor().text(), "", "the editor let the line go");
+        })
+        .unwrap();
 
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"git status".to_vec()),
-"the half-typed line is on the shell's prompt now"
-);
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"git status".to_vec()),
+        "the half-typed line is on the shell's prompt now"
+    );
 }
 
 #[gpui_kit::test]
 fn meta_word_chords_edit_the_prompt_line(cx: &mut TestAppContext) {
-let (window, _daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-let meta = |key: &str| gpui_kit::Keystroke {
-modifiers: gpui_kit::Modifiers {
-alt: true,
-..Default::default()
-},
-key: key.to_string(),
-key_char: None,
-};
-view.input.editor_mut().set("echo hello");
-view.handle_editor_key(&meta("b"), false, cx);
-assert_eq!(view.input.editor().cursor(), 5);
-view.handle_editor_key(&meta("d"), false, cx);
-assert_eq!(view.input.editor().text(), "echo ");
-view.handle_editor_key(&meta("b"), false, cx);
-assert_eq!(view.input.editor().cursor(), 0);
-view.handle_editor_key(&meta("f"), false, cx);
-assert_eq!(view.input.editor().cursor(), 4);
-view.handle_editor_key(&meta("z"), false, cx);
-assert_eq!(view.input.editor().text(), "");
-})
-.unwrap();
+    let (window, _daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            let meta = |key: &str| gpui_kit::Keystroke {
+                modifiers: gpui_kit::Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+                key: key.to_string(),
+                key_char: None,
+            };
+            view.input.editor_mut().set("echo hello");
+            view.handle_editor_key(&meta("b"), false, cx);
+            assert_eq!(view.input.editor().cursor(), 5);
+            view.handle_editor_key(&meta("d"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo ");
+            view.handle_editor_key(&meta("b"), false, cx);
+            assert_eq!(view.input.editor().cursor(), 0);
+            view.handle_editor_key(&meta("f"), false, cx);
+            assert_eq!(view.input.editor().cursor(), 4);
+            view.handle_editor_key(&meta("z"), false, cx);
+            assert_eq!(view.input.editor().text(), "");
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
 fn an_unknown_ctrl_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("echo hi");
-view.handle_editor_key(&key("ctrl-t"), false, cx);
-assert_eq!(
-view.input.editor().text(),
-"",
-"the line left for the shell, so the local buffer is empty"
-);
-assert!(
-view.input.has_handoff(),
-"the local editor stands down for the rest of the line"
-);
-})
-.unwrap();
-assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
-assert_eq!(next_input(&mut daemon), vec![0x14], "⌃T reached the shell");
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("echo hi");
+            view.handle_editor_key(&key("ctrl-t"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "the line left for the shell, so the local buffer is empty"
+            );
+            assert!(
+                view.input.has_handoff(),
+                "the local editor stands down for the rest of the line"
+            );
+        })
+        .unwrap();
+    assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
+    assert_eq!(next_input(&mut daemon), vec![0x14], "⌃T reached the shell");
 }
 
 #[gpui_kit::test]
 fn an_unknown_meta_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("echo hi");
-view.handle_editor_key(
-&gpui_kit::Keystroke {
-modifiers: gpui_kit::Modifiers {
-alt: true,
-..Default::default()
-},
-key: "u".to_string(),
-key_char: None,
-},
-false,
-cx,
-);
-assert_eq!(view.input.editor().text(), "");
-})
-.unwrap();
-assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
-assert_eq!(next_input(&mut daemon), b"\x1bu".to_vec());
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("echo hi");
+            view.handle_editor_key(
+                &gpui_kit::Keystroke {
+                    modifiers: gpui_kit::Modifiers {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    key: "u".to_string(),
+                    key_char: None,
+                },
+                false,
+                cx,
+            );
+            assert_eq!(view.input.editor().text(), "");
+        })
+        .unwrap();
+    assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
+    assert_eq!(next_input(&mut daemon), b"\x1bu".to_vec());
 }
 
 #[gpui_kit::test]
 fn ctrl_y_yanks_back_what_the_kill_chords_cut(cx: &mut TestAppContext) {
-let (window, _daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("echo hello world");
-view.handle_editor_key(&key("ctrl-w"), false, cx);
-assert_eq!(view.input.editor().text(), "echo hello ");
-view.handle_editor_key(&key("ctrl-y"), false, cx);
-assert_eq!(view.input.editor().text(), "echo hello world");
-assert!(
-!view.input.has_handoff(),
-"the line never left for the shell"
-);
-})
-.unwrap();
+    let (window, _daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("echo hello world");
+            view.handle_editor_key(&key("ctrl-w"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo hello ");
+            view.handle_editor_key(&key("ctrl-y"), false, cx);
+            assert_eq!(view.input.editor().text(), "echo hello world");
+            assert!(
+                !view.input.has_handoff(),
+                "the line never left for the shell"
+            );
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
 fn a_shifted_meta_chord_hands_off_the_shifted_character(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("echo hi");
-view.handle_editor_key(
-&gpui_kit::Keystroke {
-modifiers: gpui_kit::Modifiers {
-alt: true,
-shift: true,
-..Default::default()
-},
-key: "u".to_string(),
-key_char: None,
-},
-false,
-cx,
-);
-assert_eq!(view.input.editor().text(), "");
-})
-.unwrap();
-assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
-assert_eq!(next_input(&mut daemon), b"\x1bU".to_vec());
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("echo hi");
+            view.handle_editor_key(
+                &gpui_kit::Keystroke {
+                    modifiers: gpui_kit::Modifiers {
+                        alt: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                    key: "u".to_string(),
+                    key_char: None,
+                },
+                false,
+                cx,
+            );
+            assert_eq!(view.input.editor().text(), "");
+        })
+        .unwrap();
+    assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
+    assert_eq!(next_input(&mut daemon), b"\x1bU".to_vec());
 }
 
 #[gpui_kit::test]
 fn a_known_ctrl_chord_stays_in_the_local_editor(cx: &mut TestAppContext) {
-let (window, _daemon) = harness(cx);
-window
-.update(cx, |view, _, cx| {
-view.input.editor_mut().set("echo hi");
-view.handle_editor_key(&key("ctrl-w"), false, cx);
-assert_eq!(
-view.input.editor().text(),
-"echo ",
-"⌃W cut the word locally"
-);
-assert!(!view.input.has_handoff());
-})
-.unwrap();
+    let (window, _daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.editor_mut().set("echo hi");
+            view.handle_editor_key(&key("ctrl-w"), false, cx);
+            assert_eq!(
+                view.input.editor().text(),
+                "echo ",
+                "⌃W cut the word locally"
+            );
+            assert!(!view.input.has_handoff());
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
 fn negotiated_event_types_reach_the_production_input_route(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-DaemonMsg::Output(b"\x1b[>2u\x1b]2;EVENT_TYPES_READY\x07".to_vec())
-.encode(&mut daemon)
-.unwrap();
-for _ in 0..200 {
-cx.executor()
-.advance_clock(std::time::Duration::from_millis(5));
-cx.run_until_parked();
-if window
-.update(cx, |view, _, _| view.title == "EVENT_TYPES_READY")
-.unwrap()
-{
-break;
-}
-std::thread::sleep(std::time::Duration::from_millis(5));
-}
-window
-.update(cx, |view, window, cx| {
-assert_eq!(view.title, "EVENT_TYPES_READY");
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-for held in [false, true] {
-visual.simulate_event(gpui_kit::KeyDownEvent {
-keystroke: key("up"),
-is_held: held,
-prefer_character_input: false,
-});
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(if held {
-b"\x1b[1;1:2A".to_vec()
-} else {
-b"\x1b[A".to_vec()
-})
-);
-}
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("up"),
-});
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[1;1:3A".to_vec())
-);
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("up"),
-});
-assert_eq!(next_input_until_timeout(&mut daemon), None);
+    let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+    DaemonMsg::Output(b"\x1b[>2u\x1b]2;EVENT_TYPES_READY\x07".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        if window
+            .update(cx, |view, _, _| view.title == "EVENT_TYPES_READY")
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.title, "EVENT_TYPES_READY");
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
+    let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    for held in [false, true] {
+        visual.simulate_event(gpui_kit::KeyDownEvent {
+            keystroke: key("up"),
+            is_held: held,
+            prefer_character_input: false,
+        });
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(if held {
+                b"\x1b[1;1:2A".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            })
+        );
+    }
+    visual.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: key("up"),
+    });
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[1;1:3A".to_vec())
+    );
+    visual.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: key("up"),
+    });
+    assert_eq!(next_input_until_timeout(&mut daemon), None);
 }
 
 fn keyboard_output_ready(
-window: &gpui_kit::WindowHandle<TerminalView>,
-cx: &mut TestAppContext,
-daemon: &mut crate::daemon::transport::Stream,
-bytes: &[u8],
-title: &str,
+    window: &gpui_kit::WindowHandle<TerminalView>,
+    cx: &mut TestAppContext,
+    daemon: &mut crate::daemon::transport::Stream,
+    bytes: &[u8],
+    title: &str,
 ) {
-DaemonMsg::Output([bytes, format!("\x1b]2;{title}\x07").as_bytes()].concat())
-.encode(daemon)
-.unwrap();
-for _ in 0..200 {
-cx.executor()
-.advance_clock(std::time::Duration::from_millis(5));
-cx.run_until_parked();
-if window.update(cx, |view, _, _| view.title == title).unwrap() {
-return;
-}
-std::thread::sleep(std::time::Duration::from_millis(5));
-}
-panic!("keyboard output did not reach {title}");
+    DaemonMsg::Output([bytes, format!("\x1b]2;{title}\x07").as_bytes()].concat())
+        .encode(daemon)
+        .unwrap();
+    for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        if window.update(cx, |view, _, _| view.title == title).unwrap() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("keyboard output did not reach {title}");
 }
 
 #[gpui_kit::test]
 fn negotiated_keyboard_pairs_only_delivered_keys_and_current_focus(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-keyboard_output_ready(&window, cx, &mut daemon, b"\x1b[>27u", "PAIR_READY");
-prompt_ready(&window, cx, &mut daemon);
-window
-.update(cx, |view, window, cx| {
-window.activate_window();
-view.focus_handle.focus(window, cx);
-view.input.editor_mut().set("echo two words");
-})
-.unwrap();
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_keystrokes("ctrl-w");
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("ctrl-w"),
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-None,
-"local editing owns both edges"
-);
-window
-.update(cx, |view, _, _| {
-assert_eq!(view.input.editor().text(), "echo two ")
-})
-.unwrap();
-keyboard_output_ready(
-&window,
-cx,
-&mut daemon,
-b"\x1b[?1049h\x1b[>27u",
-"PAIR_TUI",
-);
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_event(gpui_kit::KeyDownEvent {
-keystroke: key("ctrl-q"),
-is_held: false,
-prefer_character_input: false,
-});
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[113;5u".to_vec())
-);
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("q"),
-});
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[113;1:3u".to_vec())
-);
-visual.simulate_event(gpui_kit::KeyDownEvent {
-keystroke: key("up"),
-is_held: false,
-prefer_character_input: false,
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[A".to_vec())
-);
-window.update(cx, |_, window, cx| window.blur(cx)).unwrap();
-cx.run_until_parked();
-window
-.update(cx, |view, window, cx| view.focus_handle.focus(window, cx))
-.unwrap();
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("up"),
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-None,
-"blur retires the old press without fabricating a release"
-);
+    let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+    keyboard_output_ready(&window, cx, &mut daemon, b"\x1b[>27u", "PAIR_READY");
+    prompt_ready(&window, cx, &mut daemon);
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+            view.input.editor_mut().set("echo two words");
+        })
+        .unwrap();
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes("ctrl-w");
+        visual.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: key("ctrl-w"),
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "local editing owns both edges"
+    );
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.input.editor().text(), "echo two ")
+        })
+        .unwrap();
+    keyboard_output_ready(
+        &window,
+        cx,
+        &mut daemon,
+        b"\x1b[?1049h\x1b[>27u",
+        "PAIR_TUI",
+    );
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_event(gpui_kit::KeyDownEvent {
+            keystroke: key("ctrl-q"),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"\x1b[113;5u".to_vec())
+        );
+        visual.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: key("q"),
+        });
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"\x1b[113;1:3u".to_vec())
+        );
+        visual.simulate_event(gpui_kit::KeyDownEvent {
+            keystroke: key("up"),
+            is_held: false,
+            prefer_character_input: false,
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[A".to_vec())
+    );
+    window.update(cx, |_, window, cx| window.blur(cx)).unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| view.focus_handle.focus(window, cx))
+        .unwrap();
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: key("up"),
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "blur retires the old press without fabricating a release"
+    );
 }
 
 #[gpui_kit::test]
 fn negotiated_keyboard_screen_roundtrip_cannot_release_into_another_program(
-cx: &mut TestAppContext,
+    cx: &mut TestAppContext,
 ) {
-let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-keyboard_output_ready(&window, cx, &mut daemon, b"\x1b[>2u", "ROUNDTRIP_READY");
-window
-.update(cx, |view, window, cx| {
-window.activate_window();
-view.focus_handle.focus(window, cx);
-})
-.unwrap();
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_event(gpui_kit::KeyDownEvent {
-keystroke: key("up"),
-is_held: false,
-prefer_character_input: false,
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[A".to_vec())
-);
-keyboard_output_ready(
-&window,
-cx,
-&mut daemon,
-b"\x1b[?1049h\x1b[>2u\x1b[?1049l",
-"ROUNDTRIP_DONE",
-);
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("up"),
-});
-visual.simulate_event(gpui_kit::KeyDownEvent {
-keystroke: key("up"),
-is_held: true,
-prefer_character_input: false,
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[A".to_vec()),
-"a repeat without a delivered press starts a new pair"
-);
-{
-let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-visual.simulate_event(gpui_kit::KeyUpEvent {
-keystroke: key("up"),
-});
-}
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-Some(b"\x1b[1;1:3A".to_vec())
-);
+    let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+    keyboard_output_ready(&window, cx, &mut daemon, b"\x1b[>2u", "ROUNDTRIP_READY");
+    window
+        .update(cx, |view, window, cx| {
+            window.activate_window();
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_event(gpui_kit::KeyDownEvent {
+            keystroke: key("up"),
+            is_held: false,
+            prefer_character_input: false,
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[A".to_vec())
+    );
+    keyboard_output_ready(
+        &window,
+        cx,
+        &mut daemon,
+        b"\x1b[?1049h\x1b[>2u\x1b[?1049l",
+        "ROUNDTRIP_DONE",
+    );
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: key("up"),
+        });
+        visual.simulate_event(gpui_kit::KeyDownEvent {
+            keystroke: key("up"),
+            is_held: true,
+            prefer_character_input: false,
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[A".to_vec()),
+        "a repeat without a delivered press starts a new pair"
+    );
+    {
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: key("up"),
+        });
+    }
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[1;1:3A".to_vec())
+    );
 }
 
 #[gpui_kit::test]
 fn negotiated_keyboard_queries_and_replay_describe_supported_flags(cx: &mut TestAppContext) {
-let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-DaemonMsg::Snapshot(b"\x1b[>31u\x1b[?u".to_vec())
-.encode(&mut daemon)
-.unwrap();
-keyboard_output_ready(&window, cx, &mut daemon, b"", "KEYBOARD_REPLAY");
-assert_eq!(
-next_input_until_timeout(&mut daemon),
-None,
-"snapshot queries never write live PTY input"
-);
-for (index, (bytes, expected)) in [
-(b"\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
-(b"\x1b[>6u\x1b[?u".as_slice(), b"\x1b[?2u".as_slice()),
-(b"\x1b[<u\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
-(
-b"\x1b[?1049h\x1b[>6u\x1b[?u".as_slice(),
-b"\x1b[?2u".as_slice(),
-),
-(b"\x1b[?1049l\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
-(b"\x1b[=4;2u\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
-(b"\x1b[=2;3u\x1b[?u".as_slice(), b"\x1b[?25u".as_slice()),
-]
-.into_iter()
-.enumerate()
-{
-keyboard_output_ready(&window, cx, &mut daemon, bytes, &format!("QUERY_{index}"));
-assert_eq!(
-next_input_until_timeout(&mut daemon).as_deref(),
-Some(expected)
-);
-}
+    let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+    DaemonMsg::Snapshot(b"\x1b[>31u\x1b[?u".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    keyboard_output_ready(&window, cx, &mut daemon, b"", "KEYBOARD_REPLAY");
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "snapshot queries never write live PTY input"
+    );
+    for (index, (bytes, expected)) in [
+        (b"\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
+        (b"\x1b[>6u\x1b[?u".as_slice(), b"\x1b[?2u".as_slice()),
+        (b"\x1b[<u\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
+        (
+            b"\x1b[?1049h\x1b[>6u\x1b[?u".as_slice(),
+            b"\x1b[?2u".as_slice(),
+        ),
+        (b"\x1b[?1049l\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
+        (b"\x1b[=4;2u\x1b[?u".as_slice(), b"\x1b[?27u".as_slice()),
+        (b"\x1b[=2;3u\x1b[?u".as_slice(), b"\x1b[?25u".as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        keyboard_output_ready(&window, cx, &mut daemon, bytes, &format!("QUERY_{index}"));
+        assert_eq!(
+            next_input_until_timeout(&mut daemon).as_deref(),
+            Some(expected)
+        );
+    }
 }

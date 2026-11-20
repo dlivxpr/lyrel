@@ -490,6 +490,19 @@ pub(crate) struct FramePreparation {
     _pin: retention::Pin,
 }
 
+/// The frame-transfer inputs `commit_frame` needs beyond the effect sink.
+/// `apply_inner` gathers them from the prepared image; bundling keeps the
+/// commit entry point narrow.
+struct FrameCommit {
+    control: Control,
+    image: Arc<Image>,
+    packet: crate::daemon::protocol::GraphicsPacket,
+    decoded_bytes: usize,
+    key: u64,
+    metadata: retention::MetadataTicket,
+    frame: FramePreparation,
+}
+
 pub(crate) struct PreparedPlacement {
     resource: u64,
     pub key: u64,
@@ -1527,13 +1540,15 @@ impl GraphicsState {
                 }
                 if let Some(frame) = frame {
                     self.commit_frame(
-                        control,
-                        image,
-                        packet.unwrap(),
-                        decoded_bytes,
-                        key,
-                        metadata.unwrap(),
-                        frame,
+                        FrameCommit {
+                            control,
+                            image,
+                            packet: packet.unwrap(),
+                            decoded_bytes,
+                            key,
+                            metadata: metadata.unwrap(),
+                            frame,
+                        },
                         &mut effects,
                     );
                     effects.extend(self.finish_layout(false));
@@ -1554,15 +1569,15 @@ impl GraphicsState {
                 let metadata_lease = metadata.expect("prepared resource owns its metadata lease");
                 self.refresh_retention();
                 let packet = packet.expect("transmit preparation encodes its resource packet");
-                let Some(resident) = self.retention.admit(
-                    self.owner,
-                    key,
-                    decoded_bytes,
-                    replacement.as_ref(),
-                    self.wake.clone(),
-                    self.capacity,
-                    packet.clone(),
-                ) else {
+                let Some(resident) = self.retention.admit(retention::AdmitRequest {
+                    owner: self.owner,
+                    group: key,
+                    decoded: decoded_bytes,
+                    replacement: replacement.as_ref(),
+                    wake: self.wake.clone(),
+                    capacity: self.capacity,
+                    packet: packet.clone(),
+                }) else {
                     Self::reply(
                         &mut effects,
                         &control,
@@ -1624,17 +1639,16 @@ impl GraphicsState {
         effects
     }
 
-    fn commit_frame(
-        &mut self,
-        control: Control,
-        image: Arc<Image>,
-        packet: crate::daemon::protocol::GraphicsPacket,
-        decoded: usize,
-        key: u64,
-        metadata: retention::MetadataTicket,
-        frame: FramePreparation,
-        effects: &mut Vec<GraphicsEffect>,
-    ) {
+    fn commit_frame(&mut self, commit: FrameCommit, effects: &mut Vec<GraphicsEffect>) {
+        let FrameCommit {
+            control,
+            image,
+            packet,
+            decoded_bytes: decoded,
+            key,
+            metadata,
+            frame,
+        } = commit;
         let root = frame.root;
         let valid = self.lookup(&control) == Some(root)
             && self.resources.get(&root).is_some_and(|resource| {
@@ -1657,15 +1671,15 @@ impl GraphicsState {
         }
         self.refresh_retention();
         // Charge old and new owners together; never reclaim this animation.
-        let Some(resident) = self.retention.admit(
-            self.owner,
-            root,
+        let Some(resident) = self.retention.admit(retention::AdmitRequest {
+            owner: self.owner,
+            group: root,
             decoded,
-            None,
-            self.wake.clone(),
-            self.capacity,
-            packet.clone(),
-        ) else {
+            replacement: None,
+            wake: self.wake.clone(),
+            capacity: self.capacity,
+            packet: packet.clone(),
+        }) else {
             Self::reply(
                 effects,
                 &control,
@@ -1806,8 +1820,8 @@ impl GraphicsState {
                 let next = if current.is_none() || current == replacement {
                     Some(parent)
                 } else {
-                    self.placements
-                        .get(&current.unwrap())
+                    current
+                        .and_then(|key| self.placements.get(&key))
                         .and_then(|p| p.placement.parent)
                 };
                 let Some(next) = next else { break };
@@ -2048,12 +2062,11 @@ impl GraphicsState {
             } else {
                 0
             };
-            let col = if control.iterm2 {
-                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
-            } else if self
-                .term
-                .mode()
-                .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
+            let col = if control.iterm2
+                || self
+                    .term
+                    .mode()
+                    .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
             {
                 (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
             } else {

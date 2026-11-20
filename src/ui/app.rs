@@ -43,8 +43,10 @@ mod editor_links;
 mod editor_navigation;
 mod editor_panel;
 mod editor_render;
+mod file_tree_bridge;
 mod initialization;
 mod pane_binding;
+pub(crate) use pane_binding::PendingTerminalRequest;
 mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
@@ -261,11 +263,14 @@ pub struct LyrelApp {
     pub(crate) right_panel: crate::ui::right_panel::RightPanelState,
     pub(crate) scm: crate::ui::scm::ScmPanelState,
     pub(crate) github: crate::ui::github::GitHubPanelState,
-    pub(crate) diff_probes_inflight:
-        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
-    pub(crate) diff_probes_restale:
-        std::collections::HashSet<(lyrel_ui_base::host_ops::HostId, std::path::PathBuf)>,
-    pub(crate) file_tree: crate::ui::file_tree::FileTreeState,
+    /// In-flight diff probes and their coalesced follow-up refreshes, keyed
+    /// by `(host, cwd, source)`. The tracker owns the policy — what may
+    /// spawn, what coalesces, what landing is allowed to install — so the app
+    /// only supplies the registry lookup and the spawn itself.
+    pub(crate) diff_probes: crate::ui::diff_probe::DiffProbeTracker,
+    pub(crate) file_tree: Entity<crate::ui::file_tree::FileTree>,
+    _file_tree_events: Subscription,
+    _file_tree_observer: Subscription,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
     _editor_events: Subscription,
@@ -797,7 +802,7 @@ impl LyrelApp {
                         if let Err(st) = app.put_back_closed_tab(st, window, cx) {
                             // The entry is off the machine's list now; keep it
                             // here so another ⌘⇧T can try it again.
-                            app.session.remember_close(st);
+                            app.session.remember_close(*st);
                         }
                     }
                     Ok(ReplyOk::ReopenedTab(None)) => app.reopen_closed_here(window, cx),
@@ -820,7 +825,7 @@ impl LyrelApp {
             return;
         };
         if let Err(st) = self.put_back_closed_tab(st, window, cx) {
-            self.session.remember_close(st);
+            self.session.remember_close(*st);
         }
     }
 
@@ -833,7 +838,7 @@ impl LyrelApp {
         st: SessionTab,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<(), SessionTab> {
+    ) -> Result<(), Box<SessionTab>> {
         let pane_ws = self.window_workspace(cx);
         let tab =
             match SessionRestore::reopen(pane_ws, self.workspace, self.font_size, st, window, cx) {
@@ -1058,7 +1063,7 @@ impl LyrelApp {
             }
             cx.background_spawn(async { crate::daemon::spawn::stop() })
                 .await;
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
         })
         .detach();
     }
@@ -1260,7 +1265,7 @@ impl LyrelApp {
         // exec — a daemon that never started listening again is gone, and the
         // client we still hold points at its socket, which `is_connected` keeps
         // calling good until its reader sees the EOF.
-        let _ = cx.update(crate::ui::tree_sync::resync_after_local_daemon_change);
+        cx.update(crate::ui::tree_sync::resync_after_local_daemon_change);
 
         let _ = this.update_in(cx, |this, window, cx| {
             this.focus_active(window, cx);
@@ -1681,7 +1686,15 @@ impl LyrelApp {
                 argv,
                 scope,
             } => {
-                Self::restore_agent_in_pane(agent, session, argv, scope, view, window, cx);
+                Self::restore_agent_in_pane(
+                    agent,
+                    session,
+                    argv,
+                    scope.map(|s| *s),
+                    view,
+                    window,
+                    cx,
+                );
             }
         }
         if was_focused {
@@ -1867,12 +1880,14 @@ impl LyrelApp {
         }
         let group = self.spawn_group(cwd.as_deref(), cx);
         let tab = Self::new_terminal(
-            self.window_workspace(cx),
-            Some(self.workspace),
-            self.font_size,
-            cwd,
-            None,
-            shell,
+            PendingTerminalRequest::shell(
+                self.window_workspace(cx),
+                Some(self.workspace),
+                self.font_size,
+                cwd,
+                None,
+                shell,
+            ),
             window,
             cx,
         );
@@ -2358,21 +2373,23 @@ impl LyrelApp {
                 let workspace = view.workspace().cloned();
                 // A remote route must resolve before anything is replaced. A
                 // disconnected host is not permission to start a local shell.
-                if let Some(workspace) = &workspace {
-                    if let Err(error) = workspace.route_header() {
-                        window.notify_app(error.to_string(), cx);
-                        return;
-                    }
+                if let Some(workspace) = &workspace
+                    && let Err(error) = workspace.route_header()
+                {
+                    window.notify_app(error.to_string(), cx);
+                    return;
                 }
                 let cwd = view.cwd();
                 let shell = view.shell_spec();
                 Self::new_terminal(
-                    workspace,
-                    Some(self.workspace),
-                    self.font_size,
-                    cwd,
-                    None,
-                    shell,
+                    PendingTerminalRequest::shell(
+                        workspace,
+                        Some(self.workspace),
+                        self.font_size,
+                        cwd,
+                        None,
+                        shell,
+                    ),
                     window,
                     cx,
                 )
@@ -2433,12 +2450,14 @@ impl LyrelApp {
                 Self::new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx)
             }
             SpawnAs::Shell(shell) => Self::new_terminal(
-                workspace,
-                Some(self.workspace),
-                self.font_size,
-                cwd,
-                None,
-                shell,
+                PendingTerminalRequest::shell(
+                    workspace,
+                    Some(self.workspace),
+                    self.font_size,
+                    cwd,
+                    None,
+                    shell,
+                ),
                 window,
                 cx,
             ),
@@ -3154,6 +3173,7 @@ impl LyrelApp {
         if index < self.tabs.len() && index != self.tabs.active_index() {
             self.cancel_pane_drag(window, cx);
             self.tabs.activate(index, &mut self.maximized, window, cx);
+            self.seed_file_tree_tab_view(cx);
             self.maybe_refresh_diff_overlay(cx);
             *self.sidebar_reveal.borrow_mut() = Some(
                 crate::ui::tab_sidebar::SidebarNavTarget::Tab(self.tabs[index].id()),
@@ -3162,7 +3182,8 @@ impl LyrelApp {
                 self.sync_window_title(window, cx);
             } else if self.code_panel_visible() {
                 self.file_tree_refresh_roots(window, cx);
-                self.file_tree.focus_handle.focus(window, cx);
+                self.file_tree
+                    .update(cx, |tree, cx| tree.focus_handle(cx).focus(window, cx));
             } else {
                 self.focus_active(window, cx);
             }
@@ -3853,12 +3874,14 @@ impl LyrelApp {
         let cwd = Some(prepared.cwd.clone());
         let group = self.spawn_group(cwd.as_deref(), cx);
         let new = Self::new_terminal(
-            self.window_workspace(cx),
-            Some(self.workspace),
-            self.font_size,
-            cwd,
-            None,
-            shell,
+            PendingTerminalRequest::shell(
+                self.window_workspace(cx),
+                Some(self.workspace),
+                self.font_size,
+                cwd,
+                None,
+                shell,
+            ),
             window,
             cx,
         );
@@ -4011,12 +4034,14 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let view = Self::new_terminal(
-            self.window_workspace(cx),
-            Some(self.workspace),
-            self.font_size,
-            Some(wt.path),
-            None,
-            None,
+            PendingTerminalRequest::shell(
+                self.window_workspace(cx),
+                Some(self.workspace),
+                self.font_size,
+                Some(wt.path),
+                None,
+                None,
+            ),
             window,
             cx,
         );
@@ -4589,14 +4614,36 @@ impl LyrelApp {
                 cwd,
                 host,
                 scope,
-            } => self.resume_session(agent, &session_id, cwd, host, scope, false, window, cx),
+            } => self.resume_session(
+                crate::ui::agent_launch::ResumeSessionRequest {
+                    agent,
+                    session_id,
+                    cwd,
+                    host_id: host,
+                    scope,
+                    fork: false,
+                },
+                window,
+                cx,
+            ),
             ForkSession {
                 agent,
                 session_id,
                 cwd,
                 host,
                 scope,
-            } => self.resume_session(agent, &session_id, cwd, host, scope, true, window, cx),
+            } => self.resume_session(
+                crate::ui::agent_launch::ResumeSessionRequest {
+                    agent,
+                    session_id,
+                    cwd,
+                    host_id: host,
+                    scope,
+                    fork: true,
+                },
+                window,
+                cx,
+            ),
             CopySessionId(id) => cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(id)),
             HideSession { agent, session_id } => self.update_config(cx, |cfg| {
                 cfg.hidden_agent_sessions
@@ -5318,7 +5365,6 @@ pub(crate) mod test_window {
                 root.view()
                     .clone()
                     .downcast::<LyrelApp>()
-                    .ok()
                     .expect("window root wraps a LyrelApp")
             })
             .unwrap();
@@ -5618,7 +5664,6 @@ mod restart_server_gpui_tests {
                 root.view()
                     .clone()
                     .downcast::<LyrelApp>()
-                    .ok()
                     .expect("window root wraps a LyrelApp")
             })
             .unwrap();
@@ -5670,7 +5715,6 @@ mod shell_menu_gpui_tests {
                 root.view()
                     .clone()
                     .downcast::<LyrelApp>()
-                    .ok()
                     .expect("window root wraps a LyrelApp")
             })
             .unwrap();

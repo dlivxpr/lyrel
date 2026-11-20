@@ -65,7 +65,9 @@ pub(crate) fn decode(command: &str) -> Option<(String, String)> {
         return None;
     }
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     let script = String::from_utf16(&units).ok()?;

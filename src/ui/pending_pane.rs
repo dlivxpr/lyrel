@@ -268,7 +268,8 @@ impl PendingPane {
                 .spawn
                 .agent_session_scope
                 .as_ref()
-                .map(lyrel_core::host::session_operations::durable_scope),
+                .map(lyrel_core::host::session_operations::durable_scope)
+                .map(Box::new),
         }
     }
 

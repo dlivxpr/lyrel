@@ -289,7 +289,7 @@ fn program_summary_consumer_multi_pane_priority_attribution_parking_and_reattach
     });
 
     // Removing the pane from the tree drops it from the answer immediately.
-    program_summary_show_tab(&app, &mut vcx, &[left_view.clone()]);
+    program_summary_show_tab(&app, &mut vcx, std::slice::from_ref(&left_view));
     vcx.run_until_parked();
     assert_eq!(
         program_summary_row(&mut vcx).as_deref(),
@@ -336,7 +336,7 @@ fn program_summary_consumer_identical_refresh_moves_a_tie_without_a_new_result(
     let pane = daemon.spawn();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     let view = program_summary_attach(&daemon, pane, &app, &mut vcx);
-    program_summary_show_tab(&app, &mut vcx, &[view.clone()]);
+    program_summary_show_tab(&app, &mut vcx, std::slice::from_ref(&view));
 
     graphics_send_fixture(
         &view,
@@ -533,12 +533,12 @@ fn program_summary_consumer_keeps_agent_authority_beside_program_state(cx: &mut 
     DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
         .encode(&mut agent_daemon)
         .unwrap();
-    DaemonMsg::AgentStatus(Some(AgentSessionState {
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
         status: AgentStatus::Done,
         rich: true,
         turns: 1,
         ..Default::default()
-    }))
+    })))
     .encode(&mut agent_daemon)
     .unwrap();
     graphics_recovery_wait(cx, "agent session reaches the production view", |cx| {

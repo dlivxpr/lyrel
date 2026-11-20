@@ -287,10 +287,12 @@ fn a_tab_put_to_sleep_stops_its_panes_and_keeps_them_in_the_tree() {
         .pane_split(
             ws.id,
             7,
-            machine::Axis::Horizontal,
-            0.5,
-            seed(8),
-            false,
+            machine::PaneSplitSpec {
+                axis: machine::Axis::Horizontal,
+                ratio: 0.5,
+                new: seed(8),
+                first: false,
+            },
             None,
         )
         .unwrap();
@@ -425,7 +427,17 @@ fn a_remembered_close_stops_the_panes_and_a_reopen_hands_the_tab_back() {
     let ws = store.workspace_create(None, None, None).unwrap();
     let tab = store.tab_create(ws.id, None, seed(7), None, None).unwrap();
     store
-        .pane_split(ws.id, 7, machine::Axis::Vertical, 0.5, seed(8), false, None)
+        .pane_split(
+            ws.id,
+            7,
+            machine::PaneSplitSpec {
+                axis: machine::Axis::Vertical,
+                ratio: 0.5,
+                new: seed(8),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
     let recorder = Arc::new(CloseRecorder {
         store: Arc::clone(&store),

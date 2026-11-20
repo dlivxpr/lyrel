@@ -135,6 +135,12 @@ impl SqliteGrid {
     }
 }
 
+impl Default for SqliteGrid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TableDelegate for SqliteGrid {
     fn columns_count(&self, _: &App) -> usize {
         self.columns.len() + 1

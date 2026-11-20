@@ -803,7 +803,7 @@ pub fn run() {
     // delegate stack, which is also how Zed's own reopen handler runs.
     application.on_reopen(|cx| {
         cx.spawn(async move |cx| {
-            let _ = cx.update(crate::ui::windows::reopen);
+            cx.update(crate::ui::windows::reopen);
         })
         .detach();
     });
@@ -813,13 +813,17 @@ pub fn run() {
         // AppKit's delegate call stack.
         cx.spawn(async move |cx| {
             while let Ok(urls) = external_open_rx.recv().await {
-                let _ = cx.update(|cx| handle_external_opens(urls, cx));
+                cx.update(|cx| handle_external_opens(urls, cx));
             }
         })
         .detach();
         gpui_kit::init(cx);
         crate::ui::ime::install(cx);
         lyrel_workbench_editor::lsp::popups::init(cx);
+        // Markdown previews resolve their proxy with the same desktop
+        // precedence as the updater and installer; the workbench editor
+        // links no installer machinery, so the resolver is injected here.
+        crate::ui::app::LyrelApp::ensure_image_proxy_resolver(cx);
         register_bundled_fonts(cx);
         crate::ui::prompt::install(cx);
         cx.activate(true);

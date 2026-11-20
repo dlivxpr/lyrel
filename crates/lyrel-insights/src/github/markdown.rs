@@ -423,11 +423,10 @@ pub fn is_github_hosted(url: &str) -> bool {
     let host = host.to_ascii_lowercase();
     if host == "github.com" {
         let mut parts = path.trim_start_matches('/').split('/');
-        return match (parts.next(), parts.next(), parts.next()) {
-            (Some("user-attachments"), Some(_), _) => true,
-            (Some(_), Some(_), Some("assets")) => true,
-            _ => false,
-        };
+        return matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some("user-attachments"), Some(_), _) | (Some(_), Some(_), Some("assets"))
+        );
     }
     host.ends_with(".githubusercontent.com")
 }

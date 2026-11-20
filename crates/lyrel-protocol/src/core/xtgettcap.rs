@@ -60,7 +60,9 @@ pub fn response(generated: &str) -> Vec<u8> {
         let valid = bytes.len().is_multiple_of(2)
             && bytes.len() <= decoded.len() * 2
             && bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .zip(decoded.iter_mut())
                 .all(|(pair, slot)| {
                     let digit = |byte: u8| match byte {

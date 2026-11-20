@@ -80,7 +80,7 @@ impl FileHost {
         })
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn mapped(id: HostId, root: &Path) -> Arc<Self> {
         let mut host = Self::new(id);
         Arc::get_mut(&mut host).unwrap().root = Some(root.to_path_buf());
@@ -92,7 +92,7 @@ impl FileHost {
             |root| root.join(path.to_string_lossy().trim_start_matches('/')),
         )
     }
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn fail_next_write(&self) {
         self.fail_write.store(true, Ordering::SeqCst);
     }
@@ -105,7 +105,7 @@ impl FileHost {
         tx
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn pause_next_write(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
@@ -277,14 +277,10 @@ impl Host for FileHost {
         &self,
         view: u64,
         query: &lyrel_core::host::sqlite::SqliteQuery,
-        row: u32,
-        column: u32,
-        offset: u64,
-        max_bytes: u64,
+        cell: lyrel_core::host::sqlite::SqliteCellRead,
         cancel: &lyrel_core::host::sqlite::SqliteCancel,
     ) -> io::Result<lyrel_core::host::sqlite::SqliteValue> {
-        self.inner
-            .sqlite_value(view, query, row, column, offset, max_bytes, cancel)
+        self.inner.sqlite_value(view, query, cell, cancel)
     }
     fn sqlite_close(&self, view: u64) {
         self.inner.sqlite_close(view)

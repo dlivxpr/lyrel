@@ -172,10 +172,12 @@ pub enum GitOpErrorKind {
 pub struct GitOpError {
     pub op: &'static str,
     pub kind: GitOpErrorKind,
-    /// One line for the notification.
-    pub message: String,
+    /// One line for the notification. Boxed with `detail` (as `Box<str>`) to
+    /// keep the error — and every `Result` carrying it — under the
+    /// large-Err lint budget.
+    pub message: Box<str>,
     /// Full stderr, for the details disclosure.
-    pub detail: String,
+    pub detail: Box<str>,
     /// The argv that failed. Authentication has no answer inside a GUI, so the
     /// notification offers to re-run this in a pane — lyrel is a terminal, and a
     /// real tty can take a password, a hardware key, or a host-key prompt.
@@ -505,8 +507,8 @@ impl GitOp {
         GitOpError {
             op: self.label(),
             kind,
-            detail: message.clone(),
-            message,
+            detail: message.clone().into_boxed_str(),
+            message: message.into_boxed_str(),
             // Nothing ran, so there is nothing to offer re-running.
             rerun_argv: Vec::new(),
             cwd: PathBuf::new(),
@@ -699,8 +701,8 @@ pub fn run_op(
                 std::io::ErrorKind::TimedOut => GitOpErrorKind::Timeout,
                 _ => GitOpErrorKind::Spawn,
             },
-            message: err.to_string(),
-            detail: err.to_string(),
+            message: err.to_string().into_boxed_str(),
+            detail: err.to_string().into_boxed_str(),
             rerun_argv: rerun(),
             cwd: root.to_path_buf(),
         })?;
@@ -724,14 +726,15 @@ pub fn run_op(
             return Err(GitOpError {
                 op: label,
                 kind,
-                message,
+                message: message.into_boxed_str(),
                 // Both streams: a pull explains itself across the two, and
                 // showing only one buries half the reason.
                 detail: match (stderr.is_empty(), stdout.is_empty()) {
                     (false, false) => format!("{stderr}\n{stdout}"),
                     (false, true) => stderr,
                     _ => stdout,
-                },
+                }
+                .into_boxed_str(),
                 rerun_argv: rerun(),
                 cwd: root.to_path_buf(),
             });

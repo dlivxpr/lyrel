@@ -32,11 +32,8 @@ pub enum SessionPane {
         agent_session_id: Option<String>,
         #[serde(default)]
         agent_launch_argv: Option<Vec<String>>,
-        #[serde(
-            default,
-            serialize_with = "crate::host::session_operations::serialize_durable_scope"
-        )]
-        agent_session_scope: Option<crate::host::session_operations::SessionScope>,
+        #[serde(default, serialize_with = "serialize_boxed_durable_scope")]
+        agent_session_scope: Option<Box<crate::host::session_operations::SessionScope>>,
     },
     Split {
         axis: SessionAxis,
@@ -49,6 +46,19 @@ pub enum SessionPane {
 
 fn default_ratio() -> f32 {
     0.5
+}
+
+/// Durable-scope persistence for the boxed pane field: identical JSON to
+/// [`crate::host::session_operations::serialize_durable_scope`], since `Box`
+/// is transparent on the wire; the box only shrinks the in-memory enum.
+fn serialize_boxed_durable_scope<S: serde::Serializer>(
+    scope: &Option<Box<crate::host::session_operations::SessionScope>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    scope
+        .as_deref()
+        .map(crate::host::session_operations::durable_scope)
+        .serialize(serializer)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -553,11 +563,11 @@ impl WindowViews {
         let Some(path) = Self::path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create views dir {}: {e}", parent.display());
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            log::warn!("failed to create views dir {}: {e}", parent.display());
+            return;
         }
         let json = match serde_json::to_string_pretty(self) {
             Ok(j) => j,

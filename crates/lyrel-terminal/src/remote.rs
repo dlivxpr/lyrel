@@ -544,6 +544,16 @@ pub struct RemoteTerminal {
     color_scheme_updates: Arc<AtomicBool>,
 }
 
+/// The pane layout a relink must preserve: the ordered grid size plus the
+/// measured pixel dimensions of one cell, carried together from the view's
+/// layout through the relink into the post-swap resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelinkLayout {
+    pub size: TermSize,
+    pub cell_w: u16,
+    pub cell_h: u16,
+}
+
 /// Owned by one pending GUI slot, never shared with another spawn attempt.
 #[derive(Clone, Default)]
 pub struct SpawnCancellation(Arc<AtomicBool>);
@@ -626,7 +636,17 @@ impl RemoteTerminal {
         cell_w: u16,
         cell_h: u16,
     ) -> anyhow::Result<()> {
-        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None)
+        self.adopt_relink_with_version(
+            stream,
+            buffered,
+            route,
+            RelinkLayout {
+                size,
+                cell_w,
+                cell_h,
+            },
+            None,
+        )
     }
 
     /// A relink negotiated again, so the pane keeps the endpoint's current
@@ -636,9 +656,7 @@ impl RemoteTerminal {
         stream: Stream,
         buffered: Vec<u8>,
         route: &PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         version: Option<DaemonVersion>,
     ) -> anyhow::Result<()> {
         self.connection.retire(&self.images);
@@ -703,15 +721,17 @@ impl RemoteTerminal {
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
-            &self.term,
-            &self.proxy,
-            &self.events,
-            &mut self.exited,
-            signals,
             buffered,
             route,
+            connection::RelinkState {
+                term: &self.term,
+                proxy: &self.proxy,
+                events: &self.events,
+                exited: &mut self.exited,
+            },
+            signals,
         )?;
-        self.resize(size, cell_w, cell_h);
+        self.resize(layout.size, layout.cell_w, layout.cell_h);
         Ok(())
     }
 
@@ -760,7 +780,7 @@ impl RemoteTerminal {
     }
 
     /// A test pane backed by a pty of this machine's own.
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn from_stream(stream: Stream, size: TermSize) -> anyhow::Result<Self> {
         Self::from_stream_with(
             stream,
@@ -770,7 +790,7 @@ impl RemoteTerminal {
         )
     }
 
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
     pub fn from_stream_with(
         stream: Stream,
         size: TermSize,
@@ -1062,9 +1082,11 @@ impl RemoteTerminal {
         self.connection.resize(
             &self.term,
             &self.proxy,
-            size,
-            cell_w,
-            cell_h,
+            RelinkLayout {
+                size,
+                cell_w,
+                cell_h,
+            },
             &self.local_conpty,
             &self.shell_state,
             &self.images,
@@ -1267,10 +1289,10 @@ impl RemoteTerminal {
 
     pub fn take_auth_banner(&self) -> Option<String> {
         let mut q = self.auth_prompts.lock().ok()?;
-        if matches!(q.front(), Some((_, AuthPromptKind::Banner { .. }))) {
-            if let Some((_, AuthPromptKind::Banner { text })) = q.pop_front() {
-                return Some(text);
-            }
+        if matches!(q.front(), Some((_, AuthPromptKind::Banner { .. })))
+            && let Some((_, AuthPromptKind::Banner { text })) = q.pop_front()
+        {
+            return Some(text);
         }
         None
     }
@@ -2341,7 +2363,7 @@ mod tests {
         );
 
         let report = |status, daemon: &mut UnixStream| {
-            DaemonMsg::AgentStatus(Some(AgentSessionState {
+            DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
                 status,
                 message: None,
                 session_id: Some("sid-1".into()),
@@ -2355,7 +2377,7 @@ mod tests {
                 pending_stop: false,
                 readout: Default::default(),
                 since_ms: None,
-            }))
+            })))
             .encode(daemon)
             .unwrap();
             daemon.flush().unwrap();
@@ -2407,7 +2429,7 @@ mod tests {
         DaemonMsg::Output(b"$ omp\r\n".to_vec())
             .encode(&mut daemon_side)
             .unwrap();
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Done,
             message: None,
             session_id: Some("sid-1".into()),
@@ -2421,7 +2443,7 @@ mod tests {
             pending_stop: false,
             readout: Default::default(),
             since_ms: None,
-        }))
+        })))
         .encode(&mut daemon_side)
         .unwrap();
         daemon_side.flush().unwrap();
@@ -2463,7 +2485,7 @@ mod tests {
             false
         };
 
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Waiting,
             message: Some("Claude needs your permission".into()),
             session_id: Some("sid-1".into()),
@@ -2477,7 +2499,7 @@ mod tests {
             request_resume_status: Default::default(),
             pending_stop: false,
             since_ms: None,
-        }))
+        })))
         .encode(&mut daemon_side)
         .unwrap();
         daemon_side.flush().unwrap();

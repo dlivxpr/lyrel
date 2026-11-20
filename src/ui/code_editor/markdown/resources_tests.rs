@@ -452,7 +452,7 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
         });
         settle(&mut vcx);
         let mut expected = source.clone();
-        expected.insert_str(at, "Q");
+        expected.insert(at, 'Q');
         view.read_with(&vcx, |view, _| assert_eq!(view.text(), expected));
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut vcx);

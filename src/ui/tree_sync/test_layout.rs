@@ -16,7 +16,7 @@ pub(super) fn seed(pane: u64) -> PaneSeed {
 pub(super) fn leaf(pane: u64) -> DesiredNode {
     DesiredNode::Leaf {
         pane,
-        seed: seed(pane),
+        seed: Box::new(seed(pane)),
     }
 }
 

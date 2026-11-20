@@ -27,8 +27,9 @@ fn reopening_a_cached_folder_shows_files_created_while_collapsed(cx: &mut TestAp
     });
     settle(&app, &mut vcx, &root);
     pump(&mut vcx, Duration::from_millis(300));
-    assert!(app.update_in(&mut vcx, |app, _, _| {
+    assert!(app.update_in(&mut vcx, |app, _, cx| {
         app.file_tree
+            .read(cx)
             .children
             .get(HostId::LOCAL, &docs)
             .is_some_and(|entries| entries.iter().any(|entry| entry.name == "before.md"))
@@ -44,10 +45,12 @@ fn reopening_a_cached_folder_shows_files_created_while_collapsed(cx: &mut TestAp
         app.file_tree_toggle_expand(&docs, cx);
     });
     settle(&app, &mut vcx, &root);
-    let visible: Vec<PathBuf> = app.update_in(&mut vcx, |app, _, _| {
+    let visible: Vec<PathBuf> = app.update_in(&mut vcx, |app, _, cx| {
         let code = app.tab_code().unwrap();
         app.file_tree
-            .visible_rows(HostId::LOCAL, &code.roots, &code.expanded)
+            .update(cx, |tree, _| {
+                tree.visible_rows(HostId::LOCAL, &code.roots, &code.expanded)
+            })
             .into_iter()
             .filter(|row| row.note.is_none())
             .map(|row| row.entry.path)
@@ -65,14 +68,24 @@ fn a_debounce_batch_invalidates_every_host_without_dropping_events(cx: &mut Test
     let local = HostId::LOCAL;
     let remote = HostId(987);
     let dir = PathBuf::from("/project/docs");
-    app.update_in(&mut vcx, |app, _, _| {
-        for host in [local, remote] {
-            app.file_tree.children.insert(host, dir.clone(), Vec::new());
-            app.file_tree
-                .events_tx
-                .try_send((host, vec![dir.join("agent-created.md")]))
-                .unwrap();
-        }
+    // The debounce pump verifies the live adapter instance, so both batch
+    // sources must be registered: the shared local adapter, and a distinct
+    // instance carrying the remote id.
+    let remote_host: SharedHost = super::selection_tests::host::NamespaceHost::new(
+        remote,
+        super::selection_tests::temp().path(),
+    );
+    let local_host = lyrel_core::host::local::shared();
+    app.update_in(&mut vcx, |app, _, cx| {
+        HostRegistry::insert(cx, remote_host.clone());
+        app.file_tree.update(cx, |tree, _| {
+            for host in [local_host.clone(), remote_host.clone()] {
+                tree.children.insert(host.id(), dir.clone(), Vec::new());
+                tree.events_tx
+                    .try_send((host, vec![dir.join("agent-created.md")]))
+                    .unwrap();
+            }
+        });
     });
     // Native macOS tests use a real 200ms debounce; advancing the test clock
     // does not shorten that timer. Wait for the transition, not 100ms of wall
@@ -80,19 +93,20 @@ fn a_debounce_batch_invalidates_every_host_without_dropping_events(cx: &mut Test
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         pump(&mut vcx, Duration::from_millis(50));
-        let invalidated = app.update_in(&mut vcx, |app, _, _| {
+        let invalidated = app.update_in(&mut vcx, |app, _, cx| {
             [local, remote]
                 .into_iter()
-                .all(|host| app.file_tree.stale.contains(&(host, dir.clone())))
+                .all(|host| app.file_tree.read(cx).stale.contains(&(host, dir.clone())))
         });
         if invalidated || Instant::now() >= deadline {
             break;
         }
     }
-    app.update_in(&mut vcx, |app, _, _| {
-        assert!(app.file_tree.stale.contains(&(local, dir.clone())));
+    app.update_in(&mut vcx, |app, _, cx| {
+        let tree = app.file_tree.read(cx);
+        assert!(tree.stale.contains(&(local, dir.clone())));
         assert!(
-            app.file_tree.stale.contains(&(remote, dir.clone())),
+            tree.stale.contains(&(remote, dir.clone())),
             "another host's event in the same debounce must not be discarded"
         );
     });
@@ -107,46 +121,44 @@ fn a_late_watch_open_cannot_replace_the_current_host_connection(cx: &mut TestApp
         .unwrap()
         .unwrap();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-    app.update_in(&mut vcx, |app, _, _| {
-        app.file_tree.watch_host = Some(current.clone());
-        app.file_tree.watch_opening = true;
-        let landed = app
-            .file_tree
-            .finish_watch_open(Ok(Arc::new(sub)), previous, &HashSet::new());
-        assert!(
-            landed.is_none(),
-            "a retired connection's late watch must not be adopted"
-        );
-        assert!(Arc::ptr_eq(
-            app.file_tree.watch_host.as_ref().unwrap(),
-            &current
-        ));
-        assert!(
-            app.file_tree.watch_opening,
-            "the current connection is still opening its own watch"
-        );
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.file_tree.update(cx, |tree, _| {
+            tree.watch_host = Some(current.clone());
+            tree.watch_opening = true;
+            let landed = tree.finish_watch_open(Ok(Arc::new(sub)), previous, &HashSet::new());
+            assert!(
+                landed.is_none(),
+                "a retired connection's late watch must not be adopted"
+            );
+            assert!(Arc::ptr_eq(tree.watch_host.as_ref().unwrap(), &current));
+            assert!(
+                tree.watch_opening,
+                "the current connection is still opening its own watch"
+            );
+        });
     });
 }
 
 #[gpui_kit::test]
 fn a_directory_event_refreshes_that_directorys_cached_children(cx: &mut TestAppContext) {
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-    app.update_in(&mut vcx, |app, _, _| {
-        let dir = PathBuf::from("/project/docs");
-        app.file_tree
-            .children
-            .insert(HostId::LOCAL, dir.clone(), Vec::new());
-        let refresh = app.file_tree.apply_fs_events(
-            HostId::LOCAL,
-            &HashSet::from([dir.clone()]),
-            true,
-            true,
-            HostId::LOCAL,
-        );
-        assert!(
-            refresh.reload,
-            "a directory-only notification must re-read its children"
-        );
-        assert!(app.file_tree.stale.contains(&(HostId::LOCAL, dir)));
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.file_tree.update(cx, |tree, cx| {
+            let dir = PathBuf::from("/project/docs");
+            tree.children.insert(HostId::LOCAL, dir.clone(), Vec::new());
+            let refresh = tree.apply_fs_events(
+                HostId::LOCAL,
+                &HashSet::from([dir.clone()]),
+                true,
+                true,
+                HostId::LOCAL,
+                cx,
+            );
+            assert!(
+                refresh.reload,
+                "a directory-only notification must re-read its children"
+            );
+            assert!(tree.stale.contains(&(HostId::LOCAL, dir)));
+        });
     });
 }

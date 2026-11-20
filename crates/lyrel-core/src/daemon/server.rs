@@ -988,9 +988,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             };
             let pane = match DaemonPane::spawn(
                 id,
-                cwd,
-                size,
-                shell,
+                crate::daemon::pane::PaneSpawnSpec { cwd, size, shell },
                 owner,
                 workspace,
                 restore,
@@ -1021,12 +1019,14 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 write_stream,
                 registry,
                 await_claim,
-                allow_remote_clipboard_write,
-                graphics_offers.then_some(_graphics_lease.endpoint()),
-                pane_colors,
-                glyph_state,
-                glyph_render,
-                program_status,
+                PublishOptions {
+                    allow_remote_clipboard_write,
+                    graphics_endpoint: graphics_offers.then_some(_graphics_lease.endpoint()),
+                    pane_colors,
+                    glyph_state,
+                    glyph_render,
+                    program_status,
+                },
             )
         }
 
@@ -1079,12 +1079,14 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 read_stream,
                 write_stream,
                 registry,
-                allow_remote_clipboard_write,
-                graphics_offers.then_some(_graphics_lease.endpoint()),
-                pane_colors,
-                glyph_state,
-                glyph_render,
-                program_status,
+                PublishOptions {
+                    allow_remote_clipboard_write,
+                    graphics_endpoint: graphics_offers.then_some(_graphics_lease.endpoint()),
+                    pane_colors,
+                    glyph_state,
+                    glyph_render,
+                    program_status,
+                },
             )
         }
 
@@ -1108,12 +1110,14 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     read_stream,
                     write_stream,
                     registry,
-                    allow_remote_clipboard_write,
-                    graphics_offers.then_some(_graphics_lease.endpoint()),
-                    pane_colors,
-                    glyph_state,
-                    glyph_render,
-                    program_status,
+                    PublishOptions {
+                        allow_remote_clipboard_write,
+                        graphics_endpoint: graphics_offers.then_some(_graphics_lease.endpoint()),
+                        pane_colors,
+                        glyph_state,
+                        glyph_render,
+                        program_status,
+                    },
                 )
             }
             None => {
@@ -1143,10 +1147,14 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     read_stream,
                     write_stream,
                     registry,
-                    graphics_offers.then_some(_graphics_lease.endpoint()),
-                    pane_colors,
-                    glyph_state,
-                    program_status,
+                    PublishOptions {
+                        allow_remote_clipboard_write: false,
+                        graphics_endpoint: graphics_offers.then_some(_graphics_lease.endpoint()),
+                        pane_colors,
+                        glyph_state,
+                        glyph_render: false,
+                        program_status,
+                    },
                 )
             }
             None => {
@@ -1454,19 +1462,35 @@ impl Drop for UnclaimedSpawn {
     }
 }
 
-fn publish_spawn_with_glyphs(
-    pane: Arc<DaemonPane>,
-    mut read_stream: Stream,
-    mut write_stream: Stream,
-    registry: Arc<Registry>,
-    await_claim: bool,
+/// The per-connection projection flags every publish/stream entry takes:
+/// the remote-clipboard relay, the graphics offload endpoint lease, and the
+/// feature opt-ins the client negotiated in its hello. Bundled so the stream
+/// entry points stay within the argument lint.
+struct PublishOptions {
     allow_remote_clipboard_write: bool,
     graphics_endpoint: Option<u64>,
     pane_colors: bool,
     glyph_state: bool,
     glyph_render: bool,
     program_status: bool,
+}
+
+fn publish_spawn_with_glyphs(
+    pane: Arc<DaemonPane>,
+    mut read_stream: Stream,
+    mut write_stream: Stream,
+    registry: Arc<Registry>,
+    await_claim: bool,
+    options: PublishOptions,
 ) -> anyhow::Result<()> {
+    let PublishOptions {
+        allow_remote_clipboard_write,
+        graphics_endpoint,
+        pane_colors,
+        glyph_state,
+        glyph_render,
+        program_status,
+    } = options;
     let id = pane.id;
     let mut claim = UnclaimedSpawn {
         pane: pane.clone(),
@@ -1487,14 +1511,16 @@ fn publish_spawn_with_glyphs(
             write_stream,
             registry,
             endpoint,
-            false,
-            allow_remote_clipboard_write,
-            (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }),
-            Some(claim),
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
+            graphics_session::SessionParams {
+                observer: false,
+                allow_clipboard: allow_remote_clipboard_write,
+                ready: (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }),
+                claim: Some(claim),
+                pane_colors,
+                glyph_state,
+                glyph_render,
+                program_status,
+            },
         );
     }
     // Attach the subscriber before publishing. If a short-lived child already
@@ -1522,45 +1548,22 @@ fn publish_spawn_with_glyphs(
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
 
-#[cfg(test)]
-fn publish_spawn(
-    pane: Arc<DaemonPane>,
-    read_stream: Stream,
-    write_stream: Stream,
-    registry: Arc<Registry>,
-    await_claim: bool,
-    allow_remote_clipboard_write: bool,
-    graphics_endpoint: Option<u64>,
-    pane_colors: bool,
-) -> anyhow::Result<()> {
-    publish_spawn_with_glyphs(
-        pane,
-        read_stream,
-        write_stream,
-        registry,
-        await_claim,
-        allow_remote_clipboard_write,
-        graphics_endpoint,
-        pane_colors,
-        false,
-        false,
-        false,
-    )
-}
-
 fn stream_pane_with_attach(
     pane: Arc<DaemonPane>,
     id: u64,
     read_stream: Stream,
     write_stream: Stream,
     registry: Arc<Registry>,
-    allow_remote_clipboard_write: bool,
-    graphics_endpoint: Option<u64>,
-    pane_colors: bool,
-    glyph_state: bool,
-    glyph_render: bool,
-    program_status: bool,
+    options: PublishOptions,
 ) -> anyhow::Result<()> {
+    let PublishOptions {
+        allow_remote_clipboard_write,
+        graphics_endpoint,
+        pane_colors,
+        glyph_state,
+        glyph_render,
+        program_status,
+    } = options;
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
             pane,
@@ -1568,14 +1571,16 @@ fn stream_pane_with_attach(
             write_stream,
             registry,
             endpoint,
-            false,
-            allow_remote_clipboard_write,
-            None,
-            None,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
+            graphics_session::SessionParams {
+                observer: false,
+                allow_clipboard: allow_remote_clipboard_write,
+                ready: None,
+                claim: None,
+                pane_colors,
+                glyph_state,
+                glyph_render,
+                program_status,
+            },
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
@@ -1596,13 +1601,16 @@ fn stream_pane(
     read_stream: Stream,
     write_stream: Stream,
     registry: Arc<Registry>,
-    allow_remote_clipboard_write: bool,
-    graphics_endpoint: Option<u64>,
-    pane_colors: bool,
-    glyph_state: bool,
-    glyph_render: bool,
-    program_status: bool,
+    options: PublishOptions,
 ) -> anyhow::Result<()> {
+    let PublishOptions {
+        allow_remote_clipboard_write,
+        graphics_endpoint,
+        pane_colors,
+        glyph_state,
+        glyph_render,
+        program_status,
+    } = options;
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
             pane,
@@ -1610,14 +1618,16 @@ fn stream_pane(
             write_stream,
             registry,
             endpoint,
-            false,
-            allow_remote_clipboard_write,
-            None,
-            None,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
+            graphics_session::SessionParams {
+                observer: false,
+                allow_clipboard: allow_remote_clipboard_write,
+                ready: None,
+                claim: None,
+                pane_colors,
+                glyph_state,
+                glyph_render,
+                program_status,
+            },
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
@@ -1672,11 +1682,15 @@ fn stream_observer(
     mut read_stream: Stream,
     write_stream: Stream,
     registry: Arc<Registry>,
-    graphics_endpoint: Option<u64>,
-    pane_colors: bool,
-    glyph_state: bool,
-    program_status: bool,
+    options: PublishOptions,
 ) -> anyhow::Result<()> {
+    let PublishOptions {
+        graphics_endpoint,
+        pane_colors,
+        glyph_state,
+        program_status,
+        ..
+    } = options;
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
             pane,
@@ -1684,16 +1698,18 @@ fn stream_observer(
             write_stream,
             registry,
             endpoint,
-            true,
-            false,
-            None,
-            None,
-            pane_colors,
-            glyph_state,
-            // A read-only observer never becomes the controller that answers
-            // `s`; it keeps no render credential at all.
-            false,
-            program_status,
+            graphics_session::SessionParams {
+                observer: true,
+                allow_clipboard: false,
+                ready: None,
+                claim: None,
+                pane_colors,
+                glyph_state,
+                // A read-only observer never becomes the controller that
+                // answers `s`; it keeps no render credential at all.
+                glyph_render: false,
+                program_status,
+            },
         );
     }
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
@@ -2316,17 +2332,19 @@ mod spawn_claim_tests {
         let directory = pin_config_dir();
         DaemonPane::spawn(
             id,
-            Some(directory),
-            SIZE,
-            Some(crate::daemon::protocol::ShellSpec {
-                program: if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into(),
-                args: if cfg!(windows) {
-                    vec!["/d".into()]
-                } else {
-                    vec![]
-                },
-                args_are_lyrel_defaults: false,
-            }),
+            crate::daemon::pane::PaneSpawnSpec {
+                cwd: Some(directory),
+                size: SIZE,
+                shell: Some(crate::daemon::protocol::ShellSpec {
+                    program: if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into(),
+                    args: if cfg!(windows) {
+                        vec!["/d".into()]
+                    } else {
+                        vec![]
+                    },
+                    args_are_lyrel_defaults: false,
+                }),
+            },
             None,
             None,
             None,
@@ -2351,15 +2369,20 @@ mod spawn_claim_tests {
                 let registry = registry.clone();
                 let provisional = provisional.clone();
                 std::thread::spawn(move || {
-                    publish_spawn(
+                    publish_spawn_with_glyphs(
                         provisional,
                         server.try_clone().unwrap(),
                         server,
                         registry,
                         true,
-                        false,
-                        None,
-                        false,
+                        PublishOptions {
+                            allow_remote_clipboard_write: false,
+                            graphics_endpoint: None,
+                            pane_colors: false,
+                            glyph_state: false,
+                            glyph_render: false,
+                            program_status: false,
+                        },
                     )
                 })
             };
@@ -2398,15 +2421,20 @@ mod spawn_claim_tests {
         let worker = {
             let registry = registry.clone();
             std::thread::spawn(move || {
-                publish_spawn(
+                publish_spawn_with_glyphs(
                     provisional,
                     server.try_clone().unwrap(),
                     server,
                     registry,
                     true,
-                    false,
-                    None,
-                    false,
+                    PublishOptions {
+                        allow_remote_clipboard_write: false,
+                        graphics_endpoint: None,
+                        pane_colors: false,
+                        glyph_state: false,
+                        glyph_render: false,
+                        program_status: false,
+                    },
                 )
             })
         };
@@ -2436,15 +2464,20 @@ mod spawn_claim_tests {
             let registry = registry.clone();
             let provisional = provisional.clone();
             std::thread::spawn(move || {
-                publish_spawn(
+                publish_spawn_with_glyphs(
                     provisional,
                     server.try_clone().unwrap(),
                     server,
                     registry,
                     true,
-                    false,
-                    None,
-                    false,
+                    PublishOptions {
+                        allow_remote_clipboard_write: false,
+                        graphics_endpoint: None,
+                        pane_colors: false,
+                        glyph_state: false,
+                        glyph_render: false,
+                        program_status: false,
+                    },
                 )
             })
         };
@@ -2488,9 +2521,11 @@ mod spawn_claim_tests {
         };
         let pane = DaemonPane::spawn(
             76,
-            Some(directory),
-            SIZE,
-            Some(shell),
+            crate::daemon::pane::PaneSpawnSpec {
+                cwd: Some(directory),
+                size: SIZE,
+                shell: Some(shell),
+            },
             None,
             None,
             None,
@@ -2513,15 +2548,20 @@ mod spawn_claim_tests {
             .unwrap();
         let registry_task = registry.clone();
         let worker = std::thread::spawn(move || {
-            publish_spawn(
+            publish_spawn_with_glyphs(
                 pane,
                 server.try_clone().unwrap(),
                 server,
                 registry_task,
                 true,
-                false,
-                None,
-                false,
+                PublishOptions {
+                    allow_remote_clipboard_write: false,
+                    graphics_endpoint: None,
+                    pane_colors: false,
+                    glyph_state: false,
+                    glyph_render: false,
+                    program_status: false,
+                },
             )
         });
         assert_eq!(

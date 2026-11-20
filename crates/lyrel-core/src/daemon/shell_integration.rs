@@ -791,10 +791,10 @@ pub(crate) fn is_our_zdotdir(path: &str) -> bool {
 }
 
 fn real_user_zdotdir() -> Option<String> {
-    if let Ok(z) = std::env::var("LYREL_USER_ZDOTDIR") {
-        if !z.is_empty() {
-            return Some(z);
-        }
+    if let Ok(z) = std::env::var("LYREL_USER_ZDOTDIR")
+        && !z.is_empty()
+    {
+        return Some(z);
     }
     std::env::var("ZDOTDIR")
         .ok()
@@ -2531,10 +2531,10 @@ mod tests {
             // the A mark) are separate writes: breaking the moment the mark
             // arrives can sample the transcript before the report does. Hold
             // the pty open briefly so the cycle's tail lands.
-            if let Some(at) = seen_fail {
-                if at.elapsed() >= std::time::Duration::from_millis(500) {
-                    break;
-                }
+            if let Some(at) = seen_fail
+                && at.elapsed() >= std::time::Duration::from_millis(500)
+            {
+                break;
             }
         }
         // Git's bin/bash.exe is a launcher: killing and waiting for that process
@@ -3799,7 +3799,9 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
             }
         }
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| u16::from_le_bytes([p[0], p[1]]))
             .collect();
         String::from_utf16(&units).expect("valid UTF-16LE")

@@ -487,7 +487,7 @@ mod tests {
             max_millis: u64::MAX,
             ..ContentLimits::default()
         };
-        let found = search(&[dir.clone()], &q("needle"), &limits).unwrap();
+        let found = search(std::slice::from_ref(&dir), &q("needle"), &limits).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(found.hits.len(), 1);
     }

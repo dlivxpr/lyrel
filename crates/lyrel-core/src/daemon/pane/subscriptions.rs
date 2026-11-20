@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::GraphicsFrame;
 use super::facts::PaneFacts;
-use super::graphics_admission::GraphicsAdmissionBroker;
+use super::graphics_admission::{GraphicsAdmissionBroker, OfferSpec};
 use super::replay::{RING_CAP, ReplayRing};
 use crate::core::glyph_protocol::{GlyphFrame, GlyphSession};
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsState};
@@ -34,11 +34,13 @@ impl GraphicsReplayAdmission {
         for &(key, width, height, encoded, metadata) in &resources {
             let Some(grant) = broker.request_after_release(
                 Some(endpoint),
-                key,
-                width,
-                height,
-                encoded,
-                metadata,
+                OfferSpec {
+                    key,
+                    width,
+                    height,
+                    encoded_bytes: encoded,
+                    metadata_bytes: metadata,
+                },
                 || current(&resources),
             ) else {
                 if !current(&resources) {
@@ -211,6 +213,38 @@ pub(super) struct ReplayState<'a> {
     pub ssh_phase: &'a Option<SshPhase>,
     pub alive: bool,
     pub exit_code: Option<i32>,
+}
+
+/// Capability flags a controller or observer negotiated when it attached.
+/// Bundled so the subscription entry points stay under the argument limit;
+/// stored on the subscriber and threaded into replays.
+#[derive(Clone, Copy, Default)]
+pub(super) struct SubscriberCaps {
+    /// The attaching client runs a foreground command (prompt readouts).
+    pub foreground: bool,
+    /// The consumer takes authoritative colour frames.
+    pub colors: bool,
+    /// The consumer takes the retained glyph projection.
+    pub glyphs: bool,
+    /// The consumer renders the complete monochrome contract.
+    pub glyph_render: bool,
+    /// The consumer takes the program-status projection.
+    pub program: bool,
+}
+
+/// A controller attach: who subscribes, the gate its output is charged to,
+/// and its clipboard permission.
+pub(super) struct ControllerAttach<'a> {
+    pub subscriber: Arc<Sender<DaemonMsg>>,
+    pub gate: &'a OutputGate,
+    pub allow_clipboard: bool,
+}
+
+/// An observer attach: who observes and the gate its replay and live share
+/// are charged to.
+pub(super) struct ObserverAttach {
+    pub subscriber: Arc<Sender<DaemonMsg>>,
+    pub gate: Arc<OutputGate>,
 }
 
 impl Subscriptions {
@@ -426,10 +460,10 @@ impl Subscriptions {
         gate: &OutputGate,
         graphics: &mut Option<GraphicsState>,
     ) {
-        if let Some(sub) = &self.subscriber {
-            if sub.send(msg.clone()).is_ok() {
-                gate.add(len);
-            }
+        if let Some(sub) = &self.subscriber
+            && sub.send(msg.clone()).is_ok()
+        {
+            gate.add(len);
         }
         self.observers
             .retain(|observer| send_to_observer(observer, &msg, len));
@@ -505,35 +539,30 @@ impl Subscriptions {
         &mut self,
         replay: ReplayState<'_>,
         graphics: &mut Option<GraphicsState>,
-        subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
-        gate: &OutputGate,
-        allow_clipboard: bool,
-        foreground: bool,
-        pane_colors: bool,
-        glyph_state: bool,
-        glyph_render: bool,
-        program_status: bool,
+        attach: ControllerAttach<'_>,
+        caps: SubscriberCaps,
     ) -> u64 {
-        let subscriber = subscriber.into();
+        let subscriber = attach.subscriber;
         self.subscriber_epoch += 1;
-        self.allow_remote_clipboard_write =
-            self.clipboard_write_from_spec.unwrap_or(allow_clipboard);
-        self.subscriber_colors = pane_colors;
-        self.subscriber_glyphs = glyph_state;
-        self.subscriber_glyph_render = glyph_render;
-        self.subscriber_program = program_status;
-        gate.reset();
+        self.allow_remote_clipboard_write = self
+            .clipboard_write_from_spec
+            .unwrap_or(attach.allow_clipboard);
+        self.subscriber_colors = caps.colors;
+        self.subscriber_glyphs = caps.glyphs;
+        self.subscriber_glyph_render = caps.glyph_render;
+        self.subscriber_program = caps.program;
+        attach.gate.reset();
         let epoch = self.subscriber_epoch;
         let (queued, complete) = replay_state(
             &replay,
             graphics.as_ref(),
             &subscriber,
-            foreground,
-            pane_colors,
-            glyph_state,
-            program_status,
+            caps.foreground,
+            caps.colors,
+            caps.glyphs,
+            caps.program,
         );
-        gate.add(queued);
+        attach.gate.add(queued);
         if complete {
             self.subscriber = Some(subscriber);
         } else {
@@ -554,10 +583,7 @@ impl Subscriptions {
         graphics: &Option<GraphicsState>,
         observer: impl Into<Arc<Sender<DaemonMsg>>>,
         gate: Arc<OutputGate>,
-        foreground: bool,
-        pane_colors: bool,
-        glyph_state: bool,
-        program_status: bool,
+        caps: SubscriberCaps,
     ) -> u64 {
         let observer = observer.into();
         self.observer_seq += 1;
@@ -566,10 +592,10 @@ impl Subscriptions {
             &replay,
             graphics.as_ref(),
             &observer,
-            foreground,
-            pane_colors,
-            glyph_state,
-            program_status,
+            caps.foreground,
+            caps.colors,
+            caps.glyphs,
+            caps.program,
         );
         gate.add(queued);
         if complete {
@@ -577,8 +603,8 @@ impl Subscriptions {
                 id: self.observer_seq,
                 tx: observer,
                 gate,
-                colors: pane_colors,
-                program: program_status,
+                colors: caps.colors,
+                program: caps.program,
             });
         }
         self.observer_seq
@@ -588,32 +614,15 @@ impl Subscriptions {
         &mut self,
         replay: ReplayState<'_>,
         graphics: &mut Option<GraphicsState>,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        gate: &OutputGate,
-        allow_clipboard: bool,
+        attach: ControllerAttach<'_>,
         admission: GraphicsReplayAdmission,
-        foreground: bool,
-        pane_colors: bool,
-        glyph_state: bool,
-        glyph_render: bool,
-        program_status: bool,
+        caps: SubscriberCaps,
     ) -> Result<Option<u64>, String> {
-        self.publish_evictions(graphics, gate);
+        self.publish_evictions(graphics, attach.gate);
         if !admission.activate(&self.admission, graphics)? {
             return Ok(None);
         }
-        let epoch = self.attach(
-            replay,
-            graphics,
-            subscriber,
-            gate,
-            allow_clipboard,
-            foreground,
-            pane_colors,
-            glyph_state,
-            glyph_render,
-            program_status,
-        );
+        let epoch = self.attach(replay, graphics, attach, caps);
         if self.controller_epoch() != Some(epoch) {
             return Err("Graphics replay failed".into());
         }
@@ -625,29 +634,16 @@ impl Subscriptions {
         &mut self,
         replay: ReplayState<'_>,
         graphics: &mut Option<GraphicsState>,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        gate: Arc<OutputGate>,
+        observe: ObserverAttach,
         controller_gate: &OutputGate,
         admission: GraphicsReplayAdmission,
-        foreground: bool,
-        pane_colors: bool,
-        glyph_state: bool,
-        program_status: bool,
+        caps: SubscriberCaps,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, controller_gate);
         if !admission.activate(&self.admission, graphics)? {
             return Ok(None);
         }
-        let id = self.observe(
-            replay,
-            graphics,
-            subscriber,
-            gate,
-            foreground,
-            pane_colors,
-            glyph_state,
-            program_status,
-        );
+        let id = self.observe(replay, graphics, observe.subscriber, observe.gate, caps);
         if !self.has_observer(id) {
             return Err("Graphics replay failed".into());
         }
@@ -734,7 +730,7 @@ fn replay_state(
     // had behind the program) is painted into the alternate buffer, which has
     // no history to keep it and is left behind when the program exits. What
     // the ring carries always wins on its own terms.
-    if let Some(modes) = st.ring.replay_prelude(&st.modes) {
+    if let Some(modes) = st.ring.replay_prelude(st.modes) {
         send(DaemonMsg::Snapshot(modes));
     }
     st.ring.replay(&mut send);

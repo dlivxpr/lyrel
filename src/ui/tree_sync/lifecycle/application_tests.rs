@@ -13,8 +13,10 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
     let handle = vcx.window_handle();
     let weak = app.downgrade();
     let (ws, epoch, machine, pane) = app.update_in(&mut vcx, |app, window, cx| {
-        let mut view = lyrel_ui_base::session::WindowView::default();
-        view.id = app.workspace;
+        let view = lyrel_ui_base::session::WindowView {
+            id: app.workspace,
+            ..Default::default()
+        };
         let ws = view.id;
         WorkspaceStore::install_for_test(
             cx,

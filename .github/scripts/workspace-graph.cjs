@@ -5,11 +5,10 @@ const path = require('node:path');
 
 const editor = 'lyrel-workbench-editor';
 const terminal = 'lyrel-terminal';
+const desktopMembers = ['lyrel', 'lyrel-updater', 'lyrel-ui-base', 'lyrel-markdown-editor', terminal, editor];
 const workspaceMembers = new Set([
   'lyrel-protocol', 'lyrel-core', 'lyrel-server', 'lyrel-cli',
-  'lyrel-document', 'lyrel-insights',
-  'lyrel', 'lyrel-updater', 'lyrel-ui-base', 'lyrel-markdown-editor', terminal, editor,
-  'lyrel-test-support',
+  'lyrel-document', 'lyrel-insights', 'lyrel-test-support', ...desktopMembers,
 ]);
 const desktopTargets = ['x86_64-pc-windows-msvc', 'aarch64-apple-darwin'];
 const headlessTargets = ['x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl'];
@@ -19,13 +18,15 @@ const forbidden = {
   'lyrel-server': ['lyrel-insights'],
   'lyrel-ui-base': ['lyrel', 'lyrel-core', terminal, editor, 'rio-vt', 'rio-graphics', ...editorEngines],
   [terminal]: ['lyrel', editor, ...editorEngines],
-  [editor]: ['lyrel', terminal],
+  // The Markdown image proxy resolver is injected by the desktop shell, so
+  // the workbench links none of the installer's archive machinery.
+  [editor]: ['lyrel', terminal, 'async_zip'],
 };
 const shellEngines = [
   'rusqlite', 'rusty-leveldb', 'aes-gcm', ...editorEngines, 'lsp-types', 'tree-sitter',
 ];
 
-function graphViolations(packages, normal) {
+function graphViolations(packages, normal, headless) {
   const byName = new Map(packages.map(pkg => [pkg.name, pkg]));
   const missing = [...workspaceMembers].filter(name => !byName.has(name));
   const unexpected = [...byName.keys()].filter(name => !workspaceMembers.has(name));
@@ -72,12 +73,23 @@ function graphViolations(packages, normal) {
   for (const [from, to] of [[terminal, editor], [editor, terminal]]) {
     if (byName.get(from).dependencies.some(dep => dep.name === to)) violations.push(`${from} declares a direct dependency on ${to}`);
   }
+  // The workbench editor gets its Markdown image proxy resolver injected by
+  // the desktop shell; enabling lyrel-core's installer feature would compile
+  // the downloader back into the editor's dependency graph.
+  for (const dependency of byName.get(editor).dependencies) {
+    if (dependency.name === 'lyrel-core' && dependency.features?.includes('remote-install')) {
+      violations.push(`${editor} must not enable the remote-install feature on lyrel-core`);
+    }
+  }
   for (const [name, denied] of Object.entries(forbidden)) {
     const dependencies = normal.get(name);
     if (!dependencies) throw Error(`Missing resolved production graph: ${name}`);
     for (const dependency of denied) {
       if (dependencies.has(dependency)) violations.push(`${name} reaches ${dependency} through normal dependencies`);
     }
+  }
+  for (const name of desktopMembers) {
+    if (headless.has(name)) violations.push(`Linux headless production graph reaches ${name}`);
   }
   return violations;
 }
@@ -89,18 +101,23 @@ function main() {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   const { packages } = JSON.parse(cargo('metadata', '--locked', '--format-version', '1', '--no-deps'));
+  const normalNames = (targets, ...selection) => {
+    const tree = cargo('tree', '--locked', '--all-features', ...targets.flatMap(target => ['--target', target]),
+      ...selection, '--edges', 'normal', '--prefix', 'none', '--format', '{p}', '--color', 'never');
+    return new Set(tree.trim().split(/\r?\n/).map(line => line.split(' ', 1)[0]));
+  };
   // metadata keeps dev/build edges and target-qualified declarations for the
   // direct checks. cargo tree selects a package's resolved normal edges, so a
   // dev-only fixture doesn't masquerade as part of a shipped binary.
   const normal = new Map(Object.keys(forbidden).map((name) => {
     const targets = name === 'lyrel-cli' || name === 'lyrel-server' ? [...desktopTargets, ...headlessTargets] : desktopTargets;
-    const tree = cargo('tree', '--locked', '--all-features', ...targets.flatMap(target => ['--target', target]), '-p', name,
-      '--edges', 'normal', '--prefix', 'none', '--format', '{p}', '--color', 'never');
-    const names = new Set(tree.trim().split(/\r?\n/).map(line => line.split(' ', 1)[0]));
+    const names = normalNames(targets, '-p', name);
     if (!names.delete(name)) throw Error(`Cargo did not resolve the package ${name}`);
     return [name, names];
   }));
-  const violations = graphViolations(packages, normal);
+  // --exclude removes workspace roots, not dependencies reached from them.
+  const headless = normalNames(headlessTargets, '--workspace', ...desktopMembers.flatMap(name => ['--exclude', name]));
+  const violations = graphViolations(packages, normal, headless);
   if (violations.length) {
     console.error(violations.join('\n'));
     process.exitCode = 1;

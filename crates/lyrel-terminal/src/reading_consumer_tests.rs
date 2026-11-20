@@ -582,7 +582,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
             .update(cx, |_, window, cx| {
                 view.update(cx, |view, cx| {
                     view.open_search(window, cx);
-                    let input = view.search.as_ref().unwrap().input.clone();
+                    let input = view.search_input().unwrap().clone();
                     input.update(cx, |input, cx| input.set_value(query, window, cx));
                     view.recompute_matches(cx);
                 });
@@ -591,7 +591,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.search.as_ref().unwrap().matches.len(),
+                view.search_match_count(),
                 expected,
                 "query {query} describes semantic reading rows, not replacements"
             );
@@ -615,7 +615,7 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
             });
             graphics_assert_production_paint(window, &view, cx);
             assert_eq!(
-                view.read_with(cx, |view, _| view.search.as_ref().unwrap().current_index),
+                view.read_with(cx, |view, _| view.search_current_index()),
                 Some(0)
             );
             let stepped = reading_painted_search_runs(window, &view, cx);
@@ -1080,7 +1080,6 @@ fn reading_fractional_sliver_keeps_selection_geometry_and_copy(cx: &mut TestAppC
                 .find(|quad| quad.bounds == expected)
                 .expect("the selected retained row must paint before scrolling")
                 .background
-                .clone()
         })
         .unwrap();
     graphics_send_fixture(&view, cx, 142, &b"\x1b[24;1H\r\nADVANCE".repeat(20));
@@ -1177,20 +1176,12 @@ fn reading_ordered_resize_harness(
     );
     let (client, sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        view.adopt_relink(
-            client,
-            Vec::new(),
-            &lyrel_ui_base::route::PaneRoute::Remote {
-                header: Box::new(lyrel_core::daemon::router::RouteHeader::wsl(
-                    "reading-resize-fixture",
-                )),
-                resize_echo: true,
-            },
-            TermSize::new(80, 24),
-            10,
-            20,
-            cx,
-        )
+        view.adopt_relink(client, Vec::new(), &lyrel_ui_base::route::PaneRoute::Remote {
+            header: Box::new(lyrel_core::daemon::router::RouteHeader::wsl(
+                "reading-resize-fixture",
+            )),
+            resize_echo: true,
+        }, crate::remote::RelinkLayout { size: TermSize::new(80, 24), cell_w: 10, cell_h: 20 }, cx)
         .unwrap();
     });
     (view, window, sender)
@@ -1223,7 +1214,11 @@ fn reading_ordered_size(sender: &mut lyrel_core::daemon::transport::Stream, cols
     .unwrap();
 }
 
-fn reading_ordered_screen(sender: &mut lyrel_core::daemon::transport::Stream, origin: i64, epoch: u64) {
+fn reading_ordered_screen(
+    sender: &mut lyrel_core::daemon::transport::Stream,
+    origin: i64,
+    epoch: u64,
+) {
     use lyrel_core::core::kitty_graphics::GraphicsUpdate;
 
     send_graphics(

@@ -121,7 +121,7 @@ fn native_pictures(view: &TerminalView, scale: f32) -> Vec<NativePicture> {
             );
             let bytes = image.data.as_ref()?.as_bytes(0)?;
             let mut counts = std::collections::BTreeMap::new();
-            for pixel in bytes.chunks_exact(4) {
+            for pixel in bytes.as_chunks::<4>().0 {
                 *counts
                     .entry([pixel[0], pixel[1], pixel[2], pixel[3]])
                     .or_insert(0usize) += 1;
@@ -242,7 +242,7 @@ fn native_assert_cards(
         }
         drop(term);
         assert_eq!(more.len(), 2, "one +1 more container witness per user/tool card; {diagnostics}");
-        for (card, marker) in cards.chunks_exact(3).zip(more) {
+        for (card, marker) in cards.as_chunks::<3>().0.iter().zip(more) {
             let [left, middle, right] = [card[0].bounds, card[1].bounds, card[2].bounds];
             let start_col = card[0].placement.anchor_col;
             let start_row = card[0].placement.anchor_row;

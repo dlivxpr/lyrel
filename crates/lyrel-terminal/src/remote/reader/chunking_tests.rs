@@ -163,17 +163,19 @@ fn a_batch_fed_in_slices_parses_as_one() {
         .collect();
     let mut stops = Vec::new();
     let fed = feed_grid(
-        &term,
-        &mut processor,
-        VoidListener,
-        &mut KeyboardStacks::default(),
+        &mut FeedSession {
+            term: &term,
+            proxy: &VoidListener,
+            processor: &mut processor,
+            keyboard: &mut KeyboardStacks::default(),
+            history_limit: None,
+            presentation: None,
+            glyph: None,
+            colors: None,
+            quit: &AtomicBool::new(false),
+        },
         &bytes,
         cuts,
-        None,
-        None,
-        None,
-        None,
-        &AtomicBool::new(false),
         |term, _| stops.push(cursor(term)),
     );
     assert!(fed.is_some());
@@ -188,17 +190,19 @@ fn a_retired_reader_leaves_the_grid_alone() {
     let before = screen(&term.lock());
     let mut processor = Processor::default();
     let fed = feed_grid(
-        &term,
-        &mut processor,
-        VoidListener,
-        &mut KeyboardStacks::default(),
+        &mut FeedSession {
+            term: &term,
+            proxy: &VoidListener,
+            processor: &mut processor,
+            keyboard: &mut KeyboardStacks::default(),
+            history_limit: None,
+            presentation: None,
+            glyph: None,
+            colors: None,
+            quit: &AtomicBool::new(true),
+        },
         b"stale",
         Vec::new(),
-        None,
-        None,
-        None,
-        None,
-        &AtomicBool::new(true),
         |_, _| {},
     );
     assert!(fed.is_none());

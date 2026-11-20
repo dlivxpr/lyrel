@@ -260,45 +260,50 @@ fn preedit_has_ink(marked: &str) -> bool {
         .any(|c| !c.is_whitespace() && !c.is_control() && c.width().unwrap_or(0) > 0)
 }
 
+/// What and where an IME preedit paints: the marked string and the cell the
+/// cursor sits on, if the grid gave one.
+pub struct Preedit<'a> {
+    pub marked: &'a str,
+    pub cursor: Option<(usize, usize)>,
+}
+
 pub fn paint_marked(
     window: &mut Window,
     cx: &mut App,
     geom: &CellGeom,
-    cursor: Option<(usize, usize)>,
-    marked: &str,
+    preedit: &Preedit<'_>,
     font_size: Pixels,
     base_font: &Font,
-    default_fg: Hsla,
-    default_bg: Hsla,
+    colors: &PaintColors,
 ) {
-    if !preedit_has_ink(marked) {
+    if !preedit_has_ink(preedit.marked) {
         return;
     }
-    let Some((row, col)) = cursor else {
+    let Some((row, col)) = preedit.cursor else {
         return;
     };
     let x = geom.origin.x + geom.cell_width * (col as f32);
     let y = geom.origin.y + geom.line_height * (row as f32);
     let run = TextRun {
-        len: marked.len(),
+        len: preedit.marked.len(),
         font: base_font.clone(),
-        color: default_fg,
+        color: colors.default_fg,
         background_color: None,
         underline: Some(gpui_kit::UnderlineStyle {
             thickness: px(1.),
-            color: Some(default_fg),
+            color: Some(colors.default_fg),
             wavy: false,
         }),
         strikethrough: None,
     };
     let shaped = window.text_system().shape_line(
-        SharedString::from(marked.to_owned()),
+        SharedString::from(preedit.marked.to_owned()),
         font_size,
         &[run],
         None,
     );
     let bg_rect = Bounds::new(point(x, y), size(shaped.width, geom.line_height));
-    window.paint_quad(fill(bg_rect, default_bg));
+    window.paint_quad(fill(bg_rect, colors.default_bg));
     _ = shaped.paint(
         point(x, y),
         geom.line_height,

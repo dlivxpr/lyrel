@@ -2,8 +2,10 @@
 //! stop a completed backing read before its UI callback, not an executor queue.
 use super::host::{NamespaceHost, ReadKind};
 use super::*;
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::file_tree::read_probe::{InstanceTicket, Landing};
+use lyrel_core::core::config::RightPanelTab;
 use lyrel_ui_base::file_search::FileList;
 use lyrel_ui_base::route::PaneWorkspace;
 use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
@@ -72,7 +74,9 @@ impl Replacement {
 }
 
 fn checkpoint(app: &Entity<LyrelApp>, vcx: &VisualTestContext, kind: ReadKind) -> Option<Landing> {
-    app.read_with(vcx, |app, _| app.file_tree.read_probe.checkpoint(kind))
+    app.read_with(vcx, |app, cx| {
+        app.file_tree.read(cx).read_probe.checkpoint(kind)
+    })
 }
 
 fn landed_since(
@@ -82,8 +86,11 @@ fn landed_since(
     host: InstanceTicket,
     before: Option<Landing>,
 ) -> bool {
-    app.read_with(vcx, |app, _| {
-        app.file_tree.read_probe.landed_since(kind, host, before)
+    app.read_with(vcx, |app, cx| {
+        app.file_tree
+            .read(cx)
+            .read_probe
+            .landed_since(kind, host, before)
     })
 }
 
@@ -121,7 +128,7 @@ fn activate(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, host: SharedHos
                 }))
             });
         }
-        HostRegistry::insert(cx, host);
+        HostRegistry::insert(cx, host.clone());
         pane.update(cx, |pane, _| {
             pane.set_git_status_cwd_for_test(Some(PathBuf::from("/repo")))
         });
@@ -150,15 +157,12 @@ fn until(
 }
 
 fn listed(app: &Entity<LyrelApp>, vcx: &VisualTestContext, id: HostId, name: &str) -> bool {
-    app.read_with(vcx, |app, _| {
-        app.file_tree
-            .children
+    app.read_with(vcx, |app, cx| {
+        let tree = app.file_tree.read(cx);
+        tree.children
             .get(id, Path::new("/repo"))
             .is_some_and(|entries| entries.iter().any(|entry| entry.name == name))
-            && !app
-                .file_tree
-                .loads
-                .is_pending(&(id, PathBuf::from("/repo")))
+            && !tree.loads.is_pending(&(id, PathBuf::from("/repo")))
     })
 }
 
@@ -187,7 +191,11 @@ fn host_instance_quick_open_without_cwd_shows_no_roots(cx: &mut TestAppContext) 
     app.update_in(&mut vcx, |app, window, cx| {
         HostRegistry::insert(cx, host.clone());
         assert!(app.file_project_cwds(cx).is_empty());
-        assert!(!app.file_tree.host_matches(&(host.clone() as SharedHost)));
+        assert!(
+            !app.file_tree
+                .read(cx)
+                .host_matches(&(host.clone() as SharedHost))
+        );
         app.quick_open_file(window, cx);
     });
     vcx.run_until_parked();
@@ -275,7 +283,7 @@ fn host_instance_go_to_file_after_hidden_reconnect_uses_current_adapter(cx: &mut
         app.read_with(vcx, |app, cx| {
             app.editor_active_local_file(cx).is_some_and(|file| {
                 file.path() == Path::new("/repo/needle-shared.txt")
-                    && file.input().read(cx).text().to_string() == "current adapter\n"
+                    && file.input().read(cx).text() == "current adapter\n"
             })
         })
     });
@@ -301,15 +309,15 @@ fn host_instance_directory_late_read_cannot_release_reconnected_request(cx: &mut
     until(&mut vcx, "retired directory callback", |vcx| {
         landed_since(&app, vcx, ReadKind::Directory, old_instance, before)
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
+        let tree = app.file_tree.read(cx);
         assert!(
-            app.file_tree
-                .loads
+            tree.loads
                 .is_pending(&(HostId::LOCAL, PathBuf::from("/repo"))),
             "old callback released the new same-key request (ABA)"
         );
         assert!(
-            !app.file_tree
+            !tree
                 .children
                 .get(HostId::LOCAL, Path::new("/repo"))
                 .is_some_and(|entries| entries.iter().any(|entry| entry.name == "old.txt"))
@@ -372,9 +380,9 @@ fn late_searches(cx: &mut TestAppContext, replacement_id: HostId) {
     });
     activate(&app, &mut vcx, fixture.new.clone());
     until(&mut vcx, "replacement name and content searches", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree
-                .search
+        app.read_with(vcx, |app, cx| {
+            let tree = app.file_tree.read(cx);
+            tree.search
                 .hits
                 .iter()
                 .any(|hit| hit.name == "needle-new.txt")
@@ -395,9 +403,10 @@ fn late_searches(cx: &mut TestAppContext, replacement_id: HostId) {
         landed_since(&app, vcx, ReadKind::Names, old_instance, before_names)
             && landed_since(&app, vcx, ReadKind::Contents, old_instance, before_contents)
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.file_tree
+                .read(cx)
                 .search
                 .hits
                 .iter()
@@ -538,19 +547,18 @@ fn host_instance_repo_root_late_read_cannot_release_reconnected_resolution(
     until(&mut vcx, "retired root callback", |vcx| {
         landed_since(&app, vcx, ReadKind::Root, old_instance, before)
     });
-    app.read_with(&vcx, |app, _| {
+    app.read_with(&vcx, |app, cx| {
+        let tree = app.file_tree.read(cx);
         assert!(
-            app.file_tree
-                .repo_root_loads
+            tree.repo_root_loads
                 .is_pending(&(HostId::LOCAL, PathBuf::from("/repo")))
         );
         assert!(
-            app.file_tree
-                .repo_roots
+            tree.repo_roots
                 .get(HostId::LOCAL, Path::new("/repo"))
                 .is_none()
         );
-        assert!(app.file_tree.root_aliases.is_empty());
+        assert!(tree.root_aliases.is_empty());
     });
     new_gate.release();
     until(&mut vcx, "new resolved root", |vcx| {
@@ -577,10 +585,10 @@ fn host_instance_reconnect_watch_keeps_real_external_changes_fresh(cx: &mut Test
         HostRegistry::insert(cx, replacement.clone());
     });
     until(&mut vcx, "replacement watcher", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.watch.is_some()
-                && app
-                    .file_tree
+        app.read_with(vcx, |app, cx| {
+            let tree = app.file_tree.read(cx);
+            tree.watch.is_some()
+                && tree
                     .watch_host
                     .as_ref()
                     .is_some_and(|host| Arc::ptr_eq(host, &replacement))

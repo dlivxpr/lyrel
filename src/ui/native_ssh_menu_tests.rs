@@ -54,9 +54,11 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
         );
         remote_view.id = workspace;
         remote_view.open = true;
-        let mut local = lyrel_ui_base::session::WindowView::default();
-        local.id = other_workspace;
-        local.open = true;
+        let local = lyrel_ui_base::session::WindowView {
+            id: other_workspace,
+            open: true,
+            ..Default::default()
+        };
         WorkspaceStore::install_for_test(
             cx,
             lyrel_ui_base::session::WindowViews {

@@ -16,7 +16,7 @@ enum HostLine {
         count: usize,
         collapsed: bool,
     },
-    Host(SshProfile),
+    Host(Box<SshProfile>),
 }
 
 impl SettingsWindow {
@@ -93,7 +93,7 @@ impl SettingsWindow {
                 .cloned()
                 .collect();
             hits.sort_by(by_name);
-            lines.extend(hits.into_iter().map(HostLine::Host));
+            lines.extend(hits.into_iter().map(|p| HostLine::Host(Box::new(p))));
         } else if show_all {
             let mut groups: Vec<(String, Vec<SshProfile>)> = Vec::new();
             for p in &profiles {
@@ -117,11 +117,11 @@ impl SettingsWindow {
                     collapsed: is_collapsed,
                 });
                 if !is_collapsed {
-                    lines.extend(bucket.into_iter().map(HostLine::Host));
+                    lines.extend(bucket.into_iter().map(|p| HostLine::Host(Box::new(p))));
                 }
             }
         } else {
-            lines.extend(recent.iter().cloned().map(HostLine::Host));
+            lines.extend(recent.iter().cloned().map(|p| HostLine::Host(Box::new(p))));
         }
         let visible: Vec<Uuid> = lines
             .iter()
@@ -235,7 +235,7 @@ impl SettingsWindow {
                     count,
                     collapsed,
                 } => list.child(self.render_host_group_head(&key, count, collapsed, cx)),
-                HostLine::Host(p) => list.child(self.render_host_row(Some(&p), p.id, cx)),
+                HostLine::Host(p) => list.child(self.render_host_row(Some(&*p), p.id, cx)),
             };
         }
 
@@ -548,12 +548,9 @@ impl SettingsWindow {
         let tk = Tk::of(cx);
         let id = p.id;
         let cfg = cx.global::<Config>();
-        let jump = p.jump_host.and_then(|j| {
-            cfg.ssh_profiles
-                .iter()
-                .find(|q| q.id == j)
-                .map(|q| host_title(q))
-        });
+        let jump = p
+            .jump_host
+            .and_then(|j| cfg.ssh_profiles.iter().find(|q| q.id == j).map(host_title));
         let fields: Vec<(&str, String)> = [
             ("HostName", Some(p.host.clone())),
             (

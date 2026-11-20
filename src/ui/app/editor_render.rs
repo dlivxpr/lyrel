@@ -689,7 +689,7 @@ impl LyrelApp {
         // store); the document row itself renders on the editor entity.
         let lsp = self
             .editor
-            .update(cx, |editor, cx| editor.render_lsp_status(&code, cx))
+            .update(cx, |editor, cx| editor.render_lsp_status(code, cx))
             .map(|(element, _)| element);
         self.editor
             .update(cx, |editor, cx| editor.render_status(tab, code, lsp, cx))
@@ -1286,7 +1286,7 @@ impl LyrelApp {
             false => path.display().to_string(),
         };
         menu = menu.item(copy(L10nKey::FileTreeContextCopyPath, full));
-        if let Some(rel) = self.path_under_tree_root(&path) {
+        if let Some(rel) = self.file_tree.read(cx).path_under_root(&path) {
             let rel = match local {
                 true => lyrel_ui_base::path_display::native_separators(&rel)
                     .display()

@@ -1,6 +1,10 @@
 //! Appearance's Theme group: the Light / Dark / System cards, one dropdown
 //! per theme slot with a live preview of the theme under the pointer, and the
 //! editor a duplicated theme opens.
+//!
+//! Arrowing through a slot's menu previews the highlight without mutating
+//! `Config`. The settings view holds the preview lease; a non-persisting
+//! [`SettingsEvent::ApplyTheme`] repaints the desktop and its menus.
 
 use std::rc::Rc;
 
@@ -202,6 +206,110 @@ impl SettingsWindow {
         self.settings_group(Some(t(L10nKey::SettingsThemeIntroTitle)), None, rows, cx)
     }
 
+    /// Every preset a slot's menu lists, in display order: the slot's own
+    /// mode first, the current pick kept even when it belongs to the other
+    /// mode, then the file-backed ones.
+    fn slot_themes(dark_slot: bool, current_id: &str, cx: &App) -> Vec<presets::Theme> {
+        let mut themes: Vec<presets::Theme> = presets::all(cx)
+            .into_iter()
+            .filter(|p| p.dark == dark_slot || p.id == current_id)
+            .collect();
+        themes.sort_by_key(|p| p.path.is_some());
+        themes
+    }
+
+    /// The entries the open slot menu shows once the query box's filter
+    /// applies — the same list the popover renders, so the highlighted row
+    /// names the preset the arrow keys would preview.
+    fn theme_menu_visible_themes(&self, dark_slot: bool, cx: &App) -> Vec<presets::Theme> {
+        let cfg = cx.global::<Config>();
+        let current_id = match (cfg.theme_follow_system, dark_slot) {
+            (false, _) => cfg.theme_preset.clone(),
+            (true, true) => cfg.theme_preset_dark.clone(),
+            (true, false) => cfg.theme_preset_light.clone(),
+        };
+        let query = self
+            .active_settings()
+            .map(|s| s.menu_query.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default();
+        Self::slot_themes(dark_slot, &current_id, cx)
+            .into_iter()
+            .filter(|p| query.is_empty() || p.name.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// Apply the highlighted preset to the live desktop, not `Config`.
+    fn preview_theme_menu_selection(&mut self, dark_slot: bool, cx: &mut Context<Self>) {
+        if self.theme_draft_dirty() {
+            return;
+        }
+        let Some(highlight) = self.active_settings().map(|s| s.menu_hi) else {
+            return;
+        };
+        let Some(pick) = self
+            .theme_menu_visible_themes(dark_slot, cx)
+            .get(highlight)
+            .map(|theme| theme.id.clone())
+        else {
+            return;
+        };
+        let state = self
+            .active_settings_mut()
+            .expect("settings present: checked above");
+        state.preset_preview = Some(lyrel_ui_base::presentation::preview_preset(pick, cx));
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
+        cx.notify();
+    }
+
+    /// Moves the open theme menu's highlight one row, live-previewing the
+    /// newly highlighted preset as it goes. A no-op at the list's edge, where
+    /// the previewed theme is already the applied one.
+    pub(crate) fn move_theme_menu_highlight(
+        &mut self,
+        downwards: bool,
+        dark_slot: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let len = self.theme_menu_visible_themes(dark_slot, cx).len();
+        let mut moved = false;
+        if let Some(s) = self.active_settings_mut() {
+            let hi = s.menu_hi.min(len.saturating_sub(1));
+            let next = if downwards {
+                (hi + 1).min(len.saturating_sub(1))
+            } else {
+                hi.saturating_sub(1)
+            };
+            moved = next != hi;
+            s.menu_hi = next;
+            s.menu_scroll.scroll_to_item(s.menu_hi);
+        }
+        if moved {
+            // Show the highlighted preset live, in memory only;
+            // `config.json` waits for the confirming pick.
+            self.preview_theme_menu_selection(dark_slot, cx);
+        }
+    }
+
+    /// End any live preset preview before dismissing or confirming its picker.
+    pub(crate) fn cancel_preset_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.active_settings_mut() else {
+            return;
+        };
+        if state.preset_preview.take().is_none() {
+            return;
+        }
+        cx.emit(SettingsEvent::ApplyTheme {
+            persist: false,
+            refresh_windows: false,
+            rebuild_editor: true,
+        });
+        cx.notify();
+    }
+
     fn theme_slot_dropdown(&self, dark_slot: bool, cx: &mut Context<Self>) -> AnyElement {
         let tk = Tk::of(cx);
         let cfg = cx.global::<Config>();
@@ -219,11 +327,7 @@ impl SettingsWindow {
         .into();
         let open = self.settings_menu_open(&id);
 
-        let mut themes: Vec<presets::Theme> = presets::all(cx)
-            .into_iter()
-            .filter(|p| p.dark == dark_slot || p.id == current_id)
-            .collect();
-        themes.sort_by_key(|p| p.path.is_some());
+        let themes = Self::slot_themes(dark_slot, &current_id, cx);
         let start = themes.iter().position(|p| p.id == current_id).unwrap_or(0);
 
         let sw = Swatch::of(&current);
@@ -438,15 +542,7 @@ impl SettingsWindow {
                 let len = key_picks.len();
                 match key {
                     "down" | "up" => {
-                        if let Some(s) = this.active_settings_mut() {
-                            let hi = s.menu_hi.min(len.saturating_sub(1));
-                            s.menu_hi = if key == "down" {
-                                (hi + 1).min(len.saturating_sub(1))
-                            } else {
-                                hi.saturating_sub(1)
-                            };
-                            s.menu_scroll.scroll_to_item(s.menu_hi);
-                        }
+                        this.move_theme_menu_highlight(key == "down", dark_slot, cx);
                         cx.stop_propagation();
                         cx.notify();
                     }

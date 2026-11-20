@@ -35,9 +35,9 @@ use super::completion::state::TerminalCompletion;
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::history_session::TerminalHistory;
 use super::link::LinkInteraction;
-use super::remote::RemoteTerminal;
+use super::remote::{RelinkLayout, RemoteTerminal};
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
-use super::search::SearchState;
+use super::search_controller::TerminalSearch;
 #[cfg(test)]
 use super::typeahead::RawInput;
 use lyrel_core::core::config::BellMode;
@@ -329,22 +329,18 @@ pub struct TerminalView {
     /// The scrollback bar's end of the grid: where it thinks the viewport is,
     /// and where it has asked for it to go. See [`super::scrollbar`].
     pub scroll_handle: TerminalScrollHandle,
-    pub search: Option<SearchState>,
-    pub search_focused: bool,
+    /// The floating find bar: the live session while the bar is open, the
+    /// persisted toggles and last query, and the debounced rescan's epoch and
+    /// latch. Every transition goes through [`TerminalSearch`] so a close or
+    /// reopen cannot leave a stale rescan armed — see
+    /// [`super::search_controller`]. Crate-internal: the pane's own painters
+    /// and search logic reach it only through the controller's methods, and
+    /// everyone else through the behavioral `search_*` accessors.
+    pub(crate) search: TerminalSearch,
     /// The message box docked under an agent, once it has been asked for —
     /// see [`super::composer`].
     pub composer: Option<super::composer::Composer>,
     pub composer_focused: bool,
-    pub search_case_sensitive: bool,
-    pub search_regex: bool,
-    pub search_regex_error: bool,
-    pub search_last_query: String,
-    /// Bumped by every wakeup that reaches an open search bar, so the pending
-    /// rescan can tell "the pane went quiet" from "more output landed".
-    pub search_scan_epoch: u64,
-    /// Whether a rescan is already waiting out the debounce. One task at a
-    /// time, however fast the pane is printing.
-    pub search_scan_armed: bool,
     pub bell_flash: bool,
     /// Bumped by every bell, so only the timer armed by the latest one clears
     /// the flash: a burst of bells holds one steady flash instead of strobing.
@@ -802,17 +798,10 @@ impl TerminalView {
             report_mouse,
             links: LinkInteraction::default(),
             scroll_handle: TerminalScrollHandle::default(),
-            search: None,
+            search: TerminalSearch::default(),
             dim: 1.,
-            search_focused: false,
             composer: None,
             composer_focused: false,
-            search_case_sensitive: false,
-            search_regex: false,
-            search_regex_error: false,
-            search_last_query: String::new(),
-            search_scan_epoch: 0,
-            search_scan_armed: false,
             bell_flash: false,
             bell_epoch: 0,
             last_at_prompt: false,
@@ -901,7 +890,7 @@ impl TerminalView {
                 self.retry_grid_when_available(cx);
             }
         }
-        if cols_changed && self.search.is_some() {
+        if cols_changed && self.search.is_open() {
             self.refresh_matches_after_output(cx);
         }
     }
@@ -1041,12 +1030,10 @@ impl TerminalView {
         stream: lyrel_core::daemon::transport::Stream,
         buffered: Vec<u8>,
         route: &lyrel_ui_base::route::PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None, cx)
+        self.adopt_relink_with_version(stream, buffered, route, layout, None, cx)
     }
 
     pub fn adopt_relink_with_version(
@@ -1054,9 +1041,7 @@ impl TerminalView {
         stream: lyrel_core::daemon::transport::Stream,
         buffered: Vec<u8>,
         route: &lyrel_ui_base::route::PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         version: Option<lyrel_core::daemon::protocol::DaemonVersion>,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
@@ -1065,7 +1050,7 @@ impl TerminalView {
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
         self.terminal
-            .adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, version)?;
+            .adopt_relink_with_version(stream, buffered, route, layout, version)?;
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -1893,11 +1878,13 @@ impl TerminalView {
                 let selected = self.selection_scroll.start_presented(
                     &mut self.grid_buf,
                     geom.cols,
-                    col,
-                    row,
-                    left,
-                    clicks,
-                    shift,
+                    super::selection_scroll::PointerGesture {
+                        col,
+                        row,
+                        left,
+                        clicks,
+                        shift,
+                    },
                     cx.global::<Config>(),
                 );
                 self.set_presented_selection(selected);
@@ -1913,11 +1900,13 @@ impl TerminalView {
         let mut term = term.unwrap();
         self.selection_scroll.start(
             &mut term,
-            col,
-            row,
-            left,
-            clicks,
-            shift,
+            super::selection_scroll::PointerGesture {
+                col,
+                row,
+                left,
+                clicks,
+                shift,
+            },
             cx.global::<Config>(),
         );
         drop(term);
@@ -2130,7 +2119,7 @@ impl TerminalView {
             self.selection_scroll
                 .scroll_to(&mut term, target, &self.terminal);
         }
-        let pinned = self.search.is_some()
+        let pinned = self.search.is_open()
             || self.selection_scroll.has_selection()
             || self.selection_scroll.is_selecting();
         self.selection_scroll.set_reading_pinned(pinned);
@@ -2953,7 +2942,7 @@ mod tests {
 /// differently — `socketpair` there, a loopback connect here — and every gpui
 /// test in this crate is portable once it goes through this instead of naming
 /// `UnixStream` itself.
-#[cfg(any(test, feature = "native-markdown-tests"))]
+#[cfg(any(test, feature = "test-support", feature = "native-markdown-tests"))]
 pub fn test_stream_pair() -> (
     lyrel_core::daemon::transport::Stream,
     lyrel_core::daemon::transport::Stream,
@@ -3115,7 +3104,7 @@ mod gpui_tests {
             .unwrap();
 
         let report = |status: AgentStatus, daemon: &mut Stream| {
-            DaemonMsg::AgentStatus(Some(AgentSessionState {
+            DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
                 status,
                 message: None,
                 session_id: Some("sid-abc".into()),
@@ -3129,7 +3118,7 @@ mod gpui_tests {
                 pending_stop: false,
                 readout: Default::default(),
                 since_ms: None,
-            }))
+            })))
             .encode(daemon)
             .unwrap();
         };
@@ -3175,7 +3164,7 @@ mod gpui_tests {
         DaemonMsg::Cwd(launched_in.clone())
             .encode(&mut daemon)
             .unwrap();
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Working,
             message: None,
             session_id: Some("sid-wt".into()),
@@ -3189,7 +3178,7 @@ mod gpui_tests {
             pending_stop: false,
             readout: Default::default(),
             since_ms: None,
-        }))
+        })))
         .encode(&mut daemon)
         .unwrap();
         daemon.flush().unwrap();
@@ -4537,9 +4526,11 @@ mod gpui_tests {
                     new_client,
                     Vec::new(),
                     &lyrel_ui_base::route::PaneRoute::Local,
-                    TermSize::new(100, 30),
-                    8,
-                    17,
+                    RelinkLayout {
+                        size: TermSize::new(100, 30),
+                        cell_w: 8,
+                        cell_h: 17,
+                    },
                     cx,
                 )
                 .expect("the swap itself cannot fail");
@@ -4613,40 +4604,49 @@ mod gpui_tests {
                     window: &mut Window,
                     cx: &mut Context<TerminalView>,
                 ) {
-                    let input = view.search.as_ref().unwrap().input.clone();
+                    let input = view.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value(q, window, cx));
                     view.recompute_matches(cx);
                 }
 
                 view.open_search(window, cx);
-                assert!(view.search.is_some(), "Cmd+F opens the bar");
+                assert!(view.is_search_open(), "Cmd+F opens the bar");
 
                 set_query(view, "world", window, cx);
-                assert_eq!(view.search.as_ref().unwrap().matches.len(), 3);
-                assert!(!view.search_regex_error);
+                assert_eq!(view.search_match_count(), 3);
+                assert!(!view.search_has_regex_error());
 
-                view.search_case_sensitive = true;
-                view.recompute_matches(cx);
-                assert_eq!(view.search.as_ref().unwrap().matches.len(), 1);
-                view.search_case_sensitive = false;
+                view.toggle_search_case(cx);
+                assert_eq!(
+                    view.search_match_count(),
+                    1,
+                    "case-sensitive leaves only the lowercase line"
+                );
+                view.toggle_search_case(cx);
 
                 set_query(view, "wor.d", window, cx);
-                assert_eq!(view.search.as_ref().unwrap().matches.len(), 0);
-                view.search_regex = true;
-                view.recompute_matches(cx);
-                assert_eq!(view.search.as_ref().unwrap().matches.len(), 3);
+                assert_eq!(
+                    view.search_match_count(),
+                    0,
+                    "plain text does not match through the dot"
+                );
+                view.toggle_search_regex(cx);
+                assert_eq!(
+                    view.search_match_count(),
+                    3,
+                    "regex matches through the dot"
+                );
 
-                view.search_regex = true;
                 set_query(view, "(", window, cx);
-                assert!(view.search_regex_error);
-                assert_eq!(view.search.as_ref().unwrap().matches.len(), 0);
-                view.search_regex = false;
+                assert!(view.search_has_regex_error());
+                assert_eq!(view.search_match_count(), 0);
+                view.toggle_search_regex(cx);
                 view.recompute_matches(cx);
-                assert!(!view.search_regex_error);
+                assert!(!view.search_has_regex_error());
 
                 view.close_search(window, cx);
-                assert_eq!(view.search_last_query, "(");
-                assert!(view.search.is_none());
+                assert_eq!(view.search.last_query(), "(");
+                assert!(!view.is_search_open());
             })
             .unwrap();
     }
@@ -4684,10 +4684,10 @@ mod gpui_tests {
             .update(cx, |_, window, cx| {
                 view.update(cx, |v, cx| {
                     v.open_search(window, cx);
-                    let input = v.search.as_ref().unwrap().input.clone();
+                    let input = v.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value("needle", window, cx));
                     v.recompute_matches(cx);
-                    let before = *v.search.as_ref().unwrap().matches[0].start();
+                    let before = *v.search_session().unwrap().matches[0].start();
                     assert_eq!(
                         (before.row.0, before.col.0),
                         (0, 70),
@@ -4700,7 +4700,7 @@ mod gpui_tests {
                     // into scrollback) is the grid's business — what matters is
                     // that the highlight sits on the needle, not its old row.
                     v.set_grid_size(40, 24, px(8.), px(17.), 1., cx);
-                    let after = *v.search.as_ref().unwrap().matches[0].start();
+                    let after = *v.search_session().unwrap().matches[0].start();
                     assert_ne!(
                         (after.row.0, after.col.0),
                         (0, 70),
@@ -4713,7 +4713,7 @@ mod gpui_tests {
 
                     // A rows-only change reflows nothing; the scan must not move.
                     v.set_grid_size(40, 12, px(8.), px(17.), 1., cx);
-                    let still = *v.search.as_ref().unwrap().matches[0].start();
+                    let still = *v.search_session().unwrap().matches[0].start();
                     assert_eq!((still.row.0, still.col.0), (after.row.0, after.col.0));
                 });
             })
@@ -4969,11 +4969,11 @@ mod gpui_tests {
 
         // A question the hooks report steps it aside at once, and nothing in
         // the box is sent as the answer.
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
+        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
             status: AgentStatus::Waiting,
             rich: true,
             ..Default::default()
-        }))
+        })))
         .encode(&mut daemon)
         .unwrap();
         wait_for(cx, &|v| {
@@ -5229,7 +5229,7 @@ mod gpui_tests {
 
                     v.open_search(window, cx);
                     assert_eq!(
-                        v.search.as_ref().unwrap().input.read(cx).value(),
+                        v.search_input().unwrap().read(cx).value(),
                         "needle",
                         "the bar opens on the selection as its query"
                     );
@@ -5247,7 +5247,7 @@ mod gpui_tests {
                     // But a query the user *changed* retires the old selection:
                     // it no longer names what the search is about.
                     v.open_search(window, cx);
-                    let input = v.search.as_ref().unwrap().input.clone();
+                    let input = v.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value("haystack", window, cx));
                     v.recompute_matches(cx);
                     assert!(
@@ -5291,10 +5291,10 @@ mod gpui_tests {
             .update(cx, |_, window, cx| {
                 view.update(cx, |v, cx| {
                     v.open_search(window, cx);
-                    let input = v.search.as_ref().unwrap().input.clone();
+                    let input = v.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value("world", window, cx));
                     v.recompute_matches(cx);
-                    assert_eq!(v.search.as_ref().unwrap().matches.len(), 1);
+                    assert_eq!(v.search_match_count(), 1);
                 });
             })
             .unwrap();
@@ -5314,19 +5314,18 @@ mod gpui_tests {
 
         cx.update(|cx| {
             let v = view.read(cx);
-            let search = v.search.as_ref().expect("the bar is still open");
             assert_eq!(
-                search.matches.len(),
+                v.search_match_count(),
                 2,
                 "the line printed under the open bar has to be counted too"
             );
             assert_eq!(
-                search.current_index,
+                v.search_current_index(),
                 Some(0),
                 "and the match the user was standing on is still the one they are on"
             );
             assert!(
-                !v.search_scan_armed,
+                !v.search.scan_pending(),
                 "the debounce has to settle, not rescan forever"
             );
         });
@@ -5344,19 +5343,262 @@ mod gpui_tests {
             .update(cx, |_, window, cx| {
                 view.update(cx, |v, cx| {
                     v.open_search(window, cx);
-                    let input = v.search.as_ref().unwrap().input.clone();
+                    let input = v.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value("filler", window, cx));
                     v.recompute_matches(cx);
                     assert!(v.selection_scroll.reading.is_some());
-                    assert!(!v.search.as_ref().unwrap().matches.is_empty());
+                    assert!(v.search_match_count() > 0);
                 });
             })
             .unwrap();
         print(cx, &view, vec!["filler new".to_string()]);
         assert!(
-            !view.read_with(cx, |v, _| v.search_scan_armed),
+            !view.read_with(cx, |v, _| v.search.scan_pending()),
             "unchanged frozen rows must not schedule a search rescan"
         );
+    }
+
+    /// Closing the bar has to take the pending debounced rescan down with it,
+    /// and reopening must not inherit the old task's completion: the timer
+    /// armed under the closed bar holds a stale session generation, so when
+    /// its wait finally ends it discards silently instead of refreshing —
+    /// and re-deriving — the reopened bar's matches.
+    #[gpui_kit::test]
+    fn closing_and_reopening_the_bar_discards_a_pending_output_rescan(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        print(
+            cx,
+            &view,
+            vec!["world one".to_string(), "world two".to_string()],
+        );
+
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("world", window, cx));
+                    v.recompute_matches(cx);
+                    assert_eq!(v.search_match_count(), 2);
+                });
+            })
+            .unwrap();
+
+        // Output under the open bar arms the debounced rescan.
+        print(cx, &view, vec!["unrelated".to_string()]);
+        assert!(
+            cx.read(|cx| view.read(cx).search.scan_pending()),
+            "output under the open bar arms the debounced rescan"
+        );
+
+        // Close before the debounce lands: the latch must drop with the
+        // session, and the error feedback and focus state must drop too.
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.close_search(window, cx);
+                    assert!(!v.is_search_open());
+                    assert!(
+                        !v.search.scan_pending(),
+                        "closing the bar disarms the in-flight debounced rescan"
+                    );
+                });
+            })
+            .unwrap();
+
+        // Reopen on the persisted query and step to the first match, so a
+        // stale refresh that re-derived the position from the viewport would
+        // land somewhere else.
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    assert_eq!(
+                        v.search_input().unwrap().read(cx).value(),
+                        "world",
+                        "reopening seeds the last query"
+                    );
+                    v.recompute_matches(cx);
+                    assert_eq!(
+                        v.search_current_index(),
+                        Some(1),
+                        "a fresh query lands on the last match at or above the viewport"
+                    );
+                    v.step_match(rio_vt::crosswords::pos::Direction::Right, cx);
+                    assert_eq!(v.search_current_index(), Some(0));
+                });
+            })
+            .unwrap();
+
+        // The stale timer now lands — again and again, past the lag limit.
+        // Its completion is discarded, not applied: the reopened session's
+        // matches and the stepped-to match are exactly where it put them, and
+        // the discarded task must not leave the latch armed for the next
+        // output.
+        for _ in 0..(super::super::search::SCAN_LAG_LIMIT * 2 + 2) {
+            cx.executor()
+                .advance_clock(super::super::search::SCAN_DEBOUNCE);
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |v, _| {
+            assert_eq!(
+                v.search_match_count(),
+                2,
+                "the stale rescan must not refresh the reopened session's matches"
+            );
+            assert_eq!(
+                v.search_current_index(),
+                Some(0),
+                "the stale rescan must not re-derive the current match from the viewport"
+            );
+            assert!(
+                !v.search.scan_pending(),
+                "the discarded task must not leave the debounce latch armed"
+            );
+        });
+    }
+
+    /// The toggles and the last query belong to the user, not to the bar's
+    /// lifetime: closing keeps them, reopening seeds the query from them, and
+    /// only the error feedback is torn down with the session.
+    #[gpui_kit::test]
+    fn the_bar_remembers_its_toggles_and_last_query_across_a_close(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        print(
+            cx,
+            &view,
+            vec!["Hello World".to_string(), "hello world".to_string()],
+        );
+
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("hello", window, cx));
+                    v.recompute_matches(cx);
+                    assert_eq!(v.search_match_count(), 2);
+
+                    v.toggle_search_case(cx);
+                    assert_eq!(
+                        v.search_match_count(),
+                        1,
+                        "case-sensitive leaves only the lowercase line"
+                    );
+
+                    v.toggle_search_regex(cx);
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("(", window, cx));
+                    v.recompute_matches(cx);
+                    assert!(v.search_has_regex_error());
+                    assert_eq!(v.search_match_count(), 0);
+
+                    v.close_search(window, cx);
+                    assert!(!v.is_search_open());
+                    assert!(
+                        !v.search_has_regex_error(),
+                        "closing clears the error feedback"
+                    );
+                });
+            })
+            .unwrap();
+
+        // The toggles and the persisted query survive the close.
+        view.read_with(cx, |v, _| {
+            assert!(v.search.is_case_sensitive(), "the Aa toggle survives");
+            assert!(v.search.uses_regex(), "the .* toggle survives");
+            assert_eq!(v.search.last_query(), "(");
+        });
+
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    assert_eq!(
+                        v.search_input().unwrap().read(cx).value(),
+                        "(",
+                        "reopening seeds the last query"
+                    );
+                    assert!(
+                        v.search_has_regex_error(),
+                        "regex is still on, so the same bad query errors again"
+                    );
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("hello", window, cx));
+                    v.recompute_matches(cx);
+                    assert_eq!(
+                        v.search_match_count(),
+                        1,
+                        "case sensitivity survived the close"
+                    );
+                });
+            })
+            .unwrap();
+    }
+
+    /// Retyping the query recomputes the matches synchronously; a debounced
+    /// rescan armed by earlier output is answering the old query, so the
+    /// retype must outdate it — its timer discards instead of refreshing over
+    /// what the recompute just measured.
+    #[gpui_kit::test]
+    fn retyping_the_query_discards_a_pending_output_rescan(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        print(
+            cx,
+            &view,
+            vec!["world one".to_string(), "world two".to_string()],
+        );
+
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("world", window, cx));
+                    v.recompute_matches(cx);
+                    assert_eq!(v.search_match_count(), 2);
+                });
+            })
+            .unwrap();
+
+        // Output arms the debounce; the user narrows the query before the
+        // timer lands.
+        print(cx, &view, vec!["unrelated".to_string()]);
+        assert!(
+            cx.read(|cx| view.read(cx).search.scan_pending()),
+            "output under the open bar arms the debounced rescan"
+        );
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    let input = v.search_input().unwrap().clone();
+                    input.update(cx, |s, cx| s.set_value("one", window, cx));
+                    v.recompute_matches(cx);
+                    assert_eq!(v.search_match_count(), 1);
+                    assert!(
+                        !v.search.scan_pending(),
+                        "retyping disarms the output rescan the old query armed"
+                    );
+                });
+            })
+            .unwrap();
+
+        for _ in 0..(super::super::search::SCAN_LAG_LIMIT * 2 + 2) {
+            cx.executor()
+                .advance_clock(super::super::search::SCAN_DEBOUNCE);
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |v, _| {
+            assert_eq!(
+                v.search_match_count(),
+                1,
+                "the output rescan predating the retype must not land on the new query"
+            );
+            assert!(
+                !v.search.scan_pending(),
+                "the discarded task must not leave the debounce latch armed"
+            );
+        });
     }
 
     /// Print lines into the grid and post the wakeup the reader thread would
@@ -5399,8 +5641,7 @@ mod gpui_tests {
         cx.update(|cx| {
             let v = view.read(cx);
             let start = *v
-                .search
-                .as_ref()
+                .search_session()
                 .and_then(|s| s.current())
                 .expect("a match to stand on")
                 .start();
@@ -5433,10 +5674,10 @@ mod gpui_tests {
             .update(cx, |_, window, cx| {
                 view.update(cx, |v, cx| {
                     v.open_search(window, cx);
-                    let input = v.search.as_ref().unwrap().input.clone();
+                    let input = v.search_input().unwrap().clone();
                     input.update(cx, |s, cx| s.set_value("world", window, cx));
                     v.recompute_matches(cx);
-                    assert_eq!(v.search.as_ref().unwrap().matches.len(), 1);
+                    assert_eq!(v.search_match_count(), 1);
                 });
             })
             .unwrap();
@@ -5457,7 +5698,7 @@ mod gpui_tests {
     /// failing, which reads as a CI timeout on exactly this name.
     #[gpui_kit::test]
     fn a_frame_that_cannot_have_the_grid_leaves_the_previous_one_alone(cx: &mut TestAppContext) {
-        use super::super::element::PaintColors;
+        use super::super::element::{GridPaint, PaintColors};
 
         let (_window, view, _daemon) = rooted_harness(cx);
         let element = TerminalElement::new(view.clone());
@@ -5466,16 +5707,18 @@ mod gpui_tests {
             cx.update(|cx| {
                 let colors = PaintColors::resolve(cx.theme(), cx);
                 element.build_grid(
-                    &colors,
-                    buf,
-                    24,
-                    80,
-                    false,
                     cx,
-                    1.,
-                    gpui_kit::Rgba::default(),
-                    must_block,
-                    false,
+                    GridPaint {
+                        colors: &colors,
+                        buf,
+                        rows: 24,
+                        cols: 80,
+                        want_sliver: false,
+                        dim: 1.,
+                        under: gpui_kit::Rgba::default(),
+                        must_block,
+                        has_previous: false,
+                    },
                 )
             })
         };
@@ -5854,7 +6097,7 @@ mod gpui_tests {
         print(cx, &view, filler(7));
         cx.update(|cx| {
             assert!(
-                view.read(cx).search_scan_armed,
+                view.read(cx).search.scan_pending(),
                 "the rescan is still waiting for the pane to go quiet"
             );
         });
@@ -5881,16 +6124,11 @@ mod gpui_tests {
         }
 
         cx.update(|cx| {
-            let search = view
-                .read(cx)
-                .search
-                .as_ref()
-                .expect("the bar is still open");
+            let count = view.read(cx).search_match_count();
             assert!(
-                search.matches.len() > 1,
+                count > 1,
                 "printing without a pause must not hold the scan off forever, \
-                 got {} matches",
-                search.matches.len()
+                 got {count} matches"
             );
         });
     }

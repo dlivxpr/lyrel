@@ -41,6 +41,15 @@ pub struct RemoteRequest {
     forward: bool,
 }
 
+/// The directories completion may resolve against: the pane's local cwd, a
+/// foreign share joined from a local one, and the remote listing cwd.
+#[derive(Clone, Copy, Default)]
+pub struct CompletionCwd<'a> {
+    pub local: Option<&'a Path>,
+    pub share: Option<&'a Path>,
+    pub remote: Option<&'a str>,
+}
+
 impl RemoteRequest {
     pub fn directory(&self) -> &str {
         &self.path.dir
@@ -140,13 +149,16 @@ impl TerminalCompletion {
         &mut self,
         cmd: &mut CmdEditor,
         context: CompletionContext,
-        local_cwd: Option<&Path>,
-        share_cwd: Option<&Path>,
-        remote_cwd: Option<&str>,
+        cwd: CompletionCwd<'_>,
         shell: Option<&str>,
         enabled: bool,
         forward: bool,
     ) -> CompletionWork {
+        let CompletionCwd {
+            local: local_cwd,
+            share: share_cwd,
+            remote: remote_cwd,
+        } = cwd;
         self.observe_context(context.clone());
         if !enabled {
             self.close();

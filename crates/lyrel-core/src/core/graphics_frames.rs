@@ -54,10 +54,13 @@ pub(super) fn compose_frame(
     for row in 0..image.height as usize {
         let start = ((control.y as usize + row) * frame.width as usize + control.x as usize) * 4;
         for (destination, source) in canvas[start..start + image.width as usize * 4]
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(
                 patch[row * image.width as usize * 4..(row + 1) * image.width as usize * 4]
-                    .chunks_exact(4),
+                    .as_chunks::<4>()
+                    .0,
             )
         {
             if control.offset_x == 1 {
@@ -137,8 +140,10 @@ fn compose_retained(
                 destination[dst..dst + width * 4].copy_from_slice(&source[src..src + width * 4]);
             } else {
                 for (under, over) in destination[dst..dst + width * 4]
-                    .chunks_exact_mut(4)
-                    .zip(source[src..src + width * 4].chunks_exact(4))
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(source[src..src + width * 4].as_chunks::<4>().0)
                 {
                     blend(under, over);
                 }

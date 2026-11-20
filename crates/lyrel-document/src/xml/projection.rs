@@ -215,13 +215,10 @@ pub fn project(text: &str, cancel: &CancelToken) -> Result<XmlProjection, Projec
 
     let mut stack = vec![0_usize];
     let mut pending: Option<usize> = None;
-    let mut token_count = 0_usize;
-
-    for token in Tokenizer::from(text) {
-        if token_count % CANCEL_INTERVAL == 0 && cancel.is_cancelled() {
+    for (token_count, token) in Tokenizer::from(text).enumerate() {
+        if token_count.is_multiple_of(CANCEL_INTERVAL) && cancel.is_cancelled() {
             return Err(ProjectionFailure::Cancelled);
         }
-        token_count += 1;
         let token = match token {
             Ok(token) => token,
             Err(error) => {
@@ -806,7 +803,7 @@ fn collect_namespaces(
     let mut pending = vec![document.root_element()];
     let mut visited = 0_usize;
     while let Some(node) = pending.pop() {
-        if visited % CANCEL_INTERVAL == 0 && cancel.is_cancelled() {
+        if visited.is_multiple_of(CANCEL_INTERVAL) && cancel.is_cancelled() {
             return Err(ProjectionFailure::Cancelled);
         }
         visited += 1;

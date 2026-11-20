@@ -404,17 +404,30 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
     )
 }
 
+/// Everything one paint of the parked deck needs to lay out its frame.
+pub(super) struct FrameInput {
+    pub bounds: Bounds<Pixels>,
+    pub viewport: Bounds<Pixels>,
+    pub deck_bounds: Bounds<Pixels>,
+    pub zoom: f32,
+    pub cards: Vec<FrameCard>,
+    pub fan: f32,
+    pub park: bool,
+    pub park_ink: Sprite,
+}
+
 impl Frame {
-    pub fn new(
-        bounds: Bounds<Pixels>,
-        viewport: Bounds<Pixels>,
-        zoom: f32,
-        cards: Vec<FrameCard>,
-        fan: f32,
-        park: bool,
-        park_ink: Sprite,
-        deck_bounds: Bounds<Pixels>,
-    ) -> Self {
+    pub fn new(input: FrameInput) -> Self {
+        let FrameInput {
+            bounds,
+            viewport,
+            deck_bounds,
+            zoom,
+            cards,
+            fan,
+            park,
+            park_ink,
+        } = input;
         let mut result = Self {
             bounds,
             deck_bounds,
@@ -854,7 +867,13 @@ mod tests {
                     let title = sprite(Layer::Ink, None, viewbox, &title.data);
                     let expected = reference(actual, shown, x, y, viewbox);
                     let rendered = pixels(&renderer, &title);
-                    assert!(rendered.chunks_exact(4).any(|pixel| pixel[3] != 0));
+                    assert!(
+                        rendered
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|pixel| pixel[3] != 0)
+                    );
                     // usvg 0.46 的 fallback 若覆盖整段，会替换所有 glyph；混排样本的
                     // sans/serif 因而可能收敛到同一 CJK 字体。纯 Latin 才能独立判定
                     // 原非法 family 列表造成的 Times New Roman 回退。

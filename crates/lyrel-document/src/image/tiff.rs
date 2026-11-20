@@ -124,6 +124,10 @@ impl TiffPages {
         self.pages.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+
     /// 解码一页为 RGBA。像素与纹理都由调用方作为一页的呈现接管。
     pub fn decode(&self, page: usize) -> Result<RgbaImage, TiffPageError> {
         if page >= self.pages.len() {
@@ -233,39 +237,59 @@ fn into_rgba(
     match (color, result) {
         (ColorType::Gray(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples) {
+            for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                 pixel.copy_from_slice(&[value, value, value, 255]);
             }
         }
         (ColorType::Gray(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples) {
+            for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                 let value = u16_to_u8(value);
                 pixel.copy_from_slice(&[value, value, value, 255]);
             }
         }
         (ColorType::GrayA(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(2)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<2>().0)
+            {
                 pixel.copy_from_slice(&[value[0], value[0], value[0], value[1]]);
             }
         }
         (ColorType::GrayA(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(2)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<2>().0)
+            {
                 let grey = u16_to_u8(value[0]);
                 pixel.copy_from_slice(&[grey, grey, grey, u16_to_u8(value[1])]);
             }
         }
         (ColorType::RGB(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(3)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<3>().0)
+            {
                 pixel.copy_from_slice(&[value[0], value[1], value[2], 255]);
             }
         }
         (ColorType::RGB(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(3)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<3>().0)
+            {
                 pixel.copy_from_slice(&[
                     u16_to_u8(value[0]),
                     u16_to_u8(value[1]),
@@ -280,7 +304,12 @@ fn into_rgba(
         }
         (ColorType::RGBA(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(4)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<4>().0)
+            {
                 pixel.copy_from_slice(&[
                     u16_to_u8(value[0]),
                     u16_to_u8(value[1]),
@@ -291,14 +320,24 @@ fn into_rgba(
         }
         (ColorType::CMYK(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(4)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<4>().0)
+            {
                 let [red, green, blue] = cmyk_to_rgb(value[0], value[1], value[2], value[3]);
                 pixel.copy_from_slice(&[red, green, blue, 255]);
             }
         }
         (ColorType::CMYK(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(4)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<4>().0)
+            {
                 let [red, green, blue] = cmyk_to_rgb(
                     u16_to_u8(value[0]),
                     u16_to_u8(value[1]),
@@ -310,21 +349,36 @@ fn into_rgba(
         }
         (ColorType::CMYKA(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(5)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<5>().0)
+            {
                 let [red, green, blue] = cmyk_to_rgb(value[0], value[1], value[2], value[3]);
                 pixel.copy_from_slice(&[red, green, blue, value[4]]);
             }
         }
         (ColorType::YCbCr(8), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(3)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<3>().0)
+            {
                 let [red, green, blue] = ycbcr_to_rgb(value[0], value[1], value[2]);
                 pixel.copy_from_slice(&[red, green, blue, 255]);
             }
         }
         (ColorType::YCbCr(16), DecodingResult::U16(samples)) => {
             exact(samples.len(), expected)?;
-            for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(3)) {
+            for (pixel, value) in out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(samples.as_chunks::<3>().0)
+            {
                 let [red, green, blue] = ycbcr_to_rgb(
                     u16_to_u8(value[0]),
                     u16_to_u8(value[1]),
@@ -343,12 +397,17 @@ fn into_rgba(
             exact(samples.len(), expected)?;
             match num_samples {
                 1 => {
-                    for (pixel, value) in out.chunks_exact_mut(4).zip(samples) {
+                    for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                         pixel.copy_from_slice(&[value, value, value, 255]);
                     }
                 }
                 _ => {
-                    for (pixel, value) in out.chunks_exact_mut(4).zip(samples.chunks_exact(2)) {
+                    for (pixel, value) in out
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(samples.as_chunks::<2>().0)
+                    {
                         pixel.copy_from_slice(&[value[0], value[0], value[0], value[1]]);
                     }
                 }
@@ -364,7 +423,7 @@ fn into_rgba(
                     "color map is shorter than its palette".into(),
                 ));
             }
-            for (pixel, index) in out.chunks_exact_mut(4).zip(samples) {
+            for (pixel, index) in out.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                 let index = usize::from(index);
                 if index >= entries {
                     return Err(TiffPageError::Corrupt(

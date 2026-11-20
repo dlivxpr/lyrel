@@ -1472,7 +1472,9 @@ pub enum DaemonMsg {
     },
     RemoteContext(Option<RemoteContext>),
     Agent(Option<crate::core::cli_agent::CLIAgent>),
-    AgentStatus(Option<crate::core::cli_agent::AgentSessionState>),
+    /// Boxed: an `AgentSessionState` dominates every other variant; the wire
+    /// encoding is unchanged.
+    AgentStatus(Option<Box<crate::core::cli_agent::AgentSessionState>>),
     LoopbackForward(LoopbackForward),
     AuthPrompt {
         request_id: u64,
@@ -2680,7 +2682,7 @@ mod tests {
             DaemonMsg::Agent(Some(crate::core::cli_agent::CLIAgent::OhMyPi)),
             DaemonMsg::Agent(Some(crate::core::cli_agent::CLIAgent::Pi)),
             DaemonMsg::Agent(None),
-            DaemonMsg::AgentStatus(Some(crate::core::cli_agent::AgentSessionState {
+            DaemonMsg::AgentStatus(Some(Box::new(crate::core::cli_agent::AgentSessionState {
                 status: crate::core::cli_agent::AgentStatus::Waiting,
                 message: Some("OhMyPi needs your permission to use Bash".into()),
                 session_id: Some("abc-123".into()),
@@ -2694,7 +2696,7 @@ mod tests {
                 pending_stop: false,
                 readout: Default::default(),
                 since_ms: Some(1_760_000_000_000),
-            })),
+            }))),
             DaemonMsg::AgentStatus(None),
             DaemonMsg::LoopbackForward(LoopbackForward { local_port: 49152 }),
             DaemonMsg::KnownHostsList(vec![KnownHostEntry {

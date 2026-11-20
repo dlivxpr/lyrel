@@ -16,8 +16,8 @@ mod paths;
 pub use layout::{Axis, PaneNode, PipGeometry, PipPane, Side, Tab, TabId, TabPresentation};
 pub use model::{
     AgentFacts, Attachment, CLOSED_TAB_TTL, ClosedTab, LayoutDelta, MAX_CLOSED_TABS, MAX_PANES,
-    MAX_WORKSPACES, Machine, PaneRecord, PaneSeed, Remembered, ReopenedTab, TabCloseReason,
-    Workspace, unix_now,
+    MAX_WORKSPACES, Machine, PaneRecord, PaneSeed, PaneSplitSpec, Remembered, ReopenedTab,
+    TabCloseReason, Workspace, unix_now,
 };
 pub use paths::{
     APPEARANCE_FILE, DATA_DIR_ENV, MACHINE_FILE, adopt_legacy_data_dir, appearance_path,

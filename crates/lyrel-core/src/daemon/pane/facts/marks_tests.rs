@@ -114,7 +114,7 @@ fn a_title_does_not_swallow_the_other_marks_in_the_same_read() {
 #[test]
 fn a_title_is_kept_until_it_changes_and_a_reset_clears_it() {
     let mut st = test_state(true);
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             SniffSignals {
@@ -127,10 +127,10 @@ fn a_title_is_kept_until_it_changes_and_a_reset_clears_it() {
     assert_eq!(st.facts.osc_title.as_deref(), Some("✳ fixing the switcher"));
 
     // A read with no title in it leaves the stored one alone.
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, SniffSignals::default(), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, SniffSignals::default(), emit));
     assert_eq!(st.facts.osc_title.as_deref(), Some("✳ fixing the switcher"));
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             SniffSignals {
@@ -193,7 +193,7 @@ fn a_running_program_and_a_shells_own_prompt_title_both_keep_theirs() {
     let mut st = test_state(true);
     let mut s = OscSniffer::new();
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(facts, s.feed(b"\x1b]133;C;vim\x07\x1b]2;vim\x1b\\"), emit)
     });
     assert_eq!(
@@ -205,7 +205,7 @@ fn a_running_program_and_a_shells_own_prompt_title_both_keep_theirs() {
     // A shell that re-titles itself does it between the `D` and the `A`
     // (lyrel's zsh helper prepends the `D`; the PowerShell one titles in
     // its prompt function), so the title is the last word in the read.
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             s.feed(b"\x1b]133;D;0\x07\x1b]0;me@box:~/dev\x07\x1b]133;A\x07"),
@@ -219,7 +219,7 @@ fn a_running_program_and_a_shells_own_prompt_title_both_keep_theirs() {
     );
 
     // And that prompt title is nobody's command to retire.
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(facts, s.feed(b"\x1b]133;C;ls\x07\x1b]133;D;0\x07"), emit)
     });
     assert_eq!(st.facts.osc_title.as_deref(), Some("me@box:~/dev"));
@@ -231,10 +231,8 @@ fn a_running_program_and_a_shells_own_prompt_title_both_keep_theirs() {
 fn a_pane_without_shell_integration_keeps_its_title() {
     let mut st = test_state(true);
     let mut s = OscSniffer::new();
-    (&mut st).with_facts(|facts, emit| {
-        apply_signals(facts, s.feed(b"\x1b]0;user@host:~/dev\x07"), emit)
-    });
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, s.feed(b"lots of output\r\n"), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, s.feed(b"\x1b]0;user@host:~/dev\x07"), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, s.feed(b"lots of output\r\n"), emit));
     assert_eq!(st.facts.osc_title.as_deref(), Some("user@host:~/dev"));
 }
 
@@ -520,15 +518,15 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
         ),
     ] {
         let mut state = test_state(true);
-        (&mut state).with_facts(|facts, emit| {
+        state.with_facts(|facts, emit| {
             apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
         });
         let start = parse_agent_event_body(
             br#"{"agent":"omp","event":"session-start","session_id":"still-running","session_scope":{"session_file":"/isolated/still-running.jsonl"}}"#,
         )
         .unwrap();
-        (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![start], None, emit));
-        (&mut state).with_facts(|facts, emit| {
+        state.with_facts(|facts, emit| apply_agent_signals(facts, vec![start], None, emit));
+        state.with_facts(|facts, emit| {
             apply_agent_signals(
                 facts,
                 vec![parse_agent_event_body(body.as_bytes()).unwrap()],
@@ -536,14 +534,14 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
                 emit,
             )
         });
-        let snapshot = (&state)
+        let snapshot = state
             .facts
-            .agent_state((&state).id)
+            .agent_state(state.id)
             .expect("reconnect keeps a live agent");
         assert_eq!(snapshot.agent, Some(CLIAgent::OhMyPi));
         assert_eq!(snapshot.state.status, expected);
         assert_eq!(snapshot.state.session_id.as_deref(), Some("still-running"));
-        let facts = observed_facts(&(&state).facts)
+        let facts = observed_facts(&state.facts)
             .agent
             .expect("resume identity is kept");
         assert_eq!(facts.session_id, snapshot.state.session_id);
@@ -559,7 +557,7 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
         );
         assert!(replay.iter().any(|msg| matches!(
             msg,
-            DaemonMsg::AgentStatus(Some(session)) if session == &snapshot.state
+            DaemonMsg::AgentStatus(Some(session)) if session.as_ref() == &snapshot.state
         )));
     }
 }
@@ -570,13 +568,13 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
 
     let mut st = test_state(true);
     let mut sniffer = OscSniffer::new();
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(facts, sniffer.feed(b"\x1b]9;Build finished\x07"), emit)
     });
     assert!(st.facts.agent_session.is_none());
 
     st.facts.agent = Some(CLIAgent::Pi);
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             sniffer.feed(b"\x1b]9;Pi wants to run tests\x07"),
@@ -602,8 +600,7 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
         readout: Default::default(),
         since_ms: None,
     });
-    (&mut st)
-        .with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]9;noise\x07"), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]9;noise\x07"), emit));
     assert_eq!(
         st.facts.agent_session.as_ref().unwrap().status,
         AgentStatus::Working
@@ -702,7 +699,7 @@ fn a_replay_still_reports_a_prompt_when_the_shell_owns_the_pane() {
 fn apply_signals_updates_state() {
     let mut st = test_state(true);
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             SniffSignals {
@@ -714,7 +711,7 @@ fn apply_signals_updates_state() {
     });
     assert_eq!(st.facts.cwd, Some(PathBuf::from("/tmp/x")));
 
-    (&mut st).with_facts(|facts, emit| {
+    st.with_facts(|facts, emit| {
         apply_signals(
             facts,
             SniffSignals {
@@ -733,7 +730,7 @@ fn apply_signals_updates_state() {
     assert!(st.facts.shell.active && st.facts.shell.at_prompt);
     assert_eq!(st.facts.shell.last_exit_code, Some(0));
 
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, SniffSignals::default(), emit));
+    st.with_facts(|facts, emit| apply_signals(facts, SniffSignals::default(), emit));
     assert_eq!(st.facts.cwd, Some(PathBuf::from("/tmp/x")));
 }
 

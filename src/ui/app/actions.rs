@@ -11,8 +11,8 @@ impl LyrelApp {
         let root = Self::bind_navigation_actions(root, cx);
         let root = Self::bind_documents_actions(root, cx);
         let root = Self::bind_sessions_actions(root, cx);
-        let root = Self::bind_application_actions(root, cx);
-        root
+
+        Self::bind_application_actions(root, cx)
     }
 
     fn bind_workspace_actions(
@@ -583,7 +583,6 @@ mod new_window_action_tests {
                 root.view()
                     .clone()
                     .downcast::<LyrelApp>()
-                    .ok()
                     .expect("window root wraps a LyrelApp")
             })
             .unwrap();

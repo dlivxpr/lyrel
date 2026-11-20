@@ -209,7 +209,17 @@ pub fn project(text: &str, cancel: &CancelToken) -> Result<TomlProjection, Proje
                 sort_start: 0,
                 children: Vec::new(),
             })?;
-            builder.walk_items(document.as_table(), root, "$", &[], root, None, None)?;
+            builder.walk_items(
+                document.as_table(),
+                WalkFrame {
+                    parent: root,
+                    parent_path: "$",
+                    key_path: &[],
+                },
+                root,
+                None,
+                None,
+            )?;
             let mut projection = TomlProjection {
                 nodes: builder.nodes,
                 root: Some(root),
@@ -273,7 +283,17 @@ pub fn project_for_mutation(text: &str) -> Result<TomlProjection, (usize, usize,
         })
         .expect("mutation projection has no node budget");
     builder
-        .walk_items(document.as_table(), root, "$", &[], root, None, None)
+        .walk_items(
+            document.as_table(),
+            WalkFrame {
+                parent: root,
+                parent_path: "$",
+                key_path: &[],
+            },
+            root,
+            None,
+            None,
+        )
         .expect("mutation projection has no node budget");
     let mut projection = TomlProjection {
         nodes: builder.nodes,
@@ -298,6 +318,15 @@ struct InlineContext {
     direct_parent: usize,
 }
 
+/// Where a walk sits in the tree: the node it attaches children to, that
+/// node's display path, and the dotted key path accumulated for section
+/// ownership. Bundled so `walk_items` stays under the argument limit.
+struct WalkFrame<'a> {
+    parent: usize,
+    parent_path: &'a str,
+    key_path: &'a [String],
+}
+
 impl<'a> Builder<'a> {
     fn new(text: &'a str, cancel: &'a CancelToken, limited: bool) -> Self {
         Self {
@@ -314,7 +343,7 @@ impl<'a> Builder<'a> {
             if self.nodes.len() >= STRUCTURE_NODES {
                 return Err(ProjectionFailure::TooManyNodes);
             }
-            if self.nodes.len() % CANCEL_INTERVAL == 0 && self.cancel.is_cancelled() {
+            if self.nodes.len().is_multiple_of(CANCEL_INTERVAL) && self.cancel.is_cancelled() {
                 return Err(ProjectionFailure::Cancelled);
             }
             self.path_bytes += node.path.len();
@@ -333,9 +362,7 @@ impl<'a> Builder<'a> {
     fn walk_items(
         &mut self,
         table: &dyn TableLike,
-        parent: usize,
-        parent_path: &str,
-        key_path: &[String],
+        frame: WalkFrame<'_>,
         section_owner: usize,
         dotted_start: Option<usize>,
         inline: Option<InlineContext>,
@@ -345,15 +372,15 @@ impl<'a> Builder<'a> {
             let Some((key, item)) = table.get_key_value(&name) else {
                 continue;
             };
-            let mut child_key_path = key_path.to_vec();
+            let mut child_key_path = frame.key_path.to_vec();
             child_key_path.push(name.clone());
             match item {
                 Item::Value(value) => self.add_value(
                     key,
                     &name,
                     value,
-                    parent,
-                    parent_path,
+                    frame.parent,
+                    frame.parent_path,
                     &child_key_path,
                     section_owner,
                     dotted_start,
@@ -363,8 +390,8 @@ impl<'a> Builder<'a> {
                     key,
                     &name,
                     child,
-                    parent,
-                    parent_path,
+                    frame.parent,
+                    frame.parent_path,
                     &child_key_path,
                     section_owner,
                     dotted_start,
@@ -374,8 +401,8 @@ impl<'a> Builder<'a> {
                     key,
                     &name,
                     array,
-                    parent,
-                    parent_path,
+                    frame.parent,
+                    frame.parent_path,
                     &child_key_path,
                     section_owner,
                     inline,
@@ -473,7 +500,17 @@ impl<'a> Builder<'a> {
         } else {
             None
         };
-        self.walk_items(table, id, &path, key_path, child_owner, next_dotted, inline)
+        self.walk_items(
+            table,
+            WalkFrame {
+                parent: id,
+                parent_path: &path,
+                key_path,
+            },
+            child_owner,
+            next_dotted,
+            inline,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -603,7 +640,17 @@ impl<'a> Builder<'a> {
         };
         let id = self.push(node)?;
         self.attach(parent, id);
-        self.walk_items(entry, id, &path, key_path, id, None, None)
+        self.walk_items(
+            entry,
+            WalkFrame {
+                parent: id,
+                parent_path: &path,
+                key_path,
+            },
+            id,
+            None,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -711,7 +758,17 @@ impl<'a> Builder<'a> {
                 node: id,
                 direct_parent: id,
             };
-            self.walk_items(table, id, &path, key_path, id, None, Some(context))?;
+            self.walk_items(
+                table,
+                WalkFrame {
+                    parent: id,
+                    parent_path: &path,
+                    key_path,
+                },
+                id,
+                None,
+                Some(context),
+            )?;
         }
         Ok(())
     }
@@ -740,10 +797,10 @@ fn compute_layout(projection: &mut TomlProjection, text: &str) {
     let count = projection.nodes.len();
     let mut statements: Vec<Vec<usize>> = vec![Vec::new(); count];
     for node in &projection.nodes {
-        if let (Some(owner), Some(statement)) = (node.section_owner, node.statement.as_ref()) {
-            if owner < count {
-                statements[owner].push(statement.end);
-            }
+        if let (Some(owner), Some(statement)) = (node.section_owner, node.statement.as_ref())
+            && owner < count
+        {
+            statements[owner].push(statement.end);
         }
     }
     let mut headers: Vec<usize> = projection

@@ -900,6 +900,19 @@ fn stale_pending_edit_and_split_keep_one_history(tcx: &mut TestAppContext) {
         "the other presentation keeps its own fold"
     );
 
+    // An edit that preserves the node count must not reopen the user-folded root.
+    toggle_mode(&front, &mut cx);
+    click_row(&other, &mut cx, "/");
+    assert_eq!(row(&other, &mut cx, "/").expanded(), Some(false));
+    let text = source_text(&app, &cx);
+    let at = text.find("text</b>").expect("fixture text");
+    type_source_on(&app, &front, &mut cx, at..at + 4, "edit");
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(row(&other, &mut cx, "/").expanded(), Some(false));
+    click_row(&other, &mut cx, "/");
+    type_source_on(&app, &front, &mut cx, at..at + 4, "text");
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+
     // A same-length source edit leaves the selected text node's path, range
     // and kind unchanged. The panel's opened revision is the guard: the
     // pending value must not write over the newer source.

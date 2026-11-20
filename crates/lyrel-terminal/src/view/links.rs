@@ -116,16 +116,7 @@ impl TerminalView {
         };
         let mode = link.open_mode(cx.global::<Config>().file_open_mode());
         let host_id = link.host();
-        let LinkTarget::File {
-            path,
-            line,
-            column,
-            is_dir,
-        } = link.target().clone()
-        else {
-            return;
-        };
-        self.deliver_file_link(path, line, column, is_dir, host_id, mode, window, cx);
+        self.deliver_file_link(link.target().clone(), host_id, mode, window, cx);
     }
 
     /// "Open with Default App": the file link under the menu, handed to the
@@ -181,20 +172,37 @@ impl TerminalView {
     ) {
         let mode =
             LinkInteraction::file_open_mode(self.host_id, cx.global::<Config>().file_open_mode());
-        self.deliver_file_link(path, line, column, is_dir, self.host_id, mode, window, cx);
+        self.deliver_file_link(
+            LinkTarget::File {
+                path,
+                line,
+                column,
+                is_dir,
+            },
+            self.host_id,
+            mode,
+            window,
+            cx,
+        );
     }
 
     fn deliver_file_link(
         &mut self,
-        path: std::path::PathBuf,
-        line: Option<u32>,
-        column: Option<u32>,
-        is_dir: bool,
+        target: LinkTarget,
         host_id: lyrel_ui_base::host_ops::HostId,
         mode: LinkFileOpen,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let LinkTarget::File {
+            path,
+            line,
+            column,
+            is_dir,
+        } = target
+        else {
+            return;
+        };
         let command = cx.global::<Config>().link_file_command.clone();
         // Both external arms have to answer for a failed spawn (#542): a
         // misspelled `link_file_command` or a missing opener used to hit only

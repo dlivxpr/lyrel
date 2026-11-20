@@ -11,6 +11,10 @@
 
 - 四个 GUI-free 文档微 crate（`lyrel-text`、`lyrel-code-editor`、`lyrel-epub`、`lyrel-pdf`）与纯全书 EPUB 搜索引擎合并为单个 `lyrel-document`：默认 feature 只编译 text 编码/BOM/逐行行尾/EditorConfig codec，`formats` 解锁结构化投影、CSV、GIF/TIFF、draw.io、EPUB 与 PDF，取消与 revision/generation guard 统一为一个 `CancelToken`／`ProjectionState`（无 `lyrel-core` 依赖，工作台在任务派发点桥接 Host transfer 取消），`encoding_rs`／`roxmltree` 版本声明统一，Glim/Zorite 引擎级来源记录与 MIT 文本随模块迁入；`lyrel-markdown-editor` 改用 default-features-off 依赖。
 - 工作区收敛为 13 个包：CLI 经 `lyrel-protocol` 连接会话 daemon，不再链接 SSH、Tokio、SQLite 或 PTY；独立 updater 共用安装契约。终端与文档工作台分别在 `lyrel-terminal` 与 `lyrel-workbench-editor`，共同使用 `lyrel-ui-base`，根包负责窗口装配。CI 校验生产依赖图与桌面 Host 访问约束。
+- 文档工作台由桌面注入 Markdown 图片代理，不再启用 `lyrel-core/remote-install`；JSON／JSONL、TOML、YAML、XML 共用结构视图的解析与交互流程，各格式保留独立的保真投影和局部编辑。
+- 文件树改为独立 GPUI Entity，diff 探测独立跟踪同源请求与重连；Markdown 拆分呈现状态和绘制阶段，终端搜索自行管理防抖代次。设置通过明确事件与凭据适配器接线，验证后保留在根包。Linux 生产依赖图门禁同时检查被排除的桌面包不会经传递依赖重新进入。
+- Unix 语言服务器查找继续跳过没有执行权限的文件；文件树重命名和删除回归等待 GPUI 完成事件后再核对磁盘结果，避免把磁盘先变化误判为事件丢失。
+- 终端和文档工作台的共享夹具在只启用 `test-support` 时提供普通桌面测试所需的 pane、文件 Host 和图片状态，不再依赖原生 Markdown 测试 feature。
 - core 集成目标收敛为一个，server 普通集成目标收敛为一个并保留三个显式 SSH 入口；CLI E2E 使用有界并行工作池，支持线程数覆盖、筛选、列表和逐例耗时。图形消费者改用仅依赖 core 的独立 daemon／PTY fixture，不再反复拉起巨型 GUI libtest；常规重放图片缩小但保留多分片、多行 placement 与像素断言，容量压力场景不缩减。
 - 开发 profile 改用 256 CGU，桌面测试统一 feature 图；Windows Cargo wrapper 流式显示诊断、普通测试只解析一次编译图，ConPTY 仍按固定 SHA-256 校验，nextest 支持不执行 discovery 的构建复用。
 - 独立测试进程暴露的 pane attach 握手现统一经既有 Host 阻塞线程池执行；不依赖 GPUI 测试 scheduler 将 background future 放在哪个线程，也不关闭 UI-thread guard。

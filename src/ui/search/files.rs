@@ -10,7 +10,7 @@
 //! than a spinner, and the one that replaces it lands under the cursor
 //! without moving the highlighted row.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gpui_kit::{App, Context, Window};
 
@@ -18,12 +18,8 @@ use super::SearchTab;
 use super::command::{CommandKind, Item};
 use super::sources::{Row, Section, Source};
 use crate::ui::app::LyrelApp;
-use lyrel_ui_base::file_search::{FileList, IndexKey, IndexedFile, parse_query, rank, walk};
-use lyrel_ui_base::host_ops::HostOps;
+use lyrel_ui_base::file_search::{FileList, IndexKey, IndexedFile, parse_query, rank};
 use lyrel_ui_base::i18n::{L10nKey, t_fmt};
-
-#[cfg(test)]
-use crate::ui::file_tree::read_probe::{InstanceTicket, ReadKind};
 
 /// Rows the Files tab shows before anything is typed. A sample, shallowest
 /// first, so the tab is visibly populated; the query is what finds things.
@@ -72,7 +68,7 @@ impl Source for Files<'_> {
             .files
             .iter()
             .take(BROWSE_ROWS)
-            .map(|f| Row::Item(file_item(f, None, None)))
+            .map(|f| Row::Item(Box::new(file_item(f, None, None))))
             .collect();
         if rows.is_empty() {
             return Vec::new();
@@ -157,11 +153,11 @@ impl LyrelApp {
         }
         if !self
             .active_host(cx)
-            .is_some_and(|host| self.file_tree.host_matches(&host))
+            .is_some_and(|host| self.file_tree.read(cx).host_matches(&host))
         {
             return FileList::Indexing;
         }
-        self.file_tree.file_list(&key)
+        self.file_tree.read(cx).file_list(&key)
     }
 
     /// In-place entry and reconnect also replace retired catalog rows when
@@ -175,65 +171,47 @@ impl LyrelApp {
     }
 
     /// Walks the project again, unless a walk of it just landed or is
-    /// already on its way, and hands the result to the open search.
+    /// already on its way, and hands the result to the open search. The
+    /// scheduling and landing themselves belong to the tree — the app only
+    /// supplies the key and hears the outcome through
+    /// `FileTreeEvent::FileIndexLanded`.
     pub(crate) fn refresh_file_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = self.file_index_key(cx);
         let Some(host) = self.active_host(cx) else {
             return;
         };
         self.file_tree_sync_host(&host, cx);
-        let Some(generation) = self.file_tree.begin_file_index(&key) else {
+        self.file_tree.update(cx, |tree, cx| {
+            tree.refresh_file_index(host, key, window, cx);
+        });
+    }
+
+    /// The tree landed a quick-open walk: repaint the open search with it,
+    /// unless the panes have already moved somewhere the walk never saw.
+    pub(crate) fn on_file_index_landed(
+        &mut self,
+        key: &lyrel_ui_base::file_search::IndexKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.file_index_key(cx) != *key {
             return;
-        };
-        // Only this computer's home is known here, and it is the common case:
-        // a fresh local tab starts there.
-        let home = host
-            .id()
-            .is_local()
-            .then(|| std::env::var_os("HOME").map(PathBuf::from))
-            .flatten();
-        let cwds = key.cwds().to_vec();
-        #[cfg(test)]
-        let landing_host = InstanceTicket::of(&host);
-        let authority = self.file_tree.read_authority(&host);
-        HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| walk(h, &cwds, home.as_deref()),
-            move |app, list, window, cx| {
-                #[cfg(test)]
-                app.file_tree
-                    .read_probe
-                    .record(ReadKind::Index, landing_host);
-                if !authority.is_current(&app.file_tree, cx) {
-                    return;
-                }
-                if !app
-                    .file_tree
-                    .finish_file_index(generation, key.clone(), list)
-                {
-                    return;
-                }
-                if app.file_index_key(cx) != key {
-                    return;
-                }
-                let list = app.file_list_now(cx);
-                if let Some(view) = app.search.view() {
-                    view.update(cx, |view, cx| view.set_files(list, window, cx));
-                }
-            },
-        );
+        }
+        let list = self.file_list_now(cx);
+        if let Some(view) = self.search.view() {
+            view.update(cx, |view, cx| view.set_files(list, window, cx));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use super::*;
     use lyrel_ui_base::file_search::{
-        FileIndex, FileQuery, INDEX_LIMIT, build_index, searchable_roots,
+        FileIndex, FileQuery, INDEX_LIMIT, build_index, searchable_roots, walk,
     };
 
     fn index(paths: &[&str]) -> FileIndex {

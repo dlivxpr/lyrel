@@ -610,7 +610,7 @@ fn confirm_destructive(
         };
 
         if live == Some(0) && verb == "Stop" {
-            let _ = cx.update(|cx| act(cx, workspace));
+            cx.update(|cx| act(cx, workspace));
             return;
         }
 
@@ -638,7 +638,7 @@ fn confirm_destructive(
         };
 
         if let Ok(0) = answer.await {
-            let _ = cx.update(|cx| act(cx, workspace));
+            cx.update(|cx| act(cx, workspace));
         }
     })
     .detach();
@@ -1306,7 +1306,7 @@ mod tests {
 
         // `WorkspaceStore::remove` saves; a test has no business writing the
         // real views.
-        let _ = lyrel_core::core::config::set_config_dir(
+        lyrel_core::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-windows-test-{}", std::process::id())),
         );
         cx.update(|cx| {

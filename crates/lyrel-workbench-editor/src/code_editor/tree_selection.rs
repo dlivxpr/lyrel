@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use lyrel_ui_base::host_ops::HostId;
 
 /// Retained by one tab. Paths from a different Host never become selected.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TreeSelection {
     host: Option<HostId>,
     paths: HashSet<PathBuf>,

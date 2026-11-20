@@ -554,8 +554,10 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
         WindowView::on_remote(RemoteRef::new(target.clone(), WorkspaceId::new()));
     let remote_workspace_id = remote_workspace.id;
     app.update_in(&mut vcx, |app, _, cx| {
-        let mut local_workspace = WindowView::default();
-        local_workspace.id = app.workspace;
+        let local_workspace = WindowView {
+            id: app.workspace,
+            ..Default::default()
+        };
         WorkspaceStore::install_for_test(
             cx,
             WindowViews {
@@ -578,7 +580,9 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
     app.update_in(&mut vcx, |app, window, cx| {
         app.right_panel_visible = true;
         app.right_panel_tab = lyrel_core::core::config::RightPanelTab::Files;
-        app.tab_code_mut_or_init().unwrap().roots = vec![first.clone(), second.clone()];
+        app.file_tree.update(cx, |tree, cx| {
+            tree.set_roots(vec![first.clone(), second.clone()], cx);
+        });
         app.scm_sync_watchers(window, cx);
         let data = cx.global_mut::<ScmData>();
         for owner in [4001, 4002, 4003] {
@@ -590,7 +594,9 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(
         let generation = data.generation(host.id(), &second);
 
         // Removing one root must not retire the other root's live read identity.
-        app.tab_code_mut_or_init().unwrap().roots = vec![second.clone()];
+        app.file_tree.update(cx, |tree, cx| {
+            tree.set_roots(vec![second.clone()], cx);
+        });
         app.scm_sync_watchers(window, cx);
         let data = cx.global::<ScmData>();
         assert!(data.status_for(host.id(), &first).is_none());
@@ -742,7 +748,9 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
             }
             app.right_panel_visible = true;
             app.right_panel_tab = lyrel_core::core::config::RightPanelTab::Files;
-            app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+            app.file_tree.update(cx, |tree, cx| {
+                tree.set_roots(vec![root.clone()], cx);
+            });
             app.scm_sync_watchers(window, cx);
             assert!(
                 cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet),
@@ -776,7 +784,9 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
             == Some(root.as_path())
     });
     app.update_in(&mut vcx, |app, window, cx| {
-        app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+        app.file_tree.update(cx, |tree, cx| {
+            tree.set_roots(vec![root.clone()], cx);
+        });
         app.scm_sync_watchers(window, cx);
         assert!(
             cx.try_global::<ScmData>()
@@ -787,7 +797,9 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
     app.update_in(&mut vcx, |app, window, cx| {
         let previous = index_of(cx, host.id(), &root).unwrap();
-        app.tab_code_mut_or_init().unwrap().roots = vec![nested, root.clone(), root.clone()];
+        app.file_tree.update(cx, |tree, cx| {
+            tree.set_roots(vec![nested, root.clone(), root.clone()], cx);
+        });
         app.scm_sync_watchers(window, cx);
         assert_eq!(
             cx.global::<ScmData>().subs.count(host.id(), &root),

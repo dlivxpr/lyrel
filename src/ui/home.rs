@@ -196,10 +196,10 @@ fn home_shortcut_label(action: &str, closed: Option<&str>) -> String {
         "OpenSettings" => lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::HomeSettings),
         _ => action,
     };
-    if action == "ReopenClosedTab" {
-        if let Some(name) = closed {
-            return t_fmt(L10nKey::HomeReopenNamed, &[("name", name)]);
-        }
+    if action == "ReopenClosedTab"
+        && let Some(name) = closed
+    {
+        return t_fmt(L10nKey::HomeReopenNamed, &[("name", name)]);
     }
     label.to_string()
 }

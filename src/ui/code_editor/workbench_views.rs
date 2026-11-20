@@ -1298,7 +1298,7 @@ mod integrated_acceptance {
         // Undo through the focused presentation's actual keyboard command.
         cx.dispatch_action(gpui_kit::component::input::Undo);
         until(&mut cx, |cx| {
-            source.read_with(cx, |editor, _| editor.text().to_string() == CSV_TEXT)
+            source.read_with(cx, |editor, _| editor.text() == CSV_TEXT)
         });
         settle(&mut cx);
         assert!(!app.read_with(&cx, |app, cx| {

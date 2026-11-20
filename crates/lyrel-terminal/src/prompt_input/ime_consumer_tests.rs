@@ -127,9 +127,9 @@ fn opening_search_discards_the_terminals_uncommitted_composition(cx: &mut TestAp
         .update(cx, |_, window, cx| {
             let view = view.read(cx);
             assert_eq!(view.input.marked(), "", "preedit belongs to the old focus");
-            let search = view.search.as_ref().unwrap();
-            assert_eq!(search.input.read(cx).value(), "");
-            assert!(search.input.read(cx).focus_handle(cx).is_focused(window));
+            let input = view.search_input().expect("the find bar opened");
+            assert_eq!(input.read(cx).value(), "");
+            assert!(input.read(cx).focus_handle(cx).is_focused(window));
         })
         .unwrap();
 }

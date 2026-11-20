@@ -548,12 +548,11 @@ impl SettingsWindow {
                 price.cache_read = values[3];
                 price.cache_write = values[4];
                 stored.pricing.upsert_custom(price)?;
-                if let Some((provider, model, currency)) = previous {
-                    if (provider.as_str(), model.as_str(), currency.as_str())
+                if let Some((provider, model, currency)) = previous
+                    && (provider.as_str(), model.as_str(), currency.as_str())
                         != (fields[0].trim(), fields[1].trim(), fields[2].trim())
-                    {
-                        stored.pricing.remove_custom(&provider, &model, &currency);
-                    }
+                {
+                    stored.pricing.remove_custom(&provider, &model, &currency);
                 }
                 Ok(())
             },

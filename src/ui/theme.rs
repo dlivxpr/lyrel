@@ -915,15 +915,19 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let theme_window = window.as_deref_mut();
+    #[cfg(not(target_os = "macos"))]
+    let theme_window = window;
     lyrel_ui_base::presentation::install_preset_theme(
-        window.as_deref_mut(),
+        theme_window,
         cx,
         &theme,
         material_active(backdrop, blur),
     );
 
     #[cfg(target_os = "macos")]
-    if let Some(window) = window.as_deref_mut() {
+    if let Some(window) = window {
         window.set_traffic_light_position(crate::ui::window_chrome::traffic_light_position());
     }
 }
@@ -988,6 +992,18 @@ fn sync_native_appearance(dark: Option<bool>) {
 
 #[cfg(not(target_os = "macos"))]
 fn sync_native_appearance(_dark: Option<bool>) {}
+
+/// The text view's style for rendered Markdown, wherever lyrel shows it.
+///
+/// Inline `code` gets a faint neutral fill. The text view's own default is the
+/// theme's `accent`, which lyrel also paints selection with, so every code span
+/// read as selected text.
+pub(crate) fn markdown_style(cx: &gpui_kit::App) -> gpui_kit::component::text::TextViewStyle {
+    gpui_kit::component::text::TextViewStyle::default().inline_code(gpui_kit::HighlightStyle {
+        background_color: Some(cx.theme().foreground.opacity(0.08)),
+        ..Default::default()
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -1568,16 +1584,4 @@ mod tests {
             );
         });
     }
-}
-
-/// The text view's style for rendered Markdown, wherever lyrel shows it.
-///
-/// Inline `code` gets a faint neutral fill. The text view's own default is the
-/// theme's `accent`, which lyrel also paints selection with, so every code span
-/// read as selected text.
-pub(crate) fn markdown_style(cx: &gpui_kit::App) -> gpui_kit::component::text::TextViewStyle {
-    gpui_kit::component::text::TextViewStyle::default().inline_code(gpui_kit::HighlightStyle {
-        background_color: Some(cx.theme().foreground.opacity(0.08)),
-        ..Default::default()
-    })
 }

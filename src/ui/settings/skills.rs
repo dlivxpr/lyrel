@@ -25,224 +25,6 @@ mod maintenance;
 pub(crate) mod test_host;
 mod view;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{TestAppContext, VisualTestContext};
-    fn settle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            cx.background_executor.run_until_parked();
-            if app.update_in(cx, |app, _, _| {
-                app.active_settings().is_some_and(|s| !s.skills.loading)
-            }) {
-                return;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "skill scan did not settle"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-    pub(super) fn reveal(
-        window: &mut Window,
-        cx: &mut App,
-        target: impl Into<SharedString>,
-        region: &'static str,
-    ) {
-        let target = target.into();
-        for _ in 0..50 {
-            window.render_frame(cx);
-            let bounds = window.find(region).bounds();
-            let item = window.find(target.clone());
-            let center = item.bounds().center();
-            if item.visible() && bounds.contains(&center) {
-                return;
-            }
-            let delta = if center.y < bounds.top() { 160. } else { -160. };
-            window.scroll(
-                region,
-                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(delta))),
-                cx,
-            );
-        }
-        panic!("{target} is not reachable through {region}");
-    }
-    #[gpui_kit::test]
-    fn skills_workflow_searches_actual_project_files_and_keeps_scope_on_navigation(
-        cx: &mut TestAppContext,
-    ) {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(temp.path().join(".git")).unwrap();
-        let install = temp.path().join(".agents/skills/needle");
-        std::fs::create_dir_all(&install).unwrap();
-        let original = "---\nname: needle\ndescription: A uniquely searchable reference\n---\n# Actual project skill\n";
-        std::fs::write(install.join("SKILL.md"), original).unwrap();
-        let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
-        vcx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
-        app.update_in(&mut vcx, |app, window, cx| {
-            isolate_native_roots(&temp.path().join("native-home"), cx);
-            app.open_settings_section(SettingsSection::Skills, window, cx)
-        });
-        settle(&app, &mut vcx);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            for id in ["skills-project-input", "skills-query"] {
-                assert!(window.find(id).label().is_some_and(|name| !name.is_empty()));
-            }
-            window.click("skills-project-input", cx);
-            window.input(temp.path().to_string_lossy().as_ref(), cx);
-            window.click("skills-apply-project", cx);
-        });
-        settle(&app, &mut vcx);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.click("skills-query", cx);
-            window.input("uniquely searchable", cx);
-        });
-        let path = app.update_in(&mut vcx, |app, _, cx| {
-            let state = &app.active_settings().unwrap().skills;
-            let query = state.query.read(cx).value();
-            let result = state
-                .snapshot
-                .as_ref()
-                .unwrap()
-                .filtered(&query, state.filter)
-                .collect::<Vec<_>>();
-            assert_eq!(result.len(), 1);
-            assert_eq!(result[0].markdown(), Some(original));
-            result[0].path().to_path_buf()
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.click(SharedString::from(row_id(&path)), cx);
-        });
-        app.update_in(&mut vcx, |app, _, cx| {
-            assert_eq!(
-                app.active_settings().unwrap().skills.selected.as_deref(),
-                Some(path.as_path())
-            );
-            app.select_settings_section(SettingsSection::General, cx);
-            app.select_settings_section(SettingsSection::Skills, cx);
-            assert_eq!(
-                app.active_settings().unwrap().skills.project.as_deref(),
-                Some(temp.path())
-            );
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find(SharedString::from(row_id(&path))).visible());
-            assert!(window.try_find("skills-back").is_none());
-            assert!(
-                window.find("skills-detail-metadata").bounds().bottom()
-                    <= window.find("skills-detail-actions").bounds().top()
-            );
-            assert!(
-                (window.find("skills-query").bounds().size.width
-                    - window.find("skills-source").bounds().size.width)
-                    .abs()
-                    <= px(1.)
-            );
-            window.click("skills-copy-path", cx);
-            assert_eq!(
-                cx.read_from_clipboard().unwrap().text().as_deref(),
-                Some(path.to_string_lossy().as_ref())
-            );
-        });
-        vcx.simulate_resize(gpui_kit::size(px(680.), px(560.)));
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find("skills-back").visible());
-            window.click("skills-back", cx);
-            assert!(window.find(SharedString::from(row_id(&path))).visible());
-            window.click(SharedString::from(row_id(&path)), cx);
-            window.press("escape", cx);
-        });
-        app.update_in(&mut vcx, |app, _, _| {
-            let state = &app.active_settings().unwrap().skills;
-            assert!(state.selected.is_none());
-            assert_eq!(state.project.as_deref(), Some(temp.path()));
-        });
-        assert_eq!(
-            std::fs::read_to_string(install.join("SKILL.md")).unwrap(),
-            original
-        );
-    }
-    pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<SettingsWindow>) {
-        std::fs::create_dir_all(home).unwrap();
-        super::test_host::install(home, cx);
-        let home = home.to_string_lossy();
-        cx.global_mut::<Config>().agent_launch=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent| {
-            let dir=if agent=="omp"{format!("{home}/.omp/agent")}else{format!("{home}/.pi/agent")};
-            (agent.into(),format!("HOME='{home}' USERPROFILE='{home}' PROGRAMDATA='{home}/programdata' CLAUDE_CONFIG_DIR='{home}/.claude' XDG_DATA_HOME='{home}/.data' XDG_STATE_HOME='{home}/.state' PI_CONFIG_DIR=.omp OMP_PROFILE=default PI_PROFILE=default PI_CODING_AGENT_DIR='{dir}' KIMI_CODE_HOME='{home}/.kimi-code' HERMES_HOME='{home}/.hermes' XDG_CONFIG_HOME='{home}/.config' OPENCODE_CONFIG_DIR='{home}/.config/opencode' {agent}"))
-        }).collect();
-    }
-
-    #[gpui_kit::test]
-    fn late_scans_never_replace_a_new_project_or_reopened_settings_session(
-        cx: &mut TestAppContext,
-    ) {
-        let temp = tempfile::tempdir().unwrap();
-        let old = temp.path().join("old");
-        let new = temp.path().join("new");
-        for (project, name) in [(&old, "old-installation"), (&new, "new-installation")] {
-            std::fs::create_dir_all(project.join(".git")).unwrap();
-            let dir = project.join(".agents/skills/reference");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
-                dir.join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: Reference\n---\n# {name}\n"),
-            )
-            .unwrap();
-        }
-        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
-        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            isolate_native_roots(&temp.path().join("native-home"), cx);
-            app.open_settings_section(SettingsSection::Skills, window, cx);
-            for project in [&old, &new] {
-                let input = app.active_settings().unwrap().skills.project_input.clone();
-                input.update(cx, |input, cx| {
-                    input.set_value(project.to_string_lossy().to_string(), window, cx)
-                });
-                app.apply_skills_project(cx);
-            }
-        });
-        settle(&app, &mut vcx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let state = &app.active_settings().unwrap().skills;
-            let snapshot = state.snapshot.as_ref().unwrap();
-            assert_eq!(snapshot.project(), Some(new.as_path()));
-            assert_eq!(snapshot.filtered("old-installation", None).count(), 0);
-            assert_eq!(snapshot.filtered("new-installation", None).count(), 1);
-            app.refresh_skills(cx);
-            app.close_settings(window, cx);
-        });
-        vcx.run_until_parked();
-        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.open_settings_section(SettingsSection::Skills, window, cx);
-        });
-        settle(&app, &mut vcx);
-        app.update_in(&mut vcx, |app, _, _| {
-            let state = &app.active_settings().unwrap().skills;
-            assert_eq!(state.project, None);
-            assert_eq!(state.snapshot.as_ref().unwrap().project(), None);
-            assert_eq!(
-                state
-                    .snapshot
-                    .as_ref()
-                    .unwrap()
-                    .filtered("new-installation", None)
-                    .count(),
-                0
-            );
-        });
-    }
-}
-
 pub(crate) struct SkillsState {
     session: u64,
     generation: u64,
@@ -620,4 +402,222 @@ fn safe_node(node: &gpui_kit::component::text::markdown_ast::Node) -> bool {
     here && node
         .children()
         .is_none_or(|children| children.iter().all(safe_node))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    fn settle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.background_executor.run_until_parked();
+            if app.update_in(cx, |app, _, _| {
+                app.active_settings().is_some_and(|s| !s.skills.loading)
+            }) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "skill scan did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    pub(super) fn reveal(
+        window: &mut Window,
+        cx: &mut App,
+        target: impl Into<SharedString>,
+        region: &'static str,
+    ) {
+        let target = target.into();
+        for _ in 0..50 {
+            window.render_frame(cx);
+            let bounds = window.find(region).bounds();
+            let item = window.find(target.clone());
+            let center = item.bounds().center();
+            if item.visible() && bounds.contains(&center) {
+                return;
+            }
+            let delta = if center.y < bounds.top() { 160. } else { -160. };
+            window.scroll(
+                region,
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(delta))),
+                cx,
+            );
+        }
+        panic!("{target} is not reachable through {region}");
+    }
+    #[gpui_kit::test]
+    fn skills_workflow_searches_actual_project_files_and_keeps_scope_on_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".git")).unwrap();
+        let install = temp.path().join(".agents/skills/needle");
+        std::fs::create_dir_all(&install).unwrap();
+        let original = "---\nname: needle\ndescription: A uniquely searchable reference\n---\n# Actual project skill\n";
+        std::fs::write(install.join("SKILL.md"), original).unwrap();
+        let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
+        vcx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            isolate_native_roots(&temp.path().join("native-home"), cx);
+            app.open_settings_section(SettingsSection::Skills, window, cx)
+        });
+        settle(&app, &mut vcx);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            for id in ["skills-project-input", "skills-query"] {
+                assert!(window.find(id).label().is_some_and(|name| !name.is_empty()));
+            }
+            window.click("skills-project-input", cx);
+            window.input(temp.path().to_string_lossy().as_ref(), cx);
+            window.click("skills-apply-project", cx);
+        });
+        settle(&app, &mut vcx);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("skills-query", cx);
+            window.input("uniquely searchable", cx);
+        });
+        let path = app.update_in(&mut vcx, |app, _, cx| {
+            let state = &app.active_settings().unwrap().skills;
+            let query = state.query.read(cx).value();
+            let result = state
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .filtered(&query, state.filter)
+                .collect::<Vec<_>>();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].markdown(), Some(original));
+            result[0].path().to_path_buf()
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click(SharedString::from(row_id(&path)), cx);
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            assert_eq!(
+                app.active_settings().unwrap().skills.selected.as_deref(),
+                Some(path.as_path())
+            );
+            app.select_settings_section(SettingsSection::General, cx);
+            app.select_settings_section(SettingsSection::Skills, cx);
+            assert_eq!(
+                app.active_settings().unwrap().skills.project.as_deref(),
+                Some(temp.path())
+            );
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(SharedString::from(row_id(&path))).visible());
+            assert!(window.try_find("skills-back").is_none());
+            assert!(
+                window.find("skills-detail-metadata").bounds().bottom()
+                    <= window.find("skills-detail-actions").bounds().top()
+            );
+            assert!(
+                (window.find("skills-query").bounds().size.width
+                    - window.find("skills-source").bounds().size.width)
+                    .abs()
+                    <= px(1.)
+            );
+            window.click("skills-copy-path", cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some(path.to_string_lossy().as_ref())
+            );
+        });
+        vcx.simulate_resize(gpui_kit::size(px(680.), px(560.)));
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("skills-back").visible());
+            window.click("skills-back", cx);
+            assert!(window.find(SharedString::from(row_id(&path))).visible());
+            window.click(SharedString::from(row_id(&path)), cx);
+            window.press("escape", cx);
+        });
+        app.update_in(&mut vcx, |app, _, _| {
+            let state = &app.active_settings().unwrap().skills;
+            assert!(state.selected.is_none());
+            assert_eq!(state.project.as_deref(), Some(temp.path()));
+        });
+        assert_eq!(
+            std::fs::read_to_string(install.join("SKILL.md")).unwrap(),
+            original
+        );
+    }
+    pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<SettingsWindow>) {
+        std::fs::create_dir_all(home).unwrap();
+        super::test_host::install(home, cx);
+        let home = home.to_string_lossy();
+        cx.global_mut::<Config>().agent_launch=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent| {
+            let dir=if agent=="omp"{format!("{home}/.omp/agent")}else{format!("{home}/.pi/agent")};
+            (agent.into(),format!("HOME='{home}' USERPROFILE='{home}' PROGRAMDATA='{home}/programdata' CLAUDE_CONFIG_DIR='{home}/.claude' XDG_DATA_HOME='{home}/.data' XDG_STATE_HOME='{home}/.state' PI_CONFIG_DIR=.omp OMP_PROFILE=default PI_PROFILE=default PI_CODING_AGENT_DIR='{dir}' KIMI_CODE_HOME='{home}/.kimi-code' HERMES_HOME='{home}/.hermes' XDG_CONFIG_HOME='{home}/.config' OPENCODE_CONFIG_DIR='{home}/.config/opencode' {agent}"))
+        }).collect();
+    }
+
+    #[gpui_kit::test]
+    fn late_scans_never_replace_a_new_project_or_reopened_settings_session(
+        cx: &mut TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("old");
+        let new = temp.path().join("new");
+        for (project, name) in [(&old, "old-installation"), (&new, "new-installation")] {
+            std::fs::create_dir_all(project.join(".git")).unwrap();
+            let dir = project.join(".agents/skills/reference");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Reference\n---\n# {name}\n"),
+            )
+            .unwrap();
+        }
+        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            isolate_native_roots(&temp.path().join("native-home"), cx);
+            app.open_settings_section(SettingsSection::Skills, window, cx);
+            for project in [&old, &new] {
+                let input = app.active_settings().unwrap().skills.project_input.clone();
+                input.update(cx, |input, cx| {
+                    input.set_value(project.to_string_lossy().to_string(), window, cx)
+                });
+                app.apply_skills_project(cx);
+            }
+        });
+        settle(&app, &mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let state = &app.active_settings().unwrap().skills;
+            let snapshot = state.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.project(), Some(new.as_path()));
+            assert_eq!(snapshot.filtered("old-installation", None).count(), 0);
+            assert_eq!(snapshot.filtered("new-installation", None).count(), 1);
+            app.refresh_skills(cx);
+            app.close_settings(window, cx);
+        });
+        vcx.run_until_parked();
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_settings_section(SettingsSection::Skills, window, cx);
+        });
+        settle(&app, &mut vcx);
+        app.update_in(&mut vcx, |app, _, _| {
+            let state = &app.active_settings().unwrap().skills;
+            assert_eq!(state.project, None);
+            assert_eq!(state.snapshot.as_ref().unwrap().project(), None);
+            assert_eq!(
+                state
+                    .snapshot
+                    .as_ref()
+                    .unwrap()
+                    .filtered("new-installation", None)
+                    .count(),
+                0
+            );
+        });
+    }
 }

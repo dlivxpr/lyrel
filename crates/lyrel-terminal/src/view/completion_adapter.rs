@@ -5,7 +5,7 @@
 use super::prompt::menu_layout;
 use super::*;
 use crate::completion::CandidateKind;
-use crate::completion::state::{CompletionContext, CompletionWork, RemoteRequest};
+use crate::completion::state::{CompletionContext, CompletionCwd, CompletionWork, RemoteRequest};
 use crate::prompt_input::layout::input_start;
 use crate::sftp_client::SftpClient;
 
@@ -34,9 +34,11 @@ impl TerminalView {
         let work = self.completion.tab(
             self.input.editor_mut(),
             context,
-            cwd.as_deref(),
-            share.as_deref(),
-            remote.as_deref(),
+            CompletionCwd {
+                local: cwd.as_deref(),
+                share: share.as_deref(),
+                remote: remote.as_deref(),
+            },
             shell.as_deref(),
             cx.global::<Config>().tab_completion,
             forward,

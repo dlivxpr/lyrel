@@ -15,6 +15,15 @@ use segment::{RowSeg, char_string, segment_row};
 mod powerline;
 mod segment;
 
+/// The font faces one borrowed frame shapes with: the size, the base face,
+/// and the bold/italic variants the grid resolved for this frame.
+pub struct GlyphFonts<'a> {
+    pub size: Pixels,
+    pub base: &'a Font,
+    pub bold: Option<&'a Font>,
+    pub italic: Option<&'a Font>,
+}
+
 fn build_font(base: &Font, bold: bool, italic: bool) -> Font {
     let mut f = base.clone();
     f.weight = if bold {
@@ -462,11 +471,14 @@ pub fn paint_glyphs(
     cx: &mut App,
     geom: &CellGeom,
     buf: &[RenderCell],
-    font_size: Pixels,
-    base_font: &Font,
-    bold_font: Option<&Font>,
-    italic_font: Option<&Font>,
+    fonts: &GlyphFonts<'_>,
 ) {
+    let GlyphFonts {
+        size: font_size,
+        base: base_font,
+        bold: bold_font,
+        italic: italic_font,
+    } = *fonts;
     let faces = [
         build_font(base_font, false, false),
         build_font(bold_font.unwrap_or(base_font), true, false),

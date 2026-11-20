@@ -23,7 +23,10 @@ test-support = ["lyrel-ui-base/test-guards"]
 # so headless workspace builds are unaffected.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 lyrel-protocol = { path = "../lyrel-protocol" }
-lyrel-core = { path = "../lyrel-core", features = ["remote-install"] }
+# Host value types and local-host helpers only: the Markdown image proxy
+# resolver is injected by the desktop shell (`ImageProxyResolver`), so this
+# crate links none of the installer's `remote-install` machinery.
+lyrel-core = { path = "../lyrel-core" }
 # The shared GPUI desktop foundation: config global, actions, HostOps,
 # HostRegistry, i18n, notifications, presets and the shared dialog chrome.
 lyrel-ui-base = { path = "../lyrel-ui-base" }

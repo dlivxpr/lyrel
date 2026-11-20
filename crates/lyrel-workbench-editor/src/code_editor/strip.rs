@@ -176,6 +176,13 @@ pub struct PickerRow {
     pub front: bool,
 }
 
+/// The strip one picker keystroke targets: the tab that owns the open list
+/// and that tab's code state, which the rows are computed from.
+pub struct StripTarget<'a> {
+    pub tab: TabId,
+    pub code: &'a mut TabCode,
+}
+
 impl EditorPanelState {
     /// The cell Enter or Space would activate among `visible` — the focused
     /// group's remembered cell while it is still one of the cells on screen,
@@ -436,14 +443,14 @@ impl EditorPanelState {
     /// window's files live on, for the rows' directory names.
     pub fn strip_picker_key(
         &mut self,
-        tab: TabId,
-        code: &mut TabCode,
+        target: StripTarget<'_>,
         local_host: HostId,
         ev: &gpui_kit::KeyDownEvent,
         cap: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let StripTarget { tab, code } = target;
         let (rows, _) = self.strip_matches(Some(&*code), local_host, cap, cx);
         let Some(p) = self.strip_picker.as_mut() else {
             return;

@@ -123,14 +123,15 @@ fn render_pool(pool: &providers::Pool, percentages: bool, cx: &gpui_kit::App) ->
             detail = detail.child(format!("{} {value} {unit}", t(label)));
         }
     }
-    if percentages && pool.used.is_some() {
-        if let Some(ratio) = ratio {
-            detail = detail.child(format!(
-                "{} {:.0}%",
-                t(L10nKey::UsageUsed),
-                (1. - ratio) * 100.
-            ));
-        }
+    if percentages
+        && pool.used.is_some()
+        && let Some(ratio) = ratio
+    {
+        detail = detail.child(format!(
+            "{} {:.0}%",
+            t(L10nKey::UsageUsed),
+            (1. - ratio) * 100.
+        ));
     }
     for (label, value) in [
         (L10nKey::UsageReset, &pool.reset),
@@ -1095,7 +1096,8 @@ impl Render for UsagePage {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .child(sections);
-        let page = v_flex()
+
+        v_flex()
             .id("usage-page")
             .relative()
             .size_full()
@@ -1107,8 +1109,7 @@ impl Render for UsagePage {
                 "usage-scrollbar",
                 scroll,
                 &self.scroll,
-            ));
-        page
+            ))
     }
 }
 

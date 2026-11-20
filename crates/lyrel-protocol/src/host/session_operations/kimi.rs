@@ -551,13 +551,15 @@ mod tests {
     #[test]
     fn kimi_persisted_launch_uses_the_hook_reported_home_without_replaying_profile_as_a_flag() {
         let event = crate::core::cli_agent::parse_agent_event_body(br#"{"agent":"kimi","event":"session-start","session_id":"s","session_scope":{"profile":"reviewer","environment":{"KIMI_CODE_HOME":"/actual/home"}}}"#).unwrap();
-        let mut state = crate::core::cli_agent::AgentSessionState::default();
-        state.launch_argv = Some(vec![
-            "KIMI_CODE_HOME=/old/home".into(),
-            "kimi".into(),
-            "--model".into(),
-            "team/model".into(),
-        ]);
+        let mut state = crate::core::cli_agent::AgentSessionState {
+            launch_argv: Some(vec![
+                "KIMI_CODE_HOME=/old/home".into(),
+                "kimi".into(),
+                "--model".into(),
+                "team/model".into(),
+            ]),
+            ..Default::default()
+        };
         state.apply_event(&event);
         let launch = launch_context(CLIAgent::Kimi, &state).unwrap();
         assert_eq!(

@@ -538,9 +538,11 @@ fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
     let work = tempfile::tempdir().unwrap();
     let pane = lyrel_core::daemon::pane::DaemonPane::spawn(
         7711,
-        Some(work.path().to_path_buf()),
-        ws(80, 24),
-        Some(replay_shell()),
+        lyrel_core::daemon::pane::PaneSpawnSpec {
+            cwd: Some(work.path().to_path_buf()),
+            size: ws(80, 24),
+            shell: Some(replay_shell()),
+        },
         None,
         None,
         None,
@@ -662,9 +664,11 @@ fn the_later_of_two_racing_attaches_keeps_the_screen_and_the_seat() {
     let work = tempfile::tempdir().unwrap();
     let pane = lyrel_core::daemon::pane::DaemonPane::spawn(
         7712,
-        Some(work.path().to_path_buf()),
-        ws(80, 24),
-        Some(replay_shell()),
+        lyrel_core::daemon::pane::PaneSpawnSpec {
+            cwd: Some(work.path().to_path_buf()),
+            size: ws(80, 24),
+            shell: Some(replay_shell()),
+        },
         None,
         None,
         None,

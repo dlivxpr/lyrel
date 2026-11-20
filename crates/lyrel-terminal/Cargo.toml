@@ -13,7 +13,7 @@ publish = false
 # suites build on. Enabled by the root package's desktop dev-dependencies and
 # by this crate's own tests. The fixture process stays a dev-dependency;
 # only the hex wire codec is needed by the shared GPUI consumer helpers.
-test-support = ["dep:hex", "lyrel-core/test-support", "gpui-kit/test-support"]
+test-support = ["dep:hex", "lyrel-core/test-support", "lyrel-ui-base/test-guards", "gpui-kit/test-support"]
 # The root package's native test binaries enable this name across the graph;
 # here it only keeps the cfg-gated test fixtures (quiet panes, test stream
 # pairs) compiling in feature-enabled builds, mirroring the root package.

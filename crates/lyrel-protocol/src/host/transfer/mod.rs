@@ -146,11 +146,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_segment_fits_well_inside_the_wire_frame() {
+    const _: () = {
         assert!(SEGMENT_BYTES <= SEGMENT_BYTES_MAX);
         assert!(SEGMENT_BYTES_MAX < crate::daemon::protocol::MAX_FRAME as u64);
-    }
+    };
 
     #[test]
     fn a_budget_refusal_names_what_was_exceeded() {

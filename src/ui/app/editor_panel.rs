@@ -8,6 +8,7 @@
 //! editor module holds a production `impl LyrelApp` (#327).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui_kit::AnyElement;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -211,6 +212,30 @@ impl LyrelApp {
         self.editor_open_on_host_at(host, path, None, window, cx);
     }
 
+    /// Installs the Markdown image proxy resolver when nothing has claimed
+    /// the global yet.
+    ///
+    /// `src/lib.rs::run` calls this before the first window opens, with the
+    /// production resolver that applies the desktop precedence (manual
+    /// `config.json` proxy, then the platform system proxy, then the
+    /// environment). Harnesses that construct `LyrelApp` without the desktop
+    /// bootstrap — `ui::app::test_window::harness`, the native Markdown
+    /// runner — reach documents through [`Self::editor_open_on_host`], so
+    /// that entry re-checks the global instead of letting a bare image fetch
+    /// fall back to raw ureq defaults. A harness that installed its own
+    /// resolver first is never overwritten.
+    pub(crate) fn ensure_image_proxy_resolver(cx: &mut gpui_kit::App) {
+        use lyrel_workbench_editor::code_editor::markdown::images::ImageProxyResolver;
+        if cx.try_global::<ImageProxyResolver>().is_none() {
+            ImageProxyResolver::install(
+                cx,
+                ImageProxyResolver::new(Arc::new(|url, manual| {
+                    lyrel_core::daemon::install::proxy::resolve(url, manual)
+                })),
+            );
+        }
+    }
+
     pub(crate) fn editor_open_on_host_at(
         &mut self,
         host: SharedHost,
@@ -219,6 +244,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Harnesses construct LyrelApp without the desktop bootstrap; make
+        // sure the image proxy resolver is installed before any document of
+        // this tab can request a remote picture.
+        Self::ensure_image_proxy_resolver(cx);
         let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else {
             return;
         };
@@ -406,7 +435,7 @@ impl LyrelApp {
                 editor.set_had_focus(None);
                 editor.dismiss_bar();
             });
-            self.file_tree.cancel_edit();
+            self.file_tree.update(cx, |tree, _| tree.cancel_edit());
             self.focus_active(window, cx);
             cx.notify();
             return;
@@ -432,7 +461,8 @@ impl LyrelApp {
                     cx,
                 );
             }
-            self.file_tree.focus_handle.focus(window, cx);
+            self.file_tree
+                .update(cx, |tree, cx| tree.focus_handle(cx).focus(window, cx));
         }
         cx.notify();
     }
@@ -819,34 +849,34 @@ impl LyrelApp {
     pub(crate) fn lsp_go_to_definition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_go_to_definition(&code, window, cx)
+            editor.lsp_go_to_definition(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_find_references(&code, window, cx)
+            editor.lsp_find_references(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor.update(cx, |editor, cx| {
-            editor.lsp_format_document(&code, window, cx)
+            editor.lsp_format_document(code, window, cx)
         });
     }
 
     pub(crate) fn lsp_rename_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor
-            .update(cx, |editor, cx| editor.lsp_rename_start(&code, window, cx));
+            .update(cx, |editor, cx| editor.lsp_rename_start(code, window, cx));
     }
 
     pub(crate) fn lsp_code_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(code) = self.tab_code() else { return };
         self.editor
-            .update(cx, |editor, cx| editor.lsp_code_actions(&code, window, cx));
+            .update(cx, |editor, cx| editor.lsp_code_actions(code, window, cx));
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1051,7 +1081,12 @@ impl LyrelApp {
             .is_some_and(|c| c.visible && c.files.is_empty());
         // ⌘⇧E on an empty panel hands the focus to the file tree, so from
         // there ⌘W is the empty panel's too.
-        let tree = empty && self.file_tree.focus_handle.contains_focused(window, cx);
+        let tree = empty
+            && self
+                .file_tree
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx);
         if !(tree || self.editor_panel_has_focus(window, cx)) {
             return false;
         }
@@ -1064,7 +1099,7 @@ impl LyrelApp {
                 editor.set_had_focus(None);
                 editor.dismiss_bar();
             });
-            self.file_tree.cancel_edit();
+            self.file_tree.update(cx, |tree, _| tree.cancel_edit());
             self.focus_active(window, cx);
             cx.notify();
             return true;
@@ -1610,12 +1645,14 @@ impl LyrelApp {
                 anchor,
                 revision,
             } => self.editor_follow_link(
-                *buffer,
-                *source,
-                host.clone(),
-                path,
-                anchor.clone(),
-                *revision,
+                super::editor_links::FollowedLink {
+                    buffer: *buffer,
+                    source: *source,
+                    host: host.clone(),
+                    path: path.to_path_buf(),
+                    anchor: anchor.clone(),
+                    revision: *revision,
+                },
                 window,
                 cx,
             ),
@@ -1802,6 +1839,7 @@ impl LyrelApp {
             .unwrap_or(&[]);
         let spelled = self
             .file_tree
+            .read(cx)
             .project_spelling(self.spawn_host(cx), roots, path);
         let dir = spelled.parent().map(|parent| {
             self.tab_code()

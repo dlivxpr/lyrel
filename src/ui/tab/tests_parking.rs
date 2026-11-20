@@ -195,7 +195,7 @@ fn another_clients_parking_delta_preserves_view_and_removes_hidden_input_focus(
         shared.park(shared.root.pane_ids()[0]);
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: shared,
+                tab: Box::new(shared),
                 pane: None
             },
             window,
@@ -369,7 +369,7 @@ fn restore_after_an_intervening_split_and_sibling_close_keeps_the_new_terminal(
         // Another client closes the original sibling after the new split.
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: shared,
+                tab: Box::new(shared),
                 pane: None
             },
             window,
@@ -941,7 +941,7 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
         while app.tabs.len() > 2 {
             let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
             pane.terminal().unwrap().update(cx, |view, cx| {
-                view.title = format!("构建终端与长标题 · shell {}", parked.len() + 1).into();
+                view.title = format!("构建终端与长标题 · shell {}", parked.len() + 1);
                 cx.notify();
             });
             app.tabs[0]
@@ -1019,7 +1019,7 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
         shared.presentation = app.tabs[0].presentation().clone();
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: shared,
+                tab: Box::new(shared),
                 pane: None
             },
             window,
@@ -1392,7 +1392,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         );
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: shared.clone(),
+                tab: Box::new(shared.clone()),
                 pane: None
             },
             window,
@@ -1413,7 +1413,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
             .remap_panes(|id| (id != deleted).then_some(id));
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
-                tab: shared,
+                tab: Box::new(shared),
                 pane: None
             },
             window,

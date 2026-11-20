@@ -109,8 +109,10 @@ fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_curre
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
-        let mut config = Config::default();
-        config.cursor_blink = false;
+        let config = Config(lyrel_ui_base::config::CoreConfig {
+            cursor_blink: false,
+            ..Default::default()
+        });
         cx.set_global(config);
     });
     let daemon = GraphicsDaemonProcess::start();

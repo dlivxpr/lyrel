@@ -14,8 +14,18 @@ impl LyrelApp {
         let shells = cx.weak_entity();
         let profiles = shells.clone();
         let sources = shells.clone();
+        // Production hands the real keychain to the settings pages; GUI tests
+        // take the in-memory store so no settings test can touch the OS one.
+        #[cfg(not(test))]
+        let credentials = std::sync::Arc::new(crate::core::keychain::OsCredentialStore);
+        #[cfg(test)]
+        let credentials =
+            std::sync::Arc::new(crate::core::keychain::InMemoryCredentialStore::new());
+        let usage_vault = credentials.clone();
         SettingsContext {
             owner,
+            credentials,
+            usage_vault,
             shells: Rc::new(move |cx| {
                 shells
                     .upgrade()
@@ -182,11 +192,32 @@ impl LyrelApp {
                     }
                     SettingsEvent::EditorGitGutter(on) => this.apply_editor_git_gutter(*on, cx),
                     SettingsEvent::LocaleChanged => {
+                        // Menus and the explorer's context-menu wording read
+                        // their labels from the registry, so a language change
+                        // does not reach them on its own. No-op unless the
+                        // user installed the context menu, and off Windows
+                        // entirely.
+                        set_menus(cx);
+                        crate::core::explorer_context_menu::refresh_labels();
                         this.refresh_locale_state(window, cx);
                         crate::ui::windows::WindowRegistry::refresh_locale(
                             cx,
                             Some(this.workspace),
                         );
+                    }
+                    SettingsEvent::RebindKeymap => crate::ui::keymap::rebind(cx),
+                    SettingsEvent::ApplyTheme {
+                        persist,
+                        refresh_windows,
+                        rebuild_editor,
+                    } => {
+                        this.apply_theme_change(*persist, window, cx);
+                        if *rebuild_editor {
+                            this.refresh_settings_theme(cx);
+                        }
+                        if *refresh_windows {
+                            cx.refresh_windows();
+                        }
                     }
                 }
             },
@@ -396,7 +427,6 @@ impl LyrelApp {
         if persist {
             self.persist_settings_config(cx);
         }
-        self.refresh_settings_theme(cx);
         cx.notify();
     }
     pub(super) fn refresh_settings_theme(&self, cx: &mut Context<Self>) {

@@ -127,7 +127,7 @@ fn desired_node_from_session(layout: &SessionPane, remote_window: bool) -> Optio
             }
             Some(DesiredNode::Leaf {
                 pane,
-                seed: PaneSeed {
+                seed: Box::new(PaneSeed {
                     pane,
                     cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
                     ssh_spec: ssh_spec.clone(),
@@ -136,12 +136,12 @@ fn desired_node_from_session(layout: &SessionPane, remote_window: bool) -> Optio
                         session_id: agent_session_id.clone(),
                         launch_argv: agent_launch_argv.clone(),
                         session_scope: agent_session_scope
-                            .as_ref()
+                            .as_deref()
                             .map(lyrel_core::host::session_operations::durable_scope),
                         status: None,
                     }),
                     shell: shell.clone(),
-                },
+                }),
             })
         }
         SessionPane::Split { axis, ratio, a, b } => {
@@ -201,7 +201,7 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
             });
             Some(DesiredNode::Leaf {
                 pane: view.pane_id,
-                seed: PaneSeed {
+                seed: Box::new(PaneSeed {
                     pane: view.pane_id,
                     cwd: view
                         .spawnable_cwd()
@@ -213,7 +213,7 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                     // that gap from its own side, so leaving it empty here
                     // withholds nothing the tree does not already get.
                     shell: view.shell_spec(),
-                },
+                }),
             })
         }
         Pane::Leaf(PaneSlot::Connecting(pending)) => {
@@ -236,18 +236,18 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                 agent,
                 session_id: agent_session_id,
                 launch_argv: agent_launch_argv,
-                session_scope: agent_session_scope,
+                session_scope: agent_session_scope.map(|scope| *scope),
                 status: None,
             });
             Some(DesiredNode::Leaf {
                 pane,
-                seed: PaneSeed {
+                seed: Box::new(PaneSeed {
                     pane,
                     cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
                     ssh_spec,
                     agent,
                     shell,
-                },
+                }),
             })
         }
         Pane::Split {

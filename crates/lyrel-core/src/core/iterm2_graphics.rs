@@ -76,7 +76,7 @@ pub(crate) fn parse_file(
     if data.len() % 4 == 1 {
         return Err("EINVAL:iTerm2 base64 payload has an ambiguous length");
     }
-    if data.len() % 4 != 0 {
+    if !data.len().is_multiple_of(4) {
         data.resize(data.len() + (4 - data.len() % 4), b'=');
     }
     let padding = data
@@ -531,7 +531,7 @@ mod tests {
         let normalized = normalize_jpeg(image, &mut work).unwrap();
         assert_eq!(normalized.format, WireFormat::Rgba);
         assert_eq!((normalized.width, normalized.height), (2, 1));
-        assert_eq!(normalized.data.len(), 2 * 1 * 4);
+        assert_eq!(normalized.data.len(), 2 * 4);
     }
 
     #[test]

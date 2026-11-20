@@ -9,6 +9,7 @@ pub mod desktop_lookups;
 pub mod dialog;
 pub mod diff_list;
 pub mod diff_overlay;
+pub(crate) mod diff_probe;
 pub mod diff_rows;
 pub mod document_column;
 pub mod file_copy;

@@ -83,6 +83,7 @@ impl SettingsWindow {
             s.menu = None;
             let handle = s.focus_handle.clone();
             window.focus(&handle, cx);
+            self.cancel_preset_preview(cx);
             cx.notify();
             return;
         }
@@ -110,6 +111,9 @@ impl SettingsWindow {
         if s.menu.take().is_some() {
             let handle = s.focus_handle.clone();
             window.focus(&handle, cx);
+            // Escape and outside clicks land here; a live theme preview ends
+            // with the menu, so the slots go back to what was applied.
+            self.cancel_preset_preview(cx);
             cx.notify();
         }
     }
@@ -562,14 +566,12 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(control),
             );
-        if capture {
-            if let Some(entry) = entry {
-                self.active_settings()
-                    .unwrap()
-                    .navigation
-                    .capture_row(entry.title, row.into_any_element());
-                return div().id("captured-setting");
-            }
+        if capture && let Some(entry) = entry {
+            self.active_settings()
+                .unwrap()
+                .navigation
+                .capture_row(entry.title, row.into_any_element());
+            return div().id("captured-setting");
         }
         row
     }
@@ -1358,6 +1360,7 @@ impl SettingsWindow {
                 if let Some(s) = self.active_settings_mut() {
                     s.menu = None;
                 }
+                self.cancel_preset_preview(cx);
                 cx.stop_propagation();
                 cx.notify();
             }

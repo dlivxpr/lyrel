@@ -328,10 +328,10 @@ impl PaneBackend {
     pub(super) fn resize(&self, size: WinSize) {
         match &self.0 {
             Transport::Pty(p) => {
-                if let Ok(master) = p.master.lock() {
-                    if let Some(master) = master.as_ref() {
-                        let _ = master.resize(pty_size(size));
-                    }
+                if let Ok(master) = p.master.lock()
+                    && let Some(master) = master.as_ref()
+                {
+                    let _ = master.resize(pty_size(size));
                 }
             }
             Transport::NativeSsh(b) => b.handle.resize(size),
@@ -382,24 +382,24 @@ impl PaneBackend {
     }
 
     pub(super) fn reap(&self, id: u64) {
-        if let Some(p) = self.pty() {
-            if let Ok(mut child) = p.child.lock() {
-                match child.wait() {
-                    Ok(status) => log::info!(
-                        "pane {id} child exited; child_pid={:?} status={status}",
-                        p.shell_pid
-                    ),
-                    Err(e) => log::warn!("pane {id} child wait failed: {e}"),
-                }
+        if let Some(p) = self.pty()
+            && let Ok(mut child) = p.child.lock()
+        {
+            match child.wait() {
+                Ok(status) => log::info!(
+                    "pane {id} child exited; child_pid={:?} status={status}",
+                    p.shell_pid
+                ),
+                Err(e) => log::warn!("pane {id} child wait failed: {e}"),
             }
         }
     }
 
     pub(super) fn remove_integration(&mut self) {
-        if let Transport::Pty(p) = &mut self.0 {
-            if let Some(dir) = p.integration_dir.take() {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
+        if let Transport::Pty(p) = &mut self.0
+            && let Some(dir) = p.integration_dir.take()
+        {
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 }
@@ -418,11 +418,11 @@ fn signal_group(pty: &PtyBackend, sig: libc::c_int) {
         .lock()
         .ok()
         .and_then(|m| m.as_ref().and_then(|m| m.process_group_leader()));
-    if let Some(fg) = fg {
-        if Some(fg as u32) != pty.shell_pid {
-            unsafe {
-                libc::killpg(fg, sig);
-            }
+    if let Some(fg) = fg
+        && Some(fg as u32) != pty.shell_pid
+    {
+        unsafe {
+            libc::killpg(fg, sig);
         }
     }
 }

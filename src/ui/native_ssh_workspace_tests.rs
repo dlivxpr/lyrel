@@ -100,9 +100,11 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
         ));
         remote.id = workspace;
         remote.open = true;
-        let mut local = lyrel_ui_base::session::WindowView::default();
-        local.id = local_workspace;
-        local.open = true;
+        let local = lyrel_ui_base::session::WindowView {
+            id: local_workspace,
+            open: true,
+            ..Default::default()
+        };
         WorkspaceStore::install_for_test(
             cx,
             lyrel_ui_base::session::WindowViews {

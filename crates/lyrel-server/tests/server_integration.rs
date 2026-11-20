@@ -35,6 +35,9 @@ mod pane_history;
 mod pane_send_input;
 #[path = "suite/program_status.rs"]
 mod program_status;
+#[cfg(unix)]
+#[path = "program_status_support/mod.rs"]
+mod program_status_support;
 #[path = "suite/remote_read_session.rs"]
 pub mod remote_read_session;
 #[path = "suite/remote_router.rs"]

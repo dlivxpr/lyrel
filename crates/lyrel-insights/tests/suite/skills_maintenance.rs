@@ -179,11 +179,10 @@ impl Host for SandboxHost {
         if to
             .file_name()
             .is_some_and(|n| n.to_string_lossy().starts_with(".lyrel-remove-"))
+            && let Some((alias, target)) = &self.retarget_on_detach
         {
-            if let Some((alias, target)) = &self.retarget_on_detach {
-                self.inner.remove(alias, false)?;
-                link(target, alias);
-            }
+            self.inner.remove(alias, false)?;
+            link(target, alias);
         }
         Ok(())
     }
@@ -590,7 +589,13 @@ fn removal_finds_alias_targets_and_keeps_real_copies_other_targets_and_same_name
     fs::write(elsewhere.join("SKILL.md"), "another target").unwrap();
     let other_link = private.join("other-target");
     link(&elsewhere, &other_link);
-    let preview = preview_remove(&f.host, f.target(), &f.skill(), &[private.clone()]).unwrap();
+    let preview = preview_remove(
+        &f.host,
+        f.target(),
+        &f.skill(),
+        std::slice::from_ref(&private),
+    )
+    .unwrap();
     for expected in [&alias, &second, &nested_alias] {
         assert!(preview.links().iter().any(|link| link.path() == expected));
     }
@@ -1065,7 +1070,8 @@ fn replaced_private_parent_with_identical_link_text_is_preserved() {
     fs::create_dir(&root).unwrap();
     let alias = root.join("alias");
     link(&f.destination, &alias);
-    let preview = preview_remove(&f.host, f.target(), &f.skill(), &[root.clone()]).unwrap();
+    let preview =
+        preview_remove(&f.host, f.target(), &f.skill(), std::slice::from_ref(&root)).unwrap();
     let previous = root.with_extension("previous");
     fs::rename(&root, &previous).unwrap();
     fs::create_dir(&root).unwrap();

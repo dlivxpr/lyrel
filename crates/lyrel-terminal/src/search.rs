@@ -12,6 +12,7 @@ use rio_vt::crosswords::pos::{Boundary, Column, Direction, Line, Pos};
 use rio_vt::crosswords::search::{Match, RegexSearch};
 use rio_vt::event::EventListener;
 
+use super::search_controller::ScanOutcome;
 use super::view::TerminalView;
 use lyrel_ui_base::desktop_file::{drive_root, windows_spelling};
 use lyrel_ui_base::i18n::{L10nKey, t};
@@ -130,7 +131,7 @@ fn anchor_row(origin: usize, point: &Pos) -> i64 {
 
 impl TerminalView {
     pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let fresh = self.search.is_none();
+        let fresh = !self.search.is_open();
         // When the query is seeded from the grid selection, that selection is
         // the thing being searched for — not a casualty of opening the bar.
         // `recompute_matches` clears it because its other callers are the user
@@ -145,14 +146,14 @@ impl TerminalView {
                 seeded_presented = self.selection_scroll.has_presented();
                 seeded_selection = self.terminal.term.lock().selection.clone();
             }
-            let seed = seed.unwrap_or_else(|| self.search_last_query.clone());
+            let seed = seed.unwrap_or_else(|| self.search.last_query().to_string());
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(t(L10nKey::SearchFind))
                     .default_value(seed)
             });
             let subs = vec![cx.subscribe_in(&input, window, Self::on_search_event)];
-            self.search = Some(SearchState {
+            self.search.open(SearchState {
                 input,
                 matches: Vec::new(),
                 current_index: None,
@@ -163,7 +164,7 @@ impl TerminalView {
                 _subs: subs,
             });
         }
-        if let Some(input) = self.search.as_ref().map(|s| s.input.clone()) {
+        if let Some(input) = self.search.session().map(|s| s.input.clone()) {
             input.update(cx, |state, cx| state.focus(window, cx));
             // The box keeps the last query on purpose — reopening on the word
             // you just looked for is most of what a find bar is for — so the
@@ -190,17 +191,53 @@ impl TerminalView {
     }
 
     pub fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.search.as_ref() {
-            self.search_last_query = s.input.read(cx).value().to_string();
-        }
-        self.search = None;
-        self.search_focused = false;
-        self.search_regex_error = false;
+        let query = self
+            .search
+            .session()
+            .map(|s| s.input.read(cx).value().to_string());
+        // Keeps the last query and the toggles, drops the error feedback, and
+        // — through the controller — outdates any debounced rescan still
+        // waiting from this session.
+        self.search.close(query);
         // The grid selection stays: it is the user's, not the bar's. The same
         // discipline `refresh_matches_after_output` states — the search bar
         // opening and closing around a selection must not erase it (#584).
         window.focus(&self.focus_handle, cx);
         cx.notify();
+    }
+
+    /// Whether the find bar is open. The behavioral question external callers
+    /// and tests want — no raw session handle or flags exposed.
+    pub fn is_search_open(&self) -> bool {
+        self.search.is_open()
+    }
+
+    /// The bar's input field while the bar is open, for the callers (and
+    /// tests) that drive it: reading the query, seeding one, checking focus.
+    pub fn search_input(&self) -> Option<&Entity<InputState>> {
+        self.search.session().map(|s| &s.input)
+    }
+
+    /// How many matches the last scan measured; `0` while the bar is closed.
+    pub fn search_match_count(&self) -> usize {
+        self.search.session().map_or(0, |s| s.matches.len())
+    }
+
+    /// Which match the bar is standing on, if any.
+    pub fn search_current_index(&self) -> Option<usize> {
+        self.search.session().and_then(|s| s.current_index)
+    }
+
+    /// Whether the last scan's pattern failed to compile — the bar's danger
+    /// border. Error feedback only; it never gates opening or closing.
+    pub fn search_has_regex_error(&self) -> bool {
+        self.search.has_regex_error()
+    }
+
+    /// The live session, for the crate's own painters and tests. External
+    /// callers go through the behavioral methods above.
+    pub(crate) fn search_session(&self) -> Option<&SearchState> {
+        self.search.session()
     }
 
     fn on_search_event(
@@ -221,11 +258,11 @@ impl TerminalView {
                 self.step_match(dir, cx);
             }
             InputEvent::Focus => {
-                self.search_focused = true;
+                self.search.set_focused(true);
                 cx.notify();
             }
             InputEvent::Blur => {
-                self.search_focused = false;
+                self.search.set_focused(false);
                 cx.notify();
             }
         }
@@ -283,7 +320,7 @@ impl TerminalView {
                 )
             });
             if let Ok(regex) = regex::RegexBuilder::new(&pattern)
-                .case_insensitive(!self.search_case_sensitive)
+                .case_insensitive(!self.search.is_case_sensitive())
                 .build()
             {
                 let mut text = String::new();
@@ -389,7 +426,7 @@ impl TerminalView {
     /// further output while it waits pushes the deadline out, up to
     /// [`SCAN_LAG_LIMIT`] windows — a pane that never pauses still gets scanned.
     pub fn note_output_under_search(&mut self, cx: &mut Context<Self>) {
-        if self.search.is_none() {
+        if !self.search.is_open() {
             return;
         }
         self.rebase_matches_after_scroll(cx);
@@ -401,7 +438,7 @@ impl TerminalView {
             .reading
             .as_ref()
             .is_some_and(|reading| {
-                self.search.as_ref().is_some_and(|search| {
+                self.search.session().is_some_and(|search| {
                     search.opened_in_reading
                         && search.scanned_reading == Some(reading.content_identity())
                 })
@@ -409,26 +446,33 @@ impl TerminalView {
         {
             return;
         }
-        self.search_scan_epoch = self.search_scan_epoch.wrapping_add(1);
-        if self.search_scan_armed {
+        if !self.search.note_output() {
             return;
         }
-        self.search_scan_armed = true;
         cx.spawn(async move |this, cx| {
             let mut waited = 0;
             loop {
-                let Ok(epoch) = this.update(cx, |view, _| view.search_scan_epoch) else {
+                let Ok(ticket) = this.update(cx, |view, _| view.search.scan_ticket()) else {
                     break;
                 };
                 cx.background_executor().timer(SCAN_DEBOUNCE).await;
                 waited += 1;
                 let settled = this.update(cx, |view, cx| {
-                    if view.search_scan_epoch != epoch && waited < SCAN_LAG_LIMIT {
-                        return false;
+                    match view.search.scan_outcome(ticket, waited, SCAN_LAG_LIMIT) {
+                        ScanOutcome::Settle => {
+                            view.search.scan_settle();
+                            view.refresh_matches_after_output(cx);
+                            true
+                        }
+                        // More output landed mid-wait and the lag limit has
+                        // not been reached: wait another window.
+                        ScanOutcome::Wait => false,
+                        // The bar closed (and maybe reopened), or the user
+                        // retyped, while this timer slept. Its rescan would
+                        // name a grid position the current session never
+                        // measured — drop the completion and stop.
+                        ScanOutcome::Discard => true,
                     }
-                    view.search_scan_armed = false;
-                    view.refresh_matches_after_output(cx);
-                    true
                 });
                 match settled {
                     Ok(true) | Err(_) => break,
@@ -459,7 +503,7 @@ impl TerminalView {
         let live_origin = super::reading::live_start(&term) as usize;
         let topmost = term.grid.topmost_line().0;
         drop(term);
-        let Some(s) = self.search.as_mut() else {
+        let Some(s) = self.search.session_mut() else {
             return;
         };
         let drift = live_origin as i64 - s.scanned_origin as i64;
@@ -497,13 +541,13 @@ impl TerminalView {
     pub fn refresh_matches_after_output(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self
             .search
-            .as_ref()
+            .session()
             .map(|s| s.input.read(cx).value().to_string())
         else {
             return;
         };
         let Some(scan) = self.scan_matches(&query) else {
-            if let Some(search) = self.search.as_mut() {
+            if let Some(search) = self.search.session_mut() {
                 search.scanned_query = None;
             }
             self.retry_grid_when_available(cx);
@@ -517,7 +561,7 @@ impl TerminalView {
         // would land rather than to a stale ordinal.
         let previous = self
             .search
-            .as_ref()
+            .session()
             .and_then(|s| Some((*s.current()?.start(), s.scanned_origin)))
             .map(|(p, origin)| (anchor_row(origin, &p), p.col));
         let current_index = previous
@@ -528,7 +572,7 @@ impl TerminalView {
             })
             .or_else(|| self.match_nearest_the_viewport(&scan.matches, scan.bottom));
 
-        if let Some(s) = self.search.as_mut() {
+        if let Some(s) = self.search.session_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
             s.scanned_origin = scan.origin;
@@ -539,7 +583,7 @@ impl TerminalView {
                 .map(|reading| reading.content_identity());
             s.scanned_query = Some(query);
         }
-        self.search_regex_error = scan.regex_error;
+        self.search.set_regex_error(scan.regex_error);
         cx.notify();
     }
 
@@ -548,16 +592,21 @@ impl TerminalView {
     }
 
     fn recompute_matches_inner(&mut self, preserve_presented: bool, cx: &mut Context<Self>) {
+        // The user changed what the matches describe (typed, toggled, or the
+        // bar just opened on a seed): a debounced output rescan still waiting
+        // from before this change is answering an older question, so outdate
+        // it before measuring the new answer.
+        self.search.invalidate_scan();
         let Some(query) = self
             .search
-            .as_ref()
+            .session()
             .map(|s| s.input.read(cx).value().to_string())
         else {
             return;
         };
 
         let Some(scan) = self.scan_matches(&query) else {
-            if let Some(search) = self.search.as_mut() {
+            if let Some(search) = self.search.session_mut() {
                 search.scanned_query = None;
                 search.matches.clear();
                 search.current_index = None;
@@ -567,7 +616,7 @@ impl TerminalView {
         };
         let current_index = self.match_nearest_the_viewport(&scan.matches, scan.bottom);
 
-        if let Some(s) = self.search.as_mut() {
+        if let Some(s) = self.search.session_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
             s.scanned_origin = scan.origin;
@@ -578,9 +627,9 @@ impl TerminalView {
                 .map(|reading| reading.content_identity());
             s.scanned_query = Some(query);
         }
-        self.search_regex_error = scan.regex_error;
+        self.search.set_regex_error(scan.regex_error);
 
-        let current = self.search.as_ref().and_then(|s| s.current().cloned());
+        let current = self.search.session().and_then(|s| s.current().cloned());
         let hidden = self.rows_behind_the_search_bar();
         let mut term = self.terminal.term.lock();
         term.selection = None;
@@ -600,7 +649,7 @@ impl TerminalView {
 
     pub fn step_match(&mut self, direction: Direction, cx: &mut Context<Self>) {
         let current = {
-            let Some(s) = self.search.as_mut() else {
+            let Some(s) = self.search.session_mut() else {
                 return;
             };
             if s.matches.is_empty() {
@@ -634,10 +683,11 @@ impl TerminalView {
             .reading
             .as_ref()
             .map(|reading| reading.content_identity());
-        if self.search.as_ref().is_some_and(|search| {
+        let stale = self.search.session().is_some_and(|search| {
             search.scanned_reading != key
                 || search.scanned_query.as_deref() != Some(search.input.read(cx).value().as_ref())
-        }) {
+        });
+        if stale {
             self.refresh_matches_after_output(cx);
         }
     }
@@ -646,29 +696,29 @@ impl TerminalView {
         rows_under_the_bar(self.line_height.as_f32())
     }
 
-    fn toggle_search_case(&mut self, cx: &mut Context<Self>) {
-        if self.search.is_none() {
+    pub fn toggle_search_case(&mut self, cx: &mut Context<Self>) {
+        if !self.search.is_open() {
             return;
         }
-        self.search_case_sensitive = !self.search_case_sensitive;
+        self.search.toggle_case();
         self.recompute_matches(cx);
     }
 
-    fn toggle_search_regex(&mut self, cx: &mut Context<Self>) {
-        if self.search.is_none() {
+    pub fn toggle_search_regex(&mut self, cx: &mut Context<Self>) {
+        if !self.search.is_open() {
             return;
         }
-        self.search_regex = !self.search_regex;
+        self.search.toggle_regex();
         self.recompute_matches(cx);
     }
 
     fn effective_search_pattern(&self, query: &str) -> String {
-        let base = if self.search_regex {
+        let base = if self.search.uses_regex() {
             query.to_string()
         } else {
             regex_escape(query)
         };
-        if self.search_case_sensitive {
+        if self.search.is_case_sensitive() {
             format!("(?-i){base}")
         } else {
             base
@@ -690,9 +740,9 @@ impl TerminalView {
         let total = state.matches.len();
         let has_query = !state.input.read(cx).value().is_empty();
         let has_matches = !state.matches.is_empty();
-        let regex_error = self.search_regex_error;
-        let case_on = self.search_case_sensitive;
-        let regex_on = self.search_regex;
+        let regex_error = self.search.has_regex_error();
+        let case_on = self.search.is_case_sensitive();
+        let regex_on = self.search.uses_regex();
 
         let field = Input::new(&state.input)
             .appearance(false)

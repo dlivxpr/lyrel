@@ -187,7 +187,7 @@ fn capacity_rgba_digest(image: &gpui_kit::RenderImage) -> String {
     let mut converted = [0u8; 8192];
     for chunk in image.as_bytes(0).unwrap().chunks(converted.len()) {
         converted[..chunk.len()].copy_from_slice(chunk);
-        for pixel in converted[..chunk.len()].chunks_exact_mut(4) {
+        for pixel in converted[..chunk.len()].as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         hash.update(&converted[..chunk.len()]);

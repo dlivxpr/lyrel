@@ -19,6 +19,21 @@ pub struct PaneHandshake {
     version: DaemonVersion,
 }
 
+/// The spawn request a pending pane carries: the route and grid geometry it
+/// opens with, the optional launch context, and the cancellation hook the
+/// pending slot owns.
+pub struct SpawnRequest<'a> {
+    pub route: &'a PaneRoute,
+    pub size: TermSize,
+    pub cell_w: u16,
+    pub cell_h: u16,
+    pub cwd: Option<PathBuf>,
+    pub shell: Option<ShellSpec>,
+    pub owner: Option<String>,
+    pub restore: Option<RestoreFrom>,
+    pub cancellation: Option<&'a SpawnCancellation>,
+}
+
 impl PaneHandshake {
     fn open(route: &PaneRoute, cell_w: u16, cell_h: u16) -> anyhow::Result<Self> {
         let mut stream = connect_routed(route)?;
@@ -53,34 +68,10 @@ impl PaneHandshake {
         ))
     }
 
-    pub fn spawn_on(
-        route: &PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
-        cwd: Option<PathBuf>,
-        shell: Option<ShellSpec>,
-        owner: Option<String>,
-        restore: Option<RestoreFrom>,
-        cancellation: Option<&SpawnCancellation>,
-    ) -> anyhow::Result<(RemoteTerminal, u64)> {
-        let retry_cwd = cwd.clone();
-        let retry_shell = shell.clone();
-        let retry_owner = owner.clone();
-        let retry_restore = restore.clone();
-        match Self::spawn_once(
-            route,
-            size,
-            cell_w,
-            cell_h,
-            cwd,
-            shell,
-            owner,
-            restore,
-            cancellation,
-        ) {
+    pub fn spawn_on(request: &SpawnRequest<'_>) -> anyhow::Result<(RemoteTerminal, u64)> {
+        match Self::spawn_once(request) {
             Ok(term) => Ok(term),
-            Err(first_err) if route.is_local() && daemon_not_listening(&first_err) => {
+            Err(first_err) if request.route.is_local() && daemon_not_listening(&first_err) => {
                 log::warn!(
                     "local daemon unavailable during spawn; attempting recovery: {first_err:#}"
                 );
@@ -89,15 +80,15 @@ impl PaneHandshake {
                         "daemon not running ({first_err}); starting one failed: {start_err}"
                     ));
                 }
-                Self::spawn_once(route, size, cell_w, cell_h, retry_cwd, retry_shell, retry_owner, retry_restore, cancellation)
-                    .map_err(|second_err| {
-                        anyhow::anyhow!(
-                            "daemon not running ({first_err}); started one but Spawn still failed: {second_err}"
-                        )
-                    })
+                Self::spawn_once(request).map_err(|second_err| {
+                    anyhow::anyhow!(
+                        "daemon not running ({first_err}); started one but Spawn still failed: {second_err}"
+                    )
+                })
             }
             Err(first_err)
-                if route.is_local() && daemon_disconnected_before_spawn_reply(&first_err) =>
+                if request.route.is_local()
+                    && daemon_disconnected_before_spawn_reply(&first_err) =>
             {
                 log::warn!(
                     "spawn connection ended before reply; probing daemon without forcing a restart: {first_err:#}"
@@ -107,7 +98,7 @@ impl PaneHandshake {
                         "daemon disconnected before Spawn reply ({first_err}); recovery failed: {restart_err}"
                     ));
                 }
-                Self::spawn_once(route, size, cell_w, cell_h, retry_cwd, retry_shell, retry_owner, retry_restore, cancellation).map_err(|second_err| {
+                Self::spawn_once(request).map_err(|second_err| {
                     anyhow::anyhow!(
                         "daemon disconnected before Spawn reply ({first_err}); recovery attempted but Spawn still failed: {second_err}"
                     )
@@ -117,23 +108,23 @@ impl PaneHandshake {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_once(
-        route: &PaneRoute,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
-        cwd: Option<PathBuf>,
-        shell: Option<ShellSpec>,
-        owner: Option<String>,
-        restore: Option<RestoreFrom>,
-        cancellation: Option<&SpawnCancellation>,
-    ) -> anyhow::Result<(RemoteTerminal, u64)> {
+    fn spawn_once(request: &SpawnRequest<'_>) -> anyhow::Result<(RemoteTerminal, u64)> {
+        let SpawnRequest {
+            route,
+            size,
+            cell_w,
+            cell_h,
+            cwd,
+            shell,
+            owner,
+            restore,
+            cancellation,
+        } = request;
         let Self {
             mut stream,
             images,
             version,
-        } = Self::open(route, cell_w, cell_h)?;
+        } = Self::open(route, *cell_w, *cell_h)?;
         let await_claim = route.is_local() && cancellation.is_some();
         if await_claim
             && !lyrel_core::daemon::spawn::local_daemon_supports(
@@ -144,12 +135,12 @@ impl PaneHandshake {
                 "the local daemon does not support cancellable pane creation; restart it to update"
             );
         }
-        let win = win_size(size, cell_w, cell_h);
+        let win = win_size(*size, *cell_w, *cell_h);
 
         let workspace = spawn_workspace(owner.as_deref(), route);
         let spawned_in = cwd.clone();
 
-        let owner = owner.filter(|_| {
+        let owner = owner.clone().filter(|_| {
             route.is_local()
                 && lyrel_core::daemon::spawn::local_daemon_supports(
                     lyrel_core::daemon::protocol::FEATURE_PANE_OWNER,
@@ -161,7 +152,7 @@ impl PaneHandshake {
         // predates the field would silently drop it. Sending it anyway would
         // cost nothing but would make the log claim a restore that never
         // happened, so the local case is the only one that asks.
-        let restore = restore.and_then(|want| {
+        let restore = restore.clone().and_then(|want| {
             let local = route.is_local();
             let supported = lyrel_core::daemon::spawn::local_daemon_supports(
                 lyrel_core::daemon::protocol::FEATURE_RESTORE_SCROLLBACK,
@@ -183,9 +174,9 @@ impl PaneHandshake {
         });
 
         ClientMsg::Spawn {
-            cwd,
+            cwd: cwd.clone(),
             size: win,
-            shell,
+            shell: shell.clone(),
             owner,
             workspace,
             restore,
@@ -193,7 +184,7 @@ impl PaneHandshake {
             await_claim,
         }
         .encode(&mut stream)?;
-        let reply = if let Some(cancellation) = cancellation.filter(|_| await_claim) {
+        let reply = if let Some(cancellation) = (*cancellation).filter(|_| await_claim) {
             cancellable_spawn_reply_with_images(&mut stream, cancellation, &images)?
         } else {
             spawn_reply(&mut stream, attach_reply_wait(route), "Spawn", &images)?
@@ -212,7 +203,7 @@ impl PaneHandshake {
 
         let mut term = RemoteTerminal::from_stream_parts(
             stream,
-            size,
+            *size,
             Vec::new(),
             PtySource::for_route(route),
             false,
@@ -220,7 +211,7 @@ impl PaneHandshake {
             Some(version),
         )?;
         term.connection
-            .finish_spawn(route.clone(), await_claim.then_some((pane_id, win)));
+            .finish_spawn((*route).clone(), await_claim.then_some((pane_id, win)));
         term.seed_cwd(spawned_in);
         Ok((term, pane_id))
     }

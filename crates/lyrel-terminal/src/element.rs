@@ -31,6 +31,8 @@ use decorations::{
 };
 use text::paint_glyphs;
 
+pub use snapshot::GridPaint;
+
 const DIM_OPACITY: f32 = 0.66;
 
 /// How much of the text's own colour a link's underline keeps before the
@@ -536,16 +538,18 @@ impl Element for TerminalElement {
         let must_block =
             previous.is_none() || (resized && !previous.as_ref().is_some_and(|snap| snap.held));
         let built = self.build_grid(
-            &colors,
-            &mut buf,
-            geom.rows,
-            geom.cols,
-            frac > 0.,
             cx,
-            dim,
-            under,
-            must_block,
-            previous.is_some(),
+            snapshot::GridPaint {
+                colors: &colors,
+                buf: &mut buf,
+                rows: geom.rows,
+                cols: geom.cols,
+                want_sliver: frac > 0.,
+                dim,
+                under,
+                must_block,
+                has_previous: previous.is_some(),
+            },
         );
         let reused = built.is_err() && previous.is_some();
         let held = matches!(
@@ -762,10 +766,12 @@ impl Element for TerminalElement {
                 cx,
                 &geom,
                 &buf,
-                font_size,
-                &base_font,
-                bold_font.as_ref(),
-                italic_font.as_ref(),
+                &text::GlyphFonts {
+                    size: font_size,
+                    base: &base_font,
+                    bold: bold_font.as_ref(),
+                    italic: italic_font.as_ref(),
+                },
             );
             let scale = window.scale_factor();
             paint_special_underlines(window, &geom, &buf, scale);
@@ -775,10 +781,12 @@ impl Element for TerminalElement {
                     cx,
                     sg,
                     row,
-                    font_size,
-                    &base_font,
-                    bold_font.as_ref(),
-                    italic_font.as_ref(),
+                    &text::GlyphFonts {
+                        size: font_size,
+                        base: &base_font,
+                        bold: bold_font.as_ref(),
+                        italic: italic_font.as_ref(),
+                    },
                 );
                 paint_special_underlines(window, sg, row, scale);
             }
@@ -796,12 +804,13 @@ impl Element for TerminalElement {
                     window,
                     cx,
                     &geom,
-                    cursor_cell,
-                    &marked,
+                    &decorations::Preedit {
+                        marked: &marked,
+                        cursor: cursor_cell,
+                    },
                     font_size,
                     &base_font,
-                    colors.default_fg,
-                    colors.default_bg,
+                    &colors,
                 );
             }
 

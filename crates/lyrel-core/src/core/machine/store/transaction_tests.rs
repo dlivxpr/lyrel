@@ -18,7 +18,17 @@ fn a_refused_operation_changes_nothing_and_notifies_nobody() {
     assert!(store.tab_close(ws, TabId::new(), None).is_err());
     assert!(
         store
-            .pane_split(ws, 999, Axis::Vertical, 0.5, seed(9, "/x"), false, None)
+            .pane_split(
+                ws,
+                999,
+                crate::core::machine::PaneSplitSpec {
+                    axis: Axis::Vertical,
+                    ratio: 0.5,
+                    new: seed(9, "/x"),
+                    first: false
+                },
+                None
+            )
             .is_err()
     );
     assert!(store.pane_close(ws, 999, None).is_err());

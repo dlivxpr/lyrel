@@ -184,19 +184,18 @@ impl Roots {
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if profile.is_some()
-            || !environment
+        if (profile.is_some()
+            || environment
                 .get("PI_CODING_AGENT_DIR")
-                .is_some_and(|v| !v.is_empty())
+                .is_none_or(|v| v.is_empty()))
+            && let Some(xdg) = environment.get("XDG_DATA_HOME").filter(|v| !v.is_empty())
         {
-            if let Some(xdg) = environment.get("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-                let mut root = PathBuf::from(xdg).join("omp");
-                if let Some(profile) = profile {
-                    root = root.join("profiles").join(profile);
-                }
-                if root.exists() {
-                    roots.omp_session_dir = Some(root.join("sessions"));
-                }
+            let mut root = PathBuf::from(xdg).join("omp");
+            if let Some(profile) = profile {
+                root = root.join("profiles").join(profile);
+            }
+            if root.exists() {
+                roots.omp_session_dir = Some(root.join("sessions"));
             }
         }
         Ok(roots)

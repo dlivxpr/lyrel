@@ -2,6 +2,63 @@
 //! cancellation, and installation admission; this adapter owns cross-capability effects.
 use super::*;
 
+/// Everything a pending terminal spawn needs: the slot's workspace and owner,
+/// its font, and what it opens. Attach requests carry the attach-only fields
+/// too, so both constructors feed one private `pending_terminal`.
+pub(crate) struct PendingTerminalRequest {
+    workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
+    owner: Option<WorkspaceId>,
+    font_size: f32,
+    working_directory: Option<std::path::PathBuf>,
+    restore_pane: Option<u64>,
+    shell: Option<ShellSpec>,
+    attach_only: bool,
+    attach_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+}
+
+impl PendingTerminalRequest {
+    /// A fresh shell, or a restore of `restore_pane`, in `workspace`.
+    pub(crate) fn shell(
+        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
+        owner: Option<WorkspaceId>,
+        font_size: f32,
+        working_directory: Option<std::path::PathBuf>,
+        restore_pane: Option<u64>,
+        shell: Option<ShellSpec>,
+    ) -> Self {
+        Self {
+            workspace,
+            owner,
+            font_size,
+            working_directory,
+            restore_pane,
+            shell,
+            attach_only: false,
+            attach_spec: None,
+        }
+    }
+
+    /// An existing attachment, never replaced by a fresh shell.
+    fn attach(
+        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
+        owner: WorkspaceId,
+        font_size: f32,
+        restore_pane: Option<u64>,
+        spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    ) -> Self {
+        Self {
+            workspace,
+            owner: Some(owner),
+            font_size,
+            working_directory: None,
+            restore_pane,
+            shell: None,
+            attach_only: true,
+            attach_spec: spec,
+        }
+    }
+}
+
 impl LyrelApp {
     pub(super) fn restore_agent_in_pane(
         agent: Option<crate::core::cli_agent::CLIAgent>,
@@ -68,27 +125,11 @@ impl LyrelApp {
     /// Bind a retained connecting slot. Creation errors are asynchronous and
     /// remain on PendingPane; callers place this identity before it can land.
     pub(crate) fn new_terminal(
-        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
-        owner: Option<WorkspaceId>,
-        font_size: f32,
-        working_directory: Option<std::path::PathBuf>,
-        restore_pane: Option<u64>,
-        shell: Option<ShellSpec>,
+        request: PendingTerminalRequest,
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
     ) -> PaneSlot {
-        Self::pending_terminal(
-            workspace,
-            owner,
-            font_size,
-            working_directory,
-            restore_pane,
-            shell,
-            false,
-            None,
-            window,
-            cx,
-        )
+        Self::pending_terminal(request, window, cx)
     }
 
     /// Bind an existing attachment without permitting a fresh replacement shell.
@@ -103,31 +144,27 @@ impl LyrelApp {
         cx: &mut Context<LyrelApp>,
     ) -> PaneSlot {
         Self::pending_terminal(
-            workspace,
-            Some(owner),
-            font_size,
-            None,
-            Some(pane),
-            None,
-            true,
-            spec,
+            PendingTerminalRequest::attach(workspace, owner, font_size, Some(pane), spec),
             window,
             cx,
         )
     }
 
     fn pending_terminal(
-        workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
-        owner: Option<WorkspaceId>,
-        font_size: f32,
-        working_directory: Option<std::path::PathBuf>,
-        restore_pane: Option<u64>,
-        shell: Option<ShellSpec>,
-        attach_only: bool,
-        attach_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+        request: PendingTerminalRequest,
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
     ) -> PaneSlot {
+        let PendingTerminalRequest {
+            workspace,
+            owner,
+            font_size,
+            working_directory,
+            restore_pane,
+            shell,
+            attach_only,
+            attach_spec,
+        } = request;
         let pending = cx.new(|cx| {
             let pending = crate::ui::pending_pane::PendingPane::shell(
                 workspace,
@@ -157,7 +194,7 @@ impl LyrelApp {
             pending,
             window,
             |app, pending, _: &crate::ui::pending_pane::SpawnFinished, window, cx| {
-                app.land_pane(&pending, window, cx);
+                app.land_pane(pending, window, cx);
             },
         )
         .detach();
@@ -165,7 +202,7 @@ impl LyrelApp {
             pending,
             window,
             |_app, pending, _: &crate::ui::pending_pane::RetryRequested, window, cx| {
-                Self::start_pane_spawn(&pending, window, cx);
+                Self::start_pane_spawn(pending, window, cx);
             },
         )
         .detach();
@@ -194,7 +231,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
     ) {
-        cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
+        cx.subscribe_in(view, window, |app, view, _: &ChildExited, window, cx| {
             app.on_child_exited(view.clone(), window, cx);
         })
         .detach();
@@ -215,7 +252,7 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
-            &view,
+            view,
             window,
             |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
                 app.save_session(cx);
@@ -223,7 +260,7 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
-            &view,
+            view,
             window,
             |app, _view, ev: &lyrel_terminal::view::AgentDetected, _window, cx| {
                 app.note_agent_detected(ev.0, cx);
@@ -231,7 +268,7 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
-            &view,
+            view,
             window,
             |app, view, _: &lyrel_terminal::view::AuthPromptReady, window, cx| {
                 app.on_auth_prompt_ready(view.clone(), window, cx);
@@ -239,7 +276,7 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
-            &view,
+            view,
             window,
             |_app, view, _: &lyrel_terminal::view::GlyphUnsupported, window, cx| {
                 let (workspace, pane, route) = {
@@ -257,7 +294,7 @@ impl LyrelApp {
         )
         .detach();
         cx.subscribe_in(
-            &view,
+            view,
             window,
             |_app, view, _: &lyrel_terminal::view::TitleContractUnsupported, window, cx| {
                 let (workspace, pane, route) = {
@@ -275,7 +312,7 @@ impl LyrelApp {
         )
         .detach();
         Self::watch_terminal_scm(view, cx);
-        Self::watch_open_file_requests(&view, window, cx);
+        Self::watch_open_file_requests(view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }

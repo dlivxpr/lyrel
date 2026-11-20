@@ -677,10 +677,10 @@ fn flag_values<'a>(args: &'a [String], flag: &str) -> Vec<&'a str> {
                 result.push(value.as_str());
                 index += 1;
             }
-        } else if let Some((key, value)) = args[index].split_once('=') {
-            if key == flag {
-                result.push(value);
-            }
+        } else if let Some((key, value)) = args[index].split_once('=')
+            && key == flag
+        {
+            result.push(value);
         }
         index += 1;
     }

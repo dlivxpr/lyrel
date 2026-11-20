@@ -73,7 +73,7 @@ pub enum DecodedImage {
         format: ImageFormat,
     },
     Gif {
-        player: GifPlayback,
+        player: Box<GifPlayback>,
         first: image::RgbaImage,
         delay: Duration,
     },
@@ -98,7 +98,7 @@ pub fn decode_loaded(bytes: Vec<u8>, format: ImageFormat) -> ImageOutcome {
                 .map_err(|error| gif_error_message(&error))?
                 .ok_or_else(|| SharedString::from(t(L10nKey::EditorImageAnimationEmpty)))?;
             Ok(DecodedImage::Gif {
-                player,
+                player: Box::new(player),
                 first: rgba,
                 delay,
             })
@@ -295,7 +295,7 @@ impl ImageDocument {
                 let generation = self.revision;
                 self.media = Media::Gif(GifRun {
                     frame: ImageContent::Ready(images::bitmap(first, cx)),
-                    player: Arc::new(Mutex::new(player)),
+                    player: Arc::new(Mutex::new(*player)),
                     next_delay: delay,
                     visible: false,
                     generation,
@@ -447,13 +447,9 @@ impl ImageDocument {
         let player = Arc::clone(&run.player);
         let generation = run.generation;
         let task = cx.spawn(async move |this, cx| {
-            loop {
-                let Some((delay, finished)) = this
-                    .update(cx, |document, _| document.gif_wait(generation))
-                    .ok()
-                else {
-                    break;
-                };
+            while let Ok((delay, finished)) =
+                this.update(cx, |document, _| document.gif_wait(generation))
+            {
                 if finished {
                     break;
                 }
@@ -719,11 +715,11 @@ impl ImageView {
                 self.shown = next;
                 changed = true;
             }
-        } else if let Some(next) = content {
-            if !self.shown.same(&next) {
-                self.shown = next;
-                changed = true;
-            }
+        } else if let Some(next) = content
+            && !self.shown.same(&next)
+        {
+            self.shown = next;
+            changed = true;
         }
         // A missing cache entry on the same page is the document's eviction,
         // not disappearance: this view still owns its bitmap lease, and the

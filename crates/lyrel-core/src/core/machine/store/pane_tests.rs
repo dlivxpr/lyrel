@@ -14,10 +14,12 @@ fn a_seed_for_an_already_dead_pane_registers_as_awaiting_revival() {
         .pane_split(
             ws.id,
             1,
-            Axis::Vertical,
-            0.5,
-            PaneSeed::bare(2),
-            false,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Vertical,
+                ratio: 0.5,
+                new: PaneSeed::bare(2),
+                first: false,
+            },
             None,
         )
         .unwrap();
@@ -64,10 +66,30 @@ fn replacing_a_dead_pane_rebinds_the_leaf_and_spends_the_record() {
 fn splitting_and_closing_panes_reshapes_the_tree() {
     let (store, _dir, ws, tab) = store_with_tab();
     store
-        .pane_split(ws, 1, Axis::Horizontal, 0.5, seed(2, "/b"), false, None)
+        .pane_split(
+            ws,
+            1,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                new: seed(2, "/b"),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
     store
-        .pane_split(ws, 2, Axis::Vertical, 0.5, seed(3, "/c"), true, None)
+        .pane_split(
+            ws,
+            2,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Vertical,
+                ratio: 0.5,
+                new: seed(3, "/c"),
+                first: true,
+            },
+            None,
+        )
         .unwrap();
     assert_eq!(
         store.workspace(ws).unwrap().tabs[0].root.pane_ids(),
@@ -101,10 +123,30 @@ fn splitting_and_closing_panes_reshapes_the_tree() {
 fn a_ratio_change_lands_on_the_split_its_path_names() {
     let (store, _dir, ws, tab) = store_with_tab();
     store
-        .pane_split(ws, 1, Axis::Horizontal, 0.5, seed(2, "/b"), false, None)
+        .pane_split(
+            ws,
+            1,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                new: seed(2, "/b"),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
     store
-        .pane_split(ws, 2, Axis::Vertical, 0.5, seed(3, "/c"), false, None)
+        .pane_split(
+            ws,
+            2,
+            crate::core::machine::PaneSplitSpec {
+                axis: Axis::Vertical,
+                ratio: 0.5,
+                new: seed(3, "/c"),
+                first: false,
+            },
+            None,
+        )
         .unwrap();
 
     store

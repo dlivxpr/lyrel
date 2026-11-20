@@ -476,12 +476,11 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
         }
     );
     a.red("a=T,i=5,c=1,r=1,C=1");
-    assert!(a.updates.iter().any(|update| *update
-        == GraphicsUpdate::Evicted {
-            key: newer,
-            width: 1,
-            height: 1
-        }));
+    assert!(a.updates.contains(&GraphicsUpdate::Evicted {
+        key: newer,
+        width: 1,
+        height: 1
+    }));
     let pane = a.session.pane_id();
     a.session.detach().unwrap();
     let detached = hex(b"\x1b_Ga=T,i=99,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\detached_tail");
@@ -1621,12 +1620,11 @@ fn retention_daemon_recovery_fresh_subscribers_keep_refusal_notices_and_detached
         }
     );
     let visible = a.red("a=T,i=3,p=1,c=1,r=1,C=1");
-    assert!(a.updates.iter().any(|u| *u
-        == GraphicsUpdate::Evicted {
-            key: expired_notice,
-            width: 1,
-            height: 1
-        }));
+    assert!(a.updates.contains(&GraphicsUpdate::Evicted {
+        key: expired_notice,
+        width: 1,
+        height: 1
+    }));
     let refused = a.exchange(
         b"\x1b_Ga=T,i=4,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\visible_refusal_keeps_shell",
         1,
@@ -2069,37 +2067,41 @@ fn capacity_owner_fixture() {
     let Ok(scenario) = std::env::var("LYREL_CAPACITY_OWNER_SCENARIO") else {
         return;
     };
-    let mut limits = retention::Limits::default();
-    limits.pane_work = if scenario == "sources" {
-        4096
-    } else {
-        64 << 10
+    let defaults = retention::Limits::default();
+    let limits = retention::Limits {
+        pane_work: match scenario.as_str() {
+            "sources" => 4096,
+            "handoff" => 8192,
+            _ => defaults.pane_work,
+        },
+        daemon_work: match scenario.as_str() {
+            "sources" => 8192,
+            "handoff" => 16384,
+            _ => defaults.daemon_work,
+        },
+        pane_decoded: match scenario.as_str() {
+            "replacement" | "history" => 12,
+            "timeline" => 8,
+            "snapshots" => 1024,
+            _ => defaults.pane_decoded,
+        },
+        daemon_decoded: match scenario.as_str() {
+            "replacement" | "history" | "timeline" => 12,
+            "snapshots" => 3072,
+            _ => defaults.daemon_decoded,
+        },
+        pane_encoded: if scenario == "snapshots" {
+            1108
+        } else {
+            defaults.pane_encoded
+        },
+        daemon_encoded: if scenario == "snapshots" {
+            3324 * 3
+        } else {
+            defaults.daemon_encoded
+        },
+        ..Default::default()
     };
-    limits.daemon_work = if scenario == "sources" {
-        8192
-    } else {
-        128 << 10
-    };
-    if scenario == "handoff" {
-        limits.pane_work = 8192;
-        limits.daemon_work = 16384;
-    }
-    if scenario == "replacement" {
-        limits.pane_decoded = 12;
-        limits.daemon_decoded = 12;
-    } else if scenario == "history" {
-        limits.pane_decoded = 12;
-        limits.daemon_decoded = 12;
-    } else if scenario == "timeline" {
-        limits.pane_decoded = 8;
-        limits.daemon_decoded = 12;
-    }
-    if scenario == "snapshots" {
-        limits.pane_encoded = 1108;
-        limits.daemon_encoded = 3324 * 3;
-        limits.pane_decoded = 1024;
-        limits.daemon_decoded = 3072;
-    }
     retention::inject_limits(limits);
     if scenario == "snapshots" {
         crate::daemon::protocol::inject_graphics_queue_limit(3840);

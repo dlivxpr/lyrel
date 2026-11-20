@@ -664,19 +664,21 @@ mod tests {
             b: 19. / 255.,
             a: 1.,
         };
-        let mut cell = RenderCell::default();
-        cell.c = 'x';
-        cell.fg = to_hsla(ColorRgb {
-            r: 218,
-            g: 98,
-            b: 125,
-        });
-        cell.bg = to_hsla(ColorRgb {
-            r: 154,
-            g: 52,
-            b: 142,
-        });
-        cell.draw_bg = true;
+        let cell = RenderCell {
+            c: 'x',
+            fg: to_hsla(ColorRgb {
+                r: 218,
+                g: 98,
+                b: 125,
+            }),
+            bg: to_hsla(ColorRgb {
+                r: 154,
+                g: 52,
+                b: 142,
+            }),
+            draw_bg: true,
+            ..Default::default()
+        };
 
         let dimmed = dim_cell(cell, 0.55, under);
         assert_eq!(dimmed.c, 'x', "the character itself survives");
@@ -690,13 +692,17 @@ mod tests {
         assert_eq!(fg.a, 1.0, "opaque cell colours stay opaque");
 
         // A DIM-flagged cell keeps its reduced alpha through the blend.
-        let mut dim_flag = RenderCell::default();
-        dim_flag.fg = to_hsla(ColorRgb {
-            r: 218,
-            g: 98,
-            b: 125,
-        });
-        dim_flag.fg.a = DIM_OPACITY;
+        let dim_flag = RenderCell {
+            fg: Hsla {
+                a: DIM_OPACITY,
+                ..to_hsla(ColorRgb {
+                    r: 218,
+                    g: 98,
+                    b: 125,
+                })
+            },
+            ..Default::default()
+        };
         let dimmed_flag = dim_cell(dim_flag, 0.55, under);
         assert!(
             (dimmed_flag.fg.a - DIM_OPACITY).abs() < 1e-3,

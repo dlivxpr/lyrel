@@ -436,9 +436,7 @@ impl LyrelApp {
                 // re-ask only for the pane still sitting in this cwd.
                 if rerun
                     && pane
-                        .update(cx, |view, _| {
-                            view.git_status_cwd().as_deref() == Some(cwd.as_path())
-                        })
+                        .update(cx, |view, _| view.git_status_cwd() == Some(cwd.as_path()))
                         .unwrap_or(false)
                 {
                     let _ = app.update(cx, |app, cx| {
@@ -487,7 +485,7 @@ impl LyrelApp {
                     && pane
                         .update(cx, |view, _| {
                             view.host_id() == host_id
-                                && view.git_status_cwd().as_deref() == Some(cwd.as_path())
+                                && view.git_status_cwd() == Some(cwd.as_path())
                                 && view.scm_displayed()
                         })
                         .unwrap_or(false)

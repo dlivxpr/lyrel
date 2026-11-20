@@ -432,12 +432,8 @@ fn omp_replay_scan(
                         bytes[..4].to_vec(),
                         OmpReplayPictureIdentity::from_image(&image),
                     );
-                } else if bytes
-                    .chunks_exact(4)
-                    .any(|pixel| pixel == [86, 52, 18, 255])
-                    && bytes
-                        .chunks_exact(4)
-                        .any(|pixel| pixel == [0, 128, 255, 255])
+                } else if bytes.as_chunks::<4>().0.contains(&[86, 52, 18, 255])
+                    && bytes.as_chunks::<4>().0.contains(&[0, 128, 255, 255])
                 {
                     found.insert(
                         b"rasterized-svg".to_vec(),

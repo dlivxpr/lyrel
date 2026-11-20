@@ -19,7 +19,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant}
 
 mod graphics;
 mod keyboard_region;
-use graphics::{Frame, FrameCard, Pose, Sprite, Tokens};
+use graphics::{Frame, FrameCard, FrameInput, Pose, Sprite, Tokens};
 use keyboard_region::KeyboardRegion;
 
 /// 当前 tab 中稳定的客户端卡片身份（如 PaneSlot.entity_id.as_u64()）。
@@ -908,16 +908,16 @@ impl Render for ParkedDeck {
                             deck_bounds.size.width =
                                 (deck_bounds.size.width - window.rem_size() * 6.5).max(px(0.));
                         }
-                        let scene = Frame::new(
+                        let scene = Frame::new(FrameInput {
                             bounds,
                             viewport,
-                            f32::from(window.rem_size()) / 16.,
+                            deck_bounds,
+                            zoom: f32::from(window.rem_size()) / 16.,
                             cards,
-                            aura,
+                            fan: aura,
                             park,
                             park_ink,
-                            deck_bounds,
-                        );
+                        });
                         let park_hover =
                             park && scene.park_target_contains(window.mouse_position());
                         let scene = Rc::new(scene.with_drop_hover(park_hover));

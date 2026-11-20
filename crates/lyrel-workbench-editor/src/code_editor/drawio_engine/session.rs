@@ -26,7 +26,7 @@ impl SessionId {
             return None;
         }
         let mut out = [0u8; 16];
-        for (index, chunk) in bytes.chunks_exact(2).enumerate() {
+        for (index, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
             out[index] = (lower_hex(chunk[0])? << 4) | lower_hex(chunk[1])?;
         }
         Some(Self(out))

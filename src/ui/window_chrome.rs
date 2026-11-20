@@ -980,7 +980,7 @@ mod gpui_tests {
         use crate::daemon::protocol::DaemonMsg;
         let dir = tempfile::TempDir::new().unwrap();
         let root = lyrel_core::core::path_spelling::local_spelling_buf(
-            &std::fs::canonicalize(dir.path()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
         );
         let init = std::process::Command::new("git")
             .args(["init", "--quiet"])

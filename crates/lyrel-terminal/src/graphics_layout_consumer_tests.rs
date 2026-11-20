@@ -308,7 +308,7 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
 fn graphics_consumer_real_daemon_deccolm_scrolls_match_text(cx: &mut TestAppContext) {
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     let mut serial = 0;
-    for mode in [b'h', b'l'] {
+    for mode in *b"hl" {
         for (operation, expected_row) in [
             ("\x1b[10;1H\n", 5),
             ("\x1b[3;1H\x1bM", 5),

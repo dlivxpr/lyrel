@@ -7,6 +7,8 @@
 //! materials, the machine-tree appearance note and menu refresh — while
 //! terminal-side tests install a preset directly through this module.
 
+use std::rc::{Rc, Weak};
+
 use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
 use gpui_kit::{App, Hsla, Pixels, Styled, Window, px, rgb};
@@ -43,7 +45,22 @@ pub fn system_dark(cx: &App) -> bool {
         .is_some_and(|appearance| appearance.dark)
 }
 
+struct PresetPreview(Weak<String>);
+
+impl gpui_kit::Global for PresetPreview {}
+
+/// Override the effective preset only for the lifetime of the returned lease.
+/// The preview never enters `Config`, even when another window saves settings.
+pub fn preview_preset(id: String, cx: &mut App) -> Rc<String> {
+    let lease = Rc::new(id);
+    cx.set_global(PresetPreview(Rc::downgrade(&lease)));
+    lease
+}
+
 pub fn effective_preset_id(cx: &App) -> String {
+    if let Some(preset) = cx.try_global::<PresetPreview>().and_then(|p| p.0.upgrade()) {
+        return preset.as_ref().clone();
+    }
     let config = cx.global::<Config>();
     if !config.theme_follow_system {
         config.theme_preset.clone()
@@ -65,7 +82,7 @@ impl gpui_kit::Global for StockUiFont {}
 /// DWM backdrop material shows through the window — the shell derives it from
 /// the resolved backdrop; tests and non-Windows callers pass `false`.
 pub fn install_preset_theme(
-    mut window: Option<&mut Window>,
+    window: Option<&mut Window>,
     cx: &mut App,
     theme: &presets::Theme,
     material_active: bool,
@@ -99,7 +116,7 @@ pub fn install_preset_theme(
     let interaction = theme.interactions();
     let active = theme.active_palette(config.theme_legible_palette);
 
-    Theme::change(mode, window.as_deref_mut(), cx);
+    Theme::change(mode, window, cx);
     cx.set_global(active);
     cx.set_global(presets::ActiveBackground {
         fill: theme.background.clone(),
@@ -349,7 +366,7 @@ pub fn install_preset_theme(
     // it would wash out that panel. The workspace sidebar/right-panel
     // surfaces get their translucent variant at render time instead —
     // the shell derives them from `t.sidebar`.
-    t.sidebar = sidebar_bg.into();
+    t.sidebar = sidebar_bg;
     t.tokens.sidebar = sidebar_bg.into();
     // The lighter tier: every `sidebar_border` site is a pane meeting another
     // pane, and both already carry their own fill. See `Neutrals`.

@@ -75,7 +75,7 @@ fn color_painted_blank_background(
                         .then(|| quad.background.as_solid())
                         .flatten()
                 })
-                .last()
+                .next_back()
                 .map(|color| {
                     let color = crate::palette::hsla_to_rgb(color);
                     (color.r, color.g, color.b)

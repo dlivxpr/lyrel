@@ -334,6 +334,18 @@ pub(crate) fn free_local_path(
         .find(|candidate| !taken(candidate))
 }
 
+/// What a row's context menu needs beyond the menu it extends: the entry it
+/// belongs to, the flags derived from that entry, and the state its items act on.
+struct SftpRowMenuContext<'a> {
+    entry: &'a tree::SftpTarget,
+    dir_like: bool,
+    is_symlink: bool,
+    danger: gpui_kit::Hsla,
+    app: &'a gpui_kit::WeakEntity<LyrelApp>,
+    paste_into: String,
+    can_paste: bool,
+}
+
 impl LyrelApp {
     pub(crate) fn toggle_sftp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use lyrel_core::core::config::RightPanelTab;
@@ -1735,7 +1747,7 @@ impl LyrelApp {
         let menu_entry = entry.clone();
         let select_entry = entry.clone();
         let context_entry = entry.clone();
-        let menu_parent = remote_parent(&path);
+        let menu_parent = remote_parent(path);
         let app = cx.entity().downgrade();
 
         h_flex()
@@ -1831,13 +1843,15 @@ impl LyrelApp {
                 };
                 Self::sftp_row_context_menu(
                     menu,
-                    &menu_entry,
-                    dir_like,
-                    is_symlink,
-                    danger,
-                    &app,
-                    paste_into,
-                    Self::file_tree_can_paste(cx),
+                    SftpRowMenuContext {
+                        entry: &menu_entry,
+                        dir_like,
+                        is_symlink,
+                        danger,
+                        app: &app,
+                        paste_into,
+                        can_paste: crate::ui::file_tree::FileTree::can_paste(cx),
+                    },
                 )
             })
             .into_any_element()
@@ -1845,14 +1859,17 @@ impl LyrelApp {
 
     fn sftp_row_context_menu(
         menu: gpui_kit::component::menu::PopupMenu,
-        entry: &tree::SftpTarget,
-        dir_like: bool,
-        is_symlink: bool,
-        danger: gpui_kit::Hsla,
-        app: &gpui_kit::WeakEntity<Self>,
-        paste_into: String,
-        can_paste: bool,
+        ctx: SftpRowMenuContext,
     ) -> gpui_kit::component::menu::PopupMenu {
+        let SftpRowMenuContext {
+            entry,
+            dir_like,
+            is_symlink,
+            danger,
+            app,
+            paste_into,
+            can_paste,
+        } = ctx;
         let paste_destination = paste_into.clone();
         let mut menu = menu
             .min_w(px(180.))

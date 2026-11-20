@@ -141,7 +141,17 @@ impl LyrelApp {
         };
         let head = status.head.clone();
         let Some(loss) = op.destructive() else {
-            self.run_git_op_prepared(host, repo.root, op, then, head, window, cx);
+            self.run_git_op_prepared(
+                crate::ui::scm::data::PreparedGitOp {
+                    host,
+                    root: repo.root,
+                    op,
+                    then,
+                    head,
+                },
+                window,
+                cx,
+            );
             return;
         };
         let answer = window.prompt(
@@ -154,7 +164,17 @@ impl LyrelApp {
         cx.spawn_in(window, async move |app, cx| {
             let Ok(1) = answer.await else { return };
             let _ = app.update_in(cx, |app, window, cx| {
-                app.run_git_op_prepared(host, repo.root, op, then, head, window, cx)
+                app.run_git_op_prepared(
+                    crate::ui::scm::data::PreparedGitOp {
+                        host,
+                        root: repo.root,
+                        op,
+                        then,
+                        head,
+                    },
+                    window,
+                    cx,
+                )
             });
         })
         .detach();
@@ -371,7 +391,7 @@ impl LyrelApp {
                 // untracked files.
                 let answer = window.prompt(
                     PromptLevel::Warning,
-                    &t(L10nKey::ScmDiscardAllConfirm).to_string(),
+                    t(L10nKey::ScmDiscardAllConfirm),
                     None,
                     &guarded_answers(t(L10nKey::ScmDiscard)),
                     cx,
@@ -381,11 +401,13 @@ impl LyrelApp {
                     let Ok(1) = answer.await else { return };
                     let _ = app.update_in(cx, |app, window, cx| {
                         app.run_git_op_prepared(
-                            host,
-                            repo.root,
-                            first,
-                            second.map(ScmFollowUp::Op),
-                            head,
+                            crate::ui::scm::data::PreparedGitOp {
+                                host,
+                                root: repo.root,
+                                op: first,
+                                then: second.map(ScmFollowUp::Op),
+                                head,
+                            },
                             window,
                             cx,
                         )

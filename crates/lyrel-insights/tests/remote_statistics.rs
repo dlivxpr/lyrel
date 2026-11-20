@@ -252,7 +252,7 @@ fn hermes_statistics_keeps_known_undated_fields_and_cached_values_on_failure() {
     request.agent = CLIAgent::Hermes;
     let source = Source::hermes("/isolated".into(), "scope", request);
     let mut cache = StatisticsCache::default();
-    let first = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
+    let first = statistics::scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
     let totals = first.aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.main_sessions(), 1);
     assert_eq!(totals.tokens().input(), Some(9));
@@ -271,7 +271,7 @@ fn hermes_statistics_keeps_known_undated_fields_and_cached_values_on_failure() {
         0,
         "missing timestamps must not fabricate activity on the Unix epoch day"
     );
-    let failed = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
+    let failed = statistics::scan(&*host, std::slice::from_ref(&source), &mut cache).unwrap();
     assert_eq!(
         failed.aggregate(&DateWindow::all("UTC")).recorded_usd(),
         Some(1.25)

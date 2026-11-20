@@ -185,15 +185,15 @@ impl TerminalView {
     }
 
     pub fn copy_contextual(&mut self, clear_on_copy: bool, cx: &mut Context<Self>) -> bool {
-        if self.input_active() {
-            if let Some(text) = self.input.editor().selected_text() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                if clear_on_copy {
-                    self.input.editor_mut().clear_selection();
-                    cx.notify();
-                }
-                return true;
+        if self.input_active()
+            && let Some(text) = self.input.editor().selected_text()
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            if clear_on_copy {
+                self.input.editor_mut().clear_selection();
+                cx.notify();
             }
+            return true;
         }
         if self.has_selection() {
             self.copy_selection(cx);

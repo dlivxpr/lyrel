@@ -1,11 +1,20 @@
 //! 单个 pane 链接的安装、替换、resize 同步与退休。
 //! successor 安装前先退休 reader；任何关闭路径均不 join socket 线程。
-use super::reader::ReaderTask;
+use super::reader::{ReaderGrid, ReaderReporting, ReaderTask};
 use super::writer::{InputLoss, LinkWriter};
 use super::{
-    EventProxy, GraphicsViewportReporter, PaneEvent, PaneRoute, ReaderSignals, ShellState,
-    TermSize, win_size,
+    EventProxy, GraphicsViewportReporter, PaneEvent, PaneRoute, ReaderSignals, RelinkLayout,
+    ShellState, TermSize, win_size,
 };
+
+/// The pane-side state a relink takes over: the grid and proxy it keeps
+/// parsing with, the event queue it drains, and the exited flag it clears.
+pub struct RelinkState<'a> {
+    pub term: &'a Arc<FairMutex<Crosswords<EventProxy>>>,
+    pub proxy: &'a EventProxy,
+    pub events: &'a smol::channel::Receiver<PaneEvent>,
+    pub exited: &'a mut bool,
+}
 use crate::bridge::ParseBridge;
 use lyrel_core::core::term_modes::KeyboardStacks;
 use lyrel_core::daemon::protocol::{ClientMsg, WinSize};
@@ -63,14 +72,18 @@ impl PaneConnection {
         let viewport_reporter =
             GraphicsViewportReporter::new(term, signals.images.clone(), link.sender())?;
         let reader = ReaderTask::spawn(
-            term.clone(),
-            proxy.clone(),
+            ReaderGrid {
+                term: term.clone(),
+                proxy: proxy.clone(),
+            },
             read_half,
             buffered,
             quit,
             signals,
-            link.sender(),
-            viewport_reporter.clone(),
+            ReaderReporting {
+                writer: link.sender(),
+                viewport_reporter: viewport_reporter.clone(),
+            },
             proxy.parse_state.glyph_generation.load(Ordering::SeqCst),
         );
         Ok(Self {
@@ -127,14 +140,17 @@ impl PaneConnection {
     pub fn adopt_relink(
         &mut self,
         stream: Stream,
-        term: &Arc<FairMutex<Crosswords<EventProxy>>>,
-        proxy: &EventProxy,
-        events: &smol::channel::Receiver<PaneEvent>,
-        exited: &mut bool,
-        signals: ReaderSignals,
         buffered: Vec<u8>,
         route: &PaneRoute,
+        state: RelinkState<'_>,
+        signals: ReaderSignals,
     ) -> anyhow::Result<()> {
+        let RelinkState {
+            term,
+            proxy,
+            events,
+            exited,
+        } = state;
         while events.try_recv().is_ok() {}
         if let Ok(mut pending) = signals.clipboard_writes.lock() {
             pending.clear();
@@ -191,14 +207,18 @@ impl PaneConnection {
             InputLoss::new(quit.clone(), signals.exited.clone(), proxy.clone()),
         )?;
         let reader = ReaderTask::spawn(
-            term.clone(),
-            proxy.clone(),
+            ReaderGrid {
+                term: term.clone(),
+                proxy: proxy.clone(),
+            },
             read_half,
             buffered,
             quit.clone(),
             signals,
-            link.sender(),
-            self.viewport_reporter.clone(),
+            ReaderReporting {
+                writer: link.sender(),
+                viewport_reporter: self.viewport_reporter.clone(),
+            },
             proxy.parse_state.glyph_generation.load(Ordering::SeqCst),
         );
         self.reader = reader;
@@ -241,13 +261,16 @@ impl PaneConnection {
         &mut self,
         term: &Arc<FairMutex<Crosswords<EventProxy>>>,
         proxy: &EventProxy,
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
+        layout: RelinkLayout,
         local_conpty: &AtomicBool,
         shell: &Mutex<ShellState>,
         images: &crate::images::ImageStore,
     ) -> bool {
+        let RelinkLayout {
+            size,
+            cell_w,
+            cell_h,
+        } = layout;
         images.set_cell_metrics(cell_w, cell_h);
         let echoed = self.resize_echoed();
         // The cell size has to be part of the early-out, not just cols/rows: it

@@ -384,18 +384,16 @@ impl LyrelApp {
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
         self.sync_status_metrics(window, cx);
-        if !window.is_window_active()
-            || (crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
-                && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none()))
-        {
-            if crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
+        let lifted = crate::ui::pane_drag::lifted(&self.pane_drag).is_some();
+        if (!window.is_window_active()
+            || (lifted && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none())))
+            && (lifted
                 || self
                     .tabs
                     .get(self.tabs.active_index())
-                    .is_some_and(|tab| tab.pip_interaction.has_gesture())
-            {
-                self.cancel_pane_drag(window, cx);
-            }
+                    .is_some_and(|tab| tab.pip_interaction.has_gesture()))
+        {
+            self.cancel_pane_drag(window, cx);
         }
         if cx.has_active_drag() {
             crate::ui::reorder::clear_pending(&self.reorder);

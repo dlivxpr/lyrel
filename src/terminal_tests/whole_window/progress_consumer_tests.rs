@@ -93,7 +93,11 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
     // A finite file is written by the real PTY producer once, then the producer
     // blocks on stdin. No progress byte is repeated during or after eviction.
     let file = daemon.dir.path().join("progress-ring-trim.txt");
-    std::fs::write(&file, b"replay filler\r\n".repeat(700_000)).unwrap();
+    // Eviction is byte-bound. Keep the same 10.5 MB workload without making
+    // ConPTY and the renderer process 700,000 separate line advances.
+    let mut line = [b'x'; 1024];
+    line[1022..].copy_from_slice(b"\r\n");
+    std::fs::write(&file, line.repeat(10_500_000usize.div_ceil(line.len()))).unwrap();
     let request = format!(
         "FILE_SEND 27105 0 {} 8192\n",
         hex(file.to_str().unwrap().as_bytes())

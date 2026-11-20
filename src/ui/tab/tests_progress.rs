@@ -495,7 +495,7 @@ fn tab_progress_preserves_agent_waiting_and_unread(cx: &mut TestAppContext) {
     DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
         .encode(&mut streams[0])
         .unwrap();
-    DaemonMsg::AgentStatus(Some(session(AgentStatus::Waiting, 0)))
+    DaemonMsg::AgentStatus(Some(Box::new(session(AgentStatus::Waiting, 0))))
         .encode(&mut streams[0])
         .unwrap();
     wait_until(cx, |cx| {
@@ -519,7 +519,7 @@ fn tab_progress_preserves_agent_waiting_and_unread(cx: &mut TestAppContext) {
         );
     });
 
-    DaemonMsg::AgentStatus(Some(session(AgentStatus::Done, 1)))
+    DaemonMsg::AgentStatus(Some(Box::new(session(AgentStatus::Done, 1))))
         .encode(&mut streams[0])
         .unwrap();
     wait_until(cx, |cx| {

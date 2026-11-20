@@ -51,6 +51,7 @@ pub mod remote;
 pub mod reverse_search;
 pub mod scrollbar;
 pub mod search;
+mod search_controller;
 pub mod selection_scroll;
 pub mod sftp_client;
 pub mod signature;
