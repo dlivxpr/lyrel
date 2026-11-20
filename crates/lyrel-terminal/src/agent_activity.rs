@@ -32,6 +32,7 @@ pub struct AgentActivity {
     detection_armed: bool,
     last_status: Option<AgentStatus>,
     last_session: (Option<String>, Option<Vec<String>>),
+    last_session_title: Option<String>,
     turn_started: Option<Instant>,
     pending_finish_notice: Option<Task<()>>,
     was_rich: bool,
@@ -61,6 +62,7 @@ pub struct AgentObservation<'a> {
 #[non_exhaustive]
 pub struct AgentUpdate {
     pub session_changed: bool,
+    pub session_id_changed: bool,
     pub changed: bool,
     pub turn_finished: bool,
     pub notice: Option<AgentNotice>,
@@ -73,6 +75,7 @@ impl AgentActivity {
             detection_armed: !reattached,
             last_status: None,
             last_session: (None, None),
+            last_session_title: None,
             turn_started: None,
             pending_finish_notice: None,
             was_rich: false,
@@ -201,8 +204,16 @@ impl AgentActivity {
         );
         let mut update = AgentUpdate::default();
         if identity != self.last_session {
+            let had_session = self.last_session.0.is_some();
+            update.session_id_changed = had_session && identity.0 != self.last_session.0;
             self.last_session = identity;
             update.session_changed = true;
+        }
+        let session_title = session.and_then(|s| s.readout.session_title.clone());
+        if session_title != self.last_session_title {
+            self.last_session_title = session_title;
+            update.session_changed = true;
+            update.changed = true;
         }
         let status = session.map(|s| s.status);
         let turns = session.map_or(0, |s| s.turns);

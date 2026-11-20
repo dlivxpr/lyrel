@@ -648,3 +648,60 @@ fn a_remote_menu_keeps_its_host_and_internal_open_after_the_pane_retargets(
         ]
     );
 }
+
+#[gpui_kit::test]
+fn ctrl_click_on_osc8_and_plain_file_urls_opens_in_builtin_editor(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("sample.rs");
+    std::fs::write(&file, "fn main() {}\n").unwrap();
+    let normalized = file.to_string_lossy().replace('\\', "/");
+    let file_url = format!("file:///{}", normalized.trim_start_matches('/'));
+    let (window, mut daemon) = harness(cx);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, event: &OpenFileRequested, _| {
+                seen.borrow_mut().push((
+                    event.path.clone(),
+                    event.line,
+                    event.column,
+                    event.is_dir,
+                ));
+            })
+            .detach();
+        })
+        .unwrap();
+    let payload = format!("\x1b]8;;{file_url}#L1\x1b\\sample.rs\x1b]8;;\x1b\\ {file_url}\r\n");
+    DaemonMsg::Output(payload.into_bytes())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 's'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.open_link_at(1, 0, window, cx));
+            let plain_col = 10;
+            assert!(view.open_link_at(plain_col, 0, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*opened.borrow(),
+        &[
+            (file.clone(), Some(1), None, false),
+            (file, None, None, false),
+        ]
+    );
+}

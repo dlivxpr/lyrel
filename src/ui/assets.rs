@@ -94,7 +94,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/agents/opencode.svg" => include_bytes!("../../assets/icons/agents/opencode.svg"),
         "icons/agents/pi.svg" => include_bytes!("../../assets/icons/agents/pi.svg"),
         "icons/agents/omp.svg" => include_bytes!("../../assets/icons/agents/omp.svg"),
-        "icons/agents/kimi.svg" => include_bytes!("../../assets/icons/agents/kimi.svg"),
+        "icons/agents/kimi.png" => include_bytes!("../../assets/icons/agents/kimi.png"),
         "icons/agents/hermes.png" => include_bytes!("../../assets/icons/agents/hermes.png"),
         // The GitHub tab's state glyphs: one shape per state, not one colour.
         "icons/github/issue-open.svg" => include_bytes!("../../assets/icons/github/issue-open.svg"),
@@ -157,6 +157,33 @@ mod tests {
                 "{} points at {path}, which nothing serves",
                 agent.display_name()
             );
+        }
+    }
+
+    #[test]
+    fn every_agent_icon_is_square_and_high_dpi_ready() {
+        for agent in crate::core::cli_agent::CLIAgent::ALL {
+            let path = agent.icon_path();
+            let bytes = Assets.load(path).unwrap().unwrap();
+            if path.ends_with(".png") {
+                let img = image::load_from_memory(&bytes).expect(path);
+                assert_eq!(img.width(), img.height(), "{path} must be square");
+                assert!(
+                    (48..=128).contains(&img.width()),
+                    "{path} dimensions {}x{} should stay in [48, 128] for crisp non-mipmapped downsampling",
+                    img.width(),
+                    img.height()
+                );
+            } else {
+                let svg = std::str::from_utf8(&bytes).expect(path);
+                let w: f32 = attr(svg, "width").parse().expect(path);
+                let h: f32 = attr(svg, "height").parse().expect(path);
+                assert_eq!(w, h, "{path} SVG width/height must be square");
+                assert!(
+                    (48.0..=128.0).contains(&w),
+                    "{path} SVG intrinsic size {w} should stay in [48, 128] for crisp 1.0x rasterization"
+                );
+            }
         }
     }
 

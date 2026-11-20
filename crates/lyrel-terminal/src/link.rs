@@ -357,7 +357,63 @@ impl LinkInteraction {
             return LinkAt::None;
         };
         let (text, points, click_idx) = match line {
-            GridLink::Hyperlink(uri, runs) => return LinkAt::Found(LinkTarget::Url(uri), runs),
+            GridLink::Hyperlink(uri, runs) => {
+                if uri
+                    .get(..7)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("file://"))
+                {
+                    let Some(location) = &self.location else {
+                        return LinkAt::None;
+                    };
+                    let files = include_files && location.files;
+                    if !files {
+                        return LinkAt::None;
+                    }
+                    let style = link_path_style(location.local_paths, location.cwd.as_deref());
+                    let Some((path, line, column)) = search::file_target_from_url(&uri, style)
+                    else {
+                        return LinkAt::None;
+                    };
+                    let local = location.host.is_local();
+                    let answer = if local {
+                        search::local_probe(&path, line.is_some())
+                    } else {
+                        self.probes.probe(&path, line.is_some())
+                    };
+                    return match answer {
+                        search::Probe::Hit { is_dir } => LinkAt::Found(
+                            LinkTarget::File {
+                                path,
+                                line: if is_dir { None } else { line },
+                                column: if is_dir { None } else { column },
+                                is_dir,
+                            },
+                            runs,
+                        ),
+                        search::Probe::Miss => LinkAt::Unresolved {
+                            candidate: search::FileCandidate {
+                                start: 0,
+                                end: 0,
+                                path: path.display().to_string(),
+                                line,
+                                column,
+                            },
+                            pending: false,
+                        },
+                        search::Probe::Unknown => LinkAt::Unresolved {
+                            candidate: search::FileCandidate {
+                                start: 0,
+                                end: 0,
+                                path: path.display().to_string(),
+                                line,
+                                column,
+                            },
+                            pending: true,
+                        },
+                    };
+                }
+                return LinkAt::Found(LinkTarget::Url(uri), runs);
+            }
             GridLink::Text(text, points, click_idx) => (text, points, click_idx),
         };
         let Some(location) = &self.location else {

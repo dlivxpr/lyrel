@@ -139,6 +139,7 @@ fn desired_node_from_session(layout: &SessionPane, remote_window: bool) -> Optio
                             .as_deref()
                             .map(lyrel_core::host::session_operations::durable_scope),
                         status: None,
+                        session_title: None,
                     }),
                     shell: shell.clone(),
                 }),
@@ -197,6 +198,7 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                         .and_then(|s| s.readout.session_scope.as_ref())
                         .map(lyrel_core::host::session_operations::durable_scope),
                     status: None,
+                    session_title: session.and_then(|s| s.readout.session_title),
                 }
             });
             Some(DesiredNode::Leaf {
@@ -238,6 +240,7 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                 launch_argv: agent_launch_argv,
                 session_scope: agent_session_scope.map(|scope| *scope),
                 status: None,
+                session_title: None,
             });
             Some(DesiredNode::Leaf {
                 pane,

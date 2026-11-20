@@ -6837,4 +6837,72 @@ mod tests {
             assert_eq!(rendered, ["Guide", "bold", "cargo test"]);
         });
     }
+
+    #[gpui_kit::test]
+    fn selection_quads_paint_above_code_block_and_inline_highlight_backgrounds(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let source = "before `inline` and ==mark==\n\n```rust\nlet x = 1;\n```\n";
+        let code_bg = gpui_kit::hsla(0.6, 0.2, 0.2, 1.0);
+        let link_color = gpui_kit::hsla(0.58, 0.9, 0.55, 1.0);
+        let selection_color = gpui_kit::hsla(0.58, 0.9, 0.55, 0.25);
+        let editor = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| EditorState::new(window, cx).with_text(source, cx))
+            })
+            .unwrap()
+        });
+        let window = editor
+            .update(cx, |editor, window, cx| {
+                let style = super::SyntaxStyle {
+                    code_bg,
+                    link: link_color,
+                    ..Default::default()
+                };
+                editor.set_markdown_style(style, cx);
+                editor.focus_handle.focus(window, cx);
+                let start = source.find("inline").unwrap();
+                let end = source.find("let x = 1;").unwrap() + 5;
+                editor.select_range(start..end, cx);
+                window.window_handle()
+            })
+            .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let quads = window.painted_quads();
+            let sel_positions: Vec<usize> = quads
+                .iter()
+                .enumerate()
+                .filter_map(|(i, q)| (q.background.as_solid() == Some(selection_color)).then_some(i))
+                .collect();
+            let code_card_pos = quads
+                .iter()
+                .position(|q| q.background.as_solid() == Some(code_bg));
+            assert!(
+                !sel_positions.is_empty(),
+                "expected selection quads to be painted"
+            );
+            let max_sel = *sel_positions.iter().max().unwrap();
+            let min_sel = *sel_positions.iter().min().unwrap();
+            let card = code_card_pos.expect("expected fenced code background quad");
+            assert!(
+                min_sel > card,
+                "selection quads ({min_sel}..={max_sel}) must paint AFTER code card bg ({card})"
+            );
+            let inline_bgs: Vec<usize> = quads
+                .iter()
+                .enumerate()
+                .filter_map(|(i, q)| {
+                    (i != card && q.background.as_solid() == Some(code_bg)).then_some(i)
+                })
+                .collect();
+            assert!(!inline_bgs.is_empty(), "expected inline code background quad");
+            let max_inline_bg = *inline_bgs.iter().max().unwrap();
+            assert!(
+                min_sel > max_inline_bg,
+                "selection quads ({min_sel}) must paint AFTER inline code/highlight bg ({max_inline_bg})"
+            );
+        })
+        .unwrap();
+    }
 }

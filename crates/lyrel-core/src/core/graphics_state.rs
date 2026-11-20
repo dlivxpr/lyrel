@@ -575,6 +575,26 @@ pub struct GraphicsState {
 }
 
 impl GraphicsState {
+    #[cfg(test)]
+    pub(crate) fn screen_rows(&self) -> Vec<String> {
+        use rio_vt::crosswords::grid::Dimensions as _;
+        (self.term.topmost_line().0..=self.term.bottommost_line().0)
+            .filter_map(|r| {
+                let s: String = (0..self.term.columns())
+                    .map(|c| {
+                        self.term.grid[rio_vt::crosswords::pos::Line(r)]
+                            [rio_vt::crosswords::pos::Column(c)]
+                        .c()
+                    })
+                    .collect::<String>()
+                    .replace('\0', " ")
+                    .trim_end()
+                    .to_string();
+                (!s.is_empty()).then_some(s)
+            })
+            .collect()
+    }
+
     /// Standard stream PTY semantics, including native SSH on Windows.
     pub fn new(size: WinSize) -> Self {
         Self::with_resize_mode(size, ResizeMode::Raw)

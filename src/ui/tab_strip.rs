@@ -196,10 +196,17 @@ pub(crate) fn label_of(
         // full where the one beside it says "…/dir" would be the same
         // disagreement in a new place.
         TabLabel::Osc(title) => shortened(title),
-        TabLabel::Agent(agent) => agent.slug().to_string(),
+        TabLabel::Agent(agent) => agent_tab_label(agent).to_string(),
         TabLabel::Cwd(cwd) => shortened(cwd),
         TabLabel::Process(title) => title.to_string(),
         TabLabel::Unknown => unnamed(),
+    }
+}
+
+pub(crate) fn agent_tab_label(agent: crate::core::cli_agent::CLIAgent) -> &'static str {
+    match agent {
+        crate::core::cli_agent::CLIAgent::OhMyPi => "OMP",
+        _ => agent.slug(),
     }
 }
 
@@ -1578,7 +1585,7 @@ impl LyrelApp {
             TabLabel::Osc(title) | TabLabel::Cwd(title) => {
                 abbreviate_home(strip_host_prefix(title), home.as_deref()).into_owned()
             }
-            TabLabel::Agent(agent) => agent.slug().to_string(),
+            TabLabel::Agent(agent) => agent_tab_label(agent).to_string(),
             TabLabel::Named(name) => name.to_string(),
             TabLabel::Process(title) => title.to_string(),
             TabLabel::Unknown => String::new(),
@@ -2072,6 +2079,7 @@ fn avatar_disc(
             .items_center()
             .justify_center()
             .rounded_full()
+            .overflow_hidden()
     };
     match agent {
         Some(agent) => {
@@ -2108,11 +2116,18 @@ fn avatar_disc(
                     .when(lyrel_ui_base::presets::needs_edge(accent, surface), |d| {
                         d.border_1().border_color(cx.theme().border)
                     })
-                    .child(
-                        gpui_kit::img(agent.icon_path())
-                            .size(px(size * 0.72))
-                            .object_fit(gpui_kit::ObjectFit::Contain),
-                    ),
+                    .child(gpui_kit::img(agent.icon_path()).size(px(size)).object_fit(
+                        if matches!(
+                            agent,
+                            crate::core::cli_agent::CLIAgent::Kimi
+                                | crate::core::cli_agent::CLIAgent::Hermes
+                                | crate::core::cli_agent::CLIAgent::OpenCode
+                        ) {
+                            gpui_kit::ObjectFit::Cover
+                        } else {
+                            gpui_kit::ObjectFit::Contain
+                        },
+                    )),
             )
             .when_some(dot, |b, dot| b.child(dot))
             .tooltip(move |window, cx| {
@@ -2878,6 +2893,7 @@ mod tests {
             cwd: None,
             agent: None,
             status: None,
+            session_title: None,
             live: true,
             panes: 1,
         }
@@ -2895,7 +2911,7 @@ mod tests {
         let mut tab = strip_tab();
         tab.agent = Some(crate::core::cli_agent::CLIAgent::OhMyPi);
         tab.osc_title = Some(r"C:\Windows\System32\cmd.exe".into());
-        assert_eq!(label_of(&tab, 0, Some(home())), "omp");
+        assert_eq!(label_of(&tab, 0, Some(home())), "OMP");
 
         tab.osc_title = Some("Actual session title".into());
         assert_eq!(label_of(&tab, 0, Some(home())), "Actual session title");
@@ -2996,6 +3012,7 @@ mod tests {
                 cwd: Some("/work/repo".into()),
                 agent: None,
                 status: None,
+                session_title: None,
                 live: true,
                 panes: 1,
             };

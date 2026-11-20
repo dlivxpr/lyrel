@@ -2223,6 +2223,7 @@ mod tests {
             launch_argv: None,
             session_scope: None,
             status: None,
+            session_title: None,
         });
         let mut shell_pane = PaneRecord::new(7);
         shell_pane.cwd = Some("/srv".into());
@@ -2393,6 +2394,7 @@ mod tests {
                     launch_argv: Some(vec!["omp".into()]),
                     session_scope: None,
                     status: None,
+                    session_title: None,
                 }),
                 ..PaneRecord::new(2)
             },

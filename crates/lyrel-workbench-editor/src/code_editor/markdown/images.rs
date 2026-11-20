@@ -642,23 +642,9 @@ impl ImageHost {
             return;
         };
         let focus = editor.read(cx).focus_handle(cx);
-        let preview = cx.new(|_| ImagePreview {
-            image,
-            zoom: 1.,
-            scroll: gpui_kit::ScrollHandle::new(),
-        });
         let title = source.to_owned();
         let _ = self.window.update(cx, |_, window, cx| {
-            window.open_dialog(cx, move |dialog, window, _| {
-                dialog
-                    .title(title.clone())
-                    .w(window.rem_size() * 50.)
-                    .child(preview.clone())
-                    .on_close({
-                        let focus = focus.clone();
-                        move |_, window, cx| focus.focus(window, cx)
-                    })
-            });
+            open_preview_dialog(title, image, Some(focus), window, cx);
         });
     }
 
@@ -1367,21 +1353,103 @@ pub fn controls(
         .into_any_element()
 }
 
+fn open_preview_dialog(
+    title: String,
+    image: Bitmap,
+    focus: Option<gpui_kit::FocusHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<ImagePreview> {
+    let preview = cx.new(|_| ImagePreview {
+        image,
+        zoom: 1.,
+        scroll: gpui_kit::ScrollHandle::new(),
+        drag: None,
+    });
+    let dialog_preview = preview.clone();
+    window.open_dialog(cx, move |dialog, window, cx| {
+        let dialog_w = dialog_preview.read(cx).dialog_width(window);
+        dialog
+            .title(title.clone())
+            .centered()
+            .w(dialog_w)
+            .child(dialog_preview.clone())
+            .on_close({
+                let focus = focus.clone();
+                move |_, window, cx| {
+                    if let Some(focus) = &focus {
+                        focus.focus(window, cx);
+                    }
+                }
+            })
+    });
+    preview
+}
+
+struct PreviewMetrics {
+    scale: f32,
+    content_w: gpui_kit::Pixels,
+    content_h: gpui_kit::Pixels,
+    box_w: gpui_kit::Pixels,
+    box_h: gpui_kit::Pixels,
+    dialog_w: gpui_kit::Pixels,
+}
+
 struct ImagePreview {
     image: Bitmap,
     zoom: f32,
     scroll: gpui_kit::ScrollHandle,
+    drag: Option<(
+        gpui_kit::Point<gpui_kit::Pixels>,
+        gpui_kit::Point<gpui_kit::Pixels>,
+    )>,
 }
-impl gpui_kit::Render for ImagePreview {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+
+impl ImagePreview {
+    fn metrics(&self, window: &Window) -> PreviewMetrics {
         let size = self.image.image.size(0);
-        let max_w = (window.viewport_size().width - window.rem_size() * 6.).max(window.rem_size());
-        let max_h =
-            (window.viewport_size().height - window.rem_size() * 14.).max(window.rem_size() * 4.);
-        let fit = (f32::from(max_w) / size.width.0 as f32)
-            .min(f32::from(max_h) / size.height.0 as f32)
+        let img_w = (size.width.0 as f32).max(1.);
+        let img_h = (size.height.0 as f32).max(1.);
+        let rem = window.rem_size();
+        let viewport = window.viewport_size();
+        let dialog_pad_w = rem * 2.125;
+        let max_w = (viewport.width - rem * 4. - dialog_pad_w).max(rem * 12.);
+        let max_h = (viewport.height - rem * 12.).max(rem * 4.);
+        let fit = (f32::from(max_w) / img_w)
+            .min(f32::from(max_h) / img_h)
             .min(1.);
         let scale = fit * self.zoom;
+        let content_w = px(img_w * scale);
+        let content_h = px(img_h * scale);
+        let box_w = content_w.min(max_w);
+        let box_h = content_h.min(max_h);
+        let min_dialog_w = (rem * 18.).min(viewport.width - rem * 2.);
+        let dialog_w = (box_w + dialog_pad_w)
+            .max(min_dialog_w)
+            .min(viewport.width - rem * 2.);
+        PreviewMetrics {
+            scale,
+            content_w,
+            content_h,
+            box_w,
+            box_h,
+            dialog_w,
+        }
+    }
+
+    fn dialog_width(&self, window: &Window) -> gpui_kit::Pixels {
+        self.metrics(window).dialog_w
+    }
+}
+
+impl gpui_kit::Render for ImagePreview {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let metrics = self.metrics(window);
+        let cursor = if self.drag.is_some() {
+            gpui_kit::CursorStyle::ClosedHand
+        } else {
+            gpui_kit::CursorStyle::OpenHand
+        };
         v_flex()
             .gap_2()
             .child(
@@ -1420,21 +1488,78 @@ impl gpui_kit::Render for ImagePreview {
                                 cx.notify();
                             })),
                     )
-                    .child(format!("{:.0}%", scale * 100.)),
+                    .child(format!("{:.0}%", metrics.scale * 100.)),
             )
             .child(
                 div()
                     .id("markdown-image-preview")
-                    .h(max_h)
-                    .max_w(max_w)
+                    .test_support()
+                    .mx_auto()
+                    .w(metrics.box_w)
+                    .h(metrics.box_h)
                     .overflow_scroll()
                     .track_scroll(&self.scroll)
+                    .cursor(cursor)
+                    .on_scroll(cx.listener(|this, ev: &gpui_kit::ScrollEvent, window, cx| {
+                        let dy = f32::from(ev.delta.pixel_delta(window.line_height()).y);
+                        if dy.abs() <= 0.01 {
+                            return;
+                        }
+                        let factor = 1.15_f32.powf((dy / 20.).clamp(-4., 4.));
+                        this.zoom = (this.zoom * factor).clamp(0.1, 16.);
+                        let max = this.scroll.max_offset();
+                        let off = this.scroll.offset();
+                        this.scroll.set_offset(gpui_kit::point(
+                            off.x.clamp(-max.x, px(0.)),
+                            off.y.clamp(-max.y, px(0.)),
+                        ));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|this, ev: &gpui_kit::MouseDownEvent, _, cx| {
+                            this.drag = Some((ev.position, this.scroll.offset()));
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, ev: &gpui_kit::MouseMoveEvent, _, cx| {
+                        let Some((start_pos, start_offset)) = this.drag else {
+                            return;
+                        };
+                        let delta = ev.position - start_pos;
+                        let max = this.scroll.max_offset();
+                        let next = gpui_kit::point(
+                            (start_offset.x + delta.x).clamp(-max.x, px(0.)),
+                            (start_offset.y + delta.y).clamp(-max.y, px(0.)),
+                        );
+                        this.scroll.set_offset(next);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if this.drag.take().is_some() {
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if this.drag.take().is_some() {
+                                cx.notify();
+                            }
+                        }),
+                    )
                     .child(
                         div()
                             .id("markdown-image-preview-content")
                             .test_support()
-                            .w(px(size.width.0 as f32 * scale))
-                            .h(px(size.height.0 as f32 * scale))
+                            .w(metrics.content_w)
+                            .h(metrics.content_h)
                             .flex_none()
                             .child(gpui_kit::img(self.image.image.clone()).size_full()),
                     ),
@@ -1669,6 +1794,160 @@ mod tests {
         assert!(
             !is_redirect,
             "a size violation must not surface as a redirect refusal"
+        );
+    }
+
+    struct EmptyRoot;
+    impl gpui_kit::Render for EmptyRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full()
+        }
+    }
+
+    fn test_bitmap(width: u32, height: u32, cx: &mut App) -> Bitmap {
+        let pixels = vec![255u8; (width * height * 4) as usize];
+        let image = image::RgbaImage::from_raw(width, height, pixels).unwrap();
+        let render = Arc::new(gpui_kit::RenderImage::new(vec![image::Frame::new(image)]));
+        Bitmap::new(render, cx)
+    }
+
+    #[gpui_kit::test]
+    fn image_preview_adapts_size_and_supports_wheel_zoom_and_drag_pan(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::component::Root;
+        use gpui_kit::{
+            AppContext as _, Bounds, MouseButton, Point, ScrollDelta, ScrollEvent, Size,
+            WindowBounds, WindowOptions, test::TestEventExt as _, test::TestWindowExt as _,
+        };
+        let window = cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Point::default(),
+                        Size::new(px(1200.), px(800.)),
+                    ))),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let root = cx.new(|_| EmptyRoot);
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .unwrap()
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        let preview = vcx.update(|window, cx| {
+            let small = test_bitmap(160, 120, cx);
+            let preview = open_preview_dialog("small.png".into(), small, None, window, cx);
+            window.render_frame(cx);
+            preview
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let box_bounds = window.find("markdown-image-preview").bounds();
+            let dialog_bounds = window.find("surface").bounds();
+            assert!(
+                f32::from(box_bounds.size.height) < 200.,
+                "small 160x120 image preview height should adapt, got {:?}",
+                box_bounds.size
+            );
+            assert!(
+                f32::from(dialog_bounds.size.width) < 500.,
+                "small 160x120 dialog width should adapt, got {:?}",
+                dialog_bounds.size
+            );
+            window.close_dialog(cx);
+            window.render_frame(cx);
+        });
+        let _ = preview;
+
+        let preview = vcx.update(|window, cx| {
+            let wide = test_bitmap(1000, 300, cx);
+            let preview = open_preview_dialog("wide.png".into(), wide, None, window, cx);
+            window.render_frame(cx);
+            preview
+        });
+        vcx.run_until_parked();
+        let (preview_center, initial_size) = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let box_bounds = window.find("markdown-image-preview").bounds();
+            let content_size = window.find("markdown-image-preview-content").bounds().size;
+            assert!(
+                f32::from(box_bounds.size.width) >= 980.,
+                "wide 1000x300 preview should expand past 50rem to fit image, got {:?}",
+                box_bounds.size
+            );
+            assert!(
+                f32::from(box_bounds.size.height) < 400.,
+                "wide 1000x300 preview height should adapt to ~300px, got {:?}",
+                box_bounds.size
+            );
+            (box_bounds.center(), content_size)
+        });
+
+        vcx.simulate_mouse_move(preview_center, None, Default::default());
+        vcx.simulate_event(ScrollEvent {
+            position: preview_center,
+            delta: ScrollDelta::Lines(gpui_kit::point(0., 2.)),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        let zoomed_size = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image-preview-content").bounds().size
+        });
+        assert!(
+            zoomed_size.width > initial_size.width && zoomed_size.height > initial_size.height,
+            "scroll wheel up must zoom in: before={initial_size:?}, after={zoomed_size:?}"
+        );
+
+        vcx.simulate_event(ScrollEvent {
+            position: preview_center,
+            delta: ScrollDelta::Lines(gpui_kit::point(0., -1.)),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        let zoomed_out_size = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image-preview-content").bounds().size
+        });
+        assert!(
+            zoomed_out_size.width < zoomed_size.width
+                && zoomed_out_size.height < zoomed_size.height,
+            "scroll wheel down must zoom out: zoomed={zoomed_size:?}, out={zoomed_out_size:?}"
+        );
+
+        vcx.simulate_event(ScrollEvent {
+            position: preview_center,
+            delta: ScrollDelta::Lines(gpui_kit::point(0., 3.)),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+
+        let before_pan = preview.read_with(&vcx, |p, _| p.scroll.offset());
+        vcx.update(|window, cx| {
+            window.pointer_move(preview_center, None, cx);
+            window.pointer_down(preview_center, MouseButton::Left, cx);
+            window.pointer_move(
+                preview_center - gpui_kit::point(px(60.), px(40.)),
+                Some(MouseButton::Left),
+                cx,
+            );
+            window.pointer_up(
+                preview_center - gpui_kit::point(px(60.), px(40.)),
+                MouseButton::Left,
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        let after_pan = preview.read_with(&vcx, |p, _| p.scroll.offset());
+        assert_ne!(
+            after_pan, before_pan,
+            "dragging zoomed image preview must pan scroll offset"
         );
     }
 }

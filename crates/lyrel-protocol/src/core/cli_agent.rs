@@ -132,7 +132,7 @@ impl CLIAgent {
 
             CLIAgent::Hermes => "Hermes",
 
-            CLIAgent::OhMyPi => "Oh My Pi",
+            CLIAgent::OhMyPi => "OMP",
             CLIAgent::Kimi => "Kimi Code",
         }
     }
@@ -247,7 +247,7 @@ impl CLIAgent {
             CLIAgent::Pi => "icons/agents/pi.svg",
             CLIAgent::OhMyPi => "icons/agents/omp.svg",
 
-            CLIAgent::Kimi => "icons/agents/kimi.svg",
+            CLIAgent::Kimi => "icons/agents/kimi.png",
 
             CLIAgent::Hermes => "icons/agents/hermes.png",
         }
@@ -694,6 +694,9 @@ pub struct AgentReadout {
     pub opencode_presence: Option<OpenCodePresence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<AgentResult>,
+    /// Authoritative session title from the agent's session store or title hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_title: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -772,6 +775,14 @@ impl AgentReadout {
         take(&mut self.session_scope, &newer.session_scope);
         take(&mut self.opencode_presence, &newer.opencode_presence);
         take(&mut self.result, &newer.result);
+        if newer
+            .session_title
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|title| !title.is_empty())
+        {
+            self.session_title.clone_from(&newer.session_title);
+        }
     }
 }
 
@@ -905,6 +916,7 @@ impl AgentSessionState {
         if let Some(id) = &ev.session_id {
             if self.session_id.as_ref() != Some(id) {
                 self.readout.session_scope = None;
+                self.readout.session_title = None;
             }
             self.session_id = Some(id.clone());
         }

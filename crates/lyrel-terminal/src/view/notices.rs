@@ -342,6 +342,10 @@ impl TerminalView {
             notify_allowed,
             cx,
         );
+        if update.session_id_changed {
+            self.pending_title = None;
+            self.title = self.default_title.clone();
+        }
         if update.session_changed {
             cx.emit(AgentSessionChanged);
         }

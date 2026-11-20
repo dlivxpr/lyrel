@@ -363,12 +363,71 @@ pub fn paint_row(
     window: &mut Window,
     cx: &mut App,
 ) {
+    paint_row_background(row, origin, line_height, window, cx);
+    paint_row_text(row, origin, line_height, window, cx);
+}
+
+pub fn paint_row_background(
+    row: &Row,
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
     if row.runs.len() < 2 {
-        // Backgrounds (the inline-code tint) are a separate pass from the
-        // glyphs — `paint` alone would drop them.
         let _ = row
             .line
             .paint_background(origin, line_height, TextAlign::Left, None, window, cx);
+        return;
+    }
+    let text_system = window.text_system().clone();
+    for (range, style) in &row.runs {
+        if style.background_color.is_none() {
+            continue;
+        }
+        let rects = row.map.rects_for_range(range.clone());
+        if rects.is_empty() {
+            continue;
+        }
+        let uniform: Vec<TextRun> = row
+            .runs
+            .iter()
+            .map(|(_, r)| TextRun {
+                color: style.color,
+                background_color: style.background_color,
+                underline: style.underline,
+                strikethrough: style.strikethrough,
+                ..r.clone()
+            })
+            .collect();
+        let shaped = text_system.shape_line(row.line.text.clone(), row.font_size, &uniform, None);
+        for (x0, x1) in rects {
+            let clip = Bounds::from_corners(
+                Point {
+                    x: origin.x + px(x0),
+                    y: origin.y,
+                },
+                Point {
+                    x: origin.x + px(x1),
+                    y: origin.y + line_height,
+                },
+            );
+            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                let _ =
+                    shaped.paint_background(origin, line_height, TextAlign::Left, None, window, cx);
+            });
+        }
+    }
+}
+
+pub fn paint_row_text(
+    row: &Row,
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if row.runs.len() < 2 {
         let _ = row
             .line
             .paint(origin, line_height, TextAlign::Left, None, window, cx);
@@ -422,8 +481,6 @@ pub fn paint_row(
             // scene layer for z-order and clips nothing, so every pass painted
             // the whole row and the overdraw showed up as faux-bold text.
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                let _ =
-                    shaped.paint_background(origin, line_height, TextAlign::Left, None, window, cx);
                 let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
             });
         }

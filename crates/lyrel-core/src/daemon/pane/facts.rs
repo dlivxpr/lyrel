@@ -307,6 +307,10 @@ fn observed_facts(st: &PaneFacts) -> ObservedFacts {
             .and_then(|s| s.readout.session_scope.as_ref())
             .map(crate::host::session_operations::durable_scope),
         status: st.agent_session.as_ref().map(|s| s.status),
+        session_title: st
+            .agent_session
+            .as_ref()
+            .and_then(|s| s.readout.session_title.clone()),
     });
     ObservedFacts {
         cwd,
@@ -353,6 +357,7 @@ fn agent_facts_changed(
                 || a.launch_argv != b.launch_argv
                 || a.session_scope != b.session_scope
                 || a.status != b.status
+                || a.session_title != b.session_title
         }
         _ => true,
     }
@@ -497,11 +502,32 @@ fn apply_agent_signals(
             st.agent = event.agent;
             emit(DaemonMsg::Agent(st.agent));
         }
+        let prev_session_id = st.agent_session.as_ref().and_then(|s| s.session_id.clone());
         let previous = st.agent_session.as_ref().map(|session| session.status);
         let session = st
             .agent_session
             .get_or_insert_with(AgentSessionState::default);
         session.apply_event(event);
+        if prev_session_id.is_some() && session.session_id != prev_session_id {
+            st.osc_title = None;
+        }
+        if let Some(agent) = st.agent
+            && matches!(
+                event.kind,
+                AgentEventKind::SessionStart
+                    | AgentEventKind::PromptSubmit
+                    | AgentEventKind::Stop
+                    | AgentEventKind::ToolComplete
+            )
+            && let Some(path) = session
+                .readout
+                .session_scope
+                .as_ref()
+                .and_then(|s| s.session_file.as_deref())
+            && let Some(title) = crate::core::agent_history::session_title(agent, path)
+        {
+            session.readout.session_title = Some(title);
+        }
         session.note_transition(previous, now_ms);
         if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi)
             && event.kind == AgentEventKind::SessionStart

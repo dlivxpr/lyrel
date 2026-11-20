@@ -5763,13 +5763,12 @@ Except as contained in this notice, the names of Gnome, the Gnome Foundation, an
 -------------------------------------------------------------------------------
 T114
 Applicable components and notice files:
-- Kimi brand icon (assets/icons/agents/kimi.svg, from lobehub/lobe-icons) / https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE
+- Kimi brand icon (assets/icons/agents/kimi.png, from MoonshotAI/kimi-cli web/public/logo.png) / https://github.com/MoonshotAI/kimi-cli/blob/main/LICENSE (Apache-2.0)
 
 Original license or notice text:
 
-MIT License
-
-Copyright (c) 2023 LobeHub
+Apache License 2.0 (MoonshotAI/kimi-cli)
+- Previous Kimi icon reference: lobehub/lobe-icons (MIT License, Copyright (c) 2023 LobeHub)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -13123,9 +13122,9 @@ SOFTWARE.
 ==================================
 
 适用组件与固定来源：
-- `assets/icons/agents/pi.svg`：https://pi.dev/logo-auto.svg；上游 https://github.com/earendil-works/pi，保留官方几何与颜色。
-- `assets/icons/agents/opencode.svg`：https://github.com/anomalyco/opencode 的 `packages/ui/src/assets/favicon/favicon.svg`，保留官方 512px 几何与颜色。
-- `assets/icons/agents/hermes.png`：https://github.com/NousResearch/hermes-agent 的 `apps/desktop/assets/icon.png`，1024×1024 官方图标。
+- `assets/icons/agents/pi.svg`：https://pi.dev/logo-auto.svg；上游 https://github.com/earendil-works/pi，保留官方几何与颜色（64×64 栅格化尺寸与深色内衬圆盘）。
+- `assets/icons/agents/opencode.svg`：https://github.com/anomalyco/opencode 的 `packages/ui/src/assets/favicon/favicon-v3.svg`，保留官方 512px 几何与颜色（64×64 栅格化尺寸）。
+- `assets/icons/agents/hermes.png`：https://github.com/NousResearch/hermes-agent 的 `website/static/img/logo.png`，重采样为 64×64 以适配无 mipmap 小尺寸图标渲染。
 上述组件分别适用以下来源许可证正文。
 
 Pi / MIT License

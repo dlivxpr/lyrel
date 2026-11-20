@@ -1598,6 +1598,27 @@ fn cell_offset_for_point(
 /// Paint a table row as a grid (W4c): a top border (+ bottom on the last row),
 /// a left border per column + a right outer border, and each cell's text aligned
 /// within its (content-fit) column. A separator row is a single horizontal rule.
+pub(crate) fn paint_table_row_bg(
+    t: &TableRow,
+    origin: Point<Pixels>,
+    row_h: Pixels,
+    window: &mut Window,
+) {
+    use markdown_syntax::TableStyle;
+    if t.is_separator {
+        return;
+    }
+    let table_w = t.col_widths.iter().sum();
+    let shaded = match t.style {
+        TableStyle::Header => t.is_header,
+        TableStyle::Striped => t.body_index.is_some_and(|b| b % 2 == 1),
+        _ => false,
+    };
+    if shaded {
+        window.paint_quad(fill(Bounds::new(origin, size(table_w, row_h)), t.shade));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_table_row(
     t: &TableRow,
@@ -1623,16 +1644,6 @@ pub(crate) fn paint_table_row(
     // row (Grid) vs none (Header).
     let header_rule = matches!(style, TableStyle::Striped | TableStyle::Minimal);
     let table_w = t.col_widths.iter().sum();
-    // Row shading (painted first, behind everything): the header for the Header
-    // style; alternate body rows for Striped.
-    let shaded = match style {
-        TableStyle::Header => t.is_header,
-        TableStyle::Striped => t.body_index.is_some_and(|b| b % 2 == 1),
-        _ => false,
-    };
-    if shaded {
-        window.paint_quad(fill(Bounds::new(origin, size(table_w, row_h)), t.shade));
-    }
     // Horizontal divider at the row's top: under every row (Grid, header excepted —
     // the box covers it), or just under the header (Striped/Minimal: the first body
     // row's top), or never (Header).

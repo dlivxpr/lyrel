@@ -243,7 +243,7 @@ impl Sanitizer<'_> {
                 self.flush_inline(true)?;
                 continue;
             }
-            if is_block_tag(tag) || tag == "image" || tag == "img" {
+            if is_block_tag(tag) || is_math_block(child) || tag == "image" || tag == "img" {
                 self.flush_inline(true)?;
                 self.append_block(child, depth + 1, false)?;
             } else {
@@ -479,6 +479,12 @@ impl Builder {
             owner.omit_dropped(raw_tag);
             return Ok(());
         }
+        if is_katex_visual_duplicate(node) {
+            return Ok(());
+        }
+        if is_mathml_tag(raw_tag) {
+            return self.sanitize_mathml(owner, node, raw_tag, depth, pre);
+        }
         let tag = allowed_tag(raw_tag);
         if tag == "div" && !is_allowed_tag(raw_tag) {
             owner.omissions.unsupported_elements += 1;
@@ -558,6 +564,253 @@ impl Builder {
         self.push_html("</");
         self.push_html(tag);
         self.push_html(">");
+        Ok(())
+    }
+
+    fn sanitize_mathml(
+        &mut self,
+        owner: &mut Sanitizer<'_>,
+        node: Node<'_, '_>,
+        raw_tag: &str,
+        depth: usize,
+        pre: bool,
+    ) -> Result<(), EpubError> {
+        if matches!(raw_tag, "annotation" | "annotation-xml") {
+            return Ok(());
+        }
+        if raw_tag == "mspace" {
+            self.push_text(" ", true);
+            return Ok(());
+        }
+        let children: Vec<Node<'_, '_>> = node
+            .children()
+            .filter(|c| {
+                c.is_element() || (c.is_text() && !c.text().unwrap_or("").trim().is_empty())
+            })
+            .collect();
+        let wrap_block = raw_tag == "math" && is_math_block(node) && self.parts.is_empty();
+        if wrap_block {
+            self.push_html("<p>");
+        }
+        self.push_html("<span");
+        if let Some(id) = attribute(node, "id") {
+            self.push_html(" id=\"");
+            push_attribute(id, &mut self.parts);
+            self.push_html("\"");
+            self.anchors.push((id.to_owned(), self.text.len()));
+        }
+        self.push_html(">");
+        match raw_tag {
+            "semantics" => {
+                let has_math_body = children.iter().any(|c| {
+                    c.is_element()
+                        && !matches!(c.tag_name().name(), "annotation" | "annotation-xml")
+                });
+                for child in children {
+                    if has_math_body
+                        && child.is_element()
+                        && matches!(child.tag_name().name(), "annotation" | "annotation-xml")
+                    {
+                        continue;
+                    }
+                    self.sanitize_mathml_child(owner, child, depth, pre)?;
+                }
+            }
+            "mfrac" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                if elems.len() >= 2 {
+                    self.sanitize_mathml_grouped(owner, elems[0], depth, pre)?;
+                    self.push_text("/", true);
+                    self.sanitize_mathml_grouped(owner, elems[1], depth, pre)?;
+                } else {
+                    for child in children {
+                        self.sanitize_mathml_child(owner, child, depth, pre)?;
+                    }
+                }
+            }
+            "msup" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                if elems.len() >= 2 {
+                    self.sanitize_mathml_grouped(owner, elems[0], depth, pre)?;
+                    self.push_text("^", true);
+                    self.sanitize_mathml_grouped(owner, elems[1], depth, pre)?;
+                } else {
+                    for child in children {
+                        self.sanitize_mathml_child(owner, child, depth, pre)?;
+                    }
+                }
+            }
+            "msub" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                if elems.len() >= 2 {
+                    self.sanitize_mathml_grouped(owner, elems[0], depth, pre)?;
+                    self.push_text("_", true);
+                    self.sanitize_mathml_grouped(owner, elems[1], depth, pre)?;
+                } else {
+                    for child in children {
+                        self.sanitize_mathml_child(owner, child, depth, pre)?;
+                    }
+                }
+            }
+            "msubsup" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                if elems.len() >= 3 {
+                    self.sanitize_mathml_grouped(owner, elems[0], depth, pre)?;
+                    self.push_text("_", true);
+                    self.sanitize_mathml_grouped(owner, elems[1], depth, pre)?;
+                    self.push_text("^", true);
+                    self.sanitize_mathml_grouped(owner, elems[2], depth, pre)?;
+                } else {
+                    for child in children {
+                        self.sanitize_mathml_child(owner, child, depth, pre)?;
+                    }
+                }
+            }
+            "msqrt" => {
+                self.push_text("√(", true);
+                for child in children {
+                    self.sanitize_mathml_child(owner, child, depth, pre)?;
+                }
+                self.push_text(")", true);
+            }
+            "mroot" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                if elems.len() >= 2 {
+                    self.sanitize_mathml_grouped(owner, elems[1], depth, pre)?;
+                    self.push_text("√(", true);
+                    self.sanitize_mathml_child(owner, elems[0], depth, pre)?;
+                    self.push_text(")", true);
+                } else {
+                    for child in children {
+                        self.sanitize_mathml_child(owner, child, depth, pre)?;
+                    }
+                }
+            }
+            "mfenced" => {
+                let open = attribute(node, "open").unwrap_or("(");
+                let close = attribute(node, "close").unwrap_or(")");
+                let seps: Vec<char> = attribute(node, "separators")
+                    .unwrap_or(",")
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                self.push_text(open, true);
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                for (ix, child) in elems.iter().enumerate() {
+                    if ix > 0 {
+                        let sep = seps
+                            .get(ix - 1)
+                            .or_else(|| seps.last())
+                            .copied()
+                            .unwrap_or(',');
+                        let mut buf = [0u8; 4];
+                        self.push_text(sep.encode_utf8(&mut buf), true);
+                    }
+                    self.sanitize_mathml_child(owner, *child, depth, pre)?;
+                }
+                self.push_text(close, true);
+            }
+            "mtr" | "mlabeledtr" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                for (ix, child) in elems.iter().enumerate() {
+                    if ix > 0 {
+                        self.push_text(", ", true);
+                    }
+                    self.sanitize_mathml_child(owner, *child, depth, pre)?;
+                }
+            }
+            "mtable" => {
+                let elems: Vec<Node<'_, '_>> = children
+                    .iter()
+                    .copied()
+                    .filter(|c| c.is_element())
+                    .collect();
+                for (ix, child) in elems.iter().enumerate() {
+                    if ix > 0 {
+                        self.push_text("; ", true);
+                    }
+                    self.sanitize_mathml_child(owner, *child, depth, pre)?;
+                }
+            }
+            _ => {
+                for child in children {
+                    self.sanitize_mathml_child(owner, child, depth, pre)?;
+                }
+            }
+        }
+        self.push_html("</span>");
+        if wrap_block {
+            self.push_html("</p>");
+        }
+        Ok(())
+    }
+
+    fn sanitize_mathml_child(
+        &mut self,
+        owner: &mut Sanitizer<'_>,
+        child: Node<'_, '_>,
+        depth: usize,
+        pre: bool,
+    ) -> Result<(), EpubError> {
+        if child.is_text() {
+            let text = child.text().unwrap_or_default().trim();
+            if !text.is_empty() {
+                self.push_text(text, true);
+            }
+            return Ok(());
+        }
+        if child.is_element() {
+            let name = child.tag_name().name();
+            if is_mathml_tag(name) {
+                return self.sanitize_mathml(owner, child, name, depth + 1, pre);
+            }
+        }
+        self.sanitize_element(owner, child, depth + 1, pre)
+    }
+
+    fn sanitize_mathml_grouped(
+        &mut self,
+        owner: &mut Sanitizer<'_>,
+        node: Node<'_, '_>,
+        depth: usize,
+        pre: bool,
+    ) -> Result<(), EpubError> {
+        let needs_parens = mathml_needs_parens(node);
+        if needs_parens {
+            self.push_text("(", true);
+        }
+        self.sanitize_mathml_child(owner, node, depth, pre)?;
+        if needs_parens {
+            self.push_text(")", true);
+        }
         Ok(())
     }
 }
@@ -660,6 +913,92 @@ fn is_dropped(tag: &str) -> bool {
             | "audio"
             | "video"
     )
+}
+
+fn is_mathml_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "math"
+            | "semantics"
+            | "mrow"
+            | "mi"
+            | "mo"
+            | "mn"
+            | "ms"
+            | "mtext"
+            | "mspace"
+            | "mstyle"
+            | "merror"
+            | "mpadded"
+            | "mphantom"
+            | "mfenced"
+            | "menclose"
+            | "msup"
+            | "msub"
+            | "msubsup"
+            | "mfrac"
+            | "msqrt"
+            | "mroot"
+            | "mtable"
+            | "mtr"
+            | "mtd"
+            | "mlabeledtr"
+            | "munder"
+            | "mover"
+            | "munderover"
+            | "mmultiscripts"
+            | "mprescripts"
+            | "none"
+            | "annotation"
+            | "annotation-xml"
+    )
+}
+
+fn is_math_block(node: Node<'_, '_>) -> bool {
+    node.tag_name().name() == "math"
+        && (attribute(node, "display") == Some("block")
+            || attribute(node, "mode") == Some("display"))
+}
+
+fn has_css_class(node: Node<'_, '_>, class: &str) -> bool {
+    attribute(node, "class")
+        .is_some_and(|classes| classes.split_whitespace().any(|token| token == class))
+}
+
+fn is_katex_visual_duplicate(node: Node<'_, '_>) -> bool {
+    if !has_css_class(node, "katex-html") {
+        return false;
+    }
+    node.parent().is_some_and(|parent| {
+        parent.children().any(|sibling| {
+            sibling.is_element()
+                && (has_css_class(sibling, "katex-mathml")
+                    || sibling
+                        .descendants()
+                        .any(|d| d.is_element() && d.tag_name().name() == "math"))
+        })
+    })
+}
+
+fn mathml_needs_parens(node: Node<'_, '_>) -> bool {
+    if !node.is_element() {
+        return false;
+    }
+    let elems: Vec<Node<'_, '_>> = node.children().filter(|c| c.is_element()).collect();
+    if node.tag_name().name() == "mrow" {
+        if elems.len() <= 1 {
+            return elems
+                .first()
+                .is_some_and(|&first| mathml_needs_parens(first));
+        }
+        let first_text = elems.first().and_then(|e| e.text()).unwrap_or("");
+        let last_text = elems.last().and_then(|e| e.text()).unwrap_or("");
+        if first_text == "(" && last_text == ")" {
+            return false;
+        }
+        return true;
+    }
+    matches!(node.tag_name().name(), "mfrac")
 }
 
 fn is_transparent(tag: &str) -> bool {
@@ -826,5 +1165,23 @@ mod tests {
         let (blocks, _) = sanitize("<p>a\n   b</p><pre>a\n  b</pre>");
         assert_eq!(blocks[0].text, "a b");
         assert_eq!(blocks[1].text, "a\n  b");
+    }
+
+    #[test]
+    fn mathml_and_tex_annotations_stay_inline_without_div_breaks_or_duplicates() {
+        let (blocks, omissions) = sanitize(
+            r#"<p>如果程序中有 <math><semantics><mrow><mi>f</mi></mrow><annotation encoding="application/x-tex">f</annotation></semantics></math> 的部分能够加速 <math><semantics><mrow><mi>s</mi></mrow><annotation encoding="application/x-tex">s</annotation></semantics></math> 倍，则总加速比为：</p><math display="block"><semantics><mrow><mi>S</mi><mi>p</mi><mi>e</mi><mi>e</mi><mi>d</mi><mi>u</mi><mi>p</mi><mo>=</mo><mfrac><mn>1</mn><mrow><mo>(</mo><mn>1</mn><mo>−</mo><mi>f</mi><mo>)</mo><mo>+</mo><mfrac><mi>f</mi><mi>s</mi></mfrac></mrow></mfrac></mrow><annotation encoding="application/x-tex">\text{Speedup} = \frac{1}{(1 - f) + \frac{f}{s}}</annotation></semantics></math>"#,
+        );
+        assert_eq!(blocks.len(), 2);
+        assert!(!blocks[0].html.contains("<div>"));
+        assert!(!blocks[1].html.contains("<div>"));
+        assert!(
+            blocks[0]
+                .text
+                .contains("如果程序中有 f 的部分能够加速 s 倍"),
+            "got inline text: {:?}",
+            blocks[0].text
+        );
+        assert_eq!(omissions.unsupported_elements, 0);
     }
 }

@@ -1293,7 +1293,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsAppHttpProxyInvalid => "不是有效的代理地址，该值未保存。",
         L10nKey::SettingsAgentOpencode => "OpenCode",
         L10nKey::SettingsAgentPi => "Pi",
-        L10nKey::SettingsAgentOhMyPi => "Oh My Pi",
+        L10nKey::SettingsAgentOhMyPi => "OMP",
         L10nKey::SettingsAgentKimiCode => "Kimi Code",
         L10nKey::SettingsAgentHermes => "Hermes",
         L10nKey::SettingsSearchAboutKeywords => {

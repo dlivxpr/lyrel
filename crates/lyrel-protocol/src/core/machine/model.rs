@@ -235,6 +235,8 @@ pub struct AgentFacts {
     pub session_scope: Option<crate::host::session_operations::SessionScope>,
     #[serde(default)]
     pub status: Option<crate::core::cli_agent::AgentStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_title: Option<String>,
 }
 
 fn deserialize_optional_agent_facts<'de, D>(deserializer: D) -> Result<Option<AgentFacts>, D::Error>

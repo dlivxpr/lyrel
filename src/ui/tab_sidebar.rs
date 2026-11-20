@@ -1056,6 +1056,9 @@ impl LyrelApp {
                 // owns the existing metadata line, not an agent busy/finish dot.
                 let git_line = tab
                     .progress_label(cx)
+                    .filter(|(kind, _)| {
+                        *kind != crate::daemon::protocol::ProgressKind::Indeterminate
+                    })
                     .map(|(kind, label)| {
                         use crate::daemon::protocol::ProgressKind;
                         let color = match kind {

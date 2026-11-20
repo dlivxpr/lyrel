@@ -714,7 +714,8 @@ impl<'a> Builder<'a> {
             TomlValueKind::InlineTable => {
                 format!("{{ {} keys }}", inline_key_count(value))
             }
-            _ => truncated_chars(self.text.get(range.clone()).unwrap_or(""), DISPLAY_CHARS),
+            TomlValueKind::Array => compact_toml_array(self.text.get(range.clone()).unwrap_or("")),
+            _ => compact_toml_scalar(self.text.get(range.clone()).unwrap_or("")),
         };
         let node = TomlNode {
             key: self
@@ -791,6 +792,42 @@ fn inline_key_count(value: &Value) -> usize {
         Value::InlineTable(table) => <InlineTable as TableLike>::iter(table).count(),
         _ => 0,
     }
+}
+
+fn compact_toml_scalar(raw: &str) -> String {
+    if !raw.contains(['\r', '\n']) {
+        return truncated_chars(raw, DISPLAY_CHARS);
+    }
+    let compact = raw.replace("\r\n", " ⏎ ").replace(['\r', '\n'], " ⏎ ");
+    truncated_chars(&compact, DISPLAY_CHARS)
+}
+
+fn compact_toml_array(raw: &str) -> String {
+    if !raw.contains(['\r', '\n']) {
+        return truncated_chars(raw, DISPLAY_CHARS);
+    }
+    let mut out = String::with_capacity(raw.len().min(DISPLAY_CHARS * 4));
+    let mut prev_space = false;
+    for ch in raw.chars() {
+        let ch = if matches!(ch, '\r' | '\n' | '\t') {
+            ' '
+        } else {
+            ch
+        };
+        if ch == ' ' {
+            if !prev_space && !out.is_empty() && !out.ends_with('[') {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            if ch == ']' && out.ends_with(' ') {
+                out.pop();
+            }
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    truncated_chars(out.trim_end(), DISPLAY_CHARS)
 }
 
 fn compute_layout(projection: &mut TomlProjection, text: &str) {
@@ -1140,5 +1177,18 @@ mod tests {
         assert!(projection.error().is_some());
         assert!(projection.root().is_none());
         assert_eq!(projection.node_count(), 0);
+    }
+
+    #[test]
+    fn multiline_arrays_do_not_embed_newlines_in_row_values() {
+        let text = "[project]\nname = \"intenter-api\"\ndependencies = [\n  \"fastapi[all]>=0.136.1\",\n  \"pydantic>=2.13.4\",\n]\n";
+        let projection = project(text);
+        let deps = node(&projection, "$.project.dependencies");
+        assert_eq!(deps.kind, TomlNodeKind::Value(TomlValueKind::Array));
+        assert!(
+            !deps.value.contains(['\n', '\r']),
+            "single-line tree preview must not contain newlines: {:?}",
+            deps.value
+        );
     }
 }

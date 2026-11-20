@@ -491,7 +491,7 @@ fn read(file: &Found) -> Option<PastSession> {
 
 /// Read the title of one exact native session file, without relying on the
 /// bounded recent-history list. The session operation runs on its owning Host.
-pub(crate) fn session_title(agent: CLIAgent, path: &Path) -> Option<String> {
+pub fn session_title(agent: CLIAgent, path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     let updated = metadata.modified().unwrap_or(UNIX_EPOCH);
     match agent {

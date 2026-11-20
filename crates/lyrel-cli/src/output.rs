@@ -573,6 +573,7 @@ mod tests {
                 cwd: None,
                 agent: None,
                 status: None,
+                session_title: None,
                 live: true,
                 panes: 1,
             };
@@ -587,7 +588,7 @@ mod tests {
             tab_label(&view(
                 &|v| v.agent = Some(lyrel_protocol::core::cli_agent::CLIAgent::OhMyPi)
             )),
-            "Oh My Pi"
+            "OMP"
         );
         // What the pane's own terminal says it is doing beats naming the agent
         // running it — every tab of a workspace would otherwise read alike.

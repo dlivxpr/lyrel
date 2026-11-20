@@ -2645,4 +2645,164 @@ mod tests {
             Some(ws(80, 2))
         );
     }
+
+    #[test]
+    fn real_conpty_pip_shrink_and_restore_reflows_wrapped_lines() {
+        let _ = crate::daemon::conpty::ensure_prepared();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let pane = DaemonPane::spawn(
+            1,
+            PaneSpawnSpec {
+                cwd: None,
+                size: ws(120, 35),
+                shell: Some(ShellSpec {
+                    program: if cfg!(windows) {
+                        "pwsh.exe".into()
+                    } else {
+                        "sh".into()
+                    },
+                    args: if cfg!(windows) {
+                        vec!["-NoLogo".into(), "-NoProfile".into()]
+                    } else {
+                        vec![]
+                    },
+                    args_are_lyrel_defaults: false,
+                }),
+            },
+            None,
+            None,
+            None,
+            false,
+            || {},
+        )
+        .expect("spawn real conpty pane");
+        pane.attach(tx);
+        let mut graphics = crate::core::graphics_state::GraphicsState::with_resize_mode(
+            ws(120, 35),
+            if cfg!(windows) {
+                crate::core::terminal_resize::ResizeMode::LocalConpty
+            } else {
+                crate::core::terminal_resize::ResizeMode::Raw
+            },
+        );
+        std::thread::sleep(Duration::from_millis(800));
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                DaemonMsg::Size(sz) => {
+                    graphics.resize(sz);
+                }
+                DaemonMsg::Output(bytes) => {
+                    graphics.output(&bytes);
+                }
+                _ => {}
+            }
+        }
+        let before_pip = format!("BEFORE_PIP_{}\r\n", "B".repeat(75));
+        pane.write_input(format!("Write-Output '{}'\r\n", before_pip.trim()).as_bytes());
+        let deadline_pre = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen_pre = Vec::new();
+        while std::time::Instant::now() < deadline_pre {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(DaemonMsg::Size(sz)) => {
+                    graphics.resize(sz);
+                }
+                Ok(DaemonMsg::Output(bytes)) => {
+                    graphics.output(&bytes);
+                    seen_pre.extend_from_slice(&bytes);
+                    if seen_pre.windows(10).any(|w| w == b"BBBBBBBBBB") {
+                        std::thread::sleep(Duration::from_millis(300));
+                        while let Ok(msg) = rx.try_recv() {
+                            match msg {
+                                DaemonMsg::Size(sz) => {
+                                    graphics.resize(sz);
+                                }
+                                DaemonMsg::Output(more) => {
+                                    graphics.output(&more);
+                                }
+                                _ => {}
+                            }
+                        }
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        pane.resize(ws(35, 15));
+        std::thread::sleep(Duration::from_millis(300));
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                DaemonMsg::Size(sz) => {
+                    graphics.resize(sz);
+                }
+                DaemonMsg::Output(bytes) => {
+                    graphics.output(&bytes);
+                }
+                _ => {}
+            }
+        }
+        let cmd = "1..18 | ForEach-Object { \"LINE_${_}: \" + ('X' * 65) }\r\n";
+        pane.write_input(cmd.as_bytes());
+        let mut seen_during_pip = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(DaemonMsg::Size(sz)) => {
+                    graphics.resize(sz);
+                }
+                Ok(DaemonMsg::Output(bytes)) => {
+                    graphics.output(&bytes);
+                    seen_during_pip.extend_from_slice(&bytes);
+                    if seen_during_pip.windows(7).any(|w| w == b"LINE_18") {
+                        std::thread::sleep(Duration::from_millis(400));
+                        while let Ok(msg) = rx.recv_timeout(Duration::from_millis(50)) {
+                            match msg {
+                                DaemonMsg::Size(sz) => {
+                                    graphics.resize(sz);
+                                }
+                                DaemonMsg::Output(more) => {
+                                    graphics.output(&more);
+                                    seen_during_pip.extend_from_slice(&more);
+                                }
+                                _ => {}
+                            }
+                        }
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        let mut seen_after_restore = Vec::new();
+        pane.resize(ws(120, 35));
+        std::thread::sleep(Duration::from_millis(600));
+        while let Ok(msg) = rx.recv_timeout(Duration::from_millis(50)) {
+            match msg {
+                DaemonMsg::Size(sz) => {
+                    graphics.resize(sz);
+                }
+                DaemonMsg::Output(bytes) => {
+                    graphics.output(&bytes);
+                    seen_after_restore.extend_from_slice(&bytes);
+                }
+                _ => {}
+            }
+        }
+        pane.kill();
+        let rows = graphics.screen_rows();
+        let expected_before = format!("BEFORE_PIP_{}", "B".repeat(75));
+        let expected = format!("LINE_18: {}", "X".repeat(65));
+        assert!(
+            rows.iter().any(|r| r.contains(&expected_before)),
+            "real ConPTY line printed before PiP must reflow back onto one line after 120x35 -> 35x15 -> 120x35! rows={rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.contains(&expected)),
+            "real ConPTY scrolled output after resize 35x15 -> 120x35 must reflow onto one line! seen_after_restore={:?}, rows={rows:?}",
+            String::from_utf8_lossy(&seen_after_restore)
+        );
+        let _ = (seen_during_pip,);
+    }
 }

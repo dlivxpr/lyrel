@@ -80,13 +80,22 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            let status = window.find(("sidebar-progress-status", 0usize));
-            assert!(status.visible());
-            let expected = percent.map_or_else(
-                || t(key).to_string(),
-                |percent| t_fmt(key, &[("percent", &percent.to_string())]),
-            );
-            assert_eq!(status.label(), Some(expected.as_str()));
+            if kind == ProgressKind::Indeterminate {
+                assert!(
+                    window
+                        .try_find(("sidebar-progress-status", 0usize))
+                        .is_none(),
+                    "indeterminate progress must not render a redundant second line in the sidebar"
+                );
+            } else {
+                let status = window.find(("sidebar-progress-status", 0usize));
+                assert!(status.visible());
+                let expected = percent.map_or_else(
+                    || t(key).to_string(),
+                    |percent| t_fmt(key, &[("percent", &percent.to_string())]),
+                );
+                assert_eq!(status.label(), Some(expected.as_str()));
+            }
         });
         assert!(!view.read_with(cx, |view, _| view.agent_result_unread()));
     }
@@ -945,4 +954,181 @@ fn progress_consumer_split_tab_restores_after_sleep_reconstruction(cx: &mut Test
         .expect("the remaining task is exact");
     assert_eq!(kind, ProgressKind::Running);
     assert_eq!(label.as_ref(), expected.as_str());
+}
+
+#[gpui_kit::test]
+fn pip_restore_resizes_pty_and_reflows_terminal_to_full_pane_width(cx: &mut TestAppContext) {
+    use crate::ui::{
+        app::LyrelApp,
+        pane::{Pane, PaneSlot},
+        tab::Tab,
+    };
+    use lyrel_ui_base::actions::{RestorePanePip, TogglePanePip};
+    use gpui_kit::Focusable as _;
+    use gpui_kit::test::TestWindowExt as _;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.cursor_blink = false;
+        cx.set_global(cfg);
+    });
+    let stream = daemon.stream(pane);
+    let view = app.update_in(&mut vcx, |app, window, cx| {
+        let terminal = RemoteTerminal::from_stream_with(
+            stream,
+            TermSize::new(80, 24),
+            Vec::new(),
+            if cfg!(windows) {
+                PtySource::LocalConpty
+            } else {
+                PtySource::Raw
+            },
+        )
+        .unwrap();
+        let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+        LyrelApp::watch_terminal(&view, window, cx);
+        app.tabs.clear();
+        app.tabs
+            .push(Tab::new(Pane::leaf(PaneSlot::Ready(view.clone()))));
+        app.tabs.select(0);
+        window.focus(&view.read(cx).focus_handle(cx), cx);
+        cx.notify();
+        view
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(5),
+        |cx| view.read_with(cx, |view, _| view.terminal.term.lock().columns() >= 70),
+        |cx| {
+            format!(
+                "initial cols={}",
+                view.read_with(cx, |v, _| v.terminal.term.lock().columns())
+            )
+        },
+    );
+    let initial_cols = view.read_with(&vcx, |view, _| view.terminal.term.lock().columns());
+
+    vcx.dispatch_action(TogglePanePip);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(5),
+        |cx| {
+            view.read_with(cx, |view, _| {
+                let cols = view.terminal.term.lock().columns();
+                cols < initial_cols && cols <= initial_cols / 2
+            })
+        },
+        |cx| {
+            let pip_active = app.read_with(cx, |app, cx| app.tabs[0].pip_slot(cx).is_some());
+            let (term_cols, size_cols, geom_cols) = view.read_with(cx, |v, _| {
+                (
+                    v.terminal.term.lock().columns(),
+                    v.terminal.size().cols,
+                    v.cell_geom.map(|g| g.cols),
+                )
+            });
+            format!(
+                "pip shrink timeout: initial={initial_cols}, pip_active={pip_active}, term_cols={term_cols}, size_cols={size_cols}, geom_cols={geom_cols:?}"
+            )
+        },
+    );
+    let pip_cols = view.read_with(&vcx, |view, _| view.terminal.term.lock().columns());
+
+    // Emit a line wider than `pip_cols` (but narrower than `initial_cols`) while in PiP.
+    // Enable DECAWM (`\x1b[?7h`) just like an interactive shell/TUI so ConPTY wraps at EOL.
+    let target_len = pip_cols + 30;
+    let line = format!("\x1b[?7h\x1b[2J\x1b[1;1H{}\r\n", "A".repeat(target_len));
+    let req = format!("TITLE 27901 0 {} 0\n", hex(line.as_bytes()));
+    view.read_with(&vcx, |view, _| view.terminal.write(req.into_bytes()));
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(5),
+        |cx| view.read_with(cx, |view, _| view.scrollback_text().contains("TITLE_DONE_27901")),
+        |_| "TITLE_DONE_27901 did not arrive".into(),
+    );
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+
+    let dump_grid = |view: &Entity<TerminalView>, cx: &mut gpui_kit::VisualTestContext| -> Vec<(i32, String, bool)> {
+        use rio_vt::crosswords::grid::Dimensions as _;
+        view.read_with(cx, |view, _| {
+            let term = view.terminal.term.lock();
+            let cols = term.columns();
+            let top = term.topmost_line().0;
+            let bot = term.bottommost_line().0;
+            (top..=bot)
+                .filter_map(|r| {
+                    let row = &term.grid[rio_vt::crosswords::pos::Line(r)];
+                    let s: String = (0..cols)
+                        .map(|c| row[rio_vt::crosswords::pos::Column(c)].c())
+                        .collect::<String>()
+                        .replace('\0', " ")
+                        .trim_end()
+                        .to_string();
+                    let wrapped = cols > 0
+                        && row[rio_vt::crosswords::pos::Column(cols - 1)]
+                            .contains_cell_flag(rio_vt::crosswords::square::CellFlags::WRAPLINE);
+                    (!s.is_empty() || wrapped).then_some((r, s, wrapped))
+                })
+                .collect()
+        })
+    };
+    let before_rows = dump_grid(&view, &mut vcx);
+
+    // Restore from PiP back to full pane width.
+    vcx.dispatch_action(RestorePanePip);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(5),
+        |cx| {
+            view.read_with(cx, |view, _| {
+                view.terminal.term.lock().columns() >= initial_cols.saturating_sub(2)
+            })
+        },
+        |cx| {
+            let (term_cols, size_cols, geom_cols) = view.read_with(cx, |v, _| {
+                (
+                    v.terminal.term.lock().columns(),
+                    v.terminal.size().cols,
+                    v.cell_geom.map(|g| g.cols),
+                )
+            });
+            format!(
+                "restore timeout: initial={initial_cols}, pip={pip_cols}, term_cols={term_cols}, size_cols={size_cols}, geom_cols={geom_cols:?}"
+            )
+        },
+    );
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+
+    let after_rows = dump_grid(&view, &mut vcx);
+    let (restored_term_cols, restored_geom_cols) = view.read_with(&vcx, |view, _| {
+        (view.terminal.term.lock().columns(), view.cell_geom.map(|g| g.cols))
+    });
+    assert!(
+        restored_term_cols >= initial_cols.saturating_sub(2)
+            && restored_geom_cols == Some(restored_term_cols),
+        "restored pane must fill full width: initial={initial_cols}, pip={pip_cols}, term_cols={restored_term_cols}, geom_cols={restored_geom_cols:?}, before={before_rows:?}, after={after_rows:?}"
+    );
+    let expected_full = "A".repeat(target_len);
+    assert!(
+        after_rows.iter().any(|(_, r, _)| r.contains(&expected_full)),
+        "line wrapped during PiP must unwrap to full width after restore (pip_cols={pip_cols}, restored_term_cols={restored_term_cols}), before={before_rows:?}, after={after_rows:?}"
+    );
 }

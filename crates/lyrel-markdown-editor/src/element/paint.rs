@@ -26,6 +26,44 @@ pub(crate) fn paint_editor(
         cx,
     );
 
+    let style = window.text_style();
+    let font = style.font();
+    let text_color = style.color;
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let base_lh = font_size * LINE_HEIGHT_RATIO;
+    let viewport_h = window.viewport_size().height;
+
+    // Pass 1: paint fenced-code cards, table shading, and inline-code/highlight
+    // run backgrounds BEFORE search/selection quads so selections stay visible
+    // over code blocks and highlighted text.
+    for (i, ((line, top), lh)) in prepaint
+        .wrapped
+        .iter()
+        .zip(prepaint.line_tops.iter())
+        .zip(prepaint.line_heights.iter())
+        .enumerate()
+    {
+        let origin = point(bounds.origin.x, bounds.origin.y + *top);
+        let advance = *lh * prepaint.wrap_rows.get(i).copied().unwrap_or(1) as f32;
+        if origin.y + advance + px(64.) < px(0.) || origin.y - px(64.) > viewport_h {
+            continue;
+        }
+        let rtl = prepaint
+            .rtl
+            .get(i)
+            .and_then(Option::as_ref)
+            .filter(|r| r.base_rtl);
+        let shift = rtl
+            .and_then(|r| r.shifts.first().copied())
+            .unwrap_or(px(0.));
+        paint_code_card_bg(i, prepaint, origin, lh, window);
+        if let Some(t) = prepaint.tables.get(i).and_then(Option::as_ref) {
+            paint_table_row_cell_bg(i, t, origin, bounds, lh, &el.editor, window, cx);
+        } else if prepaint.widgets.get(i).and_then(Option::as_ref).is_none() {
+            paint_text_line_bg(i, line, rtl, shift, origin, lh, prepaint, window, cx);
+        }
+    }
+
     for quad in prepaint.search.drain(..) {
         window.paint_quad(quad);
     }
@@ -36,11 +74,6 @@ pub(crate) fn paint_editor(
         window.paint_quad(underline);
     }
 
-    let style = window.text_style();
-    let font = style.font();
-    let text_color = style.color;
-    let font_size = style.font_size.to_pixels(window.rem_size());
-    let base_lh = font_size * LINE_HEIGHT_RATIO;
     // Inline-image resize: the accent color for the corner grips, and the
     // active drag (if any) so the dragged image paints at its live width.
     let grip_color = el
@@ -79,7 +112,6 @@ pub(crate) fn paint_editor(
     // active ancestor level, so a faint vertical line can drop from each down
     // through its descendants. Popped on dedent, reset off the list.
     let mut outline: Vec<Pixels> = Vec::new();
-    let viewport_h = window.viewport_size().height;
     for (i, ((line, top), lh)) in prepaint
         .wrapped
         .iter()
@@ -122,7 +154,6 @@ pub(crate) fn paint_editor(
         if origin.y + advance + px(64.) < px(0.) || origin.y - px(64.) > viewport_h {
             continue;
         }
-        paint_code_card_bg(i, prepaint, origin, lh, window);
         paint_quote_bar(i, prepaint, rtl, content_w, origin, lh, window);
         paint_heading_chevron(
             i,
@@ -777,6 +808,29 @@ fn paint_checkbox(
 /// (one box around all its rows, matching the reading view), under its own
 /// full-height mask.
 #[allow(clippy::too_many_arguments)]
+fn paint_table_row_cell_bg(
+    i: usize,
+    t: &TableRow,
+    origin: Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    lh: &Pixels,
+    entity: &Entity<EditorState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let avail = bounds.size.width - px(TABLE_GUTTER);
+    let (tleft, _) = table_visible_band(origin.x, bounds.size.width, t.rtl);
+    let content_left = entity.read(cx).table_left(t, i, &bounds);
+    let g = px(TABLE_GUTTER);
+    let mask = gpui_kit::ContentMask {
+        bounds: Bounds::new(point(tleft, origin.y - g), size(avail, *lh + g * 2.)),
+    };
+    window.with_content_mask(Some(mask), |window| {
+        paint_table_row_bg(t, point(content_left, origin.y), *lh, window);
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_table_row_cell(
     i: usize,
     t: &TableRow,
@@ -1038,6 +1092,48 @@ fn paint_mermaid_status(
 /// click-to-edit (the one being edited shows the seated editor instead of
 /// its raster).
 #[allow(clippy::too_many_arguments)]
+fn paint_text_line_bg(
+    i: usize,
+    line: &WrappedLine,
+    rtl: Option<&RtlRow>,
+    shift: Pixels,
+    origin: Point<Pixels>,
+    lh: &Pixels,
+    prepaint: &PrepaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let inset = row_inset(
+        prepaint.backgrounds.get(i).copied().flatten(),
+        prepaint.marks.get(i).copied().flatten(),
+    );
+    let text_origin = point(origin.x + inset + shift, origin.y);
+    if let Some(r) = rtl {
+        for (k, row) in r.rows.iter().enumerate() {
+            crate::bidi::paragraph::paint_row_background(
+                row,
+                point(
+                    origin.x + inset + r.shifts.get(k).copied().unwrap_or(px(0.)),
+                    origin.y + *lh * k,
+                ),
+                *lh,
+                window,
+                cx,
+            );
+        }
+    } else {
+        let _ = line.paint_background(
+            text_origin,
+            *lh,
+            gpui_kit::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_text_line(
     i: usize,
     line: &WrappedLine,
@@ -1062,10 +1158,9 @@ fn paint_text_line(
         // Our own rows, painted in reading order — gpui's wrapping
         // is not used for this line at all (#66). Each row is
         // right-aligned on its own, so a short last row sits
-        // further right than a full one. `paint_row` draws the run
-        // backgrounds (the inline-code tint) too.
+        // further right than a full one. Backgrounds were painted in Pass 1.
         for (k, row) in r.rows.iter().enumerate() {
-            crate::bidi::paragraph::paint_row(
+            crate::bidi::paragraph::paint_row_text(
                 row,
                 point(
                     origin.x + inset + r.shifts.get(k).copied().unwrap_or(px(0.)),
@@ -1077,16 +1172,6 @@ fn paint_text_line(
             );
         }
     } else {
-        // Run backgrounds (the inline-code highlight) paint separately from
-        // the glyphs — `paint` alone wouldn't show them.
-        let _ = line.paint_background(
-            text_origin,
-            *lh,
-            gpui_kit::TextAlign::Left,
-            None,
-            window,
-            cx,
-        );
         let _ = line.paint(
             text_origin,
             *lh,

@@ -170,6 +170,7 @@ fn a_pane_killed_with_its_agent_keeps_the_facts_a_resume_needs() {
                     launch_argv: Some(vec!["omp".to_string()]),
                     session_scope: None,
                     status: None,
+                    session_title: None,
                 }),
                 shell: None,
             },
@@ -635,4 +636,75 @@ fn a_hook_report_counts_only_from_inside_the_pane() {
     let status = status.expect("the report reached the pane's subscribers");
     assert_eq!(status.status, crate::core::cli_agent::AgentStatus::Working);
     assert_eq!(status.session_id.as_deref(), Some("s-1"));
+}
+
+#[test]
+fn omp_session_title_updates_from_session_file_and_clears_stale_osc_on_resume() {
+    use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.jsonl");
+    let second = dir.path().join("second.jsonl");
+    std::fs::write(
+        &first,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"session","id":"s1","cwd":"/repo"}),
+            serde_json::json!({"type":"title","v":1,"title":"UPG: Upgrade gpui-kit","source":"auto"})
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &second,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"session","id":"s2","cwd":"/repo"}),
+            serde_json::json!({"type":"session_info","name":"Resumed session B"})
+        ),
+    )
+    .unwrap();
+    let mut state = test_state(false);
+    state.facts.agent = Some(CLIAgent::OhMyPi);
+    state.facts.osc_title = Some("stale-before-resume".into());
+    let ev1 = parse_agent_event_body(
+        serde_json::json!({
+            "agent": "omp",
+            "event": "session-start",
+            "session_id": "s1",
+            "session_scope": { "session_file": first }
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![ev1], None, emit));
+    assert_eq!(
+        state
+            .facts
+            .agent_session
+            .as_ref()
+            .and_then(|s| s.readout.session_title.as_deref()),
+        Some("UPG: Upgrade gpui-kit")
+    );
+    state.facts.osc_title = Some("Session 1 OSC".into());
+    let ev2 = parse_agent_event_body(
+        serde_json::json!({
+            "agent": "omp",
+            "event": "session-start",
+            "session_id": "s2",
+            "session_scope": { "session_file": second }
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    state.with_facts(|facts, emit| apply_agent_signals(facts, vec![ev2], None, emit));
+    assert_eq!(state.facts.osc_title, None);
+    assert_eq!(
+        state
+            .facts
+            .agent_session
+            .as_ref()
+            .and_then(|s| s.readout.session_title.as_deref()),
+        Some("Resumed session B")
+    );
 }

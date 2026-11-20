@@ -447,6 +447,7 @@ impl SettingsWindow {
                             .size(px(20.))
                             .flex_shrink_0()
                             .rounded_full()
+                            .overflow_hidden()
                             .bg(rgb(mark.accent_rgb()))
                             .when(presets::needs_edge(mark.accent_rgb(), tk.page), |d| {
                                 d.shadow(vec![kit::ring(tk.k15, 0.5, false)])
@@ -454,11 +455,18 @@ impl SettingsWindow {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(
-                                gpui_kit::img(mark.icon_path())
-                                    .size(px(14.))
-                                    .object_fit(gpui_kit::ObjectFit::Contain),
-                            ),
+                            .child(gpui_kit::img(mark.icon_path()).size(px(20.)).object_fit(
+                                if matches!(
+                                    mark,
+                                    crate::core::cli_agent::CLIAgent::Kimi
+                                        | crate::core::cli_agent::CLIAgent::Hermes
+                                        | crate::core::cli_agent::CLIAgent::OpenCode
+                                ) {
+                                    gpui_kit::ObjectFit::Cover
+                                } else {
+                                    gpui_kit::ObjectFit::Contain
+                                },
+                            )),
                     )
                     .child(
                         v_flex()

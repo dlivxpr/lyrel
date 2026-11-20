@@ -1,6 +1,7 @@
 <!-- Pi brand mark, from https://pi.dev/logo-auto.svg (MIT).
-     Preserved official geometry and colors for native image rendering. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
+     Rasterized at 64x64 with a dark inner disc so all three official colors stay crisp on the accent ring. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="64" height="64">
+  <circle cx="400" cy="400" r="360" fill="#131010"/>
   <path fill="#F09082" d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
   <path fill="#4D9ABF" d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z"/>
   <path fill="#F1BE58" d="M517.36 400H634.72V634.72H517.36Z"/>

@@ -2041,6 +2041,7 @@ esac
                 launch_argv: None,
                 session_scope: Some(scope.clone()),
                 status: None,
+                session_title: None,
             };
             let serialized = serde_json::to_string(&facts).unwrap();
             assert!(!serialized.contains("must-not-persist"));

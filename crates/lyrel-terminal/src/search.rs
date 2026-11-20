@@ -1168,6 +1168,29 @@ pub fn link_at(
     probe: &mut dyn FnMut(&Path, bool) -> Probe,
 ) -> Option<LinkMatch> {
     if let Some((start, end, url)) = url_span_at(text, col) {
+        if url
+            .get(..7)
+            .is_some_and(|s| s.eq_ignore_ascii_case("file://"))
+        {
+            if !include_files {
+                return None;
+            }
+            if let Some((path, line, column)) = file_target_from_url(&url, roots.style)
+                && let Probe::Hit { is_dir } = probe(&path, line.is_some())
+            {
+                return Some(LinkMatch {
+                    start,
+                    end,
+                    target: LinkTarget::File {
+                        path,
+                        line: if is_dir { None } else { line },
+                        column: if is_dir { None } else { column },
+                        is_dir,
+                    },
+                });
+            }
+            return None;
+        }
         return Some(LinkMatch {
             start,
             end,
@@ -1623,6 +1646,145 @@ pub fn url_span_at(text: &str, col: usize) -> Option<(usize, usize, String)> {
     } else {
         None
     }
+}
+
+/// Converts a `file://` URI (from an OSC 8 hyperlink or plain text URL) into a
+/// host-appropriate filesystem path plus optional 1-based line and column.
+pub fn file_target_from_url(
+    uri: &str,
+    style: PathStyle,
+) -> Option<(PathBuf, Option<u32>, Option<u32>)> {
+    let rest = uri
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("file://"))
+        .map(|_| &uri[7..])?;
+    let (without_frag, fragment) = match rest.split_once('#') {
+        Some((before, frag)) => (before, Some(frag)),
+        None => (rest, None),
+    };
+    let without_query = without_frag.split('?').next().unwrap_or(without_frag);
+    let (host, raw_path) = if let Some(abs) = without_query.strip_prefix('/') {
+        ("", abs)
+    } else if style == PathStyle::Windows
+        && without_query.len() >= 3
+        && without_query.as_bytes()[0].is_ascii_alphabetic()
+        && without_query.as_bytes()[1] == b':'
+        && (without_query.as_bytes()[2] == b'/' || without_query.as_bytes()[2] == b'\\')
+    {
+        ("", without_query)
+    } else if let Some((h, abs)) = without_query.split_once('/') {
+        (h, abs)
+    } else {
+        return None;
+    };
+    let decoded_path = percent_decode(raw_path);
+    let mut line_col_from_frag = fragment.and_then(parse_fragment_line_col);
+
+    let (path_str, line_from_path, col_from_path) = if line_col_from_frag.is_none() {
+        split_trailing_line_col(&decoded_path)
+    } else {
+        (decoded_path.as_str(), None, None)
+    };
+    if line_col_from_frag.is_none() && line_from_path.is_some() {
+        line_col_from_frag = line_from_path.map(|l| (l, col_from_path));
+    }
+
+    let local_host = host.is_empty() || host.eq_ignore_ascii_case("localhost");
+    let path = match style {
+        PathStyle::Windows => {
+            if !local_host {
+                let unc = format!(r"\\{}\{}", host, path_str.replace('/', "\\"));
+                PathBuf::from(unc)
+            } else if path_str.as_bytes().get(1) == Some(&b':')
+                && path_str
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphabetic)
+            {
+                PathBuf::from(path_str.replace('/', "\\"))
+            } else {
+                PathBuf::from(format!("/{}", path_str))
+            }
+        }
+        PathStyle::Posix => {
+            if !local_host {
+                return None;
+            }
+            PathBuf::from(format!("/{path_str}"))
+        }
+    };
+    let (line, column) = match line_col_from_frag {
+        Some((l, c)) => (Some(l), c),
+        None => (None, None),
+    };
+    Some((path, line, column))
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn parse_fragment_line_col(frag: &str) -> Option<(u32, Option<u32>)> {
+    let frag = frag
+        .strip_prefix('L')
+        .or_else(|| frag.strip_prefix('l'))
+        .unwrap_or(frag);
+    let head = frag.split('-').next().unwrap_or(frag);
+    if let Some((l, c)) = head.split_once(['C', 'c', ':'])
+        && let (Ok(line), Ok(col)) = (l.parse::<u32>(), c.parse::<u32>())
+        && line > 0
+        && col > 0
+    {
+        return Some((line, Some(col)));
+    }
+    head.parse::<u32>()
+        .ok()
+        .filter(|&line| line > 0)
+        .map(|line| (line, None))
+}
+
+fn split_trailing_line_col(path: &str) -> (&str, Option<u32>, Option<u32>) {
+    if let Some((prefix, last)) = path.rsplit_once(':')
+        && let Ok(n) = last.parse::<u32>()
+        && n > 0
+    {
+        if let Some((p2, mid)) = prefix.rsplit_once(':')
+            && !p2.is_empty()
+            && let Ok(line) = mid.parse::<u32>()
+            && line > 0
+        {
+            return (p2, Some(line), Some(n));
+        }
+        if !prefix.is_empty() && !(prefix.len() == 1 && prefix.as_bytes()[0].is_ascii_alphabetic())
+        {
+            return (prefix, Some(n), None);
+        }
+    }
+    (path, None, None)
 }
 
 fn non_ws_token_at(text: &str, col: usize) -> Option<(usize, usize, String)> {
@@ -3451,5 +3613,17 @@ mod tests {
             let spaced: Vec<_> = asked.iter().filter(|p| p.contains(' ')).collect();
             assert_eq!(spaced.len(), 1, "{needle:?} asked {asked:?}");
         }
+    }
+
+    #[test]
+    fn file_target_from_url_handles_double_slash_windows_drive_and_fragments() {
+        assert_eq!(
+            file_target_from_url("file://C:/Users/dlivx/a.rs#L12C4", PathStyle::Windows),
+            Some((PathBuf::from(r"C:\Users\dlivx\a.rs"), Some(12), Some(4)))
+        );
+        assert_eq!(
+            file_target_from_url("file:///C:/Users/dlivx/b%20c.rs:9:2", PathStyle::Windows),
+            Some((PathBuf::from(r"C:\Users\dlivx\b c.rs"), Some(9), Some(2)))
+        );
     }
 }

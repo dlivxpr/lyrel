@@ -4071,6 +4071,7 @@ mod tests {
             cwd: Some("/Users/x/repo/lyrel".to_string()),
             agent: Some(crate::core::cli_agent::CLIAgent::OhMyPi),
             status: None,
+            session_title: None,
             live: true,
             panes: 1,
         };

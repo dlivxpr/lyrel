@@ -256,6 +256,7 @@ impl LyrelApp {
             window,
             |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
                 app.save_session(cx);
+                cx.notify();
             },
         )
         .detach();

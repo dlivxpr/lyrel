@@ -293,7 +293,7 @@ impl HookAgent {
             HookAgent::Hermes => "Hermes",
             HookAgent::OpenCode => "OpenCode",
             HookAgent::Pi => "Pi",
-            HookAgent::OhMyPi => "Oh My Pi",
+            HookAgent::OhMyPi => "OMP",
             HookAgent::Kimi => "Kimi Code",
         }
     }

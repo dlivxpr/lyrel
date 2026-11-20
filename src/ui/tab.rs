@@ -620,6 +620,7 @@ impl Tab {
                     cwd: None,
                     agent: None,
                     status: None,
+                    session_title: None,
                     live: false,
                     panes: 0,
                 },
@@ -627,6 +628,7 @@ impl Tab {
             );
         };
         let leaf = leaf.read(cx);
+        let session = leaf.agent_session();
         let view = lyrel_core::core::tab_view::TabView {
             id: self.id(),
             name,
@@ -640,7 +642,8 @@ impl Tab {
             osc_title: leaf.stated_title().map(str::to_string),
             cwd: leaf.cwd().map(|p| p.display().to_string()),
             agent: leaf.agent(),
-            status: leaf.agent_session().map(|s| s.status),
+            status: session.as_ref().map(|s| s.status),
+            session_title: session.and_then(|s| s.readout.session_title),
             live: !leaf.terminal.exited,
             panes: self.pane.terminals().len(),
         };
@@ -1138,6 +1141,7 @@ fn view_of_layout(
         cwd,
         agent,
         status: None,
+        session_title: None,
         live: false,
         panes: all.len(),
     }

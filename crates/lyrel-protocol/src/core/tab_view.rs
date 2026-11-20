@@ -25,6 +25,7 @@ pub struct TabView {
     pub cwd: Option<String>,
     pub agent: Option<CLIAgent>,
     pub status: Option<AgentStatus>,
+    pub session_title: Option<String>,
     pub live: bool,
     pub panes: usize,
 }
@@ -184,6 +185,65 @@ pub fn is_shell_program_title(title: &str) -> bool {
     )
 }
 
+pub fn is_agent_placeholder_title(agent: CLIAgent, title: &str) -> bool {
+    let trimmed = title.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower == agent.slug().to_ascii_lowercase()
+        || lower == agent.display_name().to_ascii_lowercase()
+        || matches!(
+            lower.as_str(),
+            "omp"
+                | "oh my pi"
+                | "oh-my-pi"
+                | "π"
+                | "pi"
+                | "kimi"
+                | "kimi code"
+                | "opencode"
+                | "hermes"
+        )
+    {
+        return true;
+    }
+    if trimmed.contains(['/', '\\']) || lower.ends_with(".exe") || lower.ends_with(".cmd") {
+        let name = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+        let name = name
+            .strip_suffix(".exe")
+            .or_else(|| name.strip_suffix(".cmd"))
+            .unwrap_or(name);
+        return matches!(
+            name,
+            "omp"
+                | "pi"
+                | "kimi"
+                | "opencode"
+                | "opencode2"
+                | "hermes"
+                | "node"
+                | "bun"
+                | "python"
+                | "python3"
+        );
+    }
+    false
+}
+
+fn is_agent_dir_fallback(agent: CLIAgent, title: &str) -> bool {
+    let trimmed = title.trim();
+    match agent {
+        CLIAgent::OhMyPi => {
+            trimmed.starts_with("π - ")
+                || trimmed
+                    .get(..6)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("omp - "))
+        }
+        _ => false,
+    }
+}
+
 impl TabView {
     pub fn label(&self) -> TabLabel<'_> {
         if let Some(name) = self
@@ -194,12 +254,26 @@ impl TabView {
         {
             return TabLabel::Named(name);
         }
-        if let Some(agent) = self.agent
-            && self
-                .osc_title
-                .as_deref()
-                .is_some_and(is_shell_program_title)
-        {
+        let session_title = self
+            .session_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        if let Some(agent) = self.agent {
+            if let Some(raw_osc) = self.osc_title.as_deref()
+                && !is_shell_program_title(raw_osc)
+            {
+                let cleaned = strip_status_mark(raw_osc);
+                if !cleaned.is_empty()
+                    && !is_agent_placeholder_title(agent, cleaned)
+                    && !(session_title.is_some() && is_agent_dir_fallback(agent, cleaned))
+                {
+                    return TabLabel::Osc(cleaned);
+                }
+            }
+            if let Some(title) = session_title {
+                return TabLabel::Osc(title);
+            }
             return TabLabel::Agent(agent);
         }
         if let Some(title) = self
@@ -209,9 +283,6 @@ impl TabView {
             .filter(|t| !t.is_empty())
         {
             return TabLabel::Osc(title);
-        }
-        if let Some(agent) = self.agent {
-            return TabLabel::Agent(agent);
         }
         if let Some(cwd) = self.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             return TabLabel::Cwd(cwd);
@@ -251,6 +322,7 @@ pub fn tab_views_of(ws: &Workspace, panes: &[PaneRecord]) -> Vec<TabView> {
                 cwd: head.and_then(|p| p.cwd.clone()),
                 agent: facts.map(|f| f.agent),
                 status: facts.and_then(|f| f.status),
+                session_title: facts.and_then(|f| f.session_title.clone()),
                 live: records.iter().any(|p| p.live),
                 panes: ids.len(),
             }
@@ -337,6 +409,7 @@ mod tests {
             cwd: None,
             agent: None,
             status: None,
+            session_title: None,
             live: true,
             panes: 1,
         };
@@ -362,6 +435,7 @@ mod tests {
             cwd: None,
             agent: None,
             status: None,
+            session_title: None,
             live: true,
             panes: 1,
         }
@@ -474,6 +548,7 @@ mod tests {
                     launch_argv: None,
                     session_scope: None,
                     status: None,
+                    session_title: None,
                 }),
                 ..PaneRecord::new(2)
             },
@@ -519,5 +594,43 @@ mod tests {
         );
         assert_eq!(strip_host_prefix("C:/src"), "C:/src");
         assert_eq!(strip_host_prefix("vim — main.rs"), "vim — main.rs");
+    }
+
+    #[test]
+    fn default_name_for_oh_my_pi_is_omp_and_placeholder_osc_never_hides_session_title() {
+        assert_eq!(CLIAgent::OhMyPi.display_name(), "OMP");
+        let reverted = TabView {
+            osc_title: Some("omp".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            cwd: Some("/work".into()),
+            ..view()
+        };
+        assert_eq!(
+            reverted.label(),
+            TabLabel::Agent(CLIAgent::OhMyPi),
+            "placeholder 'omp' OSC title must not mask agent default label"
+        );
+        let with_session = TabView {
+            osc_title: Some("omp".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            session_title: Some("UPG: Upgrade gpui-kit".into()),
+            ..view()
+        };
+        assert_eq!(
+            with_session.label(),
+            TabLabel::Osc("UPG: Upgrade gpui-kit"),
+            "session title must win over placeholder 'omp' OSC title"
+        );
+        let with_dir_fallback = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            session_title: Some("UPG: Upgrade gpui-kit".into()),
+            ..view()
+        };
+        assert_eq!(
+            with_dir_fallback.label(),
+            TabLabel::Osc("UPG: Upgrade gpui-kit"),
+            "session title must win over OMP's 'π - dir' fallback title"
+        );
     }
 }

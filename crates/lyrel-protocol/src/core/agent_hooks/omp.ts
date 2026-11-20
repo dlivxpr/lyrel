@@ -59,12 +59,14 @@ export default function (omp: ExtensionAPI) {
   function started(ctx: ExtensionContext) {
     if (ctx.agent.kind !== "main") return;
     if (titleWatch !== undefined) ctx.clearTimer(titleWatch);
+    lastTitle = undefined;
     syncTitle(ctx);
     // There is no public title-change extension event. A managed, deduplicated
     // watch covers /rename and automatic names without owning every OSC title.
     titleWatch = ctx.setInterval(() => syncTitle(ctx), 1000);
     lastAssistant = undefined;
-    emit("session-start", ctx);
+    const sessionTitle = ctx.sessionManager.getSessionName()?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
+    emit("session-start", ctx, sessionTitle ? {session_title: sessionTitle} : {});
     const review = ctx.getPendingPlanReview();
     if (review && sameSession(review.sessionId, ctx)) {
       emit("question-asked", ctx, {request: {id: review.reviewId, kind: "plan-review"}, message: review.title});

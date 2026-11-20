@@ -29,6 +29,7 @@ fn detect_agent(backend: &mut MockBackend, pane_id: u64, agent: CLIAgent) {
         launch_argv: None,
         session_scope: None,
         status: None,
+        session_title: None,
     });
 }
 
@@ -113,7 +114,7 @@ fn agents_reports_outdated_hooks_with_the_update_action() {
         Outcome::Report(report) => report,
         Outcome::Exit(code, _) => panic!("diagnosis unexpectedly exited {code}"),
     };
-    assert!(report.human.contains("Oh My Pi is running"));
+    assert!(report.human.contains("OMP is running"));
     assert!(report.human.contains("hooks are outdated"));
     assert!(report.human.contains("update the hooks"));
     assert_eq!(report.json["diagnostics"][0]["agent"], "omp");

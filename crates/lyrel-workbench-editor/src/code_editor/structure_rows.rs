@@ -41,8 +41,8 @@ pub fn structure_row(
     cx: &mut App,
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
-    let key = data.key.clone();
-    let value = data.value.clone();
+    let key: SharedString = sanitize_single_line(&data.key);
+    let value: SharedString = sanitize_single_line(&data.value);
     div()
         .id(data.id)
         .test_support()
@@ -130,6 +130,13 @@ pub fn structure_row(
         .on_mouse_down(MouseButton::Left, on_mouse_down)
         .on_click(on_click)
         .into_any_element()
+}
+
+fn sanitize_single_line(text: &SharedString) -> SharedString {
+    if !text.contains(['\r', '\n']) {
+        return text.clone();
+    }
+    SharedString::from(text.replace("\r\n", " ⏎ ").replace(['\r', '\n'], " ⏎ "))
 }
 
 /// 源码面：把实际滚动视口交给共享 Document 的 presentation。

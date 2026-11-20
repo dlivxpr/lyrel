@@ -1,7 +1,7 @@
-<!-- OpenCode brand icon, from anomalyco/opencode dev packages/ui/src/assets/favicon/favicon.svg (MIT).
-     Preserved official 512px geometry and native colors. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#131010"/>
+<!-- OpenCode brand icon, from anomalyco/opencode packages/ui/src/assets/favicon/favicon-v3.svg (MIT).
+     Rasterized at 64x64 from official 512px geometry for crisp small-disc rendering. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" fill="#131010"/>
   <path d="M320 224V352H192V224H320Z" fill="#5A5858"/>
   <path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="#FFFFFF"/>
 </svg>
