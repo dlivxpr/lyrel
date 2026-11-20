@@ -5,7 +5,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [0.3.6] - 2026-11-20
 
 ### 开发与 CI
 
@@ -43,10 +43,14 @@
 
 - 本次优化已运行 Windows 全量普通测试、主线程 native Markdown 37 例、native terminal 3 例、CLI E2E 29 例，以及 Linux headless 全量普通测试、CLI E2E 30 例和 doctest。首轮 Windows 的 5 个失败项已逐项修复并定点通过；Linux 的 2 个权限／用户环境前提失败在非 root 且提供 `USER` 后通过。保留首轮失败记录，不把分批修复验证写成一次全量零失败。
 - 提交 `329f8603` 的[三平台 CI](https://github.com/dlivxpr/lyrel/actions/runs/44215219931)已通过。早期 Windows 通知修复在隔离实例中通过系统 COM 接口验证了原窗格键盘输入和旧通知无副作用；该证据不代替最终修复的真实通知中心点击和匹配提交的 CI。实体 Mac、真实 SSH、正式安装和在线更新未验收。
+- 本轮界面与终端修复（`7b53b3d2`／`c937c78f`）已通过 GitHub Actions Windows、macOS 与 Linux headless 测试及 `clippy` 零警告校验；高分屏图标观感、弹窗滚轮拖拽手感及外部 `omp /resume` 真实 CLI 交互仍待桌面人工复核。
 
 ### 修复
 
 - #305：Linux Kitty `t=s` 共享内存在 opened-object 校验前以 `O_NONBLOCK` 打开，FIFO 等非 regular 对象立即拒收并执行既有一次性清理，不再阻塞 pane reader；保留正常 offset／length、有界读取与图片校验，macOS 和 Windows 路径不变。
+- 侧边栏与标签页会话同步：`Oh My Pi` 统一显示为 `OMP`，在 `omp` hook、`PaneFacts` 与 `TabView` 间同步权威 `session_title`，过滤占位及目录回退 OSC 标题并在 `/resume` 切换会话时刷新（不抹除退出回 shell 的合法 `OSC 2` 标题）；移除标签页多余的第二行“处理中”(`Indeterminate`) 文本；更新 `hermes`／`kimi`／`omp`／`opencode`／`pi` 官方高分屏图标资源与尺寸适配。
+- Markdown、TOML 与 EPUB 呈现修复：Markdown 图片预览弹窗按图片尺寸与缩放自适应大小并支持左键拖拽平移与滚轮缩放；Markdown 选区／搜索高亮改为在代码块、表格与行内高亮背景之上绘制（前景文本之下）；TOML（如 `pyproject.toml`）结构树行预览将多行数组与标量折叠为单行以消除行间重叠；EPUB MathML 公式改为内联 `<span>` 并跳过冗余 `<annotation>`／`katex-html` 分支，格式化分式、上下标、根式与矩阵。
+- 终端链接与画中画重排：终端 `Ctrl`＋左键点击将 `file://` OSC 8 超链接与普通 `file://` URL（含 Windows 双斜杠盘符及 `#L行C列`／`:行:列` 锚点）解析为 `LinkTarget::File`，交由 Lyrel 内置编辑器打开；补充 GPUI 画中画恢复与真实 Windows ConPTY 缩放重排回归测试，并清理跨平台条件编译与测试警告。
 
 
 ## [0.3.5] - 2026-11-16
