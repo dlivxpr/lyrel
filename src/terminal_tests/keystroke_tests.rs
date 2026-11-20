@@ -127,8 +127,6 @@ fn ctrl_6_reaches_the_pty_as_rs(cx: &mut TestAppContext) {
     assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x1e]));
 }
 
-#[cfg(target_os = "macos")]
-use super::*;
 use lyrel_terminal::view::notices::INTEGRATION_GRACE;
 
 #[gpui_kit::test]

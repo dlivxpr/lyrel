@@ -3134,12 +3134,12 @@ mod gpui_tests {
 
         report(AgentStatus::Working, &mut daemon);
         assert!(
-            settled(Some(PaneBusy::Agent("Oh My Pi")), cx),
+            settled(Some(PaneBusy::Agent("OMP")), cx),
             "a turn in flight is work closing would cut short"
         );
 
         // The green Done badge is what sends a reader to close the tab. Asking
-        // "Oh My Pi is still working" there is both false and in the way.
+        // "OMP is still working" there is both false and in the way.
         report(AgentStatus::Done, &mut daemon);
         assert!(
             settled(None, cx),

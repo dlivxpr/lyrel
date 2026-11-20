@@ -18,7 +18,6 @@ mod whole_window {
     use lyrel_terminal::lifecycle::declare_displayed;
     use lyrel_terminal::remote::PtySource;
     use lyrel_terminal::test_support::*;
-    use lyrel_terminal::view::test_support;
     use lyrel_terminal::view::test_support::*;
     use lyrel_terminal::view::*;
     use lyrel_terminal::{RemoteTerminal, TermSize};

@@ -69,7 +69,7 @@ fn reverse_search_cmd_enter_runs_selected_command_in_real_pty(cx: &mut TestAppCo
     let view = app.update_in(&mut vcx, |app, window, cx| {
         let view = cx.new(|cx| TerminalView::with_terminal(terminal, id, window, cx));
         view.update(cx, |view, cx| {
-            view.history = TerminalHistory::from_loaded(test_support::history_fixture(vec![
+            view.history = TerminalHistory::from_loaded(history_fixture(vec![
                 selected.clone(),
                 "echo 180_UNSELECTED".into(),
             ]));

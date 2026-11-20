@@ -1010,9 +1010,9 @@ mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
     use gpui_kit::component::Theme;
+    use gpui_kit::px;
     #[cfg(target_os = "windows")]
-    use gpui_kit::point;
-    use gpui_kit::{Styled, px};
+    use gpui_kit::{Styled, point};
     use lyrel_ui_base::presentation::SystemAppearance;
 
     #[gpui_kit::test]

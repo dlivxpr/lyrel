@@ -575,7 +575,7 @@ pub struct GraphicsState {
 }
 
 impl GraphicsState {
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn screen_rows(&self) -> Vec<String> {
         use rio_vt::crosswords::grid::Dimensions as _;
         (self.term.topmost_line().0..=self.term.bottommost_line().0)

@@ -204,8 +204,9 @@ impl AgentActivity {
         );
         let mut update = AgentUpdate::default();
         if identity != self.last_session {
-            let had_session = self.last_session.0.is_some();
-            update.session_id_changed = had_session && identity.0 != self.last_session.0;
+            update.session_id_changed = self.last_session.0.is_some()
+                && identity.0.is_some()
+                && identity.0 != self.last_session.0;
             self.last_session = identity;
             update.session_changed = true;
         }
@@ -313,5 +314,79 @@ impl AgentActivity {
             _ => {}
         }
         update
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+    use lyrel_core::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
+
+    #[gpui_kit::test]
+    fn session_id_changed_only_fires_between_two_active_sessions(cx: &mut TestAppContext) {
+        let mut activity = AgentActivity::new(false);
+        let key = (HostId(0), 1);
+        let state = |sid: &str| AgentSessionState {
+            status: AgentStatus::Done,
+            message: None,
+            session_id: Some(sid.into()),
+            launch_argv: Some(vec!["omp".into()]),
+            rich: true,
+            cwd: None,
+            activity: 0,
+            turns: 0,
+            pending_requests: Vec::new(),
+            request_resume_status: Default::default(),
+            pending_stop: false,
+            readout: Default::default(),
+            since_ms: None,
+        };
+
+        cx.update(|cx| {
+            let s1 = state("sid-1");
+            let first = activity.observe(
+                key,
+                AgentObservation {
+                    agent: Some(CLIAgent::OhMyPi),
+                    session: Some(&s1),
+                    replayed: None,
+                },
+                true,
+                false,
+                cx,
+            );
+            assert!(!first.session_id_changed);
+
+            let s2 = state("sid-2");
+            let resumed = activity.observe(
+                key,
+                AgentObservation {
+                    agent: Some(CLIAgent::OhMyPi),
+                    session: Some(&s2),
+                    replayed: None,
+                },
+                true,
+                false,
+                cx,
+            );
+            assert!(resumed.session_id_changed);
+
+            let exited = activity.observe(
+                key,
+                AgentObservation {
+                    agent: None,
+                    session: None,
+                    replayed: None,
+                },
+                true,
+                false,
+                cx,
+            );
+            assert!(
+                !exited.session_id_changed,
+                "returning to shell must not clear a fresh OSC title"
+            );
+        });
     }
 }
