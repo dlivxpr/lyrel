@@ -451,8 +451,9 @@ fn program_attention_budget_is_per_source_not_a_same_pane_mute(cx: &mut TestAppC
         })
     });
     command_notification_pump(cx);
-    cx.executor()
-        .advance_clock(std::time::Duration::from_secs(1));
+    cx.executor().advance_clock(
+        lyrel_terminal::agent_activity::DONE_SETTLE + std::time::Duration::from_millis(100),
+    );
     cx.run_until_parked();
     let notes = command_notification_take();
     assert_eq!(
