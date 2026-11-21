@@ -2744,12 +2744,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::WorktreePickerRemoveDetached => "Detached HEAD — no branch is touched.",
         L10nKey::WorktreePickerRemoveChecking => "Checking the checkout…",
         L10nKey::WorktreePickerRemoveReady => "The checkout is clean and unused.",
+        L10nKey::WorktreePickerRemoveDirtyReady => {
+            "Removing this checkout deletes its files. lyrel will save uncommitted changes and untracked files to a Git recovery reference before removing it."
+        }
+        L10nKey::WorktreePickerRecoverAndRemove => "Save Recovery and Remove",
+        L10nKey::WorktreePickerRemoving => "Recording recovery and removing the checkout…",
         L10nKey::WorktreePickerRemoveBlockedGone => {
             "This checkout is no longer registered on its Host."
         }
         L10nKey::WorktreePickerRemoveBlockedMain => "The main checkout cannot be removed.",
-        L10nKey::WorktreePickerRemoveBlockedDirty => {
-            "The checkout has uncommitted changes and will not be removed."
+        L10nKey::WorktreePickerRemoveChanged => {
+            "The checkout or its uncommitted changes changed. Reopen the confirmation to review it."
         }
         L10nKey::WorktreePickerRemoveBlockedOccupied => "A pane is using this checkout.",
         L10nKey::WorktreePickerRemoveBlockedUnsaved => {
@@ -2762,7 +2767,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Removed {path}. Branch \"{branch}\" was deleted; recovery reference {ref}."
         }
         L10nKey::WorktreePickerRemovedBranchKept => {
-            "Removed {path}. Branch \"{branch}\" was kept (unmerged commits); recovery reference {ref}."
+            "Removed {path}. Branch \"{branch}\" was kept; recovery reference {ref}."
         }
         L10nKey::WorktreePickerRemovedDetached => "Removed {path}. Recovery reference {ref}.",
         L10nKey::WorktreePickerRemoveFailed => "Couldn't remove the checkout: {error}",

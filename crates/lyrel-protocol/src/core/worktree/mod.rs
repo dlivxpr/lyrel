@@ -470,9 +470,7 @@ fn snapshot(host: &dyn Host, wt: &ManagedWorktree) -> Result<String, String> {
     } else {
         head()?
     };
-    let refname = format!("{TRASH_REFS}/{name}");
-    git(host, &wt.main_root, &["update-ref", &refname, &commit])?;
-    Ok(refname)
+    create_recovery_ref(host, &wt.main_root, &name, &commit)
 }
 
 /// One checkout of a repo, as `git worktree list` knows it.
@@ -1365,6 +1363,70 @@ mod tests {
             "the older recovery reference still points where it did"
         );
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn dirty_recovery_refs_survive_same_basenames_and_path_reuse() {
+        let h = h();
+        let repo = temp_repo("dirty-collisions");
+        let dir_a = scratch("dirty-collisions-a");
+        let dir_b = scratch("dirty-collisions-b");
+        let a = dir_a.join("checkout");
+        let b = dir_b.join("checkout");
+        let mut saved = Vec::new();
+        for (path, branch, contents) in [
+            (&a, "first", "first bytes"),
+            (&b, "second", "second bytes"),
+            (&a, "third", "third bytes"),
+        ] {
+            add_external_worktree(&repo, path, branch);
+            std::fs::write(path.join("new.txt"), contents).unwrap();
+            let target = listed_at(&*h, &repo, path);
+            let approved = inspect_checkout(&*h, &target).unwrap();
+            let result = remove_confirmed_checkout(&*h, &target, &approved).unwrap();
+            assert!(!path.exists());
+            assert!(
+                !saved
+                    .iter()
+                    .any(|(reference, _)| reference == &result.recovery)
+            );
+            saved.push((result.recovery, contents));
+        }
+        for (reference, contents) in saved {
+            assert_eq!(
+                git(&*h, &repo, &["show", &format!("{reference}:new.txt")]).unwrap(),
+                contents
+            );
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    #[test]
+    fn recovery_ref_failure_preserves_checkout_registration_index_and_branch() {
+        let h = h();
+        let repo = temp_repo("dirty-ref-failure");
+        let parent = scratch("dirty-ref-failure-wt");
+        let wt = parent.join("checkout");
+        add_external_worktree(&repo, &wt, "recovery-ref-failure");
+        let head = git(&*h, &repo, &["rev-parse", "HEAD"]).unwrap();
+        // A ref at the parent makes the namespace unwritable on all platforms.
+        git(&*h, &repo, &["update-ref", TRASH_REFS, &head]).unwrap();
+        std::fs::write(wt.join("a.txt"), "staged").unwrap();
+        sh(&wt, &["git", "add", "a.txt"]);
+        std::fs::write(wt.join("new.txt"), "unstaged").unwrap();
+        let status = git(&*h, &wt, &["status", "--porcelain"]).unwrap();
+        let target = listed_at(&*h, &repo, &wt);
+        let approved = inspect_checkout(&*h, &target).unwrap();
+        let error = remove_confirmed_checkout(&*h, &target, &approved).unwrap_err();
+        assert!(error.contains("recovery reference"), "{error}");
+        assert_eq!(listed_at(&*h, &repo, &wt), target);
+        assert_eq!(git(&*h, &wt, &["status", "--porcelain"]).unwrap(), status);
+        assert_eq!(std::fs::read(wt.join("new.txt")).unwrap(), b"unstaged");
+        assert!(branch_exists(&*h, &repo, "recovery-ref-failure"));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]

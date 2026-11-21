@@ -2475,9 +2475,16 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::WorktreePickerRemoveDetached => "分离 HEAD —— 不涉及分支。",
         L10nKey::WorktreePickerRemoveChecking => "正在检查该检出…",
         L10nKey::WorktreePickerRemoveReady => "该检出干净且未被使用。",
+        L10nKey::WorktreePickerRemoveDirtyReady => {
+            "删除检出会移除其中的文件。lyrel 会先将未提交的变更和未跟踪的文件保存到 Git 恢复引用，再删除检出。"
+        }
+        L10nKey::WorktreePickerRecoverAndRemove => "保存恢复点并删除",
+        L10nKey::WorktreePickerRemoving => "正在保存恢复点并删除检出…",
         L10nKey::WorktreePickerRemoveBlockedGone => "该检出已不再注册在其所属 Host 上。",
         L10nKey::WorktreePickerRemoveBlockedMain => "主检出不能被删除。",
-        L10nKey::WorktreePickerRemoveBlockedDirty => "该检出存在未提交的变更，不会被删除。",
+        L10nKey::WorktreePickerRemoveChanged => {
+            "检出或其未提交的变更已变化。请重新打开确认框核对。"
+        }
         L10nKey::WorktreePickerRemoveBlockedOccupied => "有窗格正在使用该检出。",
         L10nKey::WorktreePickerRemoveBlockedUnsaved => "该检出中有未保存的文档。",
         L10nKey::WorktreePickerRemoveBlockedUnknown => "无法在其所属 Host 上验证该检出的状态。",
@@ -2485,7 +2492,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "已删除 {path}。分支“{branch}”已删除；恢复引用 {ref}。"
         }
         L10nKey::WorktreePickerRemovedBranchKept => {
-            "已删除 {path}。分支“{branch}”已保留（存在未合并的提交）；恢复引用 {ref}。"
+            "已删除 {path}。分支“{branch}”已保留；恢复引用 {ref}。"
         }
         L10nKey::WorktreePickerRemovedDetached => "已删除 {path}。恢复引用 {ref}。",
         L10nKey::WorktreePickerRemoveFailed => "无法删除该检出：{error}",

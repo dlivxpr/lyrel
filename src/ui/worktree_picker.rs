@@ -16,19 +16,17 @@
 //! [`LyrelApp::revalidate_worktree_pick`], which re-reads the checkout's
 //! current facts on that Host before anything destructive is offered, and
 //! again after the confirmation click: the checkout may have become dirty or
-//! occupied while the dialog was open. Only a clean, unused, verifiable
-//! linked checkout can be removed — never the main checkout — and the disk
-//! removal itself runs through
-//! [`lyrel_core::core::worktree::remove_checkout`], which files a recovery
-//! reference and tries safe branch cleanup only after the checkout is gone.
+//! occupied while the dialog was open. Dirty removal needs its own explicit
+//! confirmation and a durable recovery point before Git removes the checkout.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::base::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListState};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, IndexPath, Selectable, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, IndexPath, Selectable, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, Focusable as _, IntoElement, MouseButton, MouseDownEvent,
@@ -38,6 +36,9 @@ use gpui_kit::{
 use crate::ui::app::LyrelApp;
 use crate::ui::notification_history::NotificationWindowExt as _;
 use crate::ui::right_panel::{META, info_chip};
+use lyrel_core::core::worktree::{
+    CheckoutInspection, CheckoutRemoval, inspect_checkout, remove_confirmed_checkout,
+};
 use lyrel_ui_base::host_ops::SharedHost;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
@@ -72,8 +73,8 @@ pub(crate) struct WorktreePickState {
     /// external directories can share a basename, so identity is never the
     /// name and never the branch.
     pub(crate) canonical: PathBuf,
-    /// The fresh registration entry, when the checkout is still listed.
-    pub(crate) listed: Option<lyrel_core::core::worktree::Listed>,
+    /// The facts shown by this confirmation, rechecked before deletion.
+    inspection: Option<CheckoutInspection>,
     /// What blocks removal right now; `None` while every guard passes.
     pub(crate) block: Option<WorktreePickBlock>,
 }
@@ -85,8 +86,8 @@ pub(crate) enum WorktreePickBlock {
     Gone,
     /// The main checkout is never removable.
     Main,
-    /// Uncommitted changes or untracked files. Dirty removal is #353.
-    Dirty,
+    /// The checkout changed after the confirmation was shown.
+    Changed,
     /// A pane of some workspace is sitting in the checkout.
     Occupied,
     /// An unsaved document is open inside the checkout.
@@ -100,11 +101,14 @@ pub(crate) enum WorktreePickBlock {
 /// path — and revalidated before the dialog is offered and once more after
 /// the confirmation click.
 struct WorktreeRemoval {
+    id: uuid::Uuid,
     pick: WorktreePick,
     /// What the open-time revalidation answered; `None` while it runs.
     state: Option<WorktreePickState>,
-    /// The post-confirmation revalidation or the removal itself is running.
+    /// True from confirmation until its result; ignore repeated activation.
     busy: bool,
+    /// Once Git is asked to remove, dismissal cannot cancel that operation.
+    removing: bool,
 }
 
 /// The picker, while open. One instance serves both entrances: they name the
@@ -730,9 +734,11 @@ impl LyrelApp {
         };
         if let Some(picker) = self.worktree_picker.as_mut() {
             picker.removal = Some(WorktreeRemoval {
+                id: uuid::Uuid::new_v4(),
                 pick: pick.clone(),
                 state: None,
                 busy: false,
+                removing: false,
             });
         }
         window.focus(&focus, cx);
@@ -746,6 +752,13 @@ impl LyrelApp {
         let Some(picker) = self.worktree_picker.as_mut() else {
             return;
         };
+        if picker
+            .removal
+            .as_ref()
+            .is_some_and(|removal| removal.removing)
+        {
+            return;
+        }
         if picker.removal.take().is_some() {
             picker.query.update(cx, |input, cx| input.focus(window, cx));
             cx.notify();
@@ -757,64 +770,55 @@ impl LyrelApp {
     /// while the dialog was open — and only a still-removable checkout runs
     /// the deletion, which itself re-verifies every fact on the Host.
     fn confirm_worktree_removal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ready = self
-            .worktree_picker
-            .as_ref()
-            .and_then(|picker| picker.removal.as_ref())
-            .is_some_and(|removal| {
-                !removal.busy
-                    && removal
-                        .state
-                        .as_ref()
-                        .is_some_and(|state| state.block.is_none() && state.listed.is_some())
-            });
-        if !ready {
-            return;
-        }
-        if let Some(picker) = self.worktree_picker.as_mut() {
-            if let Some(removal) = picker.removal.as_mut() {
-                removal.busy = true;
+        let Some((id, pick, approved, cwd)) = self.worktree_picker.as_mut().and_then(|picker| {
+            let removal = picker.removal.as_mut()?;
+            let state = removal.state.as_ref()?;
+            if removal.busy || state.block.is_some() {
+                return None;
             }
-        }
-        cx.notify();
-        let Some(pick) = self
-            .worktree_picker
-            .as_ref()
-            .and_then(|picker| picker.removal.as_ref())
-            .map(|removal| removal.pick.clone())
-        else {
+            let approved = state.inspection.clone()?;
+            removal.busy = true;
+            Some((
+                removal.id,
+                removal.pick.clone(),
+                approved,
+                picker.cwd.clone(),
+            ))
+        }) else {
             return;
         };
+        cx.notify();
         let host = pick.host.clone();
-        self.revalidate_worktree_pick(pick, window, cx, move |this, state, window, cx| {
-            let Some(picker) = this.worktree_picker.as_ref() else {
+        let checkout = pick.checkout.clone();
+        self.revalidate_worktree_pick(pick, cwd, window, cx, move |this, mut state, window, cx| {
+            let Some(removal) = this
+                .worktree_picker
+                .as_mut()
+                .and_then(|picker| picker.removal.as_mut())
+            else {
                 return;
             };
-            let Some(removal) = picker.removal.as_ref() else {
-                return;
-            };
-            if !removal.busy {
-                // A stale answer: the dialog moved on before it landed.
+            if removal.id != id || !removal.busy {
                 return;
             }
-            if state.block.is_some() || state.listed.is_none() {
-                if let Some(picker) = this.worktree_picker.as_mut() {
-                    if let Some(removal) = picker.removal.as_mut() {
-                        removal.state = Some(state);
-                        removal.busy = false;
-                    }
-                }
+            if state.block.is_none() && state.inspection.as_ref() != Some(&approved) {
+                state.block = Some(WorktreePickBlock::Changed);
+            }
+            if state.block.is_some() {
+                removal.state = Some(state);
+                removal.busy = false;
                 cx.notify();
                 return;
             }
-            let listed = state.listed.clone().expect("checked above");
+            removal.removing = true;
+            cx.notify();
             lyrel_ui_base::host_ops::HostOps::run_in(
                 host,
                 window,
                 cx,
-                move |h| lyrel_core::core::worktree::remove_checkout(h, &listed),
+                move |h| remove_confirmed_checkout(h, &checkout, &approved),
                 move |this, result, window, cx| {
-                    this.finish_worktree_removal(result, window, cx);
+                    this.finish_worktree_removal(id, result, window, cx)
                 },
             );
         });
@@ -826,7 +830,8 @@ impl LyrelApp {
     /// navigation does.
     fn finish_worktree_removal(
         &mut self,
-        result: Result<lyrel_core::core::worktree::CheckoutRemoval, String>,
+        id: uuid::Uuid,
+        result: Result<CheckoutRemoval, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -834,6 +839,7 @@ impl LyrelApp {
             .worktree_picker
             .as_ref()
             .and_then(|picker| picker.removal.as_ref())
+            .filter(|removal| removal.id == id)
         {
             Some(removal) => (
                 removal.pick.checkout.path.display().to_string(),
@@ -874,6 +880,7 @@ impl LyrelApp {
                 if let Some(picker) = self.worktree_picker.as_mut() {
                     if let Some(removal) = picker.removal.as_mut() {
                         removal.busy = false;
+                        removal.removing = false;
                     }
                 }
                 window.notify_app(
@@ -888,55 +895,57 @@ impl LyrelApp {
         }
     }
 
-    /// Re-read the open removal dialog's pick and land the fresh facts into
-    /// it. The busy flag distinguishes this answer from the post-confirm
-    /// revalidation's: an open dialog (`busy == false`) shows them, a dialog
-    /// waiting on its confirmation decision (`busy == true`) lets
-    /// [`Self::confirm_worktree_removal`] take it from there.
+    /// A late answer belongs only to the specific confirmation that asked for it.
     fn revalidate_open_worktree_removal(
         &mut self,
         pick: WorktreePick,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let host_id = pick.host.id();
-        let target = pick.checkout.path.clone();
-        self.revalidate_worktree_pick(pick, window, cx, move |this, state, _window, cx| {
-            let Some(picker) = this.worktree_picker.as_mut() else {
+        let Some((id, cwd)) = self
+            .worktree_picker
+            .as_ref()
+            .and_then(|picker| Some((picker.removal.as_ref()?.id, picker.cwd.clone())))
+        else {
+            return;
+        };
+        self.revalidate_worktree_pick(pick, cwd, window, cx, move |this, state, _window, cx| {
+            let Some(removal) = this
+                .worktree_picker
+                .as_mut()
+                .and_then(|picker| picker.removal.as_mut())
+            else {
                 return;
             };
-            let Some(removal) = picker.removal.as_mut() else {
-                return;
-            };
-            if removal.busy
-                || removal.pick.host.id() != host_id
-                || removal.pick.checkout.path != target
-            {
-                return;
+            if removal.id == id && !removal.busy {
+                removal.state = Some(state);
+                cx.notify();
             }
-            removal.state = Some(state);
-            cx.notify();
         });
     }
 
     /// Close the picker and put the keyboard back where the workspace was.
     pub(crate) fn cancel_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .worktree_picker
+            .as_ref()
+            .and_then(|picker| picker.removal.as_ref())
+            .is_some_and(|removal| removal.removing)
+        {
+            return;
+        }
         if self.worktree_picker.take().is_some() {
             self.focus_active(window, cx);
             cx.notify();
         }
     }
 
-    /// Re-read a picked checkout's facts on its owning Host: still listed,
-    /// clean, unoccupied, no unsaved document inside — or the reason removal
-    /// is blocked. Occupancy asks every pane this window holds on the Host
-    /// plus the machine mirror's live panes, so a pane of another workspace
-    /// on the same Host counts; a mirror this window never pulled simply
-    /// contributes no paths. Any read that fails is [`WorktreePickBlock::Unverifiable`]:
-    /// a check that did not run is never proof of absence.
-    pub(crate) fn revalidate_worktree_pick(
+    /// Re-read the linked checkout, live pane usage and unsaved files on its
+    /// owning Host. Neither an unavailable status nor a stale answer grants consent.
+    fn revalidate_worktree_pick(
         &mut self,
         pick: WorktreePick,
+        repo_cwd: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
         land: impl FnOnce(&mut Self, WorktreePickState, &mut Window, &mut Context<Self>) + 'static,
@@ -952,27 +961,22 @@ impl LyrelApp {
                 (view.host_id() == host_id).then(|| view.effective_host_cwd())?
             })
             .collect();
-        if let Some(machine) = crate::ui::machine_mirror::MachineMirrors::machine(cx, host_id) {
-            open.extend(
-                machine
-                    .panes
-                    .iter()
-                    .filter(|pane| pane.live)
-                    .filter_map(|pane| pane.cwd.as_deref().map(PathBuf::from)),
-            );
+        let mut unsaved = self.unsaved_worktree_documents(host_id, cx);
+        if cx
+            .try_global::<crate::ui::windows::WindowRegistry>()
+            .is_some()
+        {
+            let current = cx.entity().entity_id();
+            for (_, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+                if let Some(app) = app.upgrade().filter(|app| app.entity_id() != current) {
+                    unsaved.extend(app.read(cx).unsaved_worktree_documents(host_id, cx));
+                }
+            }
         }
-        // Dirty documents on this Host, with the path each would save to.
-        // An untitled buffer has no path yet and belongs to no checkout.
-        let unsaved: Vec<PathBuf> = self
-            .editor
-            .read(cx)
-            .buffers()
-            .iter()
-            .filter(|file| file.dirty && !file.path.as_os_str().is_empty())
-            .filter(|file| file.host.id() == host_id)
-            .map(|file| file.path.clone())
-            .collect();
         let host = pick.host.clone();
+        // In production, ask the daemon directly instead of trusting a possibly
+        // stale mirror, which can miss panes created in other workspaces.
+        let control = crate::ui::tree_sync::tree_control_for(cx, host_id);
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
@@ -980,7 +984,7 @@ impl LyrelApp {
             move |h| {
                 let mut state = WorktreePickState {
                     canonical: target.clone(),
-                    listed: None,
+                    inspection: None,
                     block: None,
                 };
                 let Ok(canonical) = h.canonicalize(&target) else {
@@ -988,7 +992,7 @@ impl LyrelApp {
                     return state;
                 };
                 state.canonical = canonical.clone();
-                let Ok(listed) = crate::core::worktree::list(h, &canonical) else {
+                let Ok(listed) = crate::core::worktree::list(h, &repo_cwd) else {
                     state.block = Some(WorktreePickBlock::Unverifiable);
                     return state;
                 };
@@ -999,22 +1003,36 @@ impl LyrelApp {
                     state.block = Some(WorktreePickBlock::Gone);
                     return state;
                 };
-                state.listed = Some(found.clone());
+                if found.branch != pick.checkout.branch {
+                    state.block = Some(WorktreePickBlock::Changed);
+                    return state;
+                }
                 if found.main {
                     state.block = Some(WorktreePickBlock::Main);
                     return state;
                 }
-                match h.git(&canonical, &["status", "--porcelain"]) {
-                    Ok(out) if out.success() => {
-                        if !out.stdout_trimmed().is_empty() {
-                            state.block = Some(WorktreePickBlock::Dirty);
-                            return state;
+                use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
+                let machine = match control {
+                    crate::ui::tree_sync::TreeLink::Ready(client) => {
+                        match client.call(ControlRequest::MachineGet) {
+                            Ok(ReplyOk::MachineTree(machine)) => machine,
+                            _ => {
+                                state.block = Some(WorktreePickBlock::Unverifiable);
+                                return state;
+                            }
                         }
                     }
                     _ => {
                         state.block = Some(WorktreePickBlock::Unverifiable);
                         return state;
                     }
+                };
+                for pane in machine.panes.into_iter().filter(|pane| pane.live) {
+                    let Some(cwd) = pane.cwd else {
+                        state.block = Some(WorktreePickBlock::Unverifiable);
+                        return state;
+                    };
+                    open.push(PathBuf::from(cwd));
                 }
                 match crate::core::worktree::occupancy(h, &canonical, &open) {
                     Ok(true) => {
@@ -1040,10 +1058,32 @@ impl LyrelApp {
                         }
                     }
                 }
+                match inspect_checkout(h, found) {
+                    Ok(inspection) if inspection.canonical() == canonical => {
+                        state.inspection = Some(inspection)
+                    }
+                    _ => state.block = Some(WorktreePickBlock::Unverifiable),
+                }
                 state
             },
             move |this, state, window, cx| land(this, state, window, cx),
         );
+    }
+
+    fn unsaved_worktree_documents(
+        &self,
+        host: lyrel_ui_base::host_ops::HostId,
+        cx: &App,
+    ) -> Vec<PathBuf> {
+        self.editor
+            .read(cx)
+            .buffers()
+            .iter()
+            .filter(|file| {
+                file.dirty && !file.path.as_os_str().is_empty() && file.host.id() == host
+            })
+            .map(|file| file.path.clone())
+            .collect()
     }
 
     pub(crate) fn render_worktree_picker_overlay(
@@ -1063,12 +1103,14 @@ impl LyrelApp {
                 input.set_placeholder(t(L10nKey::WorktreePickerPlaceholder), window, cx);
             });
             crate::ui::dialog::card("worktree-picker-card", title, CARD_W, cx)
+                .test_support()
                 .child(crate::ui::dialog::header(title, cx))
                 .child(
                     h_flex()
                         .id("worktree-picker-search")
                         .key_context("List")
                         .flex_none()
+                        .w_full()
                         // Keep the framework's list navigation without moving
                         // focus out of the input. These handlers belong only to
                         // this row: the list's propagated Cancel must not loop
@@ -1188,19 +1230,17 @@ impl LyrelApp {
 
     /// The removal confirmation: the checkout's full path, what may happen
     /// to its branch, and the revalidated answer to "may this be removed?"
-    /// The confirm button is inert unless every guard passes, and Enter is
-    /// the same click while the dialog holds the keyboard.
+    /// The destructive action is inert until every guard passes.
     fn render_worktree_removal(
         &self,
         picker: &WorktreePicker,
         removal: &WorktreeRemoval,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+    ) -> impl IntoElement {
         let title = t(L10nKey::WorktreePickerRemoveTitle);
         let muted = cx.theme().muted_foreground;
         let mono = cx.theme().mono_font_family.clone();
-        let rungs = crate::ui::dialog::popover_rungs(cx);
         // Identity is the canonical path once the revalidation has pinned it;
         // while it runs, the pick's own spelling is the best name available.
         let path = match &removal.state {
@@ -1211,14 +1251,25 @@ impl LyrelApp {
             Some(branch) => t_fmt(L10nKey::WorktreePickerRemoveBranch, &[("branch", branch)]),
             None => t(L10nKey::WorktreePickerRemoveDetached).to_string(),
         };
+        let dirty = removal
+            .state
+            .as_ref()
+            .and_then(|state| state.inspection.as_ref())
+            .is_some_and(CheckoutInspection::dirty);
         let (status, removable) = match (&removal.state, removal.busy) {
+            (_, _) if removal.removing => (t(L10nKey::WorktreePickerRemoving).to_string(), false),
             (None, _) | (_, true) => (t(L10nKey::WorktreePickerRemoveChecking).to_string(), false),
             (Some(state), false) => match state.block {
-                None => (t(L10nKey::WorktreePickerRemoveReady).to_string(), true),
+                None if dirty => (t(L10nKey::WorktreePickerRemoveDirtyReady).to_string(), true),
+                None => (
+                    t(L10nKey::WorktreePickerRemoveReady).to_string(),
+                    state.inspection.is_some(),
+                ),
                 Some(block) => (Self::worktree_pick_block_text(block), false),
             },
         };
         crate::ui::dialog::card("worktree-removal-card", title, CARD_W, cx)
+            .test_support()
             .child(crate::ui::dialog::header(title, cx))
             .child(
                 v_flex()
@@ -1230,11 +1281,18 @@ impl LyrelApp {
                         div()
                             .font_family(mono)
                             .text_size(rems(TEXT))
-                            .truncate()
+                            .id("worktree-removal-target")
+                            .role(gpui_kit::Role::Label)
+                            .aria_label(path.clone())
+                            .test_support()
                             .child(path),
                     )
                     .child(
                         div()
+                            .id("worktree-removal-branch")
+                            .role(gpui_kit::Role::Label)
+                            .aria_label(branch_line.clone())
+                            .test_support()
                             .text_size(rems(META))
                             .text_color(muted)
                             .child(branch_line),
@@ -1242,6 +1300,9 @@ impl LyrelApp {
                     .child(
                         div()
                             .id("worktree-removal-status")
+                            .role(gpui_kit::Role::Label)
+                            .aria_label(status.clone())
+                            .test_support()
                             .text_size(rems(META))
                             .text_color(muted)
                             .child(status),
@@ -1249,35 +1310,32 @@ impl LyrelApp {
             )
             .child(
                 crate::ui::dialog::footer(cx)
-                    .child(crate::ui::dialog::button(
-                        "worktree-removal-cancel",
-                        t(L10nKey::Cancel),
-                        crate::ui::dialog::Tone::Secondary,
-                        true,
-                        rungs,
-                        cx,
-                        cx.listener(|this, _, window, cx| this.cancel_worktree_removal(window, cx)),
-                    ))
-                    .child(crate::ui::dialog::button(
-                        "worktree-removal-remove",
-                        t(L10nKey::WorktreePickerRemove),
-                        crate::ui::dialog::Tone::Primary,
-                        removable,
-                        rungs,
-                        cx,
-                        cx.listener(|this, _, window, cx| {
-                            this.confirm_worktree_removal(window, cx)
-                        }),
-                    )),
+                    .child(
+                        Button::new("worktree-removal-cancel")
+                            .small()
+                            .outline()
+                            .label(t(L10nKey::Cancel))
+                            .disabled(removal.removing)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.cancel_worktree_removal(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("worktree-removal-remove")
+                            .small()
+                            .danger()
+                            .label(t(if dirty {
+                                L10nKey::WorktreePickerRecoverAndRemove
+                            } else {
+                                L10nKey::WorktreePickerRemove
+                            }))
+                            .disabled(!removable)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.confirm_worktree_removal(window, cx)
+                            })),
+                    ),
             )
             .track_focus(&picker.removal_focus)
-            .on_key_down(
-                cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                    if ev.keystroke.key == "enter" {
-                        this.confirm_worktree_removal(window, cx);
-                    }
-                }),
-            )
     }
 
     /// The user-facing sentence for a removal block.
@@ -1285,7 +1343,7 @@ impl LyrelApp {
         match block {
             WorktreePickBlock::Gone => t(L10nKey::WorktreePickerRemoveBlockedGone).to_string(),
             WorktreePickBlock::Main => t(L10nKey::WorktreePickerRemoveBlockedMain).to_string(),
-            WorktreePickBlock::Dirty => t(L10nKey::WorktreePickerRemoveBlockedDirty).to_string(),
+            WorktreePickBlock::Changed => t(L10nKey::WorktreePickerRemoveChanged).to_string(),
             WorktreePickBlock::Occupied => {
                 t(L10nKey::WorktreePickerRemoveBlockedOccupied).to_string()
             }
@@ -1302,10 +1360,57 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::app::test_window::harness;
+    use crate::ui::app::test_window;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
     use lyrel_ui_base::host_ops::HostId;
+
+    struct WorktreeTestDaemon {
+        client: std::sync::Arc<lyrel_core::daemon::control::ControlClient>,
+        server: Option<std::thread::JoinHandle<()>>,
+        _root: tempfile::TempDir,
+    }
+
+    impl gpui_kit::Global for WorktreeTestDaemon {}
+
+    impl Drop for WorktreeTestDaemon {
+        fn drop(&mut self) {
+            self.client.close();
+            if let Some(server) = self.server.take() {
+                let _ = server.join();
+            }
+        }
+    }
+
+    fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
+        use lyrel_core::core::machine::MachineStore;
+        use lyrel_core::daemon::control::{ControlClient, ControlHello};
+        use lyrel_core::host::{local, server};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::Arc;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = MachineStore::open(root.path().join("machine.json"));
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let connection = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        let thread = std::thread::spawn(move || {
+            server::serve_with(peer, local::new(), server::Services::with_machine(store)).unwrap();
+        });
+        let hello = ControlHello::host_rpc("worktree-tests", "worktree-test-window");
+        let client =
+            Arc::new(ControlClient::over_tcp(connection, &hello, Box::new(|_| {})).unwrap());
+        let (app, mut vcx) = test_window::harness(cx);
+        vcx.update(|_, cx| {
+            crate::ui::local_link::LocalLink::install_client_for_test(cx, client.clone());
+            cx.set_global(WorktreeTestDaemon {
+                client,
+                server: Some(thread),
+                _root: root,
+            });
+        });
+        (app, vcx)
+    }
 
     fn settle(vcx: &mut VisualTestContext) {
         vcx.run_until_parked();
@@ -1445,7 +1550,7 @@ mod tests {
 
     fn row_labels(vcx: &mut VisualTestContext) -> Vec<String> {
         vcx.update(|window, _| {
-            (0u64..2)
+            (0u64..LIST_MAX_ROWS as u64)
                 .filter_map(|row| window.try_find(("worktree-row", row)))
                 .filter(|row| row.visible())
                 .filter_map(|row| row.label().map(str::to_owned))
@@ -1696,19 +1801,14 @@ mod tests {
     /// The texts the removal dialog shows, scoped to its card.
     fn removal_texts(vcx: &mut VisualTestContext) -> Vec<String> {
         vcx.update(|window, _| {
-            gpui_kit::base::test_support::texts(window)
-                .into_iter()
-                .filter(|text| {
-                    text.path().iter().any(|id| {
-                        matches!(
-                            id,
-                            gpui_kit::ElementId::Name(name)
-                                if name.as_ref() == "worktree-removal-card"
-                        )
-                    })
-                })
-                .map(|text| text.text().to_string())
-                .collect()
+            [
+                "worktree-removal-target",
+                "worktree-removal-branch",
+                "worktree-removal-status",
+            ]
+            .into_iter()
+            .filter_map(|id| window.try_find(id)?.label().map(str::to_owned))
+            .collect()
         })
     }
 
@@ -1921,9 +2021,10 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_dirty_checkout_cannot_be_removed(cx: &mut TestAppContext) {
+    fn dirty_removal_requires_recovery_and_restores_file_bytes(cx: &mut TestAppContext) {
         lyrel_ui_base::i18n::set_locale("en");
         let (_main, _wt, main_root, wt_root) = repository_with_worktree();
+        std::fs::write(wt_root.join("file.txt"), b"changed\r\n").unwrap();
         std::fs::write(wt_root.join("untracked.txt"), "dirty").unwrap();
         let (app, mut vcx) = harness(cx);
         let (pane, _stream) = add_repo_tab(&app, &mut vcx, 1);
@@ -1935,27 +2036,41 @@ mod tests {
 
         open_picker(&mut vcx);
         open_removal(&mut vcx, "linked-checkout");
-        wait_for(&mut vcx, "the dirty-checkout refusal", |vcx| {
-            removal_texts(vcx)
-                .iter()
-                .any(|text| text.contains("uncommitted changes"))
-        });
-
-        let texts = removal_texts(&mut vcx);
+        wait_for(
+            &mut vcx,
+            "the dirty checkout's recovery confirmation",
+            |vcx| {
+                removal_texts(vcx)
+                    .iter()
+                    .any(|text| text.contains("untracked files"))
+            },
+        );
+        vcx.simulate_keystrokes("enter");
+        settle(&mut vcx);
         assert!(
-            texts
-                .iter()
-                .any(|text| text.contains("uncommitted changes")),
-            "the dialog refuses the dirty checkout: {texts:?}"
+            wt_root.exists(),
+            "selecting a checkout is not consent to destroy it"
         );
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
-        settle(&mut vcx);
-        assert!(wt_root.exists(), "the dirty checkout stays");
-        assert!(
-            git_at(&["worktree", "list", "--porcelain"], &main_root)
-                .contains(&wt_root.display().to_string()),
-            "it stays registered"
-        );
+        wait_for(&mut vcx, "the dirty checkout's recovery reference", |vcx| {
+            noticed(vcx, "refs/lyrel/trash/linked-checkout") && !wt_root.exists()
+        });
+        for (path, expected) in [
+            ("file.txt", &b"changed\r\n"[..]),
+            ("untracked.txt", &b"dirty"[..]),
+        ] {
+            let blob = std::process::Command::new("git")
+                .current_dir(&main_root)
+                .args([
+                    "cat-file",
+                    "blob",
+                    &format!("refs/lyrel/trash/linked-checkout:{path}"),
+                ])
+                .output()
+                .unwrap();
+            assert!(blob.status.success());
+            assert_eq!(&blob.stdout, expected);
+        }
     }
 
     #[gpui_kit::test]
@@ -2061,7 +2176,19 @@ mod tests {
             "the fixture holds an unsaved document inside the checkout"
         );
 
-        open_picker(&mut vcx);
+        // The docked document can own the status bar; use the other picker entrance.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(crate::ui::right_panel::RightPanelTab::Scm, window, cx);
+        });
+        wait_for(&mut vcx, "the Changes worktree entrance", |vcx| {
+            vcx.update(|window, _| {
+                window
+                    .try_find("scm-worktree")
+                    .is_some_and(|button| button.visible())
+            })
+        });
+        vcx.update(|window, cx| window.click("scm-worktree", cx));
+        wait_for(&mut vcx, "both checkouts", |vcx| row_labels(vcx).len() == 2);
         open_removal(&mut vcx, "linked-checkout");
         wait_for(&mut vcx, "the unsaved-document refusal", |vcx| {
             removal_texts(vcx)
