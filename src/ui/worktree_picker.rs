@@ -112,6 +112,9 @@ struct WorktreeRemoval {
 pub(crate) struct WorktreePicker {
     /// The Host the list was read on — also where a new tab opens.
     host: SharedHost,
+    /// The Context Pane's spawn route, distinct from the window's route for
+    /// a local sidecar inside a remote Workspace.
+    spawn_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
     /// The Context Pane's directory when the picker opened. The read runs
     /// from here, and the checkout containing it reads as the active row.
     cwd: PathBuf,
@@ -451,6 +454,9 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::PanelNoWorkingDirectory), cx);
             return;
         };
+        let spawn_workspace = self
+            .context_pane(window, cx)
+            .and_then(|pane| pane.read(cx).workspace().cloned());
         let query = cx.new(|cx| InputState::new(window, cx));
         let delegate = WorktreeDelegate::new(host.clone());
         let list = cx.new(|cx| ListState::new(delegate, window, cx));
@@ -466,6 +472,7 @@ impl LyrelApp {
         );
         self.worktree_picker = Some(WorktreePicker {
             host: host.clone(),
+            spawn_workspace,
             cwd: cwd.clone(),
             query,
             list,
@@ -602,7 +609,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.worktree_picker = None;
+        let Some(picker) = self.worktree_picker.take() else {
+            return;
+        };
+        let spawn_workspace = picker.spawn_workspace;
         let workspace = self.workspace;
         let host_id = pick.host.id();
         let target = pick.checkout.path.clone();
@@ -652,7 +662,7 @@ impl LyrelApp {
                         }
                     }
                     None => {
-                        this.open_terminal_at_checkout(target.clone(), window, cx);
+                        this.open_terminal_at_checkout(target, spawn_workspace, window, cx);
                     }
                 }
                 cx.notify();
@@ -666,12 +676,13 @@ impl LyrelApp {
     fn open_terminal_at_checkout(
         &mut self,
         path: PathBuf,
+        spawn_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let view = Self::new_terminal(
             crate::ui::app::PendingTerminalRequest::shell(
-                self.window_workspace(cx),
+                spawn_workspace,
                 Some(self.workspace),
                 self.font_size,
                 Some(path),
