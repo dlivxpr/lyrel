@@ -6,6 +6,7 @@ mod native_tests;
 #[cfg(test)]
 mod wire_tests;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::InputState;
 
 /// Owns the live form, its edit identity, and the last authoritative registry.

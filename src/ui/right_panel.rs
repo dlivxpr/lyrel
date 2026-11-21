@@ -1,7 +1,7 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -353,8 +353,7 @@ pub(crate) struct RightPanelState {
         std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
 }
 
-/// One workspace's right-panel tool layout — what the title-bar tool host
-/// renders from, and the value #348 persists per workspace.
+/// The tool layout rendered in the Side Panel's header and saved per Workspace.
 ///
 /// Holds the open tools in tab order, the active tool, the most recently
 /// used tool, and whether the panel column is expanded. A stored `Search`
@@ -878,7 +877,7 @@ impl LyrelApp {
         self.store_tool_layout(&layout, cx);
     }
 
-    /// Close `tab`'s tool tab from the title-bar host. Ordinary switches
+    /// Close `tab` in the Side Panel header. Ordinary switches
     /// never move the keyboard; closing only takes focus back when the panel
     /// collapsed under it or the closed tool owned the focus — otherwise the
     /// pointer and the keyboard stay wherever they were.
@@ -1074,12 +1073,9 @@ impl LyrelApp {
         (backing, handle)
     }
 
-    /// The band above a panel body. The tool tabs and the Changes count this
-    /// row used to carry moved to the title-bar tool host (#345), so for the
-    /// four tool pages this renders nothing and the body starts on its
-    /// content. The row survives only for a sub-view that brings trailing
-    /// controls of its own — the SFTP browser — and the `_count` a caller
-    /// still passes is the host's, not a tab badge, so it is dropped here.
+    /// A sub-view's action band beneath the Side Panel header. Only the SFTP
+    /// browser supplies trailing controls; tool names and the Changes count
+    /// belong to the header, not a second tab row.
     pub(crate) fn panel_title(
         &self,
         _text: &str,
@@ -1321,7 +1317,7 @@ impl LyrelApp {
             .with_size(px(13. / crate::ui::window_chrome::BUTTON_ICON_SCALE))
             .w(rems(TOOL_TILE))
             .h(rems(TOOL_TILE))
-            .rounded(rems(TOOL_TAB_RADIUS))
+            .rounded(px(TOOL_TAB_RADIUS / STEP))
             .accessibility_label(t(L10nKey::ToolHostAdd))
             .tooltip(t(L10nKey::ToolHostAdd))
             // Built when the menu opens, not when the strip draws.
