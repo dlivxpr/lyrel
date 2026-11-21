@@ -2,10 +2,10 @@
 //!
 //! Everything file-tree-internal — caches, watcher debounce, searches, inline
 //! operations, rendering — lives in `ui::file_tree`. What stays here is the
-//! tab-state wiring the entity cannot do without the app: resolving roots
-//! from the panes' working directories, mirroring the tree's view state into
-//! the active tab's code record, and answering the cross-panel intents the
-//! tree announces through `FileTreeEvent`.
+//! tab-state wiring the entity cannot do without the app: resolving the
+//! Files tab's single checkout root from the Context Pane, mirroring the
+//! tree's view state into the active tab's code record, and answering the
+//! cross-panel intents the tree announces through `FileTreeEvent`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -104,28 +104,15 @@ impl LyrelApp {
     }
 
     pub(crate) fn file_tree_refresh_roots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self.spawn_host(cx);
-        let Some((host, mut roots)) = (if id.is_local() {
-            self.project_roots(cx)
-        } else {
-            // Browsing follows the foreground pane; search keeps project roots.
-            self.active_host(cx).map(|host| {
-                let cwd = self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .and_then(|tab| tab.detail_pane(window, cx))
-                    .and_then(|pane| {
-                        let pane = pane.read(cx);
-                        (pane.host_id() == id && pane.remote_context().is_none())
-                            .then(|| pane.files_cwd())
-                            .flatten()
-                    });
-                (host, cwd.into_iter().collect())
-            })
-        }) else {
+        // One subject for everything the Files tab shows — the tree, the
+        // filename search and the content search alike: the Context Pane's
+        // checkout root, resolved on the Host that owns it. The rule is the
+        // same on every Host, so a remote workspace can no longer browse one
+        // directory while its searches describe another.
+        let Some((host, mut roots)) = self.project_roots(window, cx) else {
             return;
         };
-        let home = (roots.is_empty() && id.is_local())
+        let home = (roots.is_empty() && host.id().is_local())
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
         roots = browsable_roots(roots, home);
@@ -140,22 +127,36 @@ impl LyrelApp {
             .update(cx, |tree, cx| tree.sync_watch_to_view(host, cx));
     }
 
-    /// The project directories behind the active tab, on the host they live
-    /// on: each pane's repository root, or its directory where it is not in
-    /// one. `None` while a root is still being asked for (the ask is sent from
-    /// here); an empty list where no pane has a directory on this host.
+    /// The one checkout root behind the Files tab: the Context Pane's
+    /// repository root on the Host that owns it — the pane's own directory
+    /// where it is not in a repository. `None` while a root is still being
+    /// asked for (the ask is sent from here); an empty list where the pane
+    /// has no directory on its host.
     ///
-    /// Search uses these project roots even when remote browsing follows the
-    /// foreground pane's subdirectory. Only local browsing falls back to the
-    /// home directory — a folder to browse is harmless, a search of all of it
-    /// is not.
+    /// The tree and both Files searches read this, so all of them describe
+    /// the same checkout by construction — a result always belongs to the
+    /// tree the reader is looking at. Search Everywhere's file index keeps
+    /// its own, wider scope: every pane of the active tab
+    /// ([`Self::file_project_cwds`]).
     pub(crate) fn project_roots(
         &mut self,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, Vec<PathBuf>)> {
-        let host = self.active_host(cx)?;
+        let pane = self.context_pane(window, cx);
+        let host = pane
+            .as_ref()
+            .and_then(|leaf| leaf.read(cx).host(cx))
+            .or_else(|| self.active_host(cx))?;
         self.file_tree_sync_host(&host, cx);
-        let cwds = self.file_project_cwds(cx);
+        // Only the Context Pane supplies a directory. A union of every
+        // pane's root made a result belong to a tree the reader was not
+        // looking at, and only this pane's host may resolve its checkout.
+        let cwds = pane
+            .as_ref()
+            .and_then(|leaf| leaf.read(cx).files_cwd())
+            .into_iter()
+            .collect::<Vec<_>>();
         let roots = self
             .file_tree
             .update(cx, |tree, cx| tree.resolve_project_roots(&host, &cwds, cx))?;
@@ -163,6 +164,8 @@ impl LyrelApp {
     }
 
     pub(crate) fn file_project_cwds(&self, cx: &gpui_kit::App) -> Vec<PathBuf> {
+        // Search Everywhere's file index keys on every pane of the active tab
+        // — its scope is unchanged by the Files tab's Context Pane rooting.
         let id = self.spawn_host(cx);
         let leaves = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => tab.pane.terminals(),
