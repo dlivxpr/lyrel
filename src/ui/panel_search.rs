@@ -304,7 +304,8 @@ impl LyrelApp {
                 Some(l)
                     if matches!(l.outcome, Outcome::Found(_))
                         && !l.groups.is_empty()
-                        && run.wanted()
+                        && run
+                            .wanted()
                             .is_some_and(|w| w.host == l.key.host && w.roots == l.key.roots) =>
                 {
                     Body::Results
@@ -1208,12 +1209,10 @@ mod gpui_tests {
         loop {
             // files_cwd follows the foreground coordinator's cached cwd after
             // startup. Drive its production timer, not only wall-clock sleep.
-            vcx.executor()
-                .advance_clock(Duration::from_millis(300));
+            vcx.executor().advance_clock(Duration::from_millis(300));
             vcx.background_executor.run_until_parked();
             let rooted = app.update_in(&mut vcx, |app, window, cx| {
-                app.project_roots(window, cx).map(|(_, roots)| roots)
-                    == Some(vec![second.clone()])
+                app.project_roots(window, cx).map(|(_, roots)| roots) == Some(vec![second.clone()])
             });
             if rooted {
                 break;
@@ -1227,12 +1226,14 @@ mod gpui_tests {
         // Between the retarget and the new answer, the old checkout's hits
         // are the wrong subject: the panel says it is searching, not that it
         // has results.
-        let body = app.update_in(&mut vcx, |app, window, cx| app.panel_search_body(window, cx));
-        assert_eq!(body, Body::Searching, "stale hits from the old checkout");
-        assert!(matches!(
-            landed(&app, &mut vcx),
-            Outcome::Found(_)
-        ));
+        let body = app.update_in(&mut vcx, |app, window, cx| {
+            app.panel_search_body(window, cx)
+        });
+        assert!(
+            matches!(body, Body::Searching),
+            "stale hits from the old checkout"
+        );
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
         assert_eq!(
             groups(&app, &mut vcx),
             [("b.txt".to_string(), vec![1])],

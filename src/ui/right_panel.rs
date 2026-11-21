@@ -953,19 +953,25 @@ impl LyrelApp {
     ) {
         let tab = shown_tab(tab);
         let mut layout = self.tool_layout();
-        let was_active = layout.active == tab;
-        layout.close(tab);
+        let tab_list_focused = self.right_panel_nav_focus.contains_focused(window, cx);
+        let moved_to = layout.close(tab);
         // The SFTP browser belongs to the Files tool: retire its revalidation
         // when the tool in front changes or the panel goes away, exactly as
         // a tab switch does.
-        if was_active || !layout.open {
+        if moved_to.is_some() || !layout.open {
             self.sftp_retire_revalidation();
         }
         self.store_tool_layout(&layout, cx);
         let focus_gone = window
             .focused(cx)
             .is_some_and(|focused| !focused.is_rendered(window));
-        if !self.right_panel_visible || focus_gone {
+        if !layout.open && tab_list_focused {
+            self.leave_right_panel_navigation(window, cx);
+        } else if layout.open && moved_to.is_some() && tab_list_focused {
+            // The next layout registers the neighbour as the new roving stop.
+            window.focus(&self.right_panel_nav_focus, cx);
+            self.right_panel_nav_wait.set(2);
+        } else if !layout.open || focus_gone {
             self.focus_previous_content(window, cx);
         }
     }
@@ -2854,6 +2860,7 @@ mod tests {
         let mut layout = ToolLayout::default();
         layout.show(Files);
         layout.show(Scm);
+        layout.show(Files);
         assert_eq!(layout.close(Files), Some(Scm));
         assert_eq!(layout.active, Scm);
         assert_eq!(layout.order, [Info, Scm]);
@@ -3136,13 +3143,9 @@ mod persistence_tests {
         // — First session: two workspaces used differently. —
         let alpha = claim_workspace(cx);
         let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, alpha);
-        for action in [
-            ShowRightPanelFiles,
-            ShowRightPanelChanges,
-            ShowRightPanelGitHub,
-        ] {
-            vcx.dispatch_action(action);
-        }
+        vcx.dispatch_action(ShowRightPanelFiles);
+        vcx.dispatch_action(ShowRightPanelChanges);
+        vcx.dispatch_action(ShowRightPanelGitHub);
         settle(&mut vcx);
         // Select a tool that is not the last-opened one, then collapse: the
         // persisted state has to carry order, active tool, last-used tool
@@ -3186,7 +3189,10 @@ mod persistence_tests {
             ToolLayout::default()
         );
         assert_eq!(
-            app.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            app.read_with(&vcx, |app, _| (
+                app.right_panel_visible,
+                app.right_panel_tab
+            )),
             (false, Info)
         );
 
@@ -3215,7 +3221,10 @@ mod persistence_tests {
             "alpha comes back with its own order, selection and open state"
         );
         assert_eq!(
-            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            relaunched.read_with(&vcx, |app, _| (
+                app.right_panel_visible,
+                app.right_panel_tab
+            )),
             (written_alpha.open, written_alpha.active),
             "the live mirror fields the panel renders from agree"
         );
@@ -3254,7 +3263,10 @@ mod persistence_tests {
             ToolLayout::default()
         );
         assert_eq!(
-            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            relaunched.read_with(&vcx, |app, _| (
+                app.right_panel_visible,
+                app.right_panel_tab
+            )),
             (false, Info)
         );
     }

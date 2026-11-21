@@ -102,8 +102,7 @@ fn oklab_to_srgb(lab: [f32; 3]) -> gpui_kit::Rgba {
             -0.004_196_086_5 * l - 0.703_418_6 * m + 1.707_614_7 * s,
         ]
     };
-    let in_gamut =
-        |lab: [f32; 3]| to_linear(lab).into_iter().all(|c| (0.0..=1.0).contains(&c));
+    let in_gamut = |lab: [f32; 3]| to_linear(lab).into_iter().all(|c| (0.0..=1.0).contains(&c));
     let mut lab = lab;
     if !in_gamut(lab) {
         let (mut lo, mut hi) = (0.0f32, 1.0f32);
@@ -238,10 +237,7 @@ fn mix_preset(from: &presets::Theme, to: &presets::Theme, t: f32) -> presets::Th
         foreground: mix_u32(from.foreground, to.foreground),
         accent: mix_u32(from.accent, to.accent),
         caret: Some(mix_u32(effective_caret(from), effective_caret(to))),
-        selection: Some(mix_u32(
-            effective_selection(from),
-            effective_selection(to),
-        )),
+        selection: Some(mix_u32(effective_selection(from), effective_selection(to))),
         opacity: to.opacity,
         blur: to.blur,
         image: to.image.clone(),
@@ -267,9 +263,9 @@ fn same_mix_inputs(a: &presets::Theme, b: &presets::Theme) -> bool {
 /// How long the crossfade from `from` to `to` runs.
 fn fade_duration(from: &presets::Theme, to: &presets::Theme) -> Duration {
     if from.dark != to.dark {
-        let travel =
-            (oklab(unpack(from.background.color()))[0] - oklab(unpack(to.background.color()))[0])
-                .abs();
+        let from_lightness = oklab(unpack(from.background.color()).into())[0];
+        let to_lightness = oklab(unpack(to.background.color()).into())[0];
+        let travel = (from_lightness - to_lightness).abs();
         if travel >= FLIP_TRAVEL {
             return FLIP_FADE;
         }
@@ -288,9 +284,8 @@ struct ThemeFade {
 
 impl ThemeFade {
     fn progress(&self, now: Instant) -> f32 {
-        (now.saturating_duration_since(self.started).as_secs_f32()
-            / self.duration.as_secs_f32())
-        .clamp(0.0, 1.0)
+        (now.saturating_duration_since(self.started).as_secs_f32() / self.duration.as_secs_f32())
+            .clamp(0.0, 1.0)
     }
 
     /// The preset to install at `now`. Identity is always the destination's;
@@ -416,12 +411,8 @@ fn start_driver(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(TICK).await;
-            // `true`: the fade owes another frame. `false`: it landed (or
-            // motion was reduced) and the driver rests. `Err`: the app is
-            // going away.
-            match cx.update(|cx| tick(cx)) {
-                Ok(true) => {}
-                _ => return,
+            if !cx.update(tick) {
+                return;
             }
         }
     })
@@ -436,7 +427,10 @@ fn tick(cx: &mut App) -> bool {
         let target = {
             let state = cx.global_mut::<ThemeTransition>();
             state.driving = false;
-            state.fade.take().map(|fade| (fade.to, fade.material_active))
+            state
+                .fade
+                .take()
+                .map(|fade| (fade.to, fade.material_active))
         };
         if let Some((theme, material)) = target {
             lyrel_ui_base::presentation::install_preset_theme(None, cx, &theme, material);
@@ -545,7 +539,8 @@ pub(crate) fn install_test_clock() -> TestClockGuard {
 /// from the colors alone.
 #[cfg(test)]
 pub(crate) fn fade_active(cx: &App) -> bool {
-    cx.try_global::<ThemeTransition>().is_some_and(|state| state.fade.is_some())
+    cx.try_global::<ThemeTransition>()
+        .is_some_and(|state| state.fade.is_some())
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 use crate::ui::app::test_window;
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings::test_window as settings_window;
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{Focusable as _, TestAppContext};
 use lyrel_core::core::config::MotionPreference;
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::i18n::{L10nKey, t};
@@ -249,7 +249,7 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.find(("tab-badge", 0));
+        window.find(("tab-badge", 0usize));
         assert!(
             window.simulate_next_frame(cx) > 0,
             "the badge fade-in runs as an animation while motion is allowed"
@@ -261,7 +261,7 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
-            window.find(("tab-badge", 0)).visible(),
+            window.find(("tab-badge", 0usize)).visible(),
             "the held badges stay shown at their final state"
         );
         assert_eq!(
@@ -278,7 +278,7 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window.find_all(("tab-badge", 0)).len(),
+            window.find_all(("tab-badge", 0usize)).len(),
             1,
             "the badges stay mounted while they fade out"
         );
@@ -288,7 +288,7 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
-            window.find_all(("tab-badge", 0)).is_empty(),
+            window.find_all(("tab-badge", 0usize)).is_empty(),
             "the badges unmount once the fade-out completes"
         );
     });
@@ -311,7 +311,7 @@ fn reduced_held_hints_appear_static_and_a_fast_tap_raises_nothing(cx: &mut TestA
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
-            window.find_all(("tab-badge", 0)).is_empty(),
+            window.find_all(("tab-badge", 0usize)).is_empty(),
             "a tap shorter than the hold delay raises no badges"
         );
     });
@@ -324,7 +324,7 @@ fn reduced_held_hints_appear_static_and_a_fast_tap_raises_nothing(cx: &mut TestA
         window.render_frame(cx);
         let _ = window.simulate_next_frame(cx);
         window.render_frame(cx);
-        window.find(("tab-badge", 0));
+        window.find(("tab-badge", 0usize));
         assert_eq!(
             window.simulate_next_frame(cx),
             0,
@@ -338,7 +338,7 @@ fn reduced_held_hints_appear_static_and_a_fast_tap_raises_nothing(cx: &mut TestA
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert!(window.find_all(("tab-badge", 0)).is_empty());
+        assert!(window.find_all(("tab-badge", 0usize)).is_empty());
         assert_eq!(window.simulate_next_frame(cx), 0);
     });
 }
