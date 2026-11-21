@@ -240,6 +240,10 @@ pub struct LyrelApp {
     pub(crate) session: SessionLifecycle,
     pub(crate) renaming: Option<Renaming>,
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
+    /// The shared worktree picker, while open. One instance serves both
+    /// Git entrances — the Changes header and the status bar's indicator —
+    /// because both entrances are the same choice, not two pickers (#351).
+    pub(crate) worktree_picker: Option<crate::ui::worktree_picker::WorktreePicker>,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
     /// Badges stay mounted after the hold ends while they fade out; the
@@ -1630,10 +1634,6 @@ impl LyrelApp {
         if let Some(tab) = self.tabs.remember_leaf(leaf) {
             self.status_document_focus = Some((tab, false));
         }
-        // A terminal taking focus is the one moment the Context Pane is known
-        // to have changed without asking the layout. A repository pick made on
-        // another pane must not silently ride along with it (#349).
-        self.scm.note_context_leaf(leaf);
     }
 
     /// The Context Pane: the last valid terminal pane of the active
@@ -1771,7 +1771,7 @@ impl LyrelApp {
         }
     }
 
-    fn new_tab_insert_at(&self, cx: &App) -> usize {
+    pub(crate) fn new_tab_insert_at(&self, cx: &App) -> usize {
         match cx.global::<Config>().new_tab_position {
             NewTabPosition::AfterCurrent => (self.tabs.active_index() + 1).min(self.tabs.len()),
             NewTabPosition::End => self.tabs.len(),
@@ -4115,6 +4115,19 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::AppTabNoWorkingDirectory), cx);
             return;
         };
+        self.new_worktree_at(host, cwd, window, cx);
+    }
+
+    /// The existing creation flow for `host` + `cwd`'s repository: read the
+    /// suggested name/base on the Host, then open the prompt. The worktree
+    /// picker (#351) hands over the Context Pane it captured the same way.
+    pub(crate) fn new_worktree_at(
+        &mut self,
+        host: lyrel_ui_base::host_ops::SharedHost,
+        cwd: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let sheet_host = host.clone();
         let probe_cwd = cwd.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(

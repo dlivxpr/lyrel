@@ -399,10 +399,7 @@ impl ScmPanelState {
 
     pub(crate) fn begin_branch_at(
         &mut self,
-        repo: RepoKey,
         rev: String,
-        tab: usize,
-        pane: Option<gpui_kit::EntityId>,
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
     ) {
@@ -410,7 +407,6 @@ impl ScmPanelState {
             cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::ScmCreateBranchHere)));
         let handle = input.read(cx).focus_handle(cx);
         self.graph.naming = Some((input, rev));
-        self.select_repository(repo, tab, pane);
         window.focus(&handle, cx);
         cx.notify();
     }

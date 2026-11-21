@@ -4,7 +4,7 @@ use chrono::Timelike as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
-use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems, svg};
+use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems};
 
 use crate::ui::app::LyrelApp;
 use lyrel_ui_base::actions::{OpenSettings, ToggleSwitcher};
@@ -172,13 +172,13 @@ impl LyrelApp {
         // a repository (#349). A document, a menu or the panel holding focus
         // must not hand the subject back to the tab's first leaf.
         let leaf = self.context_pane(window, cx);
-        let branch = (!document)
-            .then(|| {
-                leaf.as_ref()
-                    .and_then(|leaf| leaf.read(cx).git_status(cx))
-                    .map(|git| git.branch)
-            })
+        let git = (!document)
+            .then(|| leaf.as_ref().and_then(|leaf| leaf.read(cx).git_status(cx)))
             .flatten();
+        let branch = git.as_ref().map(|git| git.branch.clone());
+        let counts = git
+            .filter(|git| git.added > 0 || git.removed > 0)
+            .map(|git| (git.added, git.removed));
         let program = (!document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
@@ -231,17 +231,42 @@ impl LyrelApp {
                 )
             })
             .when_some(branch, |row, branch| {
+                // The branch names the repository; clicking it opens the same
+                // searchable worktree picker the Changes header offers (#351).
                 row.child(
-                    h_flex()
-                        .id("status-git-branch")
-                        .test_support()
-                        .role(gpui_kit::Role::Status)
-                        .aria_label(branch.clone())
-                        .min_w_0()
+                    Button::new("status-git-branch")
+                        .ghost()
+                        .xsmall()
+                        .flex_shrink_1()
+                        .min_w(rems(1.5))
                         .max_w(rems(12.))
-                        .gap_1()
-                        .child(svg().path("icons/git-branch.svg").size_3().flex_none())
-                        .child(div().min_w_0().text_ellipsis().child(branch)),
+                        .icon(Icon::empty().path("icons/git-branch.svg"))
+                        .label(branch)
+                        .tooltip(t(L10nKey::StatusGitWorktree))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_worktree_picker(window, cx);
+                        })),
+                )
+            })
+            .when_some(counts, |row, (added, removed)| {
+                // The real +added −removed line counts are a different action
+                // from the worktree list: they open Changes, never the picker
+                // or a branch checkout (#351). Kept distinct from the tool
+                // tab's changed-item count, which counts entries.
+                row.child(
+                    Button::new("status-git-counts")
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .label(format!("+{added} −{removed}"))
+                        .tooltip(t(L10nKey::PanelScmTitle))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.set_right_panel_tab(
+                                lyrel_core::core::config::RightPanelTab::Scm,
+                                window,
+                                cx,
+                            );
+                        })),
                 )
             });
         h_flex()
@@ -533,10 +558,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_git_and_info_follow_the_context_pane_and_a_repo_pick_yields(cx: &mut TestAppContext) {
-        use crate::ui::app::{LyrelApp, test_window::harness};
+    fn status_git_and_info_follow_the_context_pane(cx: &mut TestAppContext) {
+        use crate::ui::app::test_window::harness;
         use crate::ui::pane::{Pane, PaneSlot};
-        use crate::ui::scm::state::RepoKey;
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use lyrel_core::core::config::RightPanelTab;
         use lyrel_terminal::view::quiet_test_pane;
@@ -659,32 +683,81 @@ mod tests {
         assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-left"));
         assert!(info_cwd_shows(&mut vcx, "/repo-left"));
 
-        // A repository pick stands while the pane it was made on supplies the
-        // data; focusing a different terminal pane hands the subject back to
-        // the pane — the choice must not silently override it.
-        app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.context_pane(window, cx).map(|leaf| leaf.entity_id());
-            app.scm.select_repository(
-                RepoKey {
-                    host: HostId::LOCAL,
-                    root: std::path::PathBuf::from("/repo-left"),
-                },
-                app.tabs.active_index(),
-                pane,
-            );
-        });
+        // There is no remembered repository pick to outrank the pane: the
+        // panel's subject is the Context Pane itself, so focusing a different
+        // terminal pane is the only thing that moves it (#349, #345).
         assert!(
             app.read_with(&vcx, |app, _| app.scm.active_repo().is_some()),
-            "the explicit pick stands while its pane remains the Context Pane"
+            "the Context Pane's repository is the panel's subject"
         );
         app.update_in(&mut vcx, |_, window, cx| {
             right.read(cx).focus_handle.clone().focus(window, cx);
         });
         settle(&mut vcx);
-        assert!(
-            app.read_with(&vcx, |app, _| app.scm.active_repo().is_none()),
-            "the pick yields once a different pane takes context"
-        );
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
+        assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+    }
+
+    #[gpui_kit::test]
+    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_ui_base::host_ops::HostId;
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        let pane = app.read_with(&vcx, |app, _| {
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .and_then(|slot| slot.terminal().cloned())
+                .expect("test pane")
+        });
+        let cwd = std::path::PathBuf::from("/repo-left");
+        app.update_in(&mut vcx, |app, _, cx| {
+            pane.update(cx, |view, _| {
+                view.set_git_status_cwd_for_test(Some(cwd.clone()));
+            });
+            cx.default_global::<GitStatusCache>().finish_probe(
+                HostId::LOCAL,
+                &cwd,
+                Some(RepoSnapshot {
+                    root: cwd.clone(),
+                    home: cwd,
+                    branch: "ctx-left".into(),
+                    counts: Some((5, 3)),
+                }),
+            );
+            cx.notify();
+        });
+        settle(&mut vcx);
+
+        // Real +added −removed counts sit beside the branch…
+        vcx.update(|window, _| {
+            let counts = window.find("status-git-counts");
+            assert!(counts.visible());
+            assert_eq!(counts.label(), Some("+5 −3"));
+        });
+        // …and open Changes — not the picker.
+        vcx.update(|window, cx| window.click("status-git-counts", cx));
+        settle(&mut vcx);
+        app.read_with(&vcx, |app, _| {
+            assert!(app.right_panel_visible, "counts open the Changes tool");
+            assert_eq!(
+                app.right_panel_tab,
+                lyrel_core::core::config::RightPanelTab::Scm
+            );
+            assert!(
+                app.worktree_picker.is_none(),
+                "the counts action never opens the worktree picker"
+            );
+        });
+
+        // The branch opens the shared picker instead.
+        vcx.update(|window, cx| window.click("status-git-branch", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_some()));
     }
 
     #[gpui_kit::test]

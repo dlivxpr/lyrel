@@ -376,6 +376,7 @@ impl LyrelApp {
             session: SessionLifecycle::default(),
             renaming: None,
             worktree_prompt: None,
+            worktree_picker: None,
             maximized: None,
             mod_hint_badges: false,
             mod_hint_fading: false,
