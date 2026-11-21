@@ -1,12 +1,16 @@
-//! One issue or pull request, pushed into the GitHub tab over its list.
+//! One issue or pull request, read as a document in the tab's document area.
 //!
-//! Title, state, author, labels, the body and the conversation as Markdown —
-//! through gpui-component's `TextView`, after `lyrel_insights::github::markdown` has
-//! turned images into links and disarmed non-web link targets — and, for a
-//! pull request, its branches, where it stands on merging, its checks, its
-//! reviewers and its changed files. A file opens in the diff overlay, the
-//! same surface a commit's files open in, fed the patch GitHub sent rather
-//! than one git read.
+//! The list hands the reader over through
+//! [`LyrelApp::github_open_detail`](crate::ui::github) and stays in the panel;
+//! this file draws what the document area receives: the document header, the
+//! same sections the detail has always had — title, state, author, labels,
+//! the body and the conversation as Markdown, through gpui-component's
+//! `TextView`, after `lyrel_insights::github::markdown` has turned images into
+//! links and disarmed non-web link targets — and, for a pull request, its
+//! branches, where it stands on merging, its checks, its reviewers and its
+//! changed files. A file opens in the diff overlay, the same surface a
+//! commit's files open in, fed the patch GitHub sent rather than one git
+//! read.
 
 use std::sync::Arc;
 
@@ -21,6 +25,8 @@ use lyrel_insights::github::{
 };
 
 use crate::ui::app::LyrelApp;
+use crate::ui::diff_overlay::{HAIRLINE_W, hairline};
+use crate::ui::document_column::DocumentChrome;
 use crate::ui::github::{Fold, now_unix};
 use crate::ui::panel_github::{
     check_glyph, check_label, describe_error, github_tile, label_chip, state_glyph, state_label,
@@ -31,7 +37,7 @@ use crate::ui::right_panel::{
 use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::RepoKey;
 use crate::ui::scm::status::{status_color, status_glyph};
-use crate::ui::window_chrome::CONTENT_INSET;
+use crate::ui::window_chrome::{CONTENT_INSET, TitleStripRow as _};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 
 const ROW_H: f32 = 26.;
@@ -57,18 +63,44 @@ const COMMENTS_KEPT_LATEST: usize = 2;
 const CLAMP_LINES: usize = 18;
 const CLAMP_CHARS: usize = 1600;
 const CLAMP_HEIGHT: f32 = 16.;
+/// The document header's close tile, the same notch the diff header's uses.
+const CLOSE_TILE: f32 = crate::ui::tab_strip::RAIL_TILE;
+
+/// Paints the full-window GitHub document without inheriting workspace
+/// opacity — the same contract the diff overlay's fill shell keeps.
+fn github_document_background(
+    active: Option<&lyrel_ui_base::presets::ActiveBackground>,
+    fallback: gpui_kit::Hsla,
+) -> gpui_kit::Background {
+    match active {
+        Some(bg) => crate::ui::theme::window_background_opaque(bg),
+        None => fallback.alpha(1.0).into(),
+    }
+}
 
 impl LyrelApp {
-    /// The rows pinned over the detail, and the detail itself.
-    pub(crate) fn render_github_detail(
+    /// The detail as a document: a document header over the same body the
+    /// panel used to pin over its list, in a shell that docks beside the
+    /// terminal and fills the window the way the code and diff shells do.
+    pub(crate) fn render_github_detail_document(
         &mut self,
-        repo: &RepoKey,
-        slug: &RepoSlug,
-        number: u64,
-        _window: &mut Window,
+        chrome: DocumentChrome,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (Vec<AnyElement>, AnyElement) {
-        self.github_ensure_detail(slug, number, cx);
+    ) -> Option<AnyElement> {
+        let active = self.tabs.active_index();
+        let (slug, number, host_id, cwd, focus_handle, scroll) = {
+            let doc = self.tabs.get(active)?.github_detail.as_ref()?;
+            (
+                doc.slug.clone(),
+                doc.number,
+                doc.host_id,
+                doc.cwd.clone(),
+                doc.focus_handle.clone(),
+                doc.scroll.clone(),
+            )
+        };
+        self.github_ensure_detail(&slug, number, cx);
         let key = (slug.clone(), number);
         let (detail, error) = match self.github.details.get(&key) {
             Some(c) => (c.detail.clone(), c.error.clone()),
@@ -88,17 +120,127 @@ impl LyrelApp {
             },
             |d| d.item.html_url.clone(),
         );
-        let pinned = vec![self.github_back_row(repo, number, is_pr, url, cx)];
+        let repo = RepoKey {
+            host: host_id,
+            root: cwd,
+        };
+        let header = self.github_document_header(
+            chrome,
+            &repo,
+            number,
+            is_pr,
+            url,
+            detail.as_ref().map(|d| d.item.title.clone()),
+            window,
+            cx,
+        );
+        let body = self.github_detail_body(&repo, &slug, number, detail, error, cx);
 
+        let scroller = div()
+            .id("github-detail-scroll")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .child(body);
+        let content =
+            lyrel_ui_base::scrollbar::with_vertical_scrollbar("github-detail-scrollbar", scroller, &scroll);
+
+        let shell = v_flex()
+            .id("github-detail-document")
+            .test_support()
+            .text_color(cx.theme().foreground)
+            .track_focus(&focus_handle)
+            .on_key_down(cx.listener(move |this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                this.github_detail_key_down(&scroll, event, window, cx);
+            }))
+            .child(header)
+            .child(content);
+        // The fill chrome covers the workspace, so it stops window
+        // translucency and the theme backdrop the way the diff shell does.
+        // Docked, the document column has already painted the surface.
+        let shell = match chrome {
+            DocumentChrome::Fill => shell
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(github_document_background(
+                    cx.try_global::<lyrel_ui_base::presets::ActiveBackground>(),
+                    cx.theme().background,
+                ))
+                .children(crate::ui::app::overlay_surface_layers(cx)),
+            DocumentChrome::Dock => shell.size_full().min_w_0(),
+        };
+        Some(shell.into_any_element())
+    }
+
+    /// The document's own keyboard. Escape hands the surface back the way it
+    /// came, and the reading keys scroll: an explicitly opened detail is
+    /// readable without a pointer.
+    fn github_detail_key_down(
+        &mut self,
+        scroll: &gpui_kit::ScrollHandle,
+        event: &gpui_kit::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step = |delta: f32| {
+            // Offsets run negative as content scroll down, clamped between
+            // the top and whatever the last layout measured as the bottom.
+            let next = (scroll.offset().y + px(delta)).max(scroll.max_offset().y);
+            scroll.set_offset(gpui_kit::point(px(0.), next.min(px(0.))));
+        };
+        match event.keystroke.key.as_str() {
+            "escape" => self.github_close_detail(window, cx),
+            "up" => {
+                step(-(ROW_H + 6.));
+                cx.stop_propagation();
+            }
+            "down" => {
+                step(ROW_H + 6.);
+                cx.stop_propagation();
+            }
+            "pageup" => {
+                step(-scroll.bounds().height.as_f32());
+                cx.stop_propagation();
+            }
+            "pagedown" => {
+                step(scroll.bounds().height.as_f32());
+                cx.stop_propagation();
+            }
+            "home" => {
+                scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                cx.stop_propagation();
+            }
+            "end" => {
+                scroll.set_offset(gpui_kit::point(px(0.), scroll.max_offset().y));
+                cx.stop_propagation();
+            }
+            _ => {}
+        }
+    }
+
+    /// The body under the header: identity, checks, reviews, description,
+    /// files and the conversation — the sections the detail has always had,
+    /// neither re-authored nor re-fetched for the document move.
+    fn github_detail_body(
+        &self,
+        repo: &RepoKey,
+        slug: &RepoSlug,
+        number: u64,
+        detail: Option<Arc<Detail>>,
+        error: Option<lyrel_insights::github::ApiError>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(detail) = detail else {
-            let body = match error {
+            return match error {
                 Some(err) => {
                     let (text, hint) = describe_error(&err, self.github_authenticated());
                     self.panel_empty(&text, hint.as_deref(), cx)
                 }
                 None => self.panel_empty(t(L10nKey::PanelLoading), None, cx),
             };
-            return (pinned, body);
         };
 
         let mut body = v_flex()
@@ -141,7 +283,7 @@ impl LyrelApp {
             body = body.child(self.github_detail_files(repo, slug, &detail, files, cx));
         }
         body = body.child(self.github_detail_comments(slug, number, &detail, cx));
-        (pinned, body.into_any_element())
+        body.into_any_element()
     }
 
     fn github_unfolded(&self, slug: &RepoSlug, number: u64, fold: Fold) -> bool {
@@ -164,22 +306,40 @@ impl LyrelApp {
         })
     }
 
-    fn github_back_row(
+    /// The document header: the way back to the list, what the document is,
+    /// refresh and external link, and the same Dock / Fill switch the code
+    /// and diff headers carry. No path, save, dirty, cursor or encoding
+    /// chrome — the content is read-only and names its repository, not a
+    /// file.
+    fn github_document_header(
         &self,
+        chrome: DocumentChrome,
         repo: &RepoKey,
         number: u64,
         is_pr: bool,
         url: String,
+        title: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
-        let muted = cx.theme().muted_foreground;
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let has_title = title.is_some();
         h_flex()
-            .flex_none()
+            .id("github-detail-header")
+            .test_support()
+            .flex_shrink_0()
+            .min_w_0()
+            // The same strip geometry the other document headers keep, so
+            // the layout switch lands on the same line in all three.
+            .title_strip_row(HAIRLINE_W, hairline(cx))
+            .pl(px(CONTENT_INSET))
+            .pr(px(crate::ui::window_chrome::tile_trailing_inset()
+                + (crate::ui::window_chrome::TILE_SIZE - CLOSE_TILE) / 2.))
+            .gap_2()
             .items_center()
-            .gap(px(4.))
-            .h(px(28.))
-            .px(px(CONTENT_INSET))
+            .children(self.render_document_terminal_button(chrome, window, cx))
             .child(
                 h_flex()
                     .id("panel-github-back")
@@ -207,15 +367,29 @@ impl LyrelApp {
                             })),
                     ),
             )
-            .child(div().flex_1().min_w_0())
             .child(
                 div()
+                    .flex_none()
                     .text_size(rems(META_MONO))
-                    .font_family(cx.theme().mono_font_family.clone())
+                    .font_family(theme.mono_font_family.clone())
                     .text_color(muted)
                     .child(format!("#{number}")),
             )
-            .child(self.github_refresh_tile(Some(repo.clone()), cx))
+            .when_some(title, |bar, title| {
+                bar.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(rems(TEXT))
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(title),
+                )
+            })
+            .when(!has_title, |bar| bar.child(div().flex_1().min_w_0()))
+            .child(
+                self.github_refresh_tile("github-detail-refresh", Some(repo.clone()), cx),
+            )
             .child(
                 github_tile(
                     "panel-github-open-item",
@@ -224,6 +398,29 @@ impl LyrelApp {
                     cx,
                 )
                 .on_click(move |_, _window, cx| cx.open_url(&url)),
+            )
+            .child(
+                div()
+                    .occlude()
+                    .flex_shrink_0()
+                    .child(self.document_layout_switch(chrome, cx)),
+            )
+            .child(
+                div().occlude().flex_shrink_0().child(
+                    crate::ui::window_chrome::chrome_tile_sized(
+                        gpui_kit::component::button::Button::new("github-detail-close")
+                            .icon(Icon::new(IconName::Close)),
+                        CLOSE_TILE,
+                        crate::ui::tab_strip::RAIL_TILE_GLYPH,
+                        false,
+                        cx,
+                    )
+                    .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
+                    .tooltip(t(L10nKey::Close))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.github_close_detail(window, cx);
+                    })),
+                ),
             )
             .into_any_element()
     }

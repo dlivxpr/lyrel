@@ -243,21 +243,32 @@ impl LyrelApp {
                     window,
                     cx,
                 );
+                let github_document = self.render_github_detail_document(
+                    crate::ui::document_column::DocumentChrome::Fill,
+                    window,
+                    cx,
+                );
                 let code_overlay = self.render_code_overlay(
                     crate::ui::document_column::DocumentChrome::Fill,
                     window,
                     cx,
                 );
-                let mut pair = vec![
-                    (OverlayTop::Diff, diff_overlay),
+                // Every open document surface paints, the stack's bottom
+                // first — code, then the detail over it, then the patch over
+                // the detail — and the raised surface, which may sit anywhere
+                // in that stack, paints last and wins on paint order the way
+                // overlay_top always has.
+                let front = self.document_front();
+                let mut pair: Vec<(OverlayTop, Option<gpui_kit::AnyElement>)> = vec![
                     (OverlayTop::Code, code_overlay),
+                    (OverlayTop::Github, github_document),
+                    (OverlayTop::Diff, diff_overlay),
                 ];
-                if self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .is_some_and(Tab::is_diff_on_top)
-                {
-                    pair.reverse();
+                if let Some(ix) = front.and_then(|surface| {
+                    pair.iter().position(|(candidate, _)| *candidate == surface)
+                }) {
+                    let raised = pair.remove(ix);
+                    pair.push(raised);
                 }
                 (
                     pair.into_iter()

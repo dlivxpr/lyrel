@@ -194,6 +194,7 @@ pub(crate) fn switch_track(
     let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
     h_flex()
         .id(id)
+        .test_support()
         .when(cfg!(test), |track| track.debug_selector(move || id.into()))
         .occlude()
         .flex_none()
@@ -225,6 +226,7 @@ where
     let dark = theme.mode.is_dark();
     div()
         .id(id)
+        .test_support()
         .when(cfg!(test), |cell| {
             cell.debug_selector(move || t(tip).into())
         })
@@ -516,6 +518,7 @@ impl LyrelApp {
         let surface = match self.document_front()? {
             OverlayTop::Code => self.render_code_overlay(chrome, window, cx),
             OverlayTop::Diff => self.render_diff_overlay(chrome, window, cx),
+            OverlayTop::Github => self.render_github_detail_document(chrome, window, cx),
         }?;
         let (backing, handle) = self.document_resize(body, cx);
         Some(

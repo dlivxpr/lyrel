@@ -22,6 +22,9 @@ pub(crate) struct Tab {
     /// while the tab is active: then the zoom lives in `LyrelApp::maximized`.
     zoomed: Option<Entity<TerminalView>>,
     pub(crate) diff_overlay: Option<crate::ui::diff_overlay::DiffOverlayState>,
+    /// The GitHub issue or pull request open as a read-only document, if the
+    /// list has handed one to this tab's document area.
+    pub(crate) github_detail: Option<crate::ui::github::GithubDetailDoc>,
     pub(crate) code: Option<Box<lyrel_workbench_editor::code_editor::TabCode>>,
     /// The pinned sidebar group this tab was put in, by id, or `None` to
     /// leave it to auto grouping. A `Cell` because the sidebar files a tab
@@ -101,6 +104,9 @@ pub(crate) enum OverlayTop {
     #[default]
     Code,
     Diff,
+    /// A GitHub issue or pull request read as a document over the code
+    /// surface, under a patch opened from it.
+    Github,
 }
 
 impl Tab {
@@ -117,6 +123,7 @@ impl Tab {
             last_focused: None,
             zoomed: None,
             diff_overlay: None,
+            github_detail: None,
             code: None,
             overlay_top: OverlayTop::default(),
             document_layout: None,
@@ -141,6 +148,7 @@ impl Tab {
             last_focused: None,
             zoomed: None,
             diff_overlay: None,
+            github_detail: None,
             code: None,
             overlay_top: OverlayTop::default(),
             document_layout: None,
@@ -358,18 +366,24 @@ impl Tab {
         self.document_layout = Some(layout);
     }
 
-    pub(crate) fn is_diff_on_top(&self) -> bool {
-        self.overlay_top == OverlayTop::Diff
-    }
-
+    /// Which document surface leads, if any.
+    ///
+    /// `overlay_top` remembers the surface raised most recently. When that
+    /// one has since been closed, the front falls back through the stack —
+    /// the read-only GitHub detail reads over the code document, and a patch
+    /// opens over the detail it came from — so dismissing the leader
+    /// promotes what is under it instead of whichever surface comes first.
     pub(crate) fn document_front(&self) -> Option<OverlayTop> {
-        let code = self.code.as_ref().is_some_and(|code| code.visible);
-        let diff = self.diff_overlay.is_some();
-        match (self.overlay_top, code, diff) {
-            (_, false, false) => None,
-            (OverlayTop::Code, true, _) | (OverlayTop::Diff, true, false) => Some(OverlayTop::Code),
-            (OverlayTop::Diff, _, true) | (OverlayTop::Code, false, true) => Some(OverlayTop::Diff),
-        }
+        let open = |surface: OverlayTop| match surface {
+            OverlayTop::Code => self.code.as_ref().is_some_and(|code| code.visible),
+            OverlayTop::Github => self.github_detail.is_some(),
+            OverlayTop::Diff => self.diff_overlay.is_some(),
+        };
+        open(self.overlay_top).then_some(self.overlay_top).or_else(|| {
+            [OverlayTop::Diff, OverlayTop::Github, OverlayTop::Code]
+                .into_iter()
+                .find(|surface| open(*surface))
+        })
     }
 
     /// Raise the code surface and report whether it was visible but buried.
@@ -387,6 +401,11 @@ impl Tab {
             || !self.code.as_ref().is_some_and(|code| code.visible);
         self.overlay_top = OverlayTop::Diff;
         was_front
+    }
+
+    /// Raise the GitHub detail surface.
+    pub(crate) fn reveal_github(&mut self) {
+        self.overlay_top = OverlayTop::Github;
     }
 
     pub(crate) fn presentation_slot(&self, pane: u64, cx: &App) -> Option<PaneSlot> {
