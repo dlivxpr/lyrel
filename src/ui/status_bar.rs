@@ -609,7 +609,7 @@ mod tests {
         // Focusing a different terminal pane moves the bottom Git indicator
         // and the Info session together.
         app.update_in(&mut vcx, |_, window, cx| {
-            right.read(cx).focus_handle.focus(window, cx);
+            right.read(cx).focus_handle.clone().focus(window, cx);
         });
         settle(&mut vcx);
         assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
@@ -642,7 +642,7 @@ mod tests {
         vcx.simulate_keystrokes("escape");
         settle(&mut vcx);
         app.update_in(&mut vcx, |_, window, cx| {
-            left.read(cx).focus_handle.focus(window, cx);
+            left.read(cx).focus_handle.clone().focus(window, cx);
         });
         settle(&mut vcx);
         assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-left"));
@@ -667,7 +667,7 @@ mod tests {
             "the explicit pick stands while its pane remains the Context Pane"
         );
         app.update_in(&mut vcx, |_, window, cx| {
-            right.read(cx).focus_handle.focus(window, cx);
+            right.read(cx).focus_handle.clone().focus(window, cx);
         });
         settle(&mut vcx);
         assert!(
