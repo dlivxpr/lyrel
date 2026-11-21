@@ -33,6 +33,7 @@ pub mod pane;
 pub mod pane_drag;
 pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;
+pub(crate) mod panel_slide;
 pub mod panel_github;
 pub mod panel_search;
 pub(crate) mod parked_deck;

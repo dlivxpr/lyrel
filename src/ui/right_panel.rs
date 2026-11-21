@@ -502,12 +502,18 @@ impl LyrelApp {
     }
 
     pub(crate) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
+        // A toggle mid-slide is dropped, not queued or reversed: the seam is
+        // still travelling to the state the first toggle already requested.
+        if self.panel_slide_active(crate::ui::panel_slide::PanelBoundary::Right) {
+            return;
+        }
         let next = !self.right_panel_visible;
         if !next {
             self.sftp_retire_revalidation();
         }
         self.right_panel_visible = next;
         self.update_config(cx, |cfg| cfg.right_panel_visible = next);
+        self.begin_panel_slide(crate::ui::panel_slide::PanelBoundary::Right, next, cx);
         cx.notify();
     }
 
@@ -679,6 +685,13 @@ impl LyrelApp {
             self.sftp_panel.panel_was_closed = true;
             return None;
         }
+        Some(self.render_right_panel_mount(window, cx))
+    }
+
+    /// The panel body at its settled width. Shared by the settled mount and
+    /// the boundary slide's clip, so a sliding panel paints exactly what the
+    /// settled one will.
+    fn render_right_panel_mount(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let width = self.right_panel_px(window, cx);
         let tab = self.right_panel_tab;
 
@@ -690,22 +703,33 @@ impl LyrelApp {
         };
         let (backing, handle) = self.right_panel_resize(window, cx);
 
-        Some(
-            v_flex()
-                .id("right-panel")
-                .relative()
-                .flex_none()
-                .w(px(width))
-                .h_full()
-                .child(backing)
-                .bg(crate::ui::theme::workspace_surface_color(cx))
-                .border_l(crate::ui::theme::hairline(window))
-                .border_color(cx.theme().sidebar_border)
-                .child(body)
-                .children(self.sftp_transfers_footer(cx))
-                .child(handle)
-                .into_any_element(),
-        )
+        v_flex()
+            .id("right-panel")
+            .relative()
+            .flex_none()
+            .w(px(width))
+            .h_full()
+            .child(backing)
+            .bg(crate::ui::theme::workspace_surface_color(cx))
+            .border_l(crate::ui::theme::hairline(window))
+            .border_color(cx.theme().sidebar_border)
+            .child(body)
+            .children(self.sftp_transfers_footer(cx))
+            .child(handle)
+            .into_any_element()
+    }
+
+    /// The panel painted for a boundary slide, at its settled width; the
+    /// composition layer clips it to the travelling seam. Deliberately not
+    /// gated on the panel being open: a closing slide still paints the panel
+    /// for the slide's duration, and the settled open/closed decision stays
+    /// with `render_work_area`.
+    pub(crate) fn render_right_panel_for_slide(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_right_panel_mount(window, cx)
     }
 
     fn right_panel_resize(

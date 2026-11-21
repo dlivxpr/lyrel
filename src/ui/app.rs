@@ -293,6 +293,13 @@ pub struct LyrelApp {
     pub(crate) right_panel_nav_wait: Cell<u8>,
     pub(crate) right_panel_nav_renders: Cell<u8>,
     pub(crate) sidebar_collapsed: bool,
+    /// Panel boundary slides in flight, one slot per `PanelBoundary`. A toggle
+    /// flips the settled state immediately and parks the visual seam's journey
+    /// here; see `crate::ui::panel_slide`.
+    pub(crate) panel_slides: [Option<crate::ui::panel_slide::PanelSlide>; 2],
+    /// Per-boundary generation, so a cleanup timer from a superseded slide
+    /// cannot clear the one now in flight.
+    panel_slide_generations: [u64; 2],
     pub(crate) sidebar_scroll: gpui_kit::ScrollHandle,
     /// The sidebar row or group header brought into view the next time it is
     /// drawn. Read by the row/header, not by `activate`: a new tab has no row
@@ -1510,9 +1517,15 @@ impl LyrelApp {
     }
 
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
+        // A toggle mid-slide is dropped, not queued or reversed: the seam is
+        // still travelling to the state the first toggle already requested.
+        if self.panel_slide_active(crate::ui::panel_slide::PanelBoundary::Left) {
+            return;
+        }
         self.sidebar_collapsed = !self.sidebar_collapsed;
         let collapsed = self.sidebar_collapsed;
         self.update_config(cx, |cfg| cfg.sidebar_collapsed = collapsed);
+        self.begin_panel_slide(crate::ui::panel_slide::PanelBoundary::Left, !collapsed, cx);
         cx.notify();
     }
 

@@ -406,6 +406,8 @@ impl LyrelApp {
             right_panel_nav_wait: Cell::new(0),
             right_panel_nav_renders: Cell::new(0),
             sidebar_collapsed,
+            panel_slides: [None, 2],
+            panel_slide_generations: [0, 2],
             sidebar_scroll: gpui_kit::ScrollHandle::new(),
             sidebar_reveal: Rc::new(RefCell::new(None)),
             sidebar_nav_focus: cx.focus_handle().tab_stop(true),

@@ -108,8 +108,11 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
-        let sidebar = self
-            .sidebar_open(cx)
+        self.reconcile_panel_slides(cx);
+        let left_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Left);
+        let right_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Right);
+        let boundary_sliding = left_slide.is_some() || right_slide.is_some();
+        let sidebar = (self.sidebar_open(cx) || left_slide.is_some())
             .then(|| self.tab_sidebar(window, cx).into_any_element());
         let ssh_status = self
             .tabs
@@ -268,7 +271,10 @@ impl LyrelApp {
             }
         };
 
-        let right_panel = self.render_right_panel(window, cx);
+        let right_panel = match right_slide {
+            Some(_) => Some(self.render_right_panel_for_slide(window, cx)),
+            None => self.render_right_panel(window, cx),
+        };
         let can_split = self
             .tabs
             .get(self.tabs.active_index())
@@ -308,15 +314,48 @@ impl LyrelApp {
             .child(body_area)
             .children(overlays)
             .child(div().absolute().inset_0().child(self.parked_deck.clone()));
-        let panel_row = div()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .child(terminal_column)
-            .when_some(document_column, |this, column| this.child(column))
-            .when_some(right_panel, |this, panel| this.child(panel));
+        let bottom_row = if boundary_sliding {
+            // A boundary slide pins the content at its final width — the width
+            // the PTY was told on the toggle frame — and paints each panel as
+            // an edge-anchored clip whose width is the travelling seam.
+            let left_final = self.sidebar_final_px(window, cx);
+            let right_final = self.right_panel_final_px(window, cx);
+            let content_w =
+                (window.viewport_size().width.as_f32() - left_final - right_final).max(0.);
+            let content = div()
+                .flex_none()
+                .min_h_0()
+                .h_full()
+                .ml(px(left_final))
+                .w(px(content_w))
+                .flex()
+                .flex_row()
+                .child(terminal_column)
+                .when_some(document_column, |this, column| this.child(column));
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .relative()
+                .child(content)
+                .when_some(sidebar, |this, sidebar| {
+                    this.child(self.render_left_boundary(left_slide, sidebar, window, cx))
+                })
+                .when_some(right_panel, |this, panel| {
+                    this.child(self.render_right_boundary(right_slide, panel, window, cx))
+                })
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .flex_row()
+                .when_some(sidebar, |this, sidebar| this.child(sidebar))
+                .child(terminal_column)
+                .when_some(document_column, |this, column| this.child(column))
+                .when_some(right_panel, |this, panel| this.child(panel))
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -341,16 +380,7 @@ impl LyrelApp {
             )
             .child(top_chrome)
             .child(self.pane_drag_capture(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .when_some(sidebar, |this, sidebar| this.child(sidebar))
-                    .child(panel_row),
-            )
+            .child(bottom_row)
             .into_any_element()
     }
 }
