@@ -225,7 +225,7 @@ impl LyrelApp {
                 row.child(
                     h_flex()
                         .id("status-git-branch")
-                        .min_w(0.)
+                        .min_w_0()
                         .max_w(rems(12.))
                         .gap_1()
                         .child(svg().path("icons/git-branch.svg").size_3().flex_none())
@@ -521,14 +521,11 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_git_and_info_follow_the_context_pane_and_a_repo_pick_yields(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::ui::app::test_window::harness;
+    fn status_git_and_info_follow_the_context_pane_and_a_repo_pick_yields(cx: &mut TestAppContext) {
+        use crate::ui::app::{LyrelApp, test_window::harness};
         use crate::ui::pane::{Pane, PaneSlot};
         use crate::ui::scm::state::RepoKey;
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
-        use gpui_kit::Focusable as _;
         use lyrel_core::core::config::RightPanelTab;
         use lyrel_terminal::view::quiet_test_pane;
         use lyrel_ui_base::actions::FocusRightPanelNavigation;
@@ -588,9 +585,9 @@ mod tests {
                 gpui_kit::base::test_support::texts(window)
                     .into_iter()
                     .find(|text| {
-                        text.path().iter().any(|id| {
-                            *id == gpui_kit::ElementId::from("status-git-branch")
-                        })
+                        text.path()
+                            .iter()
+                            .any(|id| *id == gpui_kit::ElementId::from("status-git-branch"))
                     })
                     .map(|text| text.text().to_string())
             })
