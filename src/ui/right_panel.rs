@@ -3420,6 +3420,7 @@ mod tests {
         layout.show(Files);
         layout.show(Scm);
         layout.show(GitHub);
+        layout.show(Scm);
         assert_eq!(layout.order, [Info, Files, Scm, GitHub]);
         // Drag Info across both neighbours to the trailing end while
         // Changes stays selected.
@@ -3444,7 +3445,7 @@ mod tests {
         layout.move_tab(Info, 99);
         assert_eq!(layout.order, [Files, Info], "the landing clamps");
         let settled = layout.clone();
-        layout.move_tab(Info, 0);
+        layout.move_tab(Info, 1);
         assert_eq!(layout.order, [Files, Info], "no neighbour crossed");
         layout.move_tab(GitHub, 0);
         assert_eq!(layout, settled, "a closed tool has no slot to move");

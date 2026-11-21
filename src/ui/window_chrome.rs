@@ -1326,7 +1326,9 @@ mod gpui_tests {
         }
         vcx.update(|window, cx| {
             let from = window.find("tool-tab-info").bounds().center();
-            let to = window.find("tool-tab-changes").bounds().center();
+            let target = window.find("tool-tab-changes").bounds();
+            // Pass the neighbour's midpoint, rather than dropping exactly on it.
+            let to = gpui_kit::point(target.right() + px(8.), target.center().y);
             window.drag(from, to, cx);
         });
         settle(&mut vcx);
