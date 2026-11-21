@@ -30,6 +30,7 @@ use gpui_kit::{
 };
 
 use crate::ui::app::LyrelApp;
+use crate::ui::notification_history::NotificationWindowExt as _;
 use crate::ui::right_panel::{META, info_chip};
 use lyrel_ui_base::host_ops::SharedHost;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
@@ -229,7 +230,7 @@ impl ListDelegate for WorktreeDelegate {
         let active = self.active.as_ref() == Some(&wt.path);
         let label: SharedString = format!("{name}, {branch}, {path_text}").into();
 
-        let mut first = h_flex().flex_1().min_w(0.).items_center().gap(px(6.));
+        let mut first = h_flex().flex_1().min_w_0().items_center().gap(px(6.));
         first = first.child(
             div()
                 .flex_1()
@@ -250,17 +251,17 @@ impl ListDelegate for WorktreeDelegate {
 
         let child = h_flex()
             .flex_1()
-            .min_w(0.)
+            .min_w_0()
             .child(
                 v_flex()
                     .flex_1()
-                    .min_w(0.)
+                    .min_w_0()
                     .justify_center()
                     .gap(px(2.))
                     .child(first)
                     .child(
                         div()
-                            .min_w(0.)
+                            .min_w_0()
                             .truncate()
                             .text_size(rems(META))
                             .text_color(muted)
@@ -295,7 +296,7 @@ impl ListDelegate for WorktreeDelegate {
             .items_center()
             .child(
                 div()
-                    .min_w(0.)
+                    .min_w_0()
                     .truncate()
                     .text_size(rems(META))
                     .text_color(cx.theme().muted_foreground)
@@ -380,7 +381,7 @@ impl gpui_kit::RenderOnce for WorktreeRow {
             .h(px(ROW_H))
             .mx(px(LIST_PAD))
             .px(px(ROW_PAD))
-            .rounded(px(lyrel_ui_base::rounding::ROW_RADIUS))
+            .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
             .overflow_hidden()
             .cursor_pointer()
             .text_color(cx.theme().foreground)
@@ -438,8 +439,7 @@ impl LyrelApp {
             host,
             window,
             cx,
-            move |h| -> Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String>
-            {
+            move |h| -> Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String> {
                 let worktrees = crate::core::worktree::list(h, &read_cwd)?;
                 // The active checkout is the one the Context Pane sits in,
                 // including from a subdirectory — the same prefix rule pane
@@ -452,7 +452,7 @@ impl LyrelApp {
                 Ok((worktrees, active))
             },
             move |this, result, window, cx| {
-                this.land_worktree_list(read_host_id, &read_cwd, result, window, cx)
+                this.land_worktree_list(read_host_id, &cwd, result, window, cx)
             },
         );
     }
@@ -530,9 +530,9 @@ impl LyrelApp {
         let list = picker.list.clone();
         let first = match result {
             Ok((worktrees, active)) => {
-                list.update(cx, |list, cx| list.delegate_mut().land(worktrees, active))
+                list.update(cx, |list, _| list.delegate_mut().land(worktrees, active))
             }
-            Err(error) => list.update(cx, |list, cx| {
+            Err(error) => list.update(cx, |list, _| {
                 list.delegate_mut().fail(error);
                 None
             }),
@@ -557,6 +557,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         self.worktree_picker = None;
+        let workspace = self.workspace;
         let host_id = pick.host.id();
         let target = pick.checkout.path.clone();
         let candidates: Vec<(usize, gpui_kit::EntityId, PathBuf)> = self
@@ -574,6 +575,7 @@ impl LyrelApp {
             })
             .collect();
         let host = pick.host.clone();
+        let match_root = target.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
@@ -581,11 +583,14 @@ impl LyrelApp {
             move |h| -> Option<(usize, gpui_kit::EntityId)> {
                 candidates.iter().find_map(|(tab, leaf, cwd)| {
                     h.canonicalize(cwd)
-                        .is_ok_and(|c| c.starts_with(&target))
+                        .is_ok_and(|c| c.starts_with(&match_root))
                         .then_some((*tab, *leaf))
                 })
             },
             move |this, matched, window, cx| {
+                if this.workspace != workspace {
+                    return;
+                }
                 match matched {
                     Some((tab_index, leaf_id)) => {
                         this.activate(tab_index, window, cx);
@@ -757,21 +762,15 @@ impl LyrelApp {
                         .h(px(crate::ui::dialog::FIELD_H)),
                     ),
             )
-            .child(
-                div()
-                    .px(px(LIST_PAD))
-                    .py(px(LIST_PAD))
-                    .child(
-                        List::new(&picker.list)
-                            .max_h(px(ROW_H * LIST_MAX_ROWS as f32 + LIST_PAD * 2.)),
-                    ),
-            )
+            .child(div().px(px(LIST_PAD)).py(px(LIST_PAD)).child(
+                List::new(&picker.list).max_h(px(ROW_H * LIST_MAX_ROWS as f32 + LIST_PAD * 2.)),
+            ))
             .child(
                 crate::ui::dialog::footer(cx)
                     .child(
                         div()
                             .flex_1()
-                            .min_w(0.)
+                            .min_w_0()
                             .items_center()
                             .gap(px(6.))
                             .text_size(rems(META))
@@ -789,9 +788,7 @@ impl LyrelApp {
                         true,
                         rungs,
                         cx,
-                        cx.listener(|this, _, window, cx| {
-                            this.worktree_picker_create(window, cx)
-                        }),
+                        cx.listener(|this, _, window, cx| this.worktree_picker_create(window, cx)),
                     )),
             );
 
@@ -973,9 +970,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_bar_entrance_lists_checkouts_and_marks_the_active_one(
-        cx: &mut TestAppContext,
-    ) {
+    fn status_bar_entrance_lists_checkouts_and_marks_the_active_one(cx: &mut TestAppContext) {
         lyrel_ui_base::i18n::set_locale("en");
         let (_main, _wt, main_root, wt_root) = repository_with_worktree();
         let (app, mut vcx) = harness(cx);
@@ -1015,7 +1010,11 @@ mod tests {
         type_in_picker(&app, &mut vcx, wt_root.parent().unwrap().to_str().unwrap());
         settle(&mut vcx);
         let by_path = row_texts(&mut vcx);
-        assert_eq!(by_path.len(), 1, "the distinguishing path identifies the checkout");
+        assert_eq!(
+            by_path.len(),
+            1,
+            "the distinguishing path identifies the checkout"
+        );
         assert_eq!(by_path, by_branch);
 
         // Escape closes without navigating.
@@ -1042,7 +1041,11 @@ mod tests {
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("status-git-branch", cx));
         settle(&mut vcx);
-        type_in_picker(&app, &mut vcx, wt_root.file_name().unwrap().to_str().unwrap());
+        type_in_picker(
+            &app,
+            &mut vcx,
+            wt_root.file_name().unwrap().to_str().unwrap(),
+        );
         settle(&mut vcx);
         vcx.simulate_keystrokes("enter");
         settle(&mut vcx);
@@ -1107,7 +1110,11 @@ mod tests {
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("status-git-branch", cx));
         settle(&mut vcx);
-        type_in_picker(&app, &mut vcx, wt_root.file_name().unwrap().to_str().unwrap());
+        type_in_picker(
+            &app,
+            &mut vcx,
+            wt_root.file_name().unwrap().to_str().unwrap(),
+        );
         settle(&mut vcx);
         vcx.simulate_keystrokes("enter");
         settle(&mut vcx);

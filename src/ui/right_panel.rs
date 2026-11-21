@@ -1409,10 +1409,8 @@ impl LyrelApp {
         // Only Changes may carry a real count; the host asks for the same
         // pane status the tool page itself renders from.
         let changes_count = self.tool_changes_count(window, cx);
-        let strip_state = window
-            .use_keyed_state("tool-strip", cx, |_, _| ToolStripState::default())
-            .read(cx)
-            .clone();
+        let strip_state =
+            window.use_keyed_state("tool-strip", cx, |_, _| ToolStripState::default());
         let state = strip_state.read(cx).clone();
         let layout = self.tool_layout();
 
@@ -1662,7 +1660,6 @@ impl LyrelApp {
             .child(
                 div()
                     .id("side-panel-tool-scroll")
-                    .test_support()
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -1670,9 +1667,9 @@ impl LyrelApp {
                     .items_center()
                     .gap_0p5()
                     .overflow_x_scroll()
-                    .lock_scroll_axis()
                     .track_scroll(&state.scroll)
-                    .children(tabs),
+                    .children(tabs)
+                    .test_support(),
             )
             .child(gpui_kit::base::ScrollableMask::vertical_wheel(
                 &state.scroll,
@@ -1767,7 +1764,7 @@ impl LyrelApp {
                                     .map(|slot| state.scroll.bounds_for_item(slot))
                                     .collect();
                                 let target = strip_target(&slots, &order, drag.tab, pointer_x);
-                                if target != order.iter().position(|open| *open == drag.tab) {
+                                if Some(target) != order.iter().position(|open| *open == drag.tab) {
                                     app.update(cx, |this, _cx| {
                                         let mut layout = this.tool_layout();
                                         layout.move_tab(drag.tab, target);
