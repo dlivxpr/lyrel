@@ -172,9 +172,7 @@ impl LyrelApp {
         // a repository (#349). A document, a menu or the panel holding focus
         // must not hand the subject back to the tab's first leaf.
         let leaf = self.context_pane(window, cx);
-        let git = (!document)
-            .then(|| leaf.as_ref().and_then(|leaf| leaf.read(cx).git_status(cx)))
-            .flatten();
+        let git = leaf.as_ref().and_then(|leaf| leaf.read(cx).git_status(cx));
         let branch = git.as_ref().map(|git| git.branch.clone());
         let counts = git
             .filter(|git| git.added > 0 || git.removed > 0)
@@ -672,6 +670,12 @@ mod tests {
         });
         assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
         assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+
+        // Opening a document changes its status controls, not the Git subject.
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()));
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
 
         // Back in the terminal, then on to the other pane.
         vcx.simulate_keystrokes("escape");

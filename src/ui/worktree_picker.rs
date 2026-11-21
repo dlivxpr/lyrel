@@ -26,7 +26,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListState};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, IndexPath, Selectable, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Selectable, Sizable as _,
+    h_flex, v_flex,
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, Focusable as _, IntoElement, MouseButton, MouseDownEvent,
@@ -2186,7 +2187,7 @@ mod tests {
 
         // The docked document can own the status bar; use the other picker entrance.
         app.update_in(&mut vcx, |app, window, cx| {
-            app.set_right_panel_tab(crate::ui::right_panel::RightPanelTab::Scm, window, cx);
+            app.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Scm, window, cx);
         });
         wait_for(&mut vcx, "the Changes worktree entrance", |vcx| {
             vcx.update(|window, _| {
