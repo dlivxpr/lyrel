@@ -1224,9 +1224,8 @@ impl LyrelApp {
                         ) {
                             this.right_panel_navigation_pointer(window, cx);
                         }
-                        // The current one does nothing: only close and the panel
-                        // toggle put a tool away.
-                        if this.tool_layout().active != tab {
+                        let layout = this.tool_layout();
+                        if !layout.open || layout.active != tab {
                             this.set_right_panel_tab(tab, window, cx);
                         }
                     }),
