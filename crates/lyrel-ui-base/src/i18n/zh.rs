@@ -2469,6 +2469,26 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::WorktreePickerCurrent => "当前",
         L10nKey::WorktreePickerEmpty => "没有匹配的检出",
         L10nKey::WorktreePickerFailed => "无法列出工作树：{error}",
+        L10nKey::WorktreePickerRemove => "从磁盘删除…",
+        L10nKey::WorktreePickerRemoveTitle => "从磁盘删除该检出？",
+        L10nKey::WorktreePickerRemoveBranch => "分支“{branch}”在已完全合并时会被删除，否则保留。",
+        L10nKey::WorktreePickerRemoveDetached => "分离 HEAD —— 不涉及分支。",
+        L10nKey::WorktreePickerRemoveChecking => "正在检查该检出…",
+        L10nKey::WorktreePickerRemoveReady => "该检出干净且未被使用。",
+        L10nKey::WorktreePickerRemoveBlockedGone => "该检出已不再注册在其所属 Host 上。",
+        L10nKey::WorktreePickerRemoveBlockedMain => "主检出不能被删除。",
+        L10nKey::WorktreePickerRemoveBlockedDirty => "该检出存在未提交的变更，不会被删除。",
+        L10nKey::WorktreePickerRemoveBlockedOccupied => "有窗格正在使用该检出。",
+        L10nKey::WorktreePickerRemoveBlockedUnsaved => "该检出中有未保存的文档。",
+        L10nKey::WorktreePickerRemoveBlockedUnknown => "无法在其所属 Host 上验证该检出的状态。",
+        L10nKey::WorktreePickerRemovedBranchDeleted => {
+            "已删除 {path}。分支“{branch}”已删除；恢复引用 {ref}。"
+        }
+        L10nKey::WorktreePickerRemovedBranchKept => {
+            "已删除 {path}。分支“{branch}”已保留（存在未合并的提交）；恢复引用 {ref}。"
+        }
+        L10nKey::WorktreePickerRemovedDetached => "已删除 {path}。恢复引用 {ref}。",
+        L10nKey::WorktreePickerRemoveFailed => "无法删除该检出：{error}",
         L10nKey::StatusGitWorktree => "切换工作树",
         L10nKey::HomeTimeJustNow => "刚刚",
         L10nKey::HomeTimeMinutesAgo => "{count} 分钟前",
