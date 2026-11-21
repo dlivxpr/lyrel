@@ -906,15 +906,12 @@ impl LyrelApp {
         // item was opened from. The target is cache-warm — the panel resolved
         // it to render the row that is being opened.
         let origin = match self.github_target(window, cx) {
-            GhTarget::Ready { host, repo, chosen, .. } if chosen.slug == slug => {
-                Some((host.id(), repo.root))
-            }
+            GhTarget::Ready {
+                host, repo, chosen, ..
+            } if chosen.slug == slug => Some((host.id(), repo.root)),
             _ => None,
         };
-        let (host_id, cwd) = origin.unwrap_or((
-            HostId::LOCAL,
-            std::path::PathBuf::new(),
-        ));
+        let (host_id, cwd) = origin.unwrap_or((HostId::LOCAL, std::path::PathBuf::new()));
         let focus_handle = cx.focus_handle().tab_stop(true);
         self.watch_document_status_focus(&focus_handle, window, cx);
         let Some(tab) = self.tabs.active_mut() else {

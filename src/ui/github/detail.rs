@@ -144,17 +144,22 @@ impl LyrelApp {
             .overflow_y_scroll()
             .track_scroll(&scroll)
             .child(body);
-        let content =
-            lyrel_ui_base::scrollbar::with_vertical_scrollbar("github-detail-scrollbar", scroller, &scroll);
+        let content = lyrel_ui_base::scrollbar::with_vertical_scrollbar(
+            "github-detail-scrollbar",
+            scroller,
+            &scroll,
+        );
 
         let shell = v_flex()
             .id("github-detail-document")
             .test_support()
             .text_color(cx.theme().foreground)
             .track_focus(&focus_handle)
-            .on_key_down(cx.listener(move |this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                this.github_detail_key_down(&scroll, event, window, cx);
-            }))
+            .on_key_down(
+                cx.listener(move |this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    this.github_detail_key_down(&scroll, event, window, cx);
+                }),
+            )
             .child(header)
             .child(content);
         // The fill chrome covers the workspace, so it stops window
@@ -188,25 +193,25 @@ impl LyrelApp {
         let step = |delta: f32| {
             // Offsets run negative as content scroll down, clamped between
             // the top and whatever the last layout measured as the bottom.
-            let next = (scroll.offset().y + px(delta)).max(scroll.max_offset().y);
-            scroll.set_offset(gpui_kit::point(px(0.), next.min(px(0.))));
+            let next = (scroll.offset().y + px(delta)).clamp(-scroll.max_offset().y, px(0.));
+            scroll.set_offset(gpui_kit::point(px(0.), next));
         };
         match event.keystroke.key.as_str() {
             "escape" => self.github_close_detail(window, cx),
             "up" => {
-                step(-(ROW_H + 6.));
-                cx.stop_propagation();
-            }
-            "down" => {
                 step(ROW_H + 6.);
                 cx.stop_propagation();
             }
+            "down" => {
+                step(-(ROW_H + 6.));
+                cx.stop_propagation();
+            }
             "pageup" => {
-                step(-scroll.bounds().height.as_f32());
+                step(scroll.bounds().size.height.as_f32());
                 cx.stop_propagation();
             }
             "pagedown" => {
-                step(scroll.bounds().height.as_f32());
+                step(-scroll.bounds().size.height.as_f32());
                 cx.stop_propagation();
             }
             "home" => {
@@ -214,7 +219,7 @@ impl LyrelApp {
                 cx.stop_propagation();
             }
             "end" => {
-                scroll.set_offset(gpui_kit::point(px(0.), scroll.max_offset().y));
+                scroll.scroll_to_bottom();
                 cx.stop_propagation();
             }
             _ => {}
@@ -323,8 +328,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let muted = cx.theme().muted_foreground;
+        let mono = cx.theme().mono_font_family.clone();
         let has_title = title.is_some();
         h_flex()
             .id("github-detail-header")
@@ -371,7 +376,7 @@ impl LyrelApp {
                 div()
                     .flex_none()
                     .text_size(rems(META_MONO))
-                    .font_family(theme.mono_font_family.clone())
+                    .font_family(mono)
                     .text_color(muted)
                     .child(format!("#{number}")),
             )
@@ -387,9 +392,7 @@ impl LyrelApp {
                 )
             })
             .when(!has_title, |bar| bar.child(div().flex_1().min_w_0()))
-            .child(
-                self.github_refresh_tile("github-detail-refresh", Some(repo.clone()), cx),
-            )
+            .child(self.github_refresh_tile("github-detail-refresh", Some(repo.clone()), cx))
             .child(
                 github_tile(
                     "panel-github-open-item",

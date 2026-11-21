@@ -379,11 +379,13 @@ impl Tab {
             OverlayTop::Github => self.github_detail.is_some(),
             OverlayTop::Diff => self.diff_overlay.is_some(),
         };
-        open(self.overlay_top).then_some(self.overlay_top).or_else(|| {
-            [OverlayTop::Diff, OverlayTop::Github, OverlayTop::Code]
-                .into_iter()
-                .find(|surface| open(*surface))
-        })
+        open(self.overlay_top)
+            .then_some(self.overlay_top)
+            .or_else(|| {
+                [OverlayTop::Diff, OverlayTop::Github, OverlayTop::Code]
+                    .into_iter()
+                    .find(|surface| open(*surface))
+            })
     }
 
     /// Raise the code surface and report whether it was visible but buried.

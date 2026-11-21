@@ -101,9 +101,7 @@ fn enter_opens_the_detail_document_and_escape_returns_to_the_list(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(
-    cx: &mut TestAppContext,
-) {
+fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(cx: &mut TestAppContext) {
     let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
@@ -176,14 +174,14 @@ fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppCont
         window.render_frame(cx);
         // Docked beside the terminal, the document takes the column's width.
         let docked = window.find("github-detail-document").bounds();
-        window.click(("document-layout", 1), cx);
+        window.click(("document-layout", 1usize), cx);
         window.render_frame(cx);
         let filled = window.find("github-detail-document").bounds();
         assert!(
             filled.size.width > docked.size.width,
             "fill covers the workspace; the dock takes the column beside the terminal"
         );
-        window.click(("document-layout", 0), cx);
+        window.click(("document-layout", 0usize), cx);
         window.render_frame(cx);
         let again = window.find("github-detail-document").bounds();
         assert_eq!(

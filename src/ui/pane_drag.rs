@@ -856,7 +856,10 @@ mod tests {
         take_landing(&state);
         begin(&state, pane);
         let second = glide(&state).expect("the next drag has one too");
-        assert_ne!(first, second, "picking the same pane up is still a new drag");
+        assert_ne!(
+            first, second,
+            "picking the same pane up is still a new drag"
+        );
         take_landing(&state);
         assert_eq!(glide(&state), None, "and the identity dies with the drag");
     }

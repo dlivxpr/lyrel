@@ -17,6 +17,7 @@
 //! document falls back to it for that frame without touching what the user
 //! saved.
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rems};
 use std::cell::Cell as StdCell;

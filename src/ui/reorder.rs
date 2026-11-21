@@ -610,7 +610,10 @@ mod tests {
         take_landed(&state);
         *state.borrow_mut() = Some(column(3, 30., 2., 0));
         let second = glide(&state).expect("the next drag has one too");
-        assert_ne!(first, second, "lifting the same rows again is still a new drag");
+        assert_ne!(
+            first, second,
+            "lifting the same rows again is still a new drag"
+        );
         *state.borrow_mut() = None;
         assert_eq!(glide(&state), None, "and the identity dies with the drag");
     }

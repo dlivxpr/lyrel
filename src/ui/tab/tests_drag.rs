@@ -186,11 +186,7 @@ fn dragging_across_distinct_targets_glides_the_preview_and_the_swap_settles(
             0,
             "the preview never reflows the left pane"
         );
-        assert_eq!(
-            drain_resizes(&mut streams[1]).len(),
-            0,
-            "or the right one"
-        );
+        assert_eq!(drain_resizes(&mut streams[1]).len(), 0, "or the right one");
     });
 
     // Let go over the middle: the trade the preview promised.
@@ -301,9 +297,7 @@ fn reduced_motion_shows_each_target_directly_without_a_glide(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn escape_cancels_a_pane_drag_with_the_layout_and_pty_untouched(
-    cx: &mut TestAppContext,
-) {
+fn escape_cancels_a_pane_drag_with_the_layout_and_pty_untouched(cx: &mut TestAppContext) {
     let (app, mut vcx, mut streams) = test_window::harness_with_tabs(cx, 2);
     let (left, _right) = split_tab(&app, &mut vcx);
     vcx.run_until_parked();
