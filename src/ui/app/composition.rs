@@ -331,11 +331,15 @@ impl LyrelApp {
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
                         && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
+                            || this.reorder.borrow().is_some()
                             || this
                                 .tabs
                                 .get(this.tabs.active_index())
                                 .is_some_and(|tab| tab.pip_interaction.has_gesture()))
                     {
+                        // Escape cancels whichever drag is in flight — a pane
+                        // hunting a landing or a terminal tab hunting a new
+                        // order — and leaves nothing of it behind to land late.
                         this.cancel_pane_drag(window, cx);
                         cx.stop_propagation();
                     }
