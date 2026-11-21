@@ -534,9 +534,10 @@ impl LyrelApp {
                     .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
                         this.child(el)
                     })
-                    .when_some(self.render_worktree_picker_overlay(window, cx), |this, el| {
-                        this.child(el)
-                    })
+                    .when_some(
+                        self.render_worktree_picker_overlay(window, cx),
+                        |this, el| this.child(el),
+                    )
                     .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
                         this.child(el)
                     })

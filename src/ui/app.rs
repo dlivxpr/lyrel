@@ -5504,9 +5504,8 @@ pub(crate) mod test_window {
         workspace: Option<lyrel_ui_base::session::WorkspaceId>,
     ) -> (Entity<LyrelApp>, VisualTestContext) {
         let window = cx.add_window(|window, cx| {
-            let app = cx.new(|cx| {
-                LyrelApp::with_session(workspace, Some(Session::default()), window, cx)
-            });
+            let app = cx
+                .new(|cx| LyrelApp::with_session(workspace, Some(Session::default()), window, cx));
             gpui_kit::component::Root::new(app, window, cx)
         });
         window

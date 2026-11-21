@@ -1,12 +1,12 @@
 use super::render_idle_gpui_tests::serial;
 use super::*;
-use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::app::LyrelApp;
+use crate::ui::app::test_window::harness_with_pane;
 use crate::ui::pane::{Pane, PaneSlot};
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::daemon::control::ControlHello;
 use lyrel_core::host::remote::RemoteHost;
-use lyrel_terminal::view::{quiet_test_pane, TerminalView};
+use lyrel_terminal::view::{TerminalView, quiet_test_pane};
 use lyrel_ui_base::route::PaneWorkspace;
 use lyrel_ui_base::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
 use std::net::{TcpListener, TcpStream};
@@ -41,7 +41,11 @@ fn checkouts(name: &str) -> Checkouts {
             .unwrap_or_else(|e| panic!("run git {args:?}: {e}"));
         assert!(status.success(), "git {args:?} exited {status}");
     };
-    git(&[std::ffi::OsStr::new("init"), std::ffi::OsStr::new("--quiet"), repo_root.as_os_str()]);
+    git(&[
+        std::ffi::OsStr::new("init"),
+        std::ffi::OsStr::new("--quiet"),
+        repo_root.as_os_str(),
+    ]);
     git(&[
         std::ffi::OsStr::new("-C"),
         repo_root.as_os_str(),
@@ -120,29 +124,30 @@ fn local_files_tree_and_both_searches_share_the_context_pane_checkout(cx: &mut T
     let _serial = serial();
     let fixture = checkouts("local");
     let (app, mut vcx, _stream) = harness_with_pane(cx);
-    let (repo_pane, worktree_pane, _worktree_stream) = app.update_in(&mut vcx, |app, window, cx| {
-        let repo_pane = app.tabs[0]
-            .pane
-            .first_leaf()
-            .unwrap()
-            .terminal()
-            .unwrap()
-            .clone();
-        let (worktree_pane, worktree_stream) = quiet_test_pane(2, window, cx);
-        app.tabs[0].pane = Pane::split_node(
-            gpui_kit::Axis::Horizontal,
-            0.5,
-            Pane::leaf(PaneSlot::Ready(repo_pane.clone())),
-            Pane::leaf(PaneSlot::Ready(worktree_pane.clone())),
-        );
-        repo_pane.update(cx, |pane, _| {
-            pane.set_git_status_cwd_for_test(Some(fixture.nested_repo.clone()))
+    let (repo_pane, worktree_pane, _worktree_stream) =
+        app.update_in(&mut vcx, |app, window, cx| {
+            let repo_pane = app.tabs[0]
+                .pane
+                .first_leaf()
+                .unwrap()
+                .terminal()
+                .unwrap()
+                .clone();
+            let (worktree_pane, worktree_stream) = quiet_test_pane(2, window, cx);
+            app.tabs[0].pane = Pane::split_node(
+                gpui_kit::Axis::Horizontal,
+                0.5,
+                Pane::leaf(PaneSlot::Ready(repo_pane.clone())),
+                Pane::leaf(PaneSlot::Ready(worktree_pane.clone())),
+            );
+            repo_pane.update(cx, |pane, _| {
+                pane.set_git_status_cwd_for_test(Some(fixture.nested_repo.clone()))
+            });
+            worktree_pane.update(cx, |pane, _| {
+                pane.set_git_status_cwd_for_test(Some(fixture.nested_worktree.clone()))
+            });
+            (repo_pane.clone(), worktree_pane, worktree_stream)
         });
-        worktree_pane.update(cx, |pane, _| {
-            pane.set_git_status_cwd_for_test(Some(fixture.nested_worktree.clone()))
-        });
-        (repo_pane.clone(), worktree_pane, worktree_stream)
-    });
     // Both panes sit in a nested directory of a checkout, so both answers are
     // the checkout root of the focused one — a single root, never the nested
     // cwd, never a union of the two panes' roots, and for the linked
@@ -164,9 +169,7 @@ fn local_files_tree_and_both_searches_share_the_context_pane_checkout(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn remote_files_tree_and_both_searches_share_the_context_pane_checkout(
-    cx: &mut TestAppContext,
-) {
+fn remote_files_tree_and_both_searches_share_the_context_pane_checkout(cx: &mut TestAppContext) {
     let (app, mut vcx, _stream) = harness_with_pane(cx);
     let target = RemoteTarget::Alias {
         alias: "cwd-consumer-test".into(),

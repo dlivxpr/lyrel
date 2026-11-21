@@ -50,17 +50,13 @@ pub(crate) fn pill(entrance_id: &'static str, accent: Hsla, cx: &App) -> Animati
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(div().flex_none().size(px(DOT)).rounded_full().bg(accent))
-        .with_animation(
-            entrance_id,
-            crate::ui::motion::entrance(),
-            |pill, delta| {
-                // Short translation plus fade: a negative margin-bottom dips
-                // the pill below its settled slot in the bottom-anchored
-                // stack, and it rises into place as the margin releases.
-                pill.opacity(delta)
-                    .mb(px(-crate::ui::motion::TOAST_RISE_PX * (1.0 - delta)))
-            },
-        )
+        .with_animation(entrance_id, crate::ui::motion::entrance(), |pill, delta| {
+            // Short translation plus fade: a negative margin-bottom dips
+            // the pill below its settled slot in the bottom-anchored
+            // stack, and it rises into place as the margin releases.
+            pill.opacity(delta)
+                .mb(px(-crate::ui::motion::TOAST_RISE_PX * (1.0 - delta)))
+        })
 }
 
 /// A one-line pill's floor. A longer reason still wraps it taller; this only

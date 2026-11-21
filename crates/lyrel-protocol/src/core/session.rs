@@ -466,13 +466,15 @@ where
     };
     Ok(entries
         .iter()
-        .filter_map(|raw| match crate::core::config::RightPanelTab::deserialize(raw) {
-            Ok(tab) => Some(tab),
-            Err(e) => {
-                log::warn!("ignoring unknown tool in a workspace's layout order: {raw} ({e})");
-                None
-            }
-        })
+        .filter_map(
+            |raw| match crate::core::config::RightPanelTab::deserialize(raw) {
+                Ok(tab) => Some(tab),
+                Err(e) => {
+                    log::warn!("ignoring unknown tool in a workspace's layout order: {raw} ({e})");
+                    None
+                }
+            },
+        )
         .collect())
 }
 
@@ -949,8 +951,7 @@ mod tests {
         assert_eq!(state.order, [Files, GitHub]);
         assert_eq!(state.active, Files);
         assert_eq!(
-            state.last_used,
-            Info,
+            state.last_used, Info,
             "an unknown tool falls back to Info, the way an invalid config value does"
         );
         assert!(state.open);

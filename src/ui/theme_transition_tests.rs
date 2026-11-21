@@ -233,9 +233,7 @@ fn rapid_retargeting_lands_on_the_last_selected_theme(cx: &mut gpui_kit::TestApp
 }
 
 #[gpui_kit::test]
-fn theme_crossfade_sends_no_terminal_input_and_no_resize(
-    cx: &mut gpui_kit::TestAppContext,
-) {
+fn theme_crossfade_sends_no_terminal_input_and_no_resize(cx: &mut gpui_kit::TestAppContext) {
     use crate::daemon::protocol::ClientMsg;
     use std::io::ErrorKind;
 
