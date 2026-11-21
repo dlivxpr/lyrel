@@ -4,6 +4,10 @@ use crate::ui::app::LyrelApp;
 
 const BADGE_DELAY_MS: u64 = 200;
 
+/// How long the badges stay mounted after the hold ends, covering the
+/// fade-out before the rows reclaim the width.
+const BADGE_FADE_MS: u64 = 200;
+
 pub(crate) fn tab_badge_label(index: usize) -> String {
     (index + 1).to_string()
 }
@@ -38,6 +42,7 @@ impl LyrelApp {
             let _ = this.update(cx, |this, cx| {
                 if this.mod_hint_gen == generation {
                     this.mod_hint_badges = true;
+                    this.mod_hint_fade_generation = None;
                     cx.notify();
                 }
             });
@@ -57,10 +62,35 @@ impl LyrelApp {
 
     pub(crate) fn dismiss_mod_hint(&mut self, cx: &mut Context<Self>) {
         self.mod_hint_gen = self.mod_hint_gen.wrapping_add(1);
-        if self.mod_hint_badges {
-            self.mod_hint_badges = false;
-            cx.notify();
+        if cx.reduce_motion() {
+            let was_fading = self.mod_hint_fade_generation.take().is_some();
+            if std::mem::take(&mut self.mod_hint_badges) || was_fading {
+                cx.notify();
+            }
+            return;
         }
+        if !std::mem::take(&mut self.mod_hint_badges) {
+            return;
+        }
+
+        // Keep the slot through the fade. Later modifier changes must not
+        // cancel its cleanup, but an actual reveal supersedes this fade.
+        let generation = self.mod_hint_gen;
+        self.mod_hint_fade_generation = Some(generation);
+        cx.notify();
+        let delay = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(BADGE_FADE_MS));
+        cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mod_hint_fade_generation == Some(generation) {
+                    this.mod_hint_fade_generation = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
 

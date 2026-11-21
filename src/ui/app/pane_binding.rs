@@ -371,9 +371,9 @@ impl LyrelApp {
             }
             in_active_tab |= index == active;
         }
-        // The bar presents the focused-or-first pane's representative, which
-        // can sit behind a tab-wide state another pane owns. Compare what it
-        // would paint rather than whether any record moved.
+        // The bar presents the Context Pane's representative, which can sit
+        // behind a tab-wide state another pane owns. Compare what it would
+        // paint rather than whether any record moved.
         let current_changed = in_active_tab
             && self.status_document_context(window, cx).is_none()
             && self.tabs[active].refresh_current_program_status(window, cx);

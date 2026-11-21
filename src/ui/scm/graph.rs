@@ -1302,13 +1302,11 @@ impl LyrelApp {
                     let rev = oid.to_string();
                     move |_, window, cx| {
                         let _ = app.update(cx, |this, cx| {
-                            this.scm.begin_branch_at(
-                                repo.clone(),
-                                rev.clone(),
-                                this.tabs.active_index(),
-                                window,
-                                cx,
-                            )
+                            // The menu must not move the panel's Context Pane or
+                            // create a branch if its original checkout left view.
+                            if this.scm.active_repo() == Some(&repo) {
+                                this.scm.begin_branch_at(rev.clone(), window, cx);
+                            }
                         });
                     }
                 }),

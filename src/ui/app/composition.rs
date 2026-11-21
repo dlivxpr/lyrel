@@ -80,7 +80,7 @@ impl LyrelApp {
         // The pill only. `body_area` anchors it, together with whatever else
         // is floating down there — see `ui::notice`.
         Some(
-            crate::ui::notice::pill(cx.theme().warning, cx)
+            crate::ui::notice::pill("remote-input-notice", cx.theme().warning, cx)
                 .child(notice)
                 .into_any_element(),
         )
@@ -108,8 +108,17 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
-        let sidebar = self
-            .sidebar_open(cx)
+        // Membership diff for the sidebar's row/disclosure motion, run even
+        // when the panel is shut so a change that lands hidden stays landed.
+        self.observe_sidebar_motion(cx);
+        self.reconcile_panel_slides(cx);
+        if cx.reduce_motion() {
+            self.mod_hint_fade_generation = None;
+        }
+        let left_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Left);
+        let right_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Right);
+        let boundary_sliding = left_slide.is_some() || right_slide.is_some();
+        let sidebar = (self.sidebar_open(cx) || left_slide.is_some())
             .then(|| self.tab_sidebar(window, cx).into_any_element());
         let ssh_status = self
             .tabs
@@ -243,21 +252,32 @@ impl LyrelApp {
                     window,
                     cx,
                 );
+                let github_document = self.render_github_detail_document(
+                    crate::ui::document_column::DocumentChrome::Fill,
+                    window,
+                    cx,
+                );
                 let code_overlay = self.render_code_overlay(
                     crate::ui::document_column::DocumentChrome::Fill,
                     window,
                     cx,
                 );
-                let mut pair = vec![
-                    (OverlayTop::Diff, diff_overlay),
+                // Every open document surface paints, the stack's bottom
+                // first — code, then the detail over it, then the patch over
+                // the detail — and the raised surface, which may sit anywhere
+                // in that stack, paints last and wins on paint order the way
+                // overlay_top always has.
+                let front = self.document_front();
+                let mut pair: Vec<(OverlayTop, Option<gpui_kit::AnyElement>)> = vec![
                     (OverlayTop::Code, code_overlay),
+                    (OverlayTop::Github, github_document),
+                    (OverlayTop::Diff, diff_overlay),
                 ];
-                if self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .is_some_and(Tab::is_diff_on_top)
-                {
-                    pair.reverse();
+                if let Some(ix) = front.and_then(|surface| {
+                    pair.iter().position(|(candidate, _)| *candidate == surface)
+                }) {
+                    let raised = pair.remove(ix);
+                    pair.push(raised);
                 }
                 (
                     pair.into_iter()
@@ -268,7 +288,10 @@ impl LyrelApp {
             }
         };
 
-        let right_panel = self.render_right_panel(window, cx);
+        let right_panel = match right_slide {
+            Some(_) => Some(self.render_right_panel_for_slide(window, cx)),
+            None => self.render_right_panel(window, cx),
+        };
         let can_split = self
             .tabs
             .get(self.tabs.active_index())
@@ -308,15 +331,48 @@ impl LyrelApp {
             .child(body_area)
             .children(overlays)
             .child(div().absolute().inset_0().child(self.parked_deck.clone()));
-        let panel_row = div()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .child(terminal_column)
-            .when_some(document_column, |this, column| this.child(column))
-            .when_some(right_panel, |this, panel| this.child(panel));
+        let bottom_row = if boundary_sliding {
+            // A boundary slide pins the content at its final width — the width
+            // the PTY was told on the toggle frame — and paints each panel as
+            // an edge-anchored clip whose width is the travelling seam.
+            let left_final = self.sidebar_final_px(window, cx);
+            let right_final = self.right_panel_final_px(window, cx);
+            let content_w =
+                (window.viewport_size().width.as_f32() - left_final - right_final).max(0.);
+            let content = div()
+                .flex_none()
+                .min_h_0()
+                .h_full()
+                .ml(px(left_final))
+                .w(px(content_w))
+                .flex()
+                .flex_row()
+                .child(terminal_column)
+                .when_some(document_column, |this, column| this.child(column));
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .relative()
+                .child(content)
+                .when_some(sidebar, |this, sidebar| {
+                    this.child(self.render_left_boundary(left_slide, sidebar, window, cx))
+                })
+                .when_some(right_panel, |this, panel| {
+                    this.child(self.render_right_boundary(right_slide, panel, window, cx))
+                })
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .flex_row()
+                .when_some(sidebar, |this, sidebar| this.child(sidebar))
+                .child(terminal_column)
+                .when_some(document_column, |this, column| this.child(column))
+                .when_some(right_panel, |this, panel| this.child(panel))
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -329,11 +385,15 @@ impl LyrelApp {
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
                         && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
+                            || this.reorder.borrow().is_some()
                             || this
                                 .tabs
                                 .get(this.tabs.active_index())
                                 .is_some_and(|tab| tab.pip_interaction.has_gesture()))
                     {
+                        // Escape cancels whichever drag is in flight — a pane
+                        // hunting a landing or a terminal tab hunting a new
+                        // order — and leaves nothing of it behind to land late.
                         this.cancel_pane_drag(window, cx);
                         cx.stop_propagation();
                     }
@@ -341,16 +401,7 @@ impl LyrelApp {
             )
             .child(top_chrome)
             .child(self.pane_drag_capture(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .when_some(sidebar, |this, sidebar| this.child(sidebar))
-                    .child(panel_row),
-            )
+            .child(bottom_row)
             .into_any_element()
     }
 }
@@ -437,7 +488,10 @@ impl LyrelApp {
             cx.set_active_drag_cursor_style(held, window);
         }
         let detach_caret = self.detach_caret(window, cx);
+        self.begin_worktree_picker_frame(window, cx);
         let main_layout = self.render_work_area(window, cx);
+        let status_bar = self.render_status_bar(window, cx);
+        self.finish_worktree_picker_frame(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);
@@ -486,13 +540,17 @@ impl LyrelApp {
                     .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
                         this.child(el)
                     })
+                    .when_some(
+                        self.render_worktree_removal_overlay(window, cx),
+                        |this, el| this.child(el),
+                    )
                     .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
                         this.child(el)
                     })
                     .children(self.render_switcher(window, cx))
                     .when_some(self.search.view(), |this, search| this.child(search)),
             )
-            .child(self.render_status_bar(window, cx));
+            .child(status_bar);
         let root = Self::with_editor_text_commands(root, cx);
 
         if let Some(start) = prof {

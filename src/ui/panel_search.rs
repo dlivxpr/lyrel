@@ -252,7 +252,7 @@ impl LyrelApp {
             self.panel_search_sync(None, cx);
             return Body::SshPane;
         }
-        let Some((host, roots)) = self.project_roots(cx) else {
+        let Some((host, roots)) = self.project_roots(window, cx) else {
             return Body::Resolving;
         };
         if roots.is_empty() {
@@ -295,15 +295,18 @@ impl LyrelApp {
         // Until the answer for this query arrives, the last one stays on
         // screen under a "Searching…" summary rather than blinking out on
         // every keystroke. A state with no hits to keep says "Searching…" on
-        // its own. Only hits from the same host are kept: a row opens its
-        // path on the active host, so another machine's hits would open the
-        // wrong file (or none) there.
+        // its own. Only hits for the same subject are kept: a row opens its
+        // path on the host and root it was searched for, so another
+        // machine's — or another checkout's — hits would open the wrong
+        // file (or none) there.
         let Some(landed) = run.landed().filter(|l| Some(&l.key) == run.wanted()) else {
             return match run.landed() {
                 Some(l)
                     if matches!(l.outcome, Outcome::Found(_))
                         && !l.groups.is_empty()
-                        && run.wanted().is_some_and(|w| w.host == l.key.host) =>
+                        && run
+                            .wanted()
+                            .is_some_and(|w| w.host == l.key.host && w.roots == l.key.roots) =>
                 {
                     Body::Results
                 }
@@ -776,8 +779,9 @@ mod gpui_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             vcx.background_executor.run_until_parked();
-            let rooted = app.update_in(&mut vcx, |app, _, cx| {
-                app.project_roots(cx).map(|(_, roots)| roots) == Some(vec![root.to_path_buf()])
+            let rooted = app.update_in(&mut vcx, |app, window, cx| {
+                app.project_roots(window, cx).map(|(_, roots)| roots)
+                    == Some(vec![root.to_path_buf()])
             });
             if rooted {
                 break;
@@ -1178,6 +1182,74 @@ mod gpui_tests {
             "an emptied field clears the results"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Switching the Context Pane to another checkout (same Host, so the old
+    /// host-only identity check cannot catch it) must not leave the previous
+    /// root's hits on screen while the new search is still on its way, and
+    /// the answer that lands must describe the new checkout alone.
+    #[gpui_kit::test]
+    fn switching_the_context_checkout_hides_the_previous_roots_hits(cx: &mut TestAppContext) {
+        let _serial = serial();
+        let first = scratch("switch-first");
+        let second = scratch("switch-second");
+        std::fs::write(first.join("a.txt"), "needle alpha\n").unwrap();
+        std::fs::write(second.join("b.txt"), "needle beta\n").unwrap();
+        let (app, mut vcx, mut pane) = search_panel_on(cx, &first);
+        type_query(&app, &mut vcx, "needle");
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx), [("a.txt".to_string(), vec![1])]);
+
+        // The pane moves to the other checkout; the content search must
+        // follow it, on the same Host.
+        crate::daemon::protocol::DaemonMsg::Cwd(second.clone())
+            .encode(&mut pane)
+            .expect("the pane's socket takes the new cwd");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            // Drive the cwd poll, but advance less than the search debounce.
+            // A larger step can resolve the checkout and finish its search
+            // before we ever observe the pending state on a fast runner.
+            vcx.executor().advance_clock(DEBOUNCE / 2);
+            vcx.run_until_parked();
+            let rooted = app.update_in(&mut vcx, |app, window, cx| {
+                if app.project_roots(window, cx).map(|(_, roots)| roots)
+                    != Some(vec![second.clone()])
+                {
+                    return false;
+                }
+                assert!(
+                    matches!(app.panel_search_body(window, cx), Body::Searching),
+                    "the newly resolved checkout must hide old hits while its search is pending"
+                );
+                true
+            });
+            if rooted {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pane never reported its new checkout"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(
+            groups(&app, &mut vcx),
+            [("b.txt".to_string(), vec![1])],
+            "the landed answer describes the new checkout alone"
+        );
+        app.read_with(&vcx, |app, _| {
+            let wanted = app
+                .panel_search
+                .run
+                .wanted()
+                .expect("the search is wanted after the switch");
+            assert_eq!(wanted.host, lyrel_ui_base::host_ops::HostId::LOCAL);
+            assert_eq!(wanted.roots, vec![second.clone()]);
+        });
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 
     #[gpui_kit::test]

@@ -403,6 +403,79 @@ pub struct WindowView {
     /// this is what its quick-launch list is made of.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seen_agents: Vec<String>,
+    /// This workspace's right-panel tool layout (#348). Absent — every view
+    /// written before the field existed — reads as the fresh-workspace
+    /// default (Info only, collapsed), never as the old global config
+    /// selection (#345). An emptied `order` is kept as written: the panel
+    /// stays empty, and `last_used` is what reopening it resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_layout: Option<ToolLayoutState>,
+}
+
+/// One workspace's right-panel tool layout, persisted in the Workspace Store
+/// under the owning [`WindowView`] (#348). Versioned so a future layout shape
+/// can migrate or be dropped instead of misread; tool search text, filters,
+/// expansion and drafts are panel state and deliberately have no place here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolLayoutState {
+    /// The format version this build writes. A record newer than
+    /// [`ToolLayoutState::CURRENT_VERSION`] reads as "no layout", which is
+    /// the fresh-workspace default — never a crash and never a guess.
+    pub version: u32,
+    /// Open tools, left to right. Empty means every tool was closed; the
+    /// record is kept (and restored) as written.
+    #[serde(default, deserialize_with = "de_tool_tabs")]
+    pub order: Vec<crate::core::config::RightPanelTab>,
+    /// The tool whose page was showing.
+    #[serde(default, deserialize_with = "crate::core::config::de_lenient")]
+    pub active: crate::core::config::RightPanelTab,
+    /// The tool an emptied panel resumes when reopened.
+    #[serde(default, deserialize_with = "crate::core::config::de_lenient")]
+    pub last_used: crate::core::config::RightPanelTab,
+    /// Whether the panel column was expanded.
+    #[serde(default)]
+    pub open: bool,
+}
+
+impl ToolLayoutState {
+    pub const CURRENT_VERSION: u32 = 1;
+
+    /// Whether this build can read the record: written by it or by an older
+    /// one. Anything newer is left to its own build.
+    pub fn readable(&self) -> bool {
+        self.version <= Self::CURRENT_VERSION
+    }
+}
+
+/// The tool order, read one entry at a time. [`de_lenient`] is
+/// all-or-nothing per field, which here would mean one tool name this build
+/// does not know — written by a newer one — throwing away every good entry
+/// and taking the whole views file into quarantine with them. Each entry
+/// stands alone: the ones that name a tool are kept, the rest are logged and
+/// dropped. An `order` that is not a list at all falls back to empty.
+fn de_tool_tabs<'de, D>(
+    deserializer: D,
+) -> Result<Vec<crate::core::config::RightPanelTab>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(entries) = value.as_array() else {
+        log::warn!("ignoring tool layout order {value}: expected a list of tools");
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .iter()
+        .filter_map(
+            |raw| match crate::core::config::RightPanelTab::deserialize(raw) {
+                Ok(tab) => Some(tab),
+                Err(e) => {
+                    log::warn!("ignoring unknown tool in a workspace's layout order: {raw} ({e})");
+                    None
+                }
+            },
+        )
+        .collect())
 }
 
 impl Default for WindowView {
@@ -417,6 +490,7 @@ impl Default for WindowView {
             subject: None,
             synced: false,
             seen_agents: Vec::new(),
+            tool_layout: None,
         }
     }
 }
@@ -808,6 +882,103 @@ mod tests {
         assert!(!only.open);
         assert_eq!(only.last_active, 1_700_000_000);
         assert_eq!(loaded.active, Some(id));
+    }
+
+    #[test]
+    fn tool_layout_round_trips_on_its_workspace_and_older_builds_ignore_it() {
+        use crate::core::config::RightPanelTab::{Files, Info, Scm};
+        let state = ToolLayoutState {
+            version: ToolLayoutState::CURRENT_VERSION,
+            order: vec![Info, Files, Scm],
+            active: Files,
+            last_used: Scm,
+            open: true,
+        };
+        let mut entry = view();
+        entry.tool_layout = Some(state.clone());
+        let json = serde_json::to_string(&entry).unwrap();
+
+        let back: WindowView = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.tool_layout,
+            Some(state),
+            "the layout a workspace was left in survives a restart"
+        );
+
+        // A build that predates the field skips it and keeps every record it
+        // does know: rollback drops the layout, not the views file.
+        let mut raw = serde_json::to_value(&entry).unwrap();
+        raw.as_object_mut().unwrap().remove("tool_layout");
+        let legacy: WindowView = serde_json::from_value(raw).unwrap();
+        assert_eq!(legacy.tool_layout, None);
+        assert_eq!(legacy.id, entry.id);
+    }
+
+    #[test]
+    fn tool_layout_keeps_an_empty_order_and_last_used_as_written() {
+        use crate::core::config::RightPanelTab::GitHub;
+        let state = ToolLayoutState {
+            version: ToolLayoutState::CURRENT_VERSION,
+            order: Vec::new(),
+            active: GitHub,
+            last_used: GitHub,
+            open: false,
+        };
+        let back: ToolLayoutState = serde_json::from_str(&serde_json::to_string(&state).unwrap())
+            .expect("an emptied layout must not fail the views file");
+        assert!(
+            back.order.is_empty(),
+            "an emptied order is retained, not replaced by a default tab set"
+        );
+        assert_eq!(back.active, GitHub);
+        assert_eq!(back.last_used, GitHub, "the emptied panel's resume target");
+        assert!(!back.open);
+    }
+
+    #[test]
+    fn tool_layout_drops_unknown_tools_instead_of_the_whole_record() {
+        use crate::core::config::RightPanelTab::{Files, GitHub, Info};
+        // "pomodoro" is a tool a newer build wrote; this one keeps the tools
+        // it knows and every field around them.
+        let json = r#"{
+            "version": 1,
+            "order": ["files", "pomodoro", "github"],
+            "active": "files",
+            "last_used": "pomodoro",
+            "open": true
+        }"#;
+        let state: ToolLayoutState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.order, [Files, GitHub]);
+        assert_eq!(state.active, Files);
+        assert_eq!(
+            state.last_used, Info,
+            "an unknown tool falls back to Info, the way an invalid config value does"
+        );
+        assert!(state.open);
+    }
+
+    #[test]
+    fn tool_layout_newer_than_this_build_is_not_read() {
+        let state = ToolLayoutState {
+            version: ToolLayoutState::CURRENT_VERSION + 1,
+            ..tool_layout_fixture()
+        };
+        assert!(
+            !state.readable(),
+            "a record from a newer build reads as no layout, not as a guess"
+        );
+        let current = tool_layout_fixture();
+        assert!(current.readable());
+    }
+
+    fn tool_layout_fixture() -> ToolLayoutState {
+        ToolLayoutState {
+            version: ToolLayoutState::CURRENT_VERSION,
+            order: vec![crate::core::config::RightPanelTab::Info],
+            active: crate::core::config::RightPanelTab::Info,
+            last_used: crate::core::config::RightPanelTab::Info,
+            open: false,
+        }
     }
 
     #[test]

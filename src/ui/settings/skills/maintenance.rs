@@ -387,7 +387,7 @@ impl SettingsWindow {
             .child(
                 Button::new("skills-check-update")
                     .small()
-                    .label(format!("{}…", t(L10nKey::SkillsCheckUpdate)))
+                    .label(t(L10nKey::SkillsCheckUpdate))
                     .disabled(state.target_locked() || s.skills.install.open)
                     .on_click(cx.listener(|app, _, window, cx| {
                         if let Some(s) = app.active_settings_mut() {

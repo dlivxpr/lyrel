@@ -68,11 +68,13 @@ SSH 主机与集成页面的智能体列表在内容超出列表高度时独立�
 | --- | --- | --- |
 | `system` | **跟随系统** | 使用操作系统的减少动态效果偏好，不保留应用覆盖 |
 | `reduce` | **减少动态效果** | 使用稳定的动画终点和静态活动指示，静止后不请求仅用于动画的帧 |
-| `allow` | **允许动态效果** | 允许现有界面动效，即使系统要求减少动态效果；不会新增效果或持续动画 |
+| `allow` | **允许动态效果** | 播放工作台的界面过渡，即使系统要求减少动态效果 |
 
 从 `reduce` 或 `allow` 切回 `system` 会移除应用覆盖。跟随系统在启动时读取操作系统设置，并在 Windows／macOS 的窗口重新激活时重新读取，不会停留在先前强制的值。
 
-该设置不修改终端字节、TUI 自己绘制的动画或终端光标协议。直接编辑配置时使用：
+允许动态效果时，「随处搜索」和浮动提示出现时会短暂移动并淡入，长按快捷键显示的标签页数字松开后会淡出。减少动态效果时，提示直接显示，松开快捷键便移除数字。无论哪种偏好，按 Escape 都可立即关闭搜索，不必等动画结束。
+
+此偏好只管界面过渡和活动指示，不修改终端字节、TUI 自己绘制的动画或终端光标协议。直接编辑配置时使用：
 
 ```json
 { "motion_preference": "system" }
@@ -116,7 +118,7 @@ GitHub 仓库发现、授权解析和所有 tree／blob 下载始终在**桌面�
 
 ### 安全移除共享安装
 
-选择**移除安装…**后，先审查实际共享目录、受影响的来源锁与条目，以及精确指向此安装的 symbolic link／Windows junction 路径和记录目标。其他读取同一共享目录的工具也会受影响。关联链接按所选机器的有效原生来源收集，包括不同名称的别名和相对链接；不能证明一致的条目保留并解释，真实副本、不同目标及仅名称相同的条目不会被删除，也不会新建私有链接。
+选择**移除安装**后，先审查实际共享目录、受影响的来源锁与条目，以及精确指向此安装的 symbolic link／Windows junction 路径和记录目标。其他读取同一共享目录的工具也会受影响。关联链接按所选机器的有效原生来源收集，包括不同名称的别名和相对链接；不能证明一致的条目保留并解释，真实副本、不同目标及仅名称相同的条目不会被删除，也不会新建私有链接。
 
 选择**移除共享安装**前可以取消或按 Escape，文件、锁及链接均保持不变。执行时再次通过固定 Host 复核安装身份、路径、内容、原始锁及每个链接目标；确认后发生变化的目标保留，不按名字扩大删除，也不跟随链接删除外部内容。删除结果分别列出安装、来源记录及每个链接；权限、断连、记录失败或应答丢失会保留失败、部分成功或结果未知，不冒称完成。先检查报告中的具体路径再恢复，不要盲目重复移除。
 
@@ -185,7 +187,7 @@ Hermes 将共享根本身配置为 `external_dirs` 时，其中精确指向被�
 - 服务商为 Kimi Code、Command Code、StepFun Plan、DeepSeek、Xiaomi MiMo；不引入 Antigravity 和 Devin。私有接口保留明确提示，不承诺官方支持或接口长期稳定。
 - 页面打开时按所选节奏自动刷新，并提供手动刷新；关闭页面后停止周期轮询，不因应用启动而查询服务商。
 - 保留各服务商实际支持的 API key、手工粘贴会话和浏览器导入。浏览器导入必须主动触发并选择来源；不绕过 App-Bound Encryption 或系统权限，不在后台弹出授权，浏览器会话材料不持久化。
-- 在服务商旁选择「添加账户…」，再选择认证方式；桌面账户与 SSH 的边界在添加表单中说明。
+- 在服务商旁选择「添加账户」，再选择认证方式；桌面账户与 SSH 的边界在添加表单中说明。
 
 ### 执行与验收边界
 
@@ -493,7 +495,7 @@ CLI 输出始终保持英文，shell 字符环境、终端文字、编程语言�
 
 ## DeepSeek 用量账户
 
-从**设置 → 用量**进入，或搜索 `DeepSeek`、`Kimi`、`Command Code`、余额、会话、浏览器、`LocalStorage`。页面分为「Coding 套餐」（Kimi Code、Command Code、StepFun Plan）和「API 账户」（DeepSeek、Xiaomi MiMo），每家都有添加入口与明确空状态。账户卡片宽窗双列、窄窗单列，紧凑展示身份、套餐和认证来源；单个刷新留在卡片上，重命名、启停、替换、增强与移除通过**更多账户操作**菜单进入。刷新频率和全部刷新保持同一工具组。点击服务商旁的**添加账户…**，在弹层填写名称与认证来源，再验证保存；Escape 取消并恢复原焦点。DeepSeek 支持官方 API key、手工平台会话或浏览器 LocalStorage。
+从**设置 → 用量**进入，或搜索 `DeepSeek`、`Kimi`、`Command Code`、余额、会话、浏览器、`LocalStorage`。页面分为「Coding 套餐」（Kimi Code、Command Code、StepFun Plan）和「API 账户」（DeepSeek、Xiaomi MiMo），每家都有添加入口与明确空状态。账户卡片宽窗双列、窄窗单列，紧凑展示身份、套餐和认证来源；单个刷新留在卡片上，重命名、启停、替换、增强与移除通过**更多账户操作**菜单进入。刷新频率和全部刷新保持同一工具组。点击服务商旁的**添加账户**，在弹层填写名称与认证来源，再验证保存；Escape 取消并恢复原焦点。DeepSeek 支持官方 API key、手工平台会话或浏览器 LocalStorage。
 lyrel 从桌面本机请求 [DeepSeek 官方余额接口](https://api-docs.deepseek.com/api/get-user-balance)：`GET https://api.deepseek.com/user/balance`，认证为 `Authorization: Bearer <API key>`。仅验证成功才写入系统凭据库；不会读取智能体或远端机器的密钥，不导入 vortex 数据。
 
 余额保留接口返回的 CNY／USD 金额字符串，分别显示总余额、赠送余额、充值余额与更新时间，不换算币种、不伪造百分比。接口不提供用户姓名、邮箱、账单周期或重置时间，因此页面使用自定义名称及稳定的本地账户 ID 区分账户，不冒称已确认服务商用户身份。
@@ -550,7 +552,7 @@ API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com
 
 5 小时与每周额度来自 `windowLimits.fiveHour`／`weekly` 的 `used`、`cap`、`resetAt`；月度剩余来自 `credits.monthlyCredits`，重置来自订阅 `currentPeriodEnd`。该响应没有已核实的月上限字段，因此仅在订阅为 `active` 且 `planId` 精确匹配第一方 CLI 的 `getPlanTotalCredits` 套餐表时显示月上限与百分比：GOAT（`individual-goat`）为 70 Credit，其他已知套餐按同一发布产物中的各自额度处理，不按名称前缀猜测。未知套餐、缺少订阅状态或缺少用量字段时保留未知，不把购买／赠送余额加入限额，不从 `monthlyCreditsGranted` 等未核实字段推导月上限，不补零或伪造百分之百。窗口规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
 
-已添加 Command Code API-key 账户后，点击**设置会话增强…**，选择手工会话或浏览器来源。手工来源从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`；不接受整段 Cookie、cURL 或 API key 代替会话。浏览器来源先明确选择浏览器，再选择 profile，最后确认验证；发现 profile 只读所选浏览器元数据，不扫描会话或替你选择账户。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个增强请求均仅发送所选 Cookie，不发送 API key。
+已添加 Command Code API-key 账户后，点击**设置会话增强**，选择手工会话或浏览器来源。手工来源从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`；不接受整段 Cookie、cURL 或 API key 代替会话。浏览器来源先明确选择浏览器，再选择 profile，最后确认验证；发现 profile 只读所选浏览器元数据，不扫描会话或替你选择账户。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个增强请求均仅发送所选 Cookie，不发送 API key。
 
 身份端点与基址来自[第一方 auth client](https://commandcode.ai/assets/auth-client-DR7oY-YF.js) 的 `baseURL=https://api.commandcode.ai/auth` 及 [root 会话身份读取](https://commandcode.ai/assets/root-CycwDi3N.js)；账务 endpoint、GET、Cookie 凭据与 `{success,data}` 包装来自[第一方常量](https://commandcode.ai/assets/constants-oAoFBSr8.js)及[第一方订阅 hook](https://commandcode.ai/assets/use-legacy-pro-status-B1iLcEZv.js)。私有接口不等于公开第三方支持保证。
 

@@ -532,8 +532,8 @@ impl SettingsWindow {
             .small()
             .ghost()
             .icon(gpui_kit::component::IconName::Plus)
-            .accessibility_label(format!("{}…", t(L10nKey::SkillsInstallTitle)))
-            .tooltip(format!("{}…", t(L10nKey::SkillsInstallTitle)))
+            .accessibility_label(t(L10nKey::SkillsInstallTitle))
+            .tooltip(t(L10nKey::SkillsInstallTitle))
             .disabled(s.skills.maintenance.target_locked())
             .on_click(cx.listener(|app, _, window, cx| {
                 if let Some(s) = app.active_settings_mut() {

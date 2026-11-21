@@ -510,6 +510,15 @@ impl LyrelApp {
                     window.focus(&diff.focus_handle, cx);
                 }
             }
+            Some(crate::ui::tab::OverlayTop::Github) => {
+                if let Some(doc) = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .and_then(|tab| tab.github_detail.as_ref())
+                {
+                    window.focus(&doc.focus_handle, cx);
+                }
+            }
             None => self.focus_active(window, cx),
         }
     }

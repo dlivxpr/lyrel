@@ -1,4 +1,5 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
@@ -11,12 +12,14 @@ use crate::ui::app::LyrelApp;
 use crate::ui::dialog::{self, Tone};
 use crate::ui::right_panel::META_MONO;
 use lyrel_ui_base::config::Config;
-use lyrel_ui_base::host_ops::HostId;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 pub(crate) struct WorktreePrompt {
     host: lyrel_ui_base::host_ops::SharedHost,
     cwd: std::path::PathBuf,
+    /// The route of the pane that asked for the worktree: `None` pins the
+    /// launch to the local daemon even inside a remote workspace window.
+    source_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
     dir: std::path::PathBuf,
     name: Entity<InputState>,
     branch: Entity<InputState>,
@@ -45,11 +48,30 @@ struct Created {
     setup: Option<(setup::Setup, Vec<(&'static str, String)>)>,
 }
 
+pub(super) fn same_worktree_host(
+    host: &lyrel_ui_base::host_ops::SharedHost,
+    cx: &gpui_kit::App,
+) -> bool {
+    lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host.id())
+        .is_some_and(|current| std::sync::Arc::ptr_eq(host, &current))
+}
+
+fn notify_checkout_created(wt: &NewWorktree, window: &mut Window, cx: &mut gpui_kit::App) {
+    window.notify_app(
+        t_fmt(
+            L10nKey::WorktreeCreatedWithoutTab,
+            &[("path", &wt.path.display().to_string())],
+        ),
+        cx,
+    );
+}
+
 impl LyrelApp {
     pub(crate) fn open_worktree_prompt(
         &mut self,
         host: lyrel_ui_base::host_ops::SharedHost,
         cwd: std::path::PathBuf,
+        source_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         defaults: WorktreeDefaults,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -87,6 +109,7 @@ impl LyrelApp {
         self.worktree_prompt = Some(WorktreePrompt {
             host,
             cwd,
+            source_workspace,
             dir: defaults.dir,
             name,
             branch,
@@ -141,11 +164,33 @@ impl LyrelApp {
         let agent = p.agent.map(|i| p.agents[i]);
         let task = p.task.read(cx).value().to_string();
         let overrides = cx.global::<Config>().agent_launch.clone();
+        let owner = self.workspace;
+        let prompt = p.name.entity_id();
         let p = self.worktree_prompt.as_mut().expect("checked above");
         p.busy = true;
-        let cwd = p.cwd.clone();
-        let host = p.host.clone();
+        let (host, cwd, source_workspace) =
+            (p.host.clone(), p.cwd.clone(), p.source_workspace.clone());
         let host_id = host.id();
+        let requested_host = host.clone();
+        // The pane the request was born on may be gone, or the window
+        // re-bound, while the prompt sat open; refuse to create and launch
+        // on a route that no longer answers for this window.
+        if !self.worktree_launch_route_current(source_workspace.as_ref(), host_id, cx)
+            || !same_worktree_host(&requested_host, cx)
+        {
+            let reason = t(L10nKey::WorktreeRouteChanged);
+            if let Some(p) = self.worktree_prompt.as_mut() {
+                p.busy = false;
+            }
+            window.notify_app(
+                lyrel_ui_base::host_ops::failure(
+                    t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", reason)]),
+                    &reason,
+                ),
+                cx,
+            );
+            return;
+        }
         cx.notify();
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
@@ -181,23 +226,46 @@ impl LyrelApp {
                     .zip(setup::env(h, &wt.main_root, &wt.path));
                 Ok::<_, String>((Created { wt, setup }, start))
             },
-            move |this, result, window, cx| match result {
-                Ok((created, start)) => {
-                    this.worktree_prompt = None;
-                    this.start_worktree(host_id, created, start, window, cx);
-                }
-                Err(e) => {
-                    if let Some(p) = this.worktree_prompt.as_mut() {
-                        p.busy = false;
+            move |this, result, window, cx| {
+                let owns_prompt = this
+                    .worktree_prompt
+                    .as_ref()
+                    .is_some_and(|open| open.name.entity_id() == prompt);
+                let can_launch = owns_prompt
+                    && this.workspace == owner
+                    && same_worktree_host(&requested_host, cx)
+                    && this.worktree_launch_route_current(source_workspace.as_ref(), host_id, cx);
+                match result {
+                    Ok((created, _)) if !can_launch => {
+                        if owns_prompt {
+                            this.cancel_worktree_prompt(window, cx);
+                        }
+                        notify_checkout_created(&created.wt, window, cx);
                     }
-                    window.notify_app(
-                        lyrel_ui_base::host_ops::failure(
-                            t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
-                            &e,
-                        ),
-                        cx,
-                    );
-                    cx.notify();
+                    Ok((created, start)) => {
+                        this.worktree_prompt = None;
+                        this.start_worktree(
+                            requested_host,
+                            source_workspace,
+                            created,
+                            start,
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        if owns_prompt && let Some(p) = this.worktree_prompt.as_mut() {
+                            p.busy = false;
+                        }
+                        window.notify_app(
+                            lyrel_ui_base::host_ops::failure(
+                                t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
+                                &e,
+                            ),
+                            cx,
+                        );
+                        cx.notify();
+                    }
                 }
             },
         );
@@ -207,12 +275,14 @@ impl LyrelApp {
     /// content has been approved for this repo.
     fn start_worktree(
         &mut self,
-        host: HostId,
+        requested_host: lyrel_ui_base::host_ops::SharedHost,
+        source_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         created: Created,
         start: Start,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let host = requested_host.id();
         let Created { wt, setup } = created;
         if !wt.carried.skipped.is_empty() {
             let paths = wt
@@ -231,7 +301,7 @@ impl LyrelApp {
         let shell_program = start.shell_program;
         let Some((script, env)) = setup else {
             let line = setup::launch_line(&wt.path, None, agent, &shell_program);
-            self.open_worktree_tab(wt, line, window, cx);
+            self.open_worktree_tab(wt, line, source_workspace, host, window, cx);
             return;
         };
         let key = setup::trust_key(host, &wt.main_root);
@@ -242,7 +312,7 @@ impl LyrelApp {
                 agent,
                 &shell_program,
             );
-            self.open_worktree_tab(wt, line, window, cx);
+            self.open_worktree_tab(wt, line, source_workspace, host, window, cx);
             return;
         }
         let answer = window.prompt(
@@ -258,9 +328,17 @@ impl LyrelApp {
             ),
             cx,
         );
+        let owner = self.workspace;
         cx.spawn_in(window, async move |this, cx| {
             let run = matches!(answer.await, Ok(0));
             let _ = this.update_in(cx, |this, window, cx| {
+                if this.workspace != owner
+                    || !this.worktree_launch_route_current(source_workspace.as_ref(), host, cx)
+                    || !same_worktree_host(&requested_host, cx)
+                {
+                    notify_checkout_created(&wt, window, cx);
+                    return;
+                }
                 if run {
                     this.update_config(cx, |cfg| {
                         cfg.worktree_setup_trust.insert(key, script.digest.clone());
@@ -268,7 +346,9 @@ impl LyrelApp {
                 }
                 let setup = run.then_some((script.script.as_path(), env.as_slice()));
                 let line = setup::launch_line(&wt.path, setup, agent, &shell_program);
-                this.open_worktree_tab(wt, line, window, cx);
+                // The trust dialog sat open on UI time; open_worktree_tab
+                // re-validates the route before the pane is spawned.
+                this.open_worktree_tab(wt, line, source_workspace, host, window, cx);
             });
         })
         .detach();
@@ -395,6 +475,7 @@ impl LyrelApp {
             440.,
             cx,
         )
+        .test_support()
         .child(dialog::header(t(L10nKey::WorktreePromptTitle), cx))
         .child(
             dialog::body()

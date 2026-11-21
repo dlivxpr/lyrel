@@ -11,8 +11,33 @@ use gpui_kit::App;
 use gpui_kit::base::{
     ReduceMotionPreference, apply_system_reduce_motion, set_reduce_motion_preference,
 };
+use gpui_kit::{Animation, SpringConfig};
 use lyrel_core::core::config::MotionPreference;
 use lyrel_ui_base::config::Config;
+use std::time::Duration;
+
+/// Entrance timing for transient floating feedback — toast pills, held-hint
+/// badges and the Search Everywhere card. Short fade with a small
+/// translation, the workbench reference for "something appeared".
+pub(crate) const TRANSIENT_MS: u64 = 190;
+
+/// Logical pixels a rising toast translates while it fades in.
+pub(crate) const TOAST_RISE_PX: f32 = 8.;
+
+/// Logical pixels the Search Everywhere card descends while it fades in.
+pub(crate) const PICKER_DROP_PX: f32 = 8.;
+
+/// One-shot entrance animation shared by the transient feedback surfaces.
+/// `with_animation` consults `App::reduce_motion`: under Reduce the element
+/// renders at the end state and schedules no frames.
+pub(crate) fn entrance() -> Animation {
+    Animation::new(Duration::from_millis(TRANSIENT_MS)).with_easing(gpui_kit::ease_out_quint())
+}
+
+/// Spring driving the held-hint badge fades. Critically damped, so the badges
+/// settle without overshoot, and an interrupted fade (release, then hold
+/// again) reverses from the sampled value instead of restarting.
+pub(crate) const HINT_FADE: SpringConfig = SpringConfig::new(400., 40., 1.);
 
 fn framework_preference(preference: MotionPreference) -> ReduceMotionPreference {
     match preference {

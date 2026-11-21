@@ -5,6 +5,10 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+- 统一中英文菜单项、命令和操作按钮名称，不再添加尾随省略号。
+
 ## [0.3.7] - 2026-11-21
 
 ### 修复

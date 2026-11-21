@@ -240,8 +240,17 @@ pub struct LyrelApp {
     pub(crate) session: SessionLifecycle,
     pub(crate) renaming: Option<Renaming>,
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
+    /// The shared worktree picker, while open. One instance serves both
+    /// Git entrances — the Changes header and the status bar's indicator —
+    /// because both entrances are the same choice, not two pickers (#351).
+    pub(crate) worktree_picker: Option<crate::ui::worktree_picker::WorktreePicker>,
+    pub(crate) status_checkout_focus: gpui_kit::FocusHandle,
+    pub(crate) changes_worktree_focus: gpui_kit::FocusHandle,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
+    /// Generation that owns the pending badge fade-out, independent of later
+    /// modifier events which only invalidate the hold-to-reveal timer.
+    pub(crate) mod_hint_fade_generation: Option<u64>,
     pub(crate) mod_hint_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
     /// Whether the home page's cursor block is on this half-second.
@@ -293,6 +302,10 @@ pub struct LyrelApp {
     pub(crate) right_panel_nav_wait: Cell<u8>,
     pub(crate) right_panel_nav_renders: Cell<u8>,
     pub(crate) sidebar_collapsed: bool,
+    /// Panel boundary slides in flight, one slot per `PanelBoundary`. A toggle
+    /// flips the settled state immediately and parks the visual seam's journey
+    /// here; see `crate::ui::panel_slide`.
+    pub(crate) panel_slides: crate::ui::panel_slide::PanelSlides,
     pub(crate) sidebar_scroll: gpui_kit::ScrollHandle,
     /// The sidebar row or group header brought into view the next time it is
     /// drawn. Read by the row/header, not by `activate`: a new tab has no row
@@ -339,6 +352,14 @@ pub struct LyrelApp {
     /// them. Adopted from every pull and every `GroupsChanged`, and pushed
     /// back as one `WorkspaceSetGroups` whenever this window edits it.
     pub(crate) sidebar_groups: crate::core::group_key::WorkspaceGroups,
+    /// Session-row and group-disclosure motion: which rows are arriving or
+    /// leaving, which groups are opening or shutting, and what the leaving
+    /// rows last showed. The work-area render feeds it a membership diff
+    /// each frame and the sidebar render paints what it returns; nothing
+    /// outside `tab_sidebar` touches it. RefCell, like the slot rectangles
+    /// beside it: render is `&self`, and the diff has to happen where the
+    /// frame is built.
+    pub(crate) sidebar_motion: RefCell<crate::ui::tab_sidebar::SidebarMotion>,
     /// Where the active tab's panes were last drawn, which is the frame of
     /// reference a drag's landing is worked out in.
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -721,7 +742,11 @@ impl LyrelApp {
             self.close_search(window, cx);
         }
         let previous_host = self.spawn_host(cx);
+        if previous_host != WorkspaceStore::host_of(cx, id) || self.workspace != id {
+            self.worktree_prompt = None;
+        }
         self.workspace = id;
+        self.adopt_tool_layout(id, cx);
         self.rebind_host(previous_host, cx);
         self.refresh_shells(cx);
         let font_size = self.font_size;
@@ -1510,9 +1535,15 @@ impl LyrelApp {
     }
 
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
+        // A toggle mid-slide is dropped, not queued or reversed: the seam is
+        // still travelling to the state the first toggle already requested.
+        if self.panel_slide_active(crate::ui::panel_slide::PanelBoundary::Left) {
+            return;
+        }
         self.sidebar_collapsed = !self.sidebar_collapsed;
         let collapsed = self.sidebar_collapsed;
         self.update_config(cx, |cfg| cfg.sidebar_collapsed = collapsed);
+        self.begin_panel_slide(crate::ui::panel_slide::PanelBoundary::Left, !collapsed, cx);
         cx.notify();
     }
 
@@ -1608,6 +1639,27 @@ impl LyrelApp {
         if let Some(tab) = self.tabs.remember_leaf(leaf) {
             self.status_document_focus = Some((tab, false));
         }
+    }
+
+    /// The Context Pane: the last valid terminal pane of the active
+    /// Workspace — the single subject the Side Panel tools (Info, Changes,
+    /// GitHub, Files) and the bottom Git indicator describe.
+    ///
+    /// The answer is *derived*, never remembered. A terminal leaf holding
+    /// keyboard focus wins; otherwise the leaf its tab last came back to;
+    /// otherwise the first visible leaf. Because every read walks the live
+    /// tab, a pane that was closed, or that belongs to a Workspace this
+    /// window no longer shows, can never supply the data — and focusing a
+    /// document, a menu or the panel itself changes nothing. Focusing a
+    /// different terminal pane is the only thing that moves it.
+    ///
+    /// This is the canonical resolution path: tool data sources and the
+    /// status bar read it instead of re-deriving their own pane, so all of
+    /// them agree by construction.
+    pub(crate) fn context_pane(&self, window: &Window, cx: &App) -> Option<Entity<TerminalView>> {
+        self.tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)
     }
 
     /// Toggle fullscreen, and say how to leave it on the way in.
@@ -1724,7 +1776,7 @@ impl LyrelApp {
         }
     }
 
-    fn new_tab_insert_at(&self, cx: &App) -> usize {
+    pub(crate) fn new_tab_insert_at(&self, cx: &App) -> usize {
         match cx.global::<Config>().new_tab_position {
             NewTabPosition::AfterCurrent => (self.tabs.active_index() + 1).min(self.tabs.len()),
             NewTabPosition::End => self.tabs.len(),
@@ -2668,8 +2720,18 @@ impl LyrelApp {
             .map(|slot| slot.entity_id())
     }
 
+    /// Cancel whatever drag is in flight — a pane on its way to a landing or
+    /// a terminal tab on its way to a new order. Escape, capture loss, tab
+    /// switches and window deactivation only cancel; a finished drag is the
+    /// release's to land.
     fn cancel_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_drag.borrow_mut().take();
+        // A tab drag cancelled mid-flight must not leave the pending order or
+        // the merge offer the last previewed frame recorded: letting go
+        // later, anywhere, would land them. Taking the drag drops the pending
+        // order with it; the merge offer outlives the drag, so it goes too.
+        self.reorder.borrow_mut().take();
+        self.tab_merge.take();
         if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             tab.pip_interaction.cancel();
         }
@@ -2715,7 +2777,7 @@ impl LyrelApp {
                         } else if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
                             // Re-read the release position; a stale highlighted frame cannot park or rearrange.
                             crate::ui::pane_drag::clear_landing(&app.pane_drag);
-                            let _ = app.pane_landing(window, cx);
+                            let _ = app.pane_landing_offer(window, cx);
                             let landing = crate::ui::pane_drag::take_landing(&app.pane_drag);
                             let tiled = app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
                                 !tab.pip_slot(cx)
@@ -2782,7 +2844,48 @@ impl LyrelApp {
     /// Also records that landing as the one a drop would take, so the drop and
     /// the highlight can never disagree: a zone the tree refuses to carry out
     /// is neither drawn nor remembered, and releasing over it does nothing.
-    fn pane_landing(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
+    fn pane_landing(&self, window: &mut Window, cx: &mut App) -> Option<gpui_kit::AnyElement> {
+        let rect = self.pane_landing_offer(window, cx)?;
+        // The highlight glides between the targets the pointer crosses rather
+        // than jumping; with motion reduced the transition resolves to its
+        // target on the frame it changes, so the feedback stays direct.
+        let shown = crate::ui::pane_drag::glide(&self.pane_drag)
+            .map(|glide| {
+                gpui_kit::base::transition(
+                    (glide, "pane-drop-preview"),
+                    rect,
+                    crate::ui::pane_drag::glide_transition(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap_or(rect);
+        let area = self.pane_area.get()?;
+
+        let accent = cx.theme().drag_border;
+        Some(
+            div()
+                .id("pane-drop-preview")
+                .test_support()
+                .absolute()
+                .left(shown.origin.x - area.origin.x)
+                .top(shown.origin.y - area.origin.y)
+                .w(shown.size.width)
+                .h(shown.size.height)
+                .rounded(px(6.))
+                .border_2()
+                .border_color(accent)
+                .bg(accent.opacity(0.15))
+                .into_any_element(),
+        )
+    }
+
+    /// Where a pane being dragged would land right now, remembered as the
+    /// landing a drop would take.
+    ///
+    /// Split from the highlight so the release path can re-read the offer for
+    /// the position the button came up at without painting anything.
+    fn pane_landing_offer(&self, window: &Window, cx: &App) -> Option<Bounds<Pixels>> {
         use crate::ui::pane_drag;
 
         let from = pane_drag::lifted(&self.pane_drag)?;
@@ -2808,21 +2911,7 @@ impl LyrelApp {
         let pinned = zone.map(|i| leaves.get(i).map(|l| l.entity_id()))?;
         let rect = pane_drag::landing(&tab.pane, slot, here, area)?;
         pane_drag::set_landing(&self.pane_drag, pinned);
-
-        let accent = cx.theme().drag_border;
-        Some(
-            div()
-                .absolute()
-                .left(rect.origin.x - area.origin.x)
-                .top(rect.origin.y - area.origin.y)
-                .w(rect.size.width)
-                .h(rect.size.height)
-                .rounded(px(6.))
-                .border_2()
-                .border_color(accent)
-                .bg(accent.opacity(0.15))
-                .into_any_element(),
-        )
+        Some(rect)
     }
 
     /// The patch of the layout a tab held over it would be grafted into, lit
@@ -2832,7 +2921,7 @@ impl LyrelApp {
     /// readings share one gesture: over the strip or the sidebar it is a
     /// reorder, out over the panes it is a merge. Suspending the reorder is
     /// what keeps the drop from being both.
-    fn tab_landing(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
+    fn tab_landing(&self, window: &mut Window, cx: &mut App) -> Option<gpui_kit::AnyElement> {
         self.tab_merge.set(None);
         let dragged = crate::ui::reorder::dragged_tab(&self.reorder);
         let offer = dragged.and_then(|id| self.tab_landing_rect(id, window));
@@ -2840,15 +2929,31 @@ impl LyrelApp {
         let (zone, rect) = offer?;
         let area = self.pane_area.get()?;
         self.tab_merge.set(Some((dragged?, zone)));
+        // The same glide the pane preview rides: the highlight follows the
+        // pointer across targets, and with motion reduced it is drawn at its
+        // target on the frame it changes.
+        let shown = crate::ui::reorder::glide(&self.reorder)
+            .map(|glide| {
+                gpui_kit::base::transition(
+                    (glide, "tab-drop-preview"),
+                    rect,
+                    crate::ui::pane_drag::glide_transition(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap_or(rect);
 
         let accent = cx.theme().drag_border;
         Some(
             div()
+                .id("tab-drop-preview")
+                .test_support()
                 .absolute()
-                .left(rect.origin.x - area.origin.x)
-                .top(rect.origin.y - area.origin.y)
-                .w(rect.size.width)
-                .h(rect.size.height)
+                .left(shown.origin.x - area.origin.x)
+                .top(shown.origin.y - area.origin.y)
+                .w(shown.size.width)
+                .h(shown.size.height)
                 .rounded(px(6.))
                 .border_2()
                 .border_color(accent)
@@ -3712,6 +3817,17 @@ impl LyrelApp {
     /// and the tab context menu) come through here so the two cannot drift.
     pub(crate) fn tab_cwd_text(&self, index: usize, window: &Window, cx: &App) -> Option<String> {
         let leaf = self.tabs.get(index)?.pane.focused_or_first(window, cx)?;
+        Self::cwd_text(&leaf, cx)
+    }
+
+    /// The Context Pane's working directory, spelled for the clipboard — the
+    /// same pane the bottom bar's Git indicator and the Side Panel tools
+    /// describe, so the path a user copies is the path the bar shows (#349).
+    pub(crate) fn context_cwd_text(&self, window: &Window, cx: &App) -> Option<String> {
+        Self::cwd_text(&self.context_pane(window, cx)?, cx)
+    }
+
+    fn cwd_text(leaf: &Entity<TerminalView>, cx: &App) -> Option<String> {
         let view = leaf.read(cx);
         let cwd = view.cwd()?;
         Some(match view.local_cwd().is_some() {
@@ -3723,7 +3839,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn copy_active_cwd(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.tab_cwd_text(self.tabs.active_index(), window, cx) {
+        if let Some(text) = self.context_cwd_text(window, cx) {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         }
     }
@@ -4004,6 +4120,34 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::AppTabNoWorkingDirectory), cx);
             return;
         };
+        // The pane `tab_host_cwd` just resolved is the source: a local pane
+        // inside a remote workspace has no `PaneWorkspace`, and its `None`
+        // pins the new worktree's terminal to the local route rather than
+        // the window's.
+        let source_workspace = self
+            .tabs
+            .get(index)
+            .and_then(|tab| tab.pane.focused_or_first(window, cx))
+            .and_then(|leaf| leaf.read(cx).workspace().cloned());
+        self.new_worktree_at(host, cwd, source_workspace, window, cx);
+    }
+
+    /// The existing creation flow for `host` + `cwd`'s repository: read the
+    /// suggested name/base on the Host, then open the prompt. The worktree
+    /// picker (#351) hands over the Context Pane it captured the same way.
+    ///
+    /// `source_workspace` is the route of the pane the request was started
+    /// from — `None` for a local pane, which spawns the worktree's terminal
+    /// locally even when the window's workspace itself is remote.
+    pub(crate) fn new_worktree_at(
+        &mut self,
+        host: lyrel_ui_base::host_ops::SharedHost,
+        cwd: std::path::PathBuf,
+        source_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let owner = self.workspace;
         let sheet_host = host.clone();
         let probe_cwd = cwd.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(
@@ -4011,31 +4155,88 @@ impl LyrelApp {
             window,
             cx,
             move |h| crate::core::worktree::defaults(h, &probe_cwd),
-            move |this, result, window, cx| match result {
-                Ok(defaults) => this.open_worktree_prompt(sheet_host, cwd, defaults, window, cx),
-                Err(e) => window.notify_app(
-                    lyrel_ui_base::host_ops::failure(
-                        t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
-                        &e,
+            move |this, result, window, cx| {
+                if this.workspace != owner
+                    || !crate::ui::worktree_prompt::same_worktree_host(&sheet_host, cx)
+                    || !this.worktree_launch_route_current(
+                        source_workspace.as_ref(),
+                        sheet_host.id(),
+                        cx,
+                    )
+                {
+                    return;
+                }
+                match result {
+                    Ok(defaults) => this.open_worktree_prompt(
+                        sheet_host,
+                        cwd,
+                        source_workspace,
+                        defaults,
+                        window,
+                        cx,
                     ),
-                    cx,
-                ),
+                    Err(e) => window.notify_app(
+                        lyrel_ui_base::host_ops::failure(
+                            t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
+                            &e,
+                        ),
+                        cx,
+                    ),
+                }
             },
         );
     }
 
+    /// The pane the request was started from decides where the worktree's
+    /// terminal spawns — captured as `source_workspace` because a window on
+    /// a remote workspace holds local panes too. The route is re-asked of the
+    /// store every time it is used, since workspace switching and rebinding
+    /// both run while the prompt and its Host ops are in flight: a source
+    /// whose logical workspace or Host no longer answers for this window gets
+    /// no pane and no external operation on a stale route.
+    pub(crate) fn worktree_launch_route_current(
+        &self,
+        source_workspace: Option<&lyrel_ui_base::route::PaneWorkspace>,
+        host: HostId,
+        cx: &App,
+    ) -> bool {
+        match source_workspace {
+            None => host.is_local(),
+            Some(source) => {
+                source.workspace == self.workspace
+                    && source.target.host_id() == host
+                    && WorkspaceStore::host_of(cx, self.workspace) == host
+            }
+        }
+    }
+
     /// Open `wt` in a new tab named after its branch, typing `first` — its
-    /// setup and agent — into the shell there.
+    /// setup and agent — into the shell there. The terminal spawns on the
+    /// source pane's route, not the window's: a local pane inside a remote
+    /// workspace asked for a local worktree.
     pub(crate) fn open_worktree_tab(
         &mut self,
         wt: crate::core::worktree::NewWorktree,
         first: Option<String>,
+        source_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
+        host: HostId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.worktree_launch_route_current(source_workspace.as_ref(), host, cx) {
+            let reason = t(L10nKey::WorktreeRouteChanged);
+            window.notify_app(
+                lyrel_ui_base::host_ops::failure(
+                    t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", reason)]),
+                    &reason,
+                ),
+                cx,
+            );
+            return;
+        }
         let view = Self::new_terminal(
             PendingTerminalRequest::shell(
-                self.window_workspace(cx),
+                source_workspace,
                 Some(self.workspace),
                 self.font_size,
                 Some(wt.path),
@@ -4229,6 +4430,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_worktree_picker(window, cx);
+        if self.worktree_picker.is_some() {
+            // Keep the confirmation visible while Git is removing a checkout.
+            return;
+        }
         let catalog = self.search_input(window, cx);
         let view = self
             .search
@@ -5330,7 +5536,26 @@ pub(crate) mod test_window {
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
         lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, None)
+    }
 
+    /// The production workbench on an already-claimed workspace — what a
+    /// window restored at launch gets, and what the tool-layout persistence
+    /// tests (#348) reopen at their simulated relaunch. Callers that simulate
+    /// the relaunch itself use [`open_window_on`] so the rest of the app
+    /// state — the config above all — survives the "restart".
+    pub(crate) fn harness_on_workspace(
+        cx: &mut TestAppContext,
+        workspace: lyrel_ui_base::session::WorkspaceId,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
+        lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, Some(workspace))
+    }
+
+    /// The globals every GUI test window needs, installed idempotently.
+    fn install_globals(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -5351,9 +5576,18 @@ pub(crate) mod test_window {
                     .display_hint(crate::ui::machine_mirror::display_hint),
             );
         });
+    }
+
+    /// A production window on `workspace` (`None` opens an unclaimed one),
+    /// without touching the app globals — the half of the harness a simulated
+    /// relaunch reuses as-is.
+    pub(crate) fn open_window_on(
+        cx: &mut TestAppContext,
+        workspace: Option<lyrel_ui_base::session::WorkspaceId>,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
         let window = cx.add_window(|window, cx| {
-            let app =
-                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
+            let app = cx
+                .new(|cx| LyrelApp::with_session(workspace, Some(Session::default()), window, cx));
             gpui_kit::component::Root::new(app, window, cx)
         });
         window
@@ -5852,3 +6086,7 @@ mod sidecar_snapshot_gpui_tests;
 #[cfg(test)]
 #[path = "tab/tests_parking.rs"]
 mod parking_gpui_tests;
+
+#[cfg(test)]
+#[path = "tab/tests_drag.rs"]
+mod drag_gpui_tests;
