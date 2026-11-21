@@ -108,6 +108,9 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
+        // Membership diff for the sidebar's row/disclosure motion, run even
+        // when the panel is shut so a change that lands hidden stays landed.
+        self.observe_sidebar_motion(cx);
         let sidebar = self
             .sidebar_open(cx)
             .then(|| self.tab_sidebar(window, cx).into_any_element());

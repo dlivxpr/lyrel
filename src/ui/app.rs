@@ -339,6 +339,14 @@ pub struct LyrelApp {
     /// them. Adopted from every pull and every `GroupsChanged`, and pushed
     /// back as one `WorkspaceSetGroups` whenever this window edits it.
     pub(crate) sidebar_groups: crate::core::group_key::WorkspaceGroups,
+    /// Session-row and group-disclosure motion: which rows are arriving or
+    /// leaving, which groups are opening or shutting, and what the leaving
+    /// rows last showed. The work-area render feeds it a membership diff
+    /// each frame and the sidebar render paints what it returns; nothing
+    /// outside `tab_sidebar` touches it. RefCell, like the slot rectangles
+    /// beside it: render is `&self`, and the diff has to happen where the
+    /// frame is built.
+    pub(crate) sidebar_motion: RefCell<crate::ui::tab_sidebar::SidebarMotion>,
     /// Where the active tab's panes were last drawn, which is the frame of
     /// reference a drag's landing is worked out in.
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
