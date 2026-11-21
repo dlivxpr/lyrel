@@ -1302,10 +1302,15 @@ impl LyrelApp {
                     let rev = oid.to_string();
                     move |_, window, cx| {
                         let _ = app.update(cx, |this, cx| {
+                            // Scoped to the Context Pane, like the panel's
+                            // repository dropdown: focusing a different
+                            // terminal pane hands the subject back (#349).
+                            let pane = this.context_pane(window, cx).map(|leaf| leaf.entity_id());
                             this.scm.begin_branch_at(
                                 repo.clone(),
                                 rev.clone(),
                                 this.tabs.active_index(),
+                                pane,
                                 window,
                                 cx,
                             )

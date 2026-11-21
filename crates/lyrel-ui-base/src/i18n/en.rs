@@ -2544,6 +2544,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelFilesTitle => "Files",
         L10nKey::PanelSearchTitle => "Search",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::ToolHostAdd => "Add Tool",
+        L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
             "Open a tab to see its shell, directory, and processes here."

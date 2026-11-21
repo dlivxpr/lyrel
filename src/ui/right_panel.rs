@@ -1,7 +1,9 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
@@ -26,29 +28,91 @@ pub(crate) fn shown_tab(tab: RightPanelTab) -> RightPanelTab {
     }
 }
 
-/// Wide enough for the word tabs, bare, beside the panel toggle at
-/// the default interface size — the Changes count is dropped before a label is
-/// ever cut. A larger UI font raises the floor past this; see
-/// [`right_panel_tabs_floor`].
-pub(crate) const MIN_WIDTH: f32 = 240.;
+/// The tools the host offers, in `+` menu order: Info leads as the default
+/// and the pane's overview; then the project's files, and its version
+/// control, local to remote (Changes, GitHub). Search is not among them — it
+/// is the Files tool's input mode, commanded through
+/// [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
+pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 4] = [
+    (
+        RightPanelTab::Info,
+        L10nKey::PanelInfoTitle,
+        "icons/info.svg",
+    ),
+    (
+        RightPanelTab::Files,
+        L10nKey::PanelFilesTitle,
+        "icons/file.svg",
+    ),
+    (
+        RightPanelTab::Scm,
+        L10nKey::PanelChangesTitle,
+        "icons/git-branch.svg",
+    ),
+    (
+        RightPanelTab::GitHub,
+        L10nKey::PanelGitHubTitle,
+        "icons/github.svg",
+    ),
+];
 
-/// What the tab row needs with the count dropped: the labels, the row's lead,
-/// its 2px gaps, and the panel toggle at the trailing end.
-fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
-    let chrome = tile_trailing_inset();
-    (TAB_ROW_LEAD + crate::ui::tab_strip::right_panel_tab_labels_w(window, cx) + chrome).ceil()
+/// The `+` tile: tall enough for the 24px hit-target floor, drawn at the
+/// same scale as the 26px tab pills it closes the strip with.
+const TOOL_TILE: f32 = 26.;
+
+/// How wide every tab's close slot is reserved, button painted or not.
+const TOOL_CLOSE_SLOT: f32 = 16.;
+
+/// What the host renders for `tab`: label key and icon path. Only ever
+/// called with the layout's identities — Search has already folded into
+/// Files — so it spells the four real tools.
+fn tool_spec(tab: RightPanelTab) -> (RightPanelTab, L10nKey, &'static str) {
+    TOOL_HOST_TOOLS
+        .into_iter()
+        .find(|(tool, _, _)| *tool == tab)
+        .expect("a layout identity is one of the four tools")
 }
 
-/// The tab row's leading inset: the selected tab's pill starts on
-/// `CONTENT_INSET`, the edge every row fill below it starts on, and each tab's
-/// click target reaches `TAB_OUTER_PAD` past its pill.
-const TAB_ROW_LEAD: f32 =
-    crate::ui::window_chrome::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
+/// The stable element id of `tab`'s tool tab.
+pub(crate) fn tool_tab_id(tab: RightPanelTab) -> &'static str {
+    match tab {
+        RightPanelTab::Info => "tool-tab-info",
+        RightPanelTab::Files => "tool-tab-files",
+        RightPanelTab::Search => "tool-tab-files",
+        RightPanelTab::Scm => "tool-tab-changes",
+        RightPanelTab::GitHub => "tool-tab-github",
+    }
+}
 
-/// How tall the tab row is where it sits below the title bar (Windows and
-/// Linux): the tab's 26px hover pill plus 2px either side. A full title-bar
-/// height here stacked a second 40px band under the first and left the labels
-/// sitting well down from the window's top edge.
+/// The stable element id of `tab`'s reserved close slot.
+fn tool_tab_close_id(tab: RightPanelTab) -> &'static str {
+    match tab {
+        RightPanelTab::Info => "tool-tab-close-info",
+        RightPanelTab::Files | RightPanelTab::Search => "tool-tab-close-files",
+        RightPanelTab::Scm => "tool-tab-close-changes",
+        RightPanelTab::GitHub => "tool-tab-close-github",
+    }
+}
+
+/// The distinguishing part of a tool's element ids, for menu rows that are
+/// built per open.
+fn tool_name(tab: RightPanelTab) -> &'static str {
+    match tab {
+        RightPanelTab::Info => "info",
+        RightPanelTab::Files | RightPanelTab::Search => "files",
+        RightPanelTab::Scm => "changes",
+        RightPanelTab::GitHub => "github",
+    }
+}
+
+/// The narrowest the panel may be drawn. The tool tabs moved up into the
+/// window title bar (#345) and the strip scrolls there instead of squeezing
+/// the panel, so the floor no longer carries their labels.
+pub(crate) const MIN_WIDTH: f32 = 240.;
+
+/// How tall the band above a panel body is where one exists at all: the tab's
+/// 26px hover pill plus 2px either side. Only the SFTP browser still brings a
+/// trailing row since the tool tabs left for the title bar.
 const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
 
 /// How wide a panel edge is to grab. Both edges a window can drag — the tab
@@ -280,6 +344,113 @@ pub(crate) struct RightPanelState {
         std::collections::HashSet<u16>,
     >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
+    /// This workspace's tool layout, keyed by the workspace it belongs to —
+    /// the value #348 persists per workspace. The active workspace's layout
+    /// is mirrored onto `LyrelApp::right_panel_tab` / `right_panel_visible`
+    /// (see [`LyrelApp::fold_mirror_into_tool_layout`]) so the rest of the
+    /// panel code keeps reading the fields it always has.
+    pub(crate) tool_layouts:
+        std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
+}
+
+/// One workspace's right-panel tool layout — what the title-bar tool host
+/// renders from, and the value #348 persists per workspace.
+///
+/// Holds the open tools in tab order, the active tool, the most recently
+/// used tool, and whether the panel column is expanded. A stored `Search`
+/// choice is not a layout identity: [`shown_tab`] folds it into `Files`,
+/// whose search field the explicit search command focuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolLayout {
+    /// Open tools, left to right. One entry per tool at most.
+    pub(crate) order: Vec<RightPanelTab>,
+    /// The tool whose page is showing.
+    pub(crate) active: RightPanelTab,
+    /// The tool an emptied panel resumes when it is reopened.
+    pub(crate) last_used: RightPanelTab,
+    /// Whether the panel column is expanded.
+    pub(crate) open: bool,
+}
+
+impl Default for ToolLayout {
+    /// What a workspace starts with on first use of the new layout: Info
+    /// prepared behind a collapsed panel. The old global selection is not
+    /// projected onto a workspace (#345).
+    fn default() -> Self {
+        Self {
+            order: vec![RightPanelTab::Info],
+            active: RightPanelTab::Info,
+            last_used: RightPanelTab::Info,
+            open: false,
+        }
+    }
+}
+
+impl ToolLayout {
+    /// Show `tab`: one instance per workspace, so an already-open tool is
+    /// activated in place and a new one takes the trailing slot. Showing a
+    /// tool always expands the panel — choosing it from `+`, its tab, or
+    /// Search Everywhere opens the panel on it.
+    pub(crate) fn show(&mut self, tab: RightPanelTab) {
+        let tab = shown_tab(tab);
+        if !self.order.contains(&tab) {
+            self.order.push(tab);
+        }
+        self.active = tab;
+        self.last_used = tab;
+        self.open = true;
+    }
+
+    /// Close `tab`, removing only its display position — the tool's search,
+    /// filters, expansion and drafts survive in the panel state. Closing the
+    /// active tab selects the right neighbour, otherwise the left; closing
+    /// the last tab collapses the panel, remembering the tool for the next
+    /// reopen.
+    ///
+    /// Returns the tool the selection moved to, when it moved.
+    pub(crate) fn close(&mut self, tab: RightPanelTab) -> Option<RightPanelTab> {
+        let tab = shown_tab(tab);
+        let at = self.order.iter().position(|open| *open == tab)?;
+        self.order.remove(at);
+        if self.active != tab {
+            return None;
+        }
+        // Right neighbour first: after the removal it sits at the removed
+        // tab's own index. Only the rightmost tab falls back to the left.
+        match self
+            .order
+            .get(at)
+            .or_else(|| at.checked_sub(1).and_then(|left| self.order.get(left)))
+        {
+            Some(next) => {
+                self.active = *next;
+                self.last_used = *next;
+                Some(*next)
+            }
+            None => {
+                // The last tab went away: the panel collapses rather than
+                // leaving an empty shell, and `last_used` keeps the closed
+                // tool so the next reopen resumes it.
+                self.open = false;
+                None
+            }
+        }
+    }
+
+    /// Expand the panel. An emptied panel resumes `last_used` — Info when
+    /// the workspace has no history.
+    pub(crate) fn expand(&mut self) {
+        if self.order.is_empty() {
+            self.order.push(self.last_used);
+            self.active = self.last_used;
+        }
+        self.open = true;
+    }
+
+    /// Collapse the panel; the tab set is kept.
+    pub(crate) fn collapse(&mut self) {
+        self.open = false;
+    }
 }
 
 /// How many renders a reveal waits for its row to show up. Generous: it costs
@@ -479,11 +650,11 @@ impl LyrelApp {
         }
     }
 
-    /// The narrowest the panel may be drawn: `MIN_WIDTH`, or wider when the
-    /// interface font or the language makes the three tab labels and the two
-    /// chrome tiles beside them need more than that.
-    pub(crate) fn right_panel_min_px(&self, window: &Window, cx: &gpui_kit::App) -> f32 {
-        MIN_WIDTH.max(right_panel_tabs_floor(window, cx))
+    /// The narrowest the panel may be drawn. The tool tabs no longer live
+    /// here, so the floor is the constant rather than a measurement of the
+    /// old word-tab row.
+    pub(crate) fn right_panel_min_px(&self, _window: &Window, _cx: &gpui_kit::App) -> f32 {
+        MIN_WIDTH
     }
 
     pub(crate) fn right_panel_max_px(&self, window: &Window, cx: &gpui_kit::App) -> f32 {
@@ -501,14 +672,75 @@ impl LyrelApp {
         )
     }
 
+    /// This workspace's tool layout — a copy; the map entry is created on the
+    /// first write, so reads stay cheap for workspaces never touched.
+    pub(crate) fn tool_layout(&self) -> ToolLayout {
+        self.right_panel
+            .tool_layouts
+            .get(&self.workspace)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Write the layout back: the map, the live mirror fields the panel code
+    /// reads, and the global config, which keeps carrying the choice for an
+    /// older build until per-workspace persistence lands (#348).
+    fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
+        self.right_panel
+            .tool_layouts
+            .insert(self.workspace, layout.clone());
+        self.right_panel_visible = layout.open;
+        self.right_panel_tab = layout.active;
+        self.update_config(cx, |cfg| {
+            cfg.right_panel_tab = layout.active;
+            cfg.right_panel_visible = layout.open;
+        });
+        cx.notify();
+    }
+
+    /// Reconcile the layout with the live mirror fields at the panel's render
+    /// choke point. Legacy open entrypoints — the file tree's reveal, the
+    /// palette, GitHub navigation — write `right_panel_tab` /
+    /// `right_panel_visible` directly rather than through the layout API, and
+    /// folding them here keeps the layout — the value #348 persists — the
+    /// same layout the title-bar host renders, without touching those seams.
+    fn fold_mirror_into_tool_layout(&mut self) {
+        let tab = shown_tab(self.right_panel_tab);
+        let mut layout = self.tool_layout();
+        if self.right_panel_visible {
+            if !layout.order.contains(&tab) {
+                layout.order.push(tab);
+            }
+            layout.active = tab;
+            layout.last_used = tab;
+            layout.open = true;
+        } else {
+            if !layout.order.is_empty() && !layout.order.contains(&tab) {
+                // A selection made while collapsed is still a choice the next
+                // expansion should honour.
+                layout.order.push(tab);
+            }
+            if layout.order.contains(&tab) {
+                layout.active = tab;
+            }
+            layout.open = false;
+        }
+        self.right_panel.tool_layouts.insert(self.workspace, layout);
+    }
+
     pub(crate) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
-        let next = !self.right_panel_visible;
-        if !next {
+        let mut layout = self.tool_layout();
+        if layout.open {
+            layout.collapse();
+        } else {
+            // An emptied panel resumes the last-used tool rather than
+            // opening on nothing (#345).
+            layout.expand();
+        }
+        if !layout.open {
             self.sftp_retire_revalidation();
         }
-        self.right_panel_visible = next;
-        self.update_config(cx, |cfg| cfg.right_panel_visible = next);
-        cx.notify();
+        self.store_tool_layout(&layout, cx);
     }
 
     /// Enter the panel's tab list from terminal or editor content, landing on
@@ -623,7 +855,9 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         // The Files field still takes focus on its next frame rather than
-        // here: a tab switch does not preempt the entry-cancel below.
+        // here: a tab switch does not preempt the entry-cancel below. Search
+        // is the Files tool's input mode, not a tool of its own — stored and
+        // commanded as Files, with the field focused.
         if tab == RightPanelTab::Search {
             self.panel_search.focus_pending = true;
         }
@@ -636,16 +870,41 @@ impl LyrelApp {
             // abandoned mid-flight.
             self.leave_right_panel_navigation(window, cx);
         }
-        if self.right_panel_tab != tab {
+        let mut layout = self.tool_layout();
+        if layout.active != tab {
             self.sftp_retire_revalidation();
         }
-        self.right_panel_tab = tab;
-        self.right_panel_visible = true;
-        self.update_config(cx, |cfg| {
-            cfg.right_panel_tab = tab;
-            cfg.right_panel_visible = true;
-        });
-        cx.notify();
+        layout.show(tab);
+        self.store_tool_layout(&layout, cx);
+    }
+
+    /// Close `tab`'s tool tab from the title-bar host. Ordinary switches
+    /// never move the keyboard; closing only takes focus back when the panel
+    /// collapsed under it or the closed tool owned the focus — otherwise the
+    /// pointer and the keyboard stay wherever they were.
+    pub(crate) fn close_right_panel_tab(
+        &mut self,
+        tab: RightPanelTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = shown_tab(tab);
+        let mut layout = self.tool_layout();
+        let was_active = layout.active == tab;
+        layout.close(tab);
+        // The SFTP browser belongs to the Files tool: retire its revalidation
+        // when the tool in front changes or the panel goes away, exactly as
+        // a tab switch does.
+        if was_active || !layout.open {
+            self.sftp_retire_revalidation();
+        }
+        self.store_tool_layout(&layout, cx);
+        let focus_gone = window
+            .focused(cx)
+            .is_some_and(|focused| !focused.is_rendered(window));
+        if !self.right_panel_visible || focus_gone {
+            self.focus_previous_content(window, cx);
+        }
     }
 
     pub(crate) fn render_right_panel(
@@ -653,6 +912,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        self.fold_mirror_into_tool_layout();
         let panel_open = self.right_panel_open(cx);
         if panel_open {
             self.right_panel_nav_renders
@@ -812,31 +1072,259 @@ impl LyrelApp {
         (backing, handle)
     }
 
+    /// The band above a panel body. The tool tabs and the Changes count this
+    /// row used to carry moved to the title-bar tool host (#345), so for the
+    /// four tool pages this renders nothing and the body starts on its
+    /// content. The row survives only for a sub-view that brings trailing
+    /// controls of its own — the SFTP browser — and the `_count` a caller
+    /// still passes is the host's, not a tab badge, so it is dropped here.
     pub(crate) fn panel_title(
         &self,
         _text: &str,
-        count: Option<String>,
+        _count: Option<String>,
         trailing: Option<AnyElement>,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> AnyElement {
-        let changes_count = if self.right_panel_tab == RightPanelTab::Scm {
-            count.map(gpui_kit::SharedString::from)
-        } else {
-            None
+        let Some(trailing) = trailing else {
+            return div().into_any_element();
         };
-        let tabs = self.right_panel_tabs(changes_count, cx);
         h_flex()
             .id("panel-title")
             .flex_none()
             .h(rems(TAB_ROW_HEIGHT / 16.))
             .items_center()
-            .pl(rems(TAB_ROW_LEAD / 16.))
+            .pl(rems(CONTENT_INSET / 16.))
             .pr(rems(tile_trailing_inset() / 16.))
-            .child(tabs)
             .child(div().flex_1().min_w_0())
-            .when_some(trailing, |row, trailing| row.child(trailing))
+            .child(trailing)
             .into_any_element()
+    }
+
+    /// The title-bar tool host: compact icon-and-label tabs for this
+    /// workspace's open tools — one instance each, the selected tab on a
+    /// neutral fill, a reserved close slot on every tab — and the fixed `+`
+    /// that offers every tool and opens the panel on its pick. The host stays
+    /// put and usable while the panel is collapsed: choosing a tool opens the
+    /// panel on it.
+    pub(crate) fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let layout = self.tool_layout();
+        let rail = cx.global::<lyrel_ui_base::presets::Surfaces>().rail;
+        let rail_selected = gpui_kit::rgb(rail.selected);
+        let rail_hover = gpui_kit::rgb(rail.hover);
+        let body_ink = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+        let ring = cx.theme().ring;
+        // Only Changes may carry a real count; the host asks for the same
+        // pane status the tool page itself renders from.
+        let changes_count = self.tool_changes_count(window, cx);
+        let tabs = layout.order.iter().map(|tab| {
+            let tab = *tab;
+            let current = layout.active == tab;
+            let (_, label_key, icon) = tool_spec(tab);
+            let ink = match current {
+                true => body_ink,
+                false => muted,
+            };
+            let group = gpui_kit::SharedString::from(tool_tab_id(tab));
+            let close_tip = t_fmt(L10nKey::ToolHostClose, &[("tool", t(label_key))]);
+            NavTab::new(tool_tab_id(tab))
+                .selected(current)
+                .accessibility_label(t(label_key))
+                .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
+                // Pointer activation keeps the established content focus:
+                // the framework would otherwise focus the tab on mouse down.
+                .capture_any_mouse_down(|_, window, _| window.prevent_default())
+                .focus(move |style| {
+                    style.shadow(vec![gpui_kit::BoxShadow {
+                        color: ring,
+                        offset: gpui_kit::point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(2.),
+                        inset: true,
+                    }])
+                })
+                // The press must not start a window drag from the title bar
+                // the host sits in.
+                .occlude()
+                .group(group.clone())
+                .flex_shrink_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .rounded(px(7.))
+                .text_size(gpui_kit::rems(TAB_TEXT))
+                .when(current, |tab| tab.bg(rail_selected))
+                .when(!current, |tab| tab.hover(move |style| style.bg(rail_hover)))
+                .child(Icon::empty().path(icon).size(px(14.)).text_color(ink))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_weight(match current {
+                            true => gpui_kit::FontWeight::MEDIUM,
+                            false => gpui_kit::FontWeight::NORMAL,
+                        })
+                        .text_color(ink)
+                        .child(t(label_key))
+                        // Only Changes may show a real changed-item count,
+                        // the same number its tool page headlines with.
+                        .when(tab == RightPanelTab::Scm, |label| {
+                            label.when_some(changes_count.clone(), |label, count| {
+                                label.child(
+                                    div()
+                                        .id("right-panel-change-count")
+                                        .test_support()
+                                        .aria_label(count.clone())
+                                        .font_weight(gpui_kit::FontWeight::NORMAL)
+                                        .text_color(muted)
+                                        .child(count),
+                                )
+                            })
+                        }),
+                )
+                // The close slot is reserved on every tab whether or not its
+                // button is painted, so showing the button never rewraps the
+                // strip; the button itself paints on hover or selection.
+                .child(
+                    div()
+                        .id(tool_tab_close_id(tab))
+                        .test_support()
+                        .flex_shrink_0()
+                        .size(px(TOOL_CLOSE_SLOT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .role(gpui_kit::Role::Button)
+                        .aria_label(close_tip.clone())
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(close_tip.clone())
+                                .build(window, cx)
+                        })
+                        .hover(move |style| style.bg(rail_hover))
+                        .child(
+                            div()
+                                .invisible()
+                                .when(current, |icon| icon.visible())
+                                .group_hover(group, |style| style.visible())
+                                .child(Icon::new(IconName::Close).size(px(12.)).text_color(ink)),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.close_right_panel_tab(tab, window, cx);
+                        })),
+                )
+                .on_click(
+                    cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if matches!(
+                            event,
+                            gpui_kit::ClickEvent::Mouse(_) | gpui_kit::ClickEvent::Touch(_)
+                        ) {
+                            this.right_panel_navigation_pointer(window, cx);
+                        }
+                        let layout = this.tool_layout();
+                        if !layout.open || layout.active != tab {
+                            this.set_right_panel_tab(tab, window, cx);
+                        }
+                    }),
+                )
+        });
+        NavTabs::new("tool-tabs")
+            .axis(gpui_kit::Axis::Horizontal)
+            // One roving tab stop: focusing this scope then moving on lands
+            // on the selected tab, while the scope itself is never a stop.
+            .track_focus(&self.right_panel_nav_focus)
+            .tab_stop(false)
+            .flex()
+            .flex_row()
+            .items_center()
+            .h_full()
+            .flex_shrink_0()
+            .min_w_0()
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape"
+                        && this.right_panel_nav_focus.contains_focused(window, cx)
+                    {
+                        this.leave_right_panel_navigation(window, cx);
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "w" && event.keystroke.modifiers.control {
+                        // The roving stop sits on the selected tab, so closing
+                        // it from the keyboard follows the same rule as the
+                        // pointer: right neighbour, otherwise left.
+                        let active = this.tool_layout().active;
+                        this.close_right_panel_tab(active, window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .children(tabs)
+            .child(self.tool_add_button(cx))
+            .into_any_element()
+    }
+
+    /// The real changed-item count for the Context Pane's repository, when
+    /// one is known — the only badge a tool tab may carry.
+    fn tool_changes_count(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let (host, cwd) = self.scm_pane_target(window, cx)?;
+        let root = match self.scm_repo_root(&host, &cwd, cx) {
+            crate::ui::scm::panel::RepoLookup::Root(root) => root,
+            _ => return None,
+        };
+        let status = crate::ui::scm::data::status_of(cx, host.id(), &root)?;
+        (status.total_entries > 0).then(|| status.total_entries.to_string())
+    }
+
+    /// The fixed `+` at the host's trailing end. Works while the panel is
+    /// collapsed — a pick opens the panel on the tool, activating the
+    /// existing tab when the tool is already open.
+    fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let app = cx.entity().downgrade();
+        crate::ui::window_chrome::chrome_tile_sized(
+            Button::new("titlebar-tool-add").icon(Icon::new(IconName::Plus)),
+            TOOL_TILE,
+            crate::ui::window_chrome::TILE_GLYPH,
+            false,
+            cx,
+        )
+        .rounded(px(7.))
+        .accessibility_label(t(L10nKey::ToolHostAdd))
+        .tooltip(t(L10nKey::ToolHostAdd))
+        // Built when the menu opens, not when the strip draws.
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu.min_w(px(180.));
+            for (tab, label_key, icon) in TOOL_HOST_TOOLS {
+                let app = app.clone();
+                let id = format!("tool-add-{}", tool_name(tab));
+                menu = menu.item(
+                    gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
+                        h_flex()
+                            .id(id.clone())
+                            .test_support()
+                            .w_full()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(Icon::empty().path(icon).size(px(14.)))
+                            .child(div().child(t(label_key)))
+                    })
+                    .on_click(move |_, window, cx| {
+                        if let Some(app) = app.upgrade() {
+                            app.update(cx, |this, cx| {
+                                this.set_right_panel_tab(tab, window, cx);
+                            });
+                        }
+                    }),
+                );
+            }
+            menu
+        })
     }
 
     pub(crate) fn panel_search(
@@ -952,8 +1440,10 @@ impl LyrelApp {
         let mut diff_target: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)> = None;
         let mut git: Option<crate::ui::scm::status_cache::GitStatus> = None;
 
-        if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
-            if let Some(leaf) = tab.detail_pane(window, cx) {
+        // Which pane the sections describe comes from the canonical Context
+        // Pane resolution, the same call the port watch uses below.
+        if self.tabs.get(self.tabs.active_index()).is_some() {
+            if let Some(leaf) = self.context_pane(window, cx) {
                 let view = leaf.read(cx);
                 pane_id = Some(view.pane_id);
                 diff_target = view
@@ -1757,10 +2247,7 @@ impl LyrelApp {
         window: &Window,
         cx: &gpui_kit::App,
     ) -> Option<PaneForwardCtx> {
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .detail_pane(window, cx)?;
+        let leaf = self.context_pane(window, cx)?;
         let view = leaf.read(cx);
         // A pane holds managed forwards once it has somewhere to hold them:
         // a live native-ssh connection, or the workspace's shared one.
@@ -2235,8 +2722,135 @@ fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{InfoRow, InfoValue, format_rtt, forwards_port};
+    use super::{InfoRow, InfoValue, ToolLayout, format_rtt, forwards_port, shown_tab};
     use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
+    use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm, Search};
+
+    /// A workspace's first layout: only Info prepared, behind a collapsed
+    /// panel, whatever an old global config selection said (#345).
+    #[test]
+    fn a_fresh_layout_prepares_only_info_collapsed() {
+        let layout = ToolLayout::default();
+        assert_eq!(layout.order, [Info]);
+        assert_eq!(layout.active, Info);
+        assert_eq!(layout.last_used, Info);
+        assert!(!layout.open);
+    }
+
+    /// One instance per tool: showing an open tool activates its existing
+    /// tab instead of adding a second, and showing any tool opens the panel.
+    #[test]
+    fn showing_tools_keeps_single_instances_and_opens_the_panel() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.show(Files);
+        assert_eq!(layout.order, [Info, Files], "one tab per tool");
+        layout.show(GitHub);
+        assert_eq!(layout.order, [Info, Files, GitHub]);
+        assert!(layout.open);
+        assert_eq!(layout.active, GitHub);
+        assert_eq!(layout.last_used, GitHub);
+    }
+
+    /// Search is the Files tool's explicit input mode, never a tab identity.
+    #[test]
+    fn search_is_files_input_mode_not_a_tool_identity() {
+        assert_eq!(shown_tab(Search), Files);
+        let mut layout = ToolLayout::default();
+        layout.show(Search);
+        assert_eq!(layout.order, [Info, Files]);
+        assert!(!layout.order.contains(&Search));
+        assert_eq!(layout.active, Files);
+    }
+
+    /// Closing the active tab lands on the right neighbour.
+    #[test]
+    fn closing_the_active_tab_selects_the_right_neighbor() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.show(Scm);
+        assert_eq!(layout.close(Files), Some(Scm));
+        assert_eq!(layout.active, Scm);
+        assert_eq!(layout.order, [Info, Scm]);
+        assert!(layout.open, "a remaining tab keeps the panel open");
+    }
+
+    /// A rightmost active tab has no right neighbour and falls back to the
+    /// left one.
+    #[test]
+    fn closing_the_last_tab_selects_its_left_neighbor() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        assert_eq!(layout.close(Files), Some(Info));
+        assert_eq!(layout.active, Info);
+        assert_eq!(layout.order, [Info]);
+    }
+
+    /// Closing a tool that is not selected changes neither the selection nor
+    /// the panel's visibility.
+    #[test]
+    fn closing_a_background_tab_preserves_selection() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.show(Scm);
+        assert_eq!(layout.active, Scm);
+        assert_eq!(layout.close(Info), None);
+        assert_eq!(layout.active, Scm);
+        assert_eq!(layout.order, [Files, Scm]);
+        assert!(layout.open);
+    }
+
+    /// Closing the final tab collapses the panel instead of leaving an empty
+    /// shell, and remembers the tool for the reopen.
+    #[test]
+    fn closing_the_final_tab_collapses_and_remembers_the_tool() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.close(Info);
+        assert_eq!(layout.close(Files), None, "the last tab has no neighbour");
+        assert!(layout.order.is_empty());
+        assert!(!layout.open);
+        assert_eq!(layout.last_used, Files);
+    }
+
+    /// Reopening an emptied panel resumes the last-used tool.
+    #[test]
+    fn expanding_an_emptied_panel_restores_the_last_used_tool() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.close(Info);
+        layout.close(Files);
+        assert!(layout.order.is_empty());
+        layout.expand();
+        assert_eq!(layout.order, [Files]);
+        assert_eq!(layout.active, Files);
+        assert!(layout.open);
+    }
+
+    /// With no history at all, an emptied panel falls back to Info.
+    #[test]
+    fn expanding_without_history_falls_back_to_info() {
+        let mut layout = ToolLayout::default();
+        layout.close(Info);
+        assert!(layout.order.is_empty());
+        layout.expand();
+        assert_eq!(layout.order, [Info]);
+        assert_eq!(layout.active, Info);
+        assert!(layout.open);
+    }
+
+    /// Collapsing keeps the tab set, so expansion returns to the same tool.
+    #[test]
+    fn collapsing_keeps_the_tab_set() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.collapse();
+        assert!(!layout.open);
+        assert_eq!(layout.order, [Info, Files]);
+        layout.expand();
+        assert!(layout.open);
+        assert_eq!(layout.active, Files);
+    }
 
     fn forward(kind: SshForwardKind, target_host: &str, target_port: u16) -> ManagedForward {
         ManagedForward {
