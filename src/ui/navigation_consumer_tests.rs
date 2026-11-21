@@ -454,7 +454,13 @@ fn left_panel_toggle_slides_the_sidebar_boundary_and_resizes_the_pty_once(cx: &m
     // consulted, so the reduced-motion flag stays released and the slide runs.
     allow_motion(&mut vcx, MotionPreference::System);
     vcx.update(|_, cx| assert!(!cx.reduce_motion()));
-    let seam_rest = vcx.update(|window, _| window.find("sidebar-resize").bounds().center().x);
+    // The seam's reference is the rail's settled width, in the same render
+    // units the slide paints: `sidebar-resize` is the drag handle, centred on
+    // the rail's 1px border line — half a pixel inside the rail's outer edge
+    // (259.5px against a 260px rail at this fixture width) — so the handle's
+    // centre is not the seam reference. The slide starts from the settled
+    // width itself, which is what `render_sliding_sidebar` clips from.
+    let seam_rest = app.update_in(&mut vcx, |app, window, cx| px(app.sidebar_px(window, cx)));
     assert!(seam_rest > px(0.));
 
     app.update_in(&mut vcx, |app, _, cx| app.toggle_left_panel(cx));

@@ -1945,6 +1945,7 @@ impl LyrelApp {
     pub(crate) fn panel_scroll(&self, inner: AnyElement, title: AnyElement) -> AnyElement {
         let body = div()
             .id("right-panel-body")
+            .test_support()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -3752,11 +3753,13 @@ mod persistence_tests {
 
         // A workspace without new-format layout data starts from Info,
         // collapsed — even though the shared config still carries the old
-        // global selection (Files) for an older build.
+        // global selection (the newest session's resumed Scm) for an older
+        // build: every stored layout keeps that legacy field current, and
+        // gamma's start does not read it.
         assert_eq!(
             cx.update(|cx| cx.global::<Config>().right_panel_tab),
-            Files,
-            "the first session left the old global selection written"
+            Scm,
+            "the legacy global follows the most recent stored layout"
         );
         let gamma = claim_workspace(cx);
         relaunched.update_in(&mut vcx, |app, window, cx| {

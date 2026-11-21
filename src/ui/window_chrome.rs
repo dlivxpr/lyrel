@@ -764,7 +764,10 @@ mod gpui_tests {
                         (app.left_panel_open(cx), app.right_panel_open(cx))
                     });
                     vcx.update(|window, cx| window.click(button, cx));
-                    settle(&mut vcx);
+                    // Each toggle starts a 260 ms seam slide; a repeat on the
+                    // same boundary inside the window is dropped, and the
+                    // chrome assertions below read the settled layout.
+                    settle_panel_toggle(&mut vcx);
                     app.read_with(&vcx, |app, cx| {
                         let expected = if button == "titlebar-left-panel" {
                             (!before.0, before.1)
@@ -836,7 +839,9 @@ mod gpui_tests {
             ("titlebar-right-panel", true, true),
         ] {
             vcx.update(|window, cx| window.click(button, cx));
-            settle(&mut vcx);
+            // A toggle drops repeats while its seam travels; let the slide
+            // finish before the next click and the geometry assertions.
+            settle_panel_toggle(&mut vcx);
             app.update_in(&mut vcx, |app, _, cx| {
                 assert_eq!(app.left_panel_open(cx), left_open);
                 assert_eq!(app.right_panel_open(cx), right_open);
@@ -1601,10 +1606,15 @@ mod gpui_tests {
                 app.focus_active(window, cx);
                 cx.notify();
             });
-            settle(&mut vcx);
+            // Sidebar rows register their drop rectangles only once the
+            // 220 ms row-enter motion has fully settled on the test clock.
+            settle_panel_toggle(&mut vcx);
             if collapsed {
                 vcx.update(|window, cx| window.click("titlebar-left-panel", cx));
-                settle(&mut vcx);
+                // The reopened sidebar's slide takes the same wait: its rows
+                // are clipped (and their drop slots unwritten) until the
+                // opening seam finishes travelling.
+                settle_panel_toggle(&mut vcx);
             }
             let second_tab = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
             assert!(second_tab.size.width > px(0.));
