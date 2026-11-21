@@ -216,6 +216,13 @@ impl PendingPane {
     pub(crate) fn workspace(&self) -> Option<&PaneWorkspace> {
         self.spawn.workspace.as_ref()
     }
+
+    /// Where a fresh shell was asked to start. The worktree picker's
+    /// consumer test reads this to prove navigation opened the new tab at
+    /// the picked checkout's root rather than wherever the old pane sat.
+    pub(crate) fn spawn_cwd(&self) -> Option<&std::path::Path> {
+        self.spawn.working_directory.as_deref()
+    }
     pub(crate) fn run_known_agent_when_ready(
         &mut self,
         command: String,

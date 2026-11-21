@@ -5,6 +5,24 @@
 //! between the index and the working tree. That is the whole reason the old
 //! flat list had to go: it ran one `git diff HEAD`, so it could not tell a
 //! staged change from an unstaged one and showed every row the letter `M`.
+            // The worktree entry: the same searchable picker the status bar's
+            // Git indicator opens (#351). Branch work stays on this row's
+            // menu and the sync tile; switching the checkout is navigation,
+            // not a branch operation, so it gets its own tile beside sync.
+                    Button::new("scm-worktree").icon(Icon::empty().path("icons/folder.svg")),
+                    BRANCH_TILE,
+                    BRANCH_TILE_GLYPH,
+                    false,
+                    cx,
+                )
+                .rounded(px(6.))
+                .tooltip(t(L10nKey::WorktreePickerTitle))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_worktree_picker(window, cx);
+                })),
+            )
+            .child(
+                crate::ui::window_chrome::chrome_tile_sized(
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

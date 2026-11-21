@@ -71,6 +71,7 @@ pub mod tree_sync;
 mod window_chrome;
 pub mod windows;
 pub mod worktree_prompt;
+pub mod worktree_picker;
 
 /// The two answers a confirmation dialog gets, arranged the way macOS arranges
 /// them: the action on the right, where Return lands and where every other app
