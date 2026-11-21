@@ -255,6 +255,9 @@ pub fn inspect_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutIn
             "status",
             "--porcelain",
             "--untracked-files=all",
+            // Ordinary `worktree remove` deletes ignored files too. Route
+            // those checkouts through recovery, which refuses ignored data.
+            "--ignored=matching",
             "--ignore-submodules=none",
         ],
     )?
@@ -1231,6 +1234,29 @@ mod tests {
         assert!(branch_exists(&*h, &repo, "dirty-branch"));
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn confirmed_removal_preserves_a_checkout_containing_only_ignored_data() {
+        let h = h();
+        let repo = temp_repo("rmignored");
+        let parent = scratch("rmignored-wt");
+        let wt = parent.join("checkout");
+        add_external_worktree(&repo, &wt, "ignored-branch");
+        std::fs::write(repo.join(".git/info/exclude"), "local-data\n").unwrap();
+        let data = wt.join("local-data");
+        std::fs::write(&data, b"local-only data\n").unwrap();
+
+        let listed = listed_at(&*h, &repo, &wt);
+        let approved = inspect_checkout(&*h, &listed).unwrap();
+        let error = remove_confirmed_checkout(&*h, &listed, &approved).unwrap_err();
+        assert!(error.contains("ignored data"), "{error}");
+        assert_eq!(std::fs::read(&data).unwrap(), b"local-only data\n");
+        assert!(list(&*h, &repo).unwrap().contains(&listed));
+        assert!(branch_exists(&*h, &repo, "ignored-branch"));
+        assert!(retired(&*h, &repo).is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]

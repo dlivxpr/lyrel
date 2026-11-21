@@ -1010,6 +1010,11 @@ mod gpui_tests {
                  "pull_request": {"merged_at": null},
                  "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
                  "html_url": "https://github.com/acme/widgets/pull/8"}]"#
+        } else if path.starts_with("/repos/acme/widgets/pulls?") {
+            r#"[{"number": 8, "title": "A pull request", "state": "open",
+                 "head": {"ref": "feature", "sha": "c0ffee42"}, "base": {"ref": "main"},
+                 "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/pull/8"}]"#
         } else if path == "/repos/acme/widgets/issues/7" {
             r#"{"number": 7, "title": "Widgets wobble", "state": "open",
                 "user": {"login": "ada"}, "labels": [], "comments": 1,

@@ -1445,14 +1445,14 @@ impl LyrelApp {
                 .selected(current)
                 .accessibility_label(t(label_key))
                 .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
-                // Pointer activation keeps the established content focus:
-                // the framework would otherwise focus the tab on mouse down.
-                .capture_any_mouse_down(|_, window, _| window.prevent_default())
-                // Arm a potential drag; the window-level handlers in the
-                // header's canvas decide whether the press becomes one.
-                .on_mouse_down(MouseButton::Left, {
+                // Keep content focus and arm before NavTab stops bubbling.
+                .capture_any_mouse_down({
                     let strip_state = strip_state.clone();
-                    move |event: &MouseDownEvent, _window, cx| {
+                    move |event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        if event.button != MouseButton::Left {
+                            return;
+                        }
                         strip_state.update(cx, |state, _| {
                             state.drag = Some(ToolTabDrag {
                                 tab,
@@ -1545,14 +1545,28 @@ impl LyrelApp {
                         )
                         // A press on the close button is never the start of a
                         // tab drag.
+                        .capture_any_mouse_down({
+                            let strip_state = strip_state.clone();
+                            move |event, _, cx| {
+                                if event.button == MouseButton::Left {
+                                    strip_state.update(cx, |state, _| state.drag = None);
+                                }
+                            }
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if window.default_prevented() {
+                                return;
+                            }
                             cx.stop_propagation();
                             this.close_right_panel_tab(tab, window, cx);
                         })),
                 )
                 .on_click(
                     cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if window.default_prevented() {
+                            return;
+                        }
                         if matches!(
                             event,
                             gpui_kit::ClickEvent::Mouse(_) | gpui_kit::ClickEvent::Touch(_)
@@ -1795,6 +1809,9 @@ impl LyrelApp {
                                 let Some(drag) = drag.filter(|drag| drag.started) else {
                                     return;
                                 };
+                                // Clear the normal mouse-up state, but don't activate
+                                // a tab (or its close control) on drag release.
+                                window.prevent_default();
                                 if let Some(app) = app.upgrade() {
                                     app.update(cx, |this, cx| {
                                         let mut layout = this.tool_layout();
@@ -2315,6 +2332,7 @@ impl LyrelApp {
 
         h_flex()
             .id(id.clone())
+            .test_support()
             .role(gpui_kit::Role::Label)
             .aria_label(a11y_name)
             .group(id)

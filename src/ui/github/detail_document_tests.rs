@@ -6,6 +6,7 @@
 /// open, and the list settled — the common half of every detail test.
 fn detail_doc_panel(
     cx: &mut TestAppContext,
+    kind: Kind,
 ) -> (
     PathBuf,
     Entity<LyrelApp>,
@@ -26,23 +27,24 @@ fn detail_doc_panel(
         app.github.connector = Some(Arc::new(move || Connection {
             transport: transport.clone(),
         }));
+        app.github.kind = kind;
         app.right_panel_visible = true;
         app.right_panel_tab = RightPanelTab::GitHub;
         cx.notify();
     });
     DaemonMsg::Cwd(root.clone()).encode(&mut pane).unwrap();
-    settle(&app, &mut vcx, "the issue list", |app| {
+    settle(&app, &mut vcx, "the requested GitHub list", |app| {
         app.github
             .lists
             .iter()
-            .any(|(q, l)| q.slug.full() == "acme/widgets" && l.loaded)
+            .any(|(q, l)| q.slug.full() == "acme/widgets" && q.kind == kind && l.loaded)
     });
     (root, app, vcx, pane)
 }
 
 #[gpui_kit::test]
 fn enter_opens_the_detail_document_and_escape_returns_to_the_list(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
+    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         let list = window.find("panel-github-rows-acme/widgets").bounds();
@@ -102,7 +104,7 @@ fn enter_opens_the_detail_document_and_escape_returns_to_the_list(cx: &mut TestA
 
 #[gpui_kit::test]
 fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
+    let (_root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
     std::fs::write(&path, "hello").unwrap();
@@ -162,12 +164,11 @@ fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(cx: &mut Te
         editor.read_with(&vcx, |editor, _| editor.value().to_string()),
         "hello!"
     );
-    test_window::quiesce(&mut vcx, Some(&root));
 }
 
 #[gpui_kit::test]
 fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppContext) {
-    let (root, _app, mut vcx, _pane) = detail_doc_panel(cx);
+    let (root, _app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("panel-github-item-7", cx);
@@ -199,7 +200,7 @@ fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppCont
 /// hands the keyboard to the surface underneath.
 #[gpui_kit::test]
 fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
+    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
     std::fs::write(&path, "hello").unwrap();
@@ -380,7 +381,6 @@ fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &m
     app.update_in(&mut vcx, |app, _, cx| {
         app.set_document_layout(lyrel_core::core::config::DocumentLayout::Dock, cx);
     });
-    test_window::quiesce(&mut vcx, Some(&root));
 }
 
 /// With no document underneath, the round trip ends on the list item the
@@ -390,7 +390,7 @@ fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &m
 fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
     cx: &mut TestAppContext,
 ) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
+    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
     let key = app.read_with(&vcx, |app, _| {
         app.github
             .lists
@@ -437,7 +437,7 @@ fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
 /// opened from, and closing it still returns to that pull request.
 #[gpui_kit::test]
 fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, mut pane) = detail_doc_panel(cx);
+    let (root, app, mut vcx, mut pane) = detail_doc_panel(cx, Kind::Pulls);
     let key = app.read_with(&vcx, |app, _| {
         app.github
             .lists
@@ -509,7 +509,7 @@ fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(cx: &mut Tes
         Some(key),
         "closing the patch returns to the pull request it came from"
     );
-    test_window::quiesce(&mut vcx, Some(&root));
+    test_window::quiesce(&mut vcx, Some(&root_b));
 }
 
 /// Switching items while their reads are still in flight: the answer that
@@ -530,16 +530,17 @@ fn a_late_detail_response_cannot_replace_the_item_now_on_screen(cx: &mut TestApp
         app.github.connector = Some(Arc::new(move || Connection {
             transport: transport.clone(),
         }));
+        app.github.kind = Kind::Pulls;
         app.right_panel_visible = true;
         app.right_panel_tab = RightPanelTab::GitHub;
         cx.notify();
     });
     DaemonMsg::Cwd(root.clone()).encode(&mut pane).unwrap();
-    settle(&app, &mut vcx, "the issue list", |app| {
+    settle(&app, &mut vcx, "the pull request list", |app| {
         app.github
             .lists
             .iter()
-            .any(|(q, l)| q.slug.full() == "acme/widgets" && l.loaded)
+            .any(|(q, l)| q.slug.full() == "acme/widgets" && q.kind == Kind::Pulls && l.loaded)
     });
     let slug = app.read_with(&vcx, |app, _| {
         app.github
@@ -560,6 +561,13 @@ fn a_late_detail_response_cannot_replace_the_item_now_on_screen(cx: &mut TestApp
         app.read_with(&vcx, |app, _| app.github.open.is_some()),
         "opening does not wait on the network"
     );
+    vcx.update(|window, cx| window.click(("panel-github-kind", 0usize), cx));
+    settle(&app, &mut vcx, "the issue list", |app| {
+        app.github
+            .lists
+            .iter()
+            .any(|(q, list)| q.slug == slug && q.kind == Kind::Issues && list.loaded)
+    });
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("panel-github-item-7", cx);

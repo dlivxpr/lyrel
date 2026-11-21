@@ -114,15 +114,15 @@ fn dragging_across_distinct_targets_glides_the_preview_and_the_swap_settles(
         area.origin.x + area.size.width - px(8.),
         area.origin.y + area.size.height / 2.,
     );
-    // The middle of the right pane promises a trade — the whole rect — and
-    // the band at the tab's own edge promises a third column beside both.
+    // The middle trades places. At the outer edge, the moving pane and
+    // the remaining pane become two equally sized columns.
     let swap_target = Bounds {
         origin: point(area.origin.x + area.size.width * 0.35, area.origin.y),
         size: size(area.size.width * 0.65, area.size.height),
     };
     let edge_target = Bounds {
-        origin: point(area.origin.x + area.size.width * (2. / 3.), area.origin.y),
-        size: size(area.size.width / 3., area.size.height),
+        origin: point(area.origin.x + area.size.width / 2., area.origin.y),
+        size: size(area.size.width / 2., area.size.height),
     };
 
     // Pick the left pane up by its handle and hold it over the right pane's
@@ -133,11 +133,6 @@ fn dragging_across_distinct_targets_glides_the_preview_and_the_swap_settles(
         let handle = ("pane-drag-handle", left.entity_id().as_u64() as usize);
         let start = window.find(handle).bounds().center();
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
-        window.pointer_move(
-            start + point(px(4.), px(0.)),
-            Some(gpui_kit::MouseButton::Left),
-            cx,
-        );
         window.pointer_move(right_middle, Some(gpui_kit::MouseButton::Left), cx);
         assert!(
             rect_near(window.find("pane-drop-preview").bounds(), swap_target),
@@ -145,8 +140,8 @@ fn dragging_across_distinct_targets_glides_the_preview_and_the_swap_settles(
         );
     });
 
-    // On to the band: the preview glides from the swap rect to the third
-    // column instead of jumping — it starts where it was.
+    // On to the band: the preview glides from the swap rect to the equal
+    // split instead of jumping — it starts where it was.
     vcx.update(|window, cx| {
         window.pointer_move(right_band, Some(gpui_kit::MouseButton::Left), cx);
         assert!(
@@ -263,8 +258,8 @@ fn reduced_motion_shows_each_target_directly_without_a_glide(cx: &mut TestAppCon
         size: size(area.size.width * 0.65, area.size.height),
     };
     let edge_target = Bounds {
-        origin: point(area.origin.x + area.size.width * (2. / 3.), area.origin.y),
-        size: size(area.size.width / 3., area.size.height),
+        origin: point(area.origin.x + area.size.width / 2., area.origin.y),
+        size: size(area.size.width / 2., area.size.height),
     };
 
     vcx.update(|window, cx| {

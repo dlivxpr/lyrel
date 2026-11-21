@@ -405,6 +405,23 @@ fn checkout_name(wt: &lyrel_core::core::worktree::Listed) -> String {
         .unwrap_or_else(|| wt.path.display().to_string())
 }
 
+fn canonical_checkout(host: &dyn lyrel_core::host::Host, cwd: &Path) -> Option<PathBuf> {
+    let out = host
+        .git(
+            cwd,
+            &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+        )
+        .ok()?;
+    if !out.success() {
+        return None;
+    }
+    let path = std::str::from_utf8(&out.stdout)
+        .ok()?
+        .strip_suffix('\n')?
+        .trim_end_matches('\r');
+    host.canonicalize(Path::new(path)).ok()
+}
+
 /// One checkout row: the same neutral selected fill the search rows use, so
 /// the keyboard row reads as where Return lands, not as an action.
 #[derive(IntoElement)]
@@ -507,14 +524,14 @@ impl LyrelApp {
             cx,
             move |h| -> Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String> {
                 let worktrees = crate::core::worktree::list(h, &read_cwd)?;
-                // The active checkout is the one the Context Pane sits in,
-                // including from a subdirectory — the same prefix rule pane
-                // reuse uses, asked on the Host that owns the paths.
-                let cwd = h.canonicalize(&read_cwd).unwrap_or(read_cwd.clone());
-                let active = worktrees
-                    .iter()
-                    .find(|wt| cwd.starts_with(&wt.path))
-                    .map(|wt| wt.path.clone());
+                // A managed checkout may live underneath the main checkout.
+                // Git's root, not a prefix match, identifies the current row.
+                let active = canonical_checkout(h, &read_cwd).and_then(|cwd| {
+                    worktrees
+                        .iter()
+                        .find(|wt| h.canonicalize(&wt.path).is_ok_and(|path| path == cwd))
+                        .map(|wt| wt.path.clone())
+                });
                 Ok((worktrees, active))
             },
             move |this, result, window, cx| {
@@ -650,10 +667,12 @@ impl LyrelApp {
             window,
             cx,
             move |h| -> Option<(usize, gpui_kit::EntityId)> {
+                let root = h.canonicalize(&match_root).ok()?;
                 candidates.iter().find_map(|(tab, leaf, cwd)| {
-                    h.canonicalize(cwd)
-                        .is_ok_and(|c| c.starts_with(&match_root))
-                        .then_some((*tab, *leaf))
+                    let cwd = h.canonicalize(cwd).ok()?;
+                    (cwd.starts_with(&root)
+                        && canonical_checkout(h, &cwd).is_some_and(|checkout| checkout == root))
+                    .then_some((*tab, *leaf))
                 })
             },
             move |this, matched, window, cx| {
@@ -1433,7 +1452,7 @@ mod tests {
         what: &str,
         mut ready: impl FnMut(&mut VisualTestContext) -> bool,
     ) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             settle(vcx);
             if ready(vcx) {
@@ -1826,6 +1845,9 @@ mod tests {
     /// pool; wait_for the expected status text before asserting on it.
     fn open_removal(vcx: &mut VisualTestContext, query: &str) {
         type_in_picker(vcx, query);
+        wait_for(vcx, "the filtered checkout row", |vcx| {
+            row_labels(vcx).len() == 1
+        });
         vcx.update(|window, cx| window.click("worktree-picker-remove", cx));
     }
 

@@ -781,6 +781,7 @@ impl LyrelApp {
         let files = files.clone();
         h_flex()
             .id(("panel-github-file", i))
+            .test_support()
             .items_center()
             .gap(px(8.))
             .min_h(rems(ROW_H / 16.))

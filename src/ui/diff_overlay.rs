@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -261,17 +262,23 @@ impl LyrelApp {
     }
 
     pub(crate) fn close_diff_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let active = self.tabs.active_index();
-        let taken = self
-            .tabs
-            .get_mut(active)
-            .and_then(|t| t.diff_overlay.take());
-        if taken.is_some() {
-            // Return to whatever the patch covered — the pull request's
-            // detail document, a code document, or the terminal when the
-            // document area is empty — never an obscured shell: the document
-            // the reader sees must be the one the keyboard lands in.
-            self.focus_previous_content(window, cx);
+        use crate::ui::tab::OverlayTop;
+
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        let was_front = tab.document_front() == Some(OverlayTop::Diff);
+        if let Some(closed) = tab.diff_overlay.take() {
+            // A supplied PR patch explicitly returns to its detail, even
+            // if the pane changed repository while the patch was open.
+            if was_front
+                && matches!(closed.source, DiffSource::Patch { .. })
+                && let Some(detail) = tab.github_detail.as_ref()
+            {
+                window.focus(&detail.focus_handle, cx);
+            } else {
+                self.focus_previous_content(window, cx);
+            }
             cx.notify();
         }
     }
@@ -830,7 +837,7 @@ impl LyrelApp {
         let subject_takes_the_slack =
             chrome.is_dock() && !subject.is_rev && subject.label.is_none();
         let hover = gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::Surfaces>().window.hover);
-        let row = h_flex().id("diff-overlay-header");
+        let row = h_flex().id("diff-overlay-header").test_support();
         row.flex_shrink_0()
             .min_w_0()
             // Keep document header geometry aligned with its own content.

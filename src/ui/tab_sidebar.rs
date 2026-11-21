@@ -360,6 +360,9 @@ impl SidebarRowMotion {
     /// replays later. Most renders replay the same membership, which costs
     /// one compare, not a walk.
     fn observe(&mut self, current: &[TabId], animate: bool, now: Instant) {
+        if !animate {
+            self.entries.clear();
+        }
         if let Some(known) = &self.known
             && known == current
         {
@@ -370,7 +373,6 @@ impl SidebarRowMotion {
             return;
         };
         if !animate {
-            self.entries.clear();
             return;
         }
         self.entries.retain(|_, entry| !entry.done(now));
@@ -2120,6 +2122,7 @@ impl LyrelApp {
                 .inset_0();
                 let row = h_flex()
                     .id(("tab-row", i))
+                    .test_support()
                     .relative()
                     // What a screen reader announces and presses: the full
                     // title, not the elided one drawn.
@@ -5839,8 +5842,9 @@ mod drag_tests {
         gpui_kit::VisualTestContext,
         lyrel_core::core::machine::TabId,
         crate::ui::pane::PaneSlot,
+        Vec<crate::daemon::transport::Stream>,
     ) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        let (app, mut vcx, streams) = harness_with_tabs(cx, 3);
         vcx.update(|_, cx| cx.set_reduce_motion(true));
         let first = app.update(&mut vcx, |app, cx| {
             app.sidebar_collapsed = false;
@@ -5854,26 +5858,42 @@ mod drag_tests {
             window.focus(&pane.focus_handle(cx), cx);
             pane
         });
-        (app, vcx, first, pane)
+        (app, vcx, first, pane, streams)
     }
 
     #[gpui_kit::test]
     fn a_dragged_row_follows_the_pointer_and_the_drop_settles_the_order(cx: &mut TestAppContext) {
-        let (app, mut vcx, first, pane) = three_rows(cx);
-        let (grab, row_h, top0, top1) = vcx.update(|window, cx| {
+        let (app, mut vcx, first, pane, _streams) = three_rows(cx);
+        let (grab, row_h, top0, top1, title) = vcx.update(|window, cx| {
             window.render_frame(cx);
-            let row0 = window.find(("tab-row", 0usize)).bounds();
+            let row = window.find(("tab-row", 0usize));
+            let row0 = row.bounds();
             let row1 = window.find(("tab-row", 1usize)).bounds();
-            (row0.center(), row0.size.height, row0, row1)
+            (
+                point(row0.left() + row0.size.width / 3., row0.center().y),
+                row0.size.height,
+                row0,
+                row1,
+                row.label().unwrap().to_owned(),
+            )
         });
 
+        let over = point(grab.x, top1.center().y);
+        assert!(
+            top0.bottom() <= top1.top(),
+            "fixture rows must not overlap: {top0:?}, {top1:?}"
+        );
         vcx.update(|window, cx| {
+            window.pointer_move(grab, None, cx);
             window.pointer_down(grab, MouseButton::Left, cx);
             // A small sideways step crosses gpui's drag threshold without
             // disturbing the vertical grab offset the row was picked up with.
             window.pointer_move(grab + point(px(4.), px(0.)), Some(MouseButton::Left), cx);
-            let over = point(grab.x, top1.center().y);
             window.pointer_move(over, Some(MouseButton::Left), cx);
+            assert!(
+                cx.has_active_drag(),
+                "a press and move over the visible session row must start a drag"
+            );
 
             // The grabbed row tracks the pointer exactly — it is positioned,
             // never animated, so it cannot lag a frame behind.
@@ -5889,30 +5909,38 @@ mod drag_tests {
                 (neighbour.origin.y - top0.origin.y).abs() < px(1.5),
                 "the crossed neighbour settles into the row's old slot"
             );
+        });
 
+        vcx.update(|window, cx| {
             window.pointer_up(over, MouseButton::Left, cx);
             assert!(!cx.has_active_drag());
         });
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs.active_index(), 1);
+            assert!(app.reorder.borrow().is_none(), "mouse-up ended the drag");
             assert_eq!(
-                app.tabs[1].id(),
+                app.tabs[app.tabs.active_index()].id(),
                 first,
-                "the dragged tab is still the active one, at its new index"
+                "dropping the row keeps the original terminal selected"
+            );
+            let landed = app.tabs.iter().position(|tab| tab.id() == first);
+            assert_eq!(
+                landed,
+                Some(1),
+                "the dragged session moved below its neighbour"
             );
             assert!(
                 pane.contains_focused(window, cx),
                 "the keyboard never left the dragged terminal"
             );
-            assert!(app.reorder.borrow().is_none());
         });
         vcx.update(|window, cx| {
             window.render_frame(cx);
+            let landed = window.find(("tab-row", 1usize));
+            assert_eq!(landed.label(), Some(title.as_str()));
             assert!(
-                (window.find(("tab-row", 0usize)).bounds().origin.y - top1.origin.y).abs()
-                    < px(1.5),
-                "after the drop the rows read in the settled order"
+                (landed.bounds().origin.y - top1.origin.y).abs() < px(1.5),
+                "after the drop the dragged session occupies its new slot"
             );
         });
     }
@@ -5921,7 +5949,7 @@ mod drag_tests {
     fn escape_while_dragging_a_row_leaves_the_order_and_active_tab_untouched(
         cx: &mut TestAppContext,
     ) {
-        let (app, mut vcx, first, pane) = three_rows(cx);
+        let (app, mut vcx, first, pane, _streams) = three_rows(cx);
         let before: Vec<_> =
             app.read_with(&vcx, |app, _| app.tabs.iter().map(|tab| tab.id()).collect());
         let (grab, row_h, top1) = vcx.update(|window, cx| {
@@ -5968,7 +5996,7 @@ mod drag_tests {
 
     #[gpui_kit::test]
     fn a_tab_held_over_the_layout_shows_its_landing_and_escape_returns_it(cx: &mut TestAppContext) {
-        let (app, mut vcx, _first, _pane) = three_rows(cx);
+        let (app, mut vcx, _first, _pane, _streams) = three_rows(cx);
         // Two tabs are enough for the merge offer; drop the third.
         app.update(&mut vcx, |app, cx| {
             app.tabs.remove(2);
