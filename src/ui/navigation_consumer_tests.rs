@@ -75,15 +75,15 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
             assert_eq!(window.find("tool-tab-info").focused(), Some(true));
             window.press("home", cx);
             window.press("tab", cx);
-            assert_ne!(window.find("right-panel-tab-info").focused(), Some(true));
+            assert_ne!(window.find("tool-tab-info").focused(), Some(true));
             window.press("shift-tab", cx);
-            assert_eq!(window.find("right-panel-tab-changes").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-changes").focused(), Some(true));
             window.press("escape", cx);
             assert!(
                 content.is_focused(window),
                 "Escape returns to the owning terminal"
             );
-            window.click("right-panel-tab-files", cx);
+            window.click("tool-tab-files", cx);
             assert!(
                 content.is_focused(window),
                 "pointer activation keeps content focus"
@@ -120,7 +120,7 @@ fn panel_navigation_new_request_replaces_the_pending_origin(cx: &mut TestAppCont
     vcx.dispatch_action(FocusRightPanelNavigation);
     settle(&mut vcx);
     vcx.update(|window, cx| {
-        assert_eq!(window.find("right-panel-tab-info").focused(), Some(true));
+        assert_eq!(window.find("tool-tab-info").focused(), Some(true));
         window.press("escape", cx);
     });
     app.update_in(&mut vcx, |app, window, _| {
