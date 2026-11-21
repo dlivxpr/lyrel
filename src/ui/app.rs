@@ -242,6 +242,9 @@ pub struct LyrelApp {
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
+    /// Badges stay mounted after the hold ends while they fade out; the
+    /// unmount timer then clears this. See `ui::hints`.
+    pub(crate) mod_hint_fading: bool,
     pub(crate) mod_hint_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
     /// Whether the home page's cursor block is on this half-second.

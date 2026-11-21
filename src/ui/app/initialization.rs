@@ -373,6 +373,7 @@ impl LyrelApp {
             worktree_prompt: None,
             maximized: None,
             mod_hint_badges: false,
+            mod_hint_fading: false,
             mod_hint_gen: 0,
             home_focus: cx.focus_handle(),
             home_cursor_on: true,

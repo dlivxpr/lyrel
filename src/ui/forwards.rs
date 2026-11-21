@@ -277,7 +277,7 @@ impl LyrelApp {
         let (danger, foreground) = (theme.danger, theme.foreground);
         let theme_popover = theme.popover;
 
-        let bar = crate::ui::notice::pill(danger, cx)
+        let bar = crate::ui::notice::pill("ssh-status-strip", danger, cx)
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
@@ -296,6 +296,7 @@ impl LyrelApp {
                 let full = reason.clone();
                 div()
                     .id("ssh-strip-reason")
+                    .test_support()
                     .max_w(px(360.))
                     .truncate()
                     .text_color(danger)
