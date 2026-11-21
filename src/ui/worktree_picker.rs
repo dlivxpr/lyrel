@@ -278,7 +278,15 @@ impl ListDelegate for WorktreeDelegate {
             _ => branch.clone(),
         };
         let active = self.active.as_ref() == Some(&wt.path);
-        let label: SharedString = format!("{name}, {branch}, {path_text}").into();
+        let label: SharedString = if active {
+            format!(
+                "{name}, {branch}, {path_text}, {}",
+                t(L10nKey::WorktreePickerCurrent)
+            )
+        } else {
+            format!("{name}, {branch}, {path_text}")
+        }
+        .into();
 
         let mut first = h_flex().flex_1().min_w_0().items_center().gap(px(6.));
         first = first.child(
@@ -1588,10 +1596,10 @@ mod tests {
         vcx.update(|window, _| {
             assert!(window.find("worktree-picker-card").visible());
             assert!(
-                gpui_kit::base::test_support::texts(window)
-                    .into_iter()
-                    .any(|text| text.text() == "current"),
-                "the Context Pane's checkout is marked active"
+                window
+                    .find(("worktree-row", 0u64))
+                    .label()
+                    .is_some_and(|label| label.ends_with(", current"))
             );
         });
 
@@ -2431,7 +2439,7 @@ mod tests {
         wait_for(&mut vcx, "the detached checkout to be verified", |vcx| {
             removal_texts(vcx)
                 .iter()
-                .any(|text| text.contains("Detached HEAD"))
+                .any(|text| text.contains("clean and unused"))
         });
 
         let texts = removal_texts(&mut vcx);
