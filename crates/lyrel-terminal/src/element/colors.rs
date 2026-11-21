@@ -238,6 +238,15 @@ impl PaintColors {
         )
     }
 
+    /// The resolved default ink, paper and caret. The shell's theme
+    /// crossfade tests read these to prove a terminal frame tracks the live
+    /// theme through a fade — the same values `paint` draws with — without
+    /// painting a grid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn defaults(&self) -> (Hsla, Hsla, Hsla) {
+        (self.default_fg, self.default_bg, self.caret)
+    }
+
     pub fn resolve_with(
         theme: &gpui_kit::component::Theme,
         overrides: lyrel_core::core::pane_colors::PaneColors,

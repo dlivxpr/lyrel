@@ -95,15 +95,10 @@ impl ScmGroup {
 
 #[derive(Default)]
 pub(crate) struct ScmPanelState {
-    /// Which repository the panel is showing. Follows the active pane unless
-    /// `repo_override` says otherwise.
+    /// Which repository the panel is showing: the Context Pane's checkout.
+    /// There is deliberately no remembered override — the pane, not a pick,
+    /// is the panel's subject (#349, #345).
     repo: Option<RepoKey>,
-    /// Set when the user picks a repository from the multi-repo dropdown, and
-    /// cleared whenever the active tab changes — an explicit choice should
-    /// outlive a pane switch inside one tab, not a jump to somewhere else.
-    repo_override: Option<RepoKey>,
-    /// The tab the override was made on, so the jump away can be noticed.
-    override_tab: Option<usize>,
     /// Local branch names per repository, with the epoch they were read at.
     /// Anything that could have moved a ref bumps the epoch, so the list in
     /// the switcher is never older than the last operation.
@@ -190,45 +185,8 @@ impl ScmPanelState {
         self.repo = Some(repo);
     }
 
-    pub(crate) fn enter_tab(&mut self, tab: usize) {
-        if self.override_tab != Some(tab) {
-            self.repo_override = None;
-            self.override_tab = None;
-        }
-    }
-
-    pub(crate) fn select_repository(&mut self, repo: RepoKey, tab: usize) {
-        self.repo_override = Some(repo);
-        self.override_tab = Some(tab);
-    }
-
     pub(crate) fn repository_context(&mut self, cx: &App) -> Option<RepositoryContext> {
-        if self
-            .repo_override
-            .as_ref()
-            .is_some_and(|repo| HostRegistry::lookup(cx, repo.host).is_none())
-        {
-            self.repo_override = None;
-            self.override_tab = None;
-        }
         self.active_repo()?.context(cx)
-    }
-
-    /// Choices are resolved working-tree roots, never project-home guesses.
-    pub(crate) fn repository_choices(&self) -> Vec<RepoKey> {
-        let mut out = Vec::new();
-        for ((host, _), (_, root)) in &self.roots {
-            let Some(root) = root else { continue };
-            let key = RepoKey {
-                host: *host,
-                root: root.clone(),
-            };
-            if !out.contains(&key) {
-                out.push(key);
-            }
-        }
-        out.sort_by(|a, b| a.root.cmp(&b.root));
-        out
     }
 
     pub(crate) fn amend(&self) -> bool {
@@ -340,10 +298,12 @@ impl ScmPanelState {
         true
     }
 
-    /// The repository the panel should act on: an explicit pick wins over
-    /// whatever the active pane happens to be sitting in.
+    /// The repository the panel acts on: the Context Pane's checkout. Branch
+    /// work (checkout, fetch, pull, push) runs against this source
+    /// repository; navigation to another checkout goes through the shared
+    /// worktree picker (#351), never through a remembered override.
     pub(crate) fn active_repo(&self) -> Option<&RepoKey> {
-        self.repo_override.as_ref().or(self.repo.as_ref())
+        self.repo.as_ref()
     }
 
     /// Drop everything keyed to a host that left the registry. Without this,
@@ -373,14 +333,6 @@ impl ScmPanelState {
             .filter(|host| !keep(*host))
         {
             self.invalidate_history_host(host);
-        }
-        if self
-            .repo_override
-            .as_ref()
-            .is_some_and(|repo| !keep(repo.host))
-        {
-            self.repo_override = None;
-            self.override_tab = None;
         }
     }
 
@@ -555,18 +507,16 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_repo_pick_outranks_the_active_pane() {
+    fn the_panel_follows_the_pane_without_a_remembered_pick() {
         let mut state = ScmPanelState::default();
         assert!(state.active_repo().is_none());
         state.follow_pane(key("/a"));
         assert_eq!(state.active_repo(), Some(&key("/a")));
-        state.select_repository(key("/b"), 1);
-        assert_eq!(state.active_repo(), Some(&key("/b")));
-        state.enter_tab(1);
+        // No override exists to outrank or outlive the pane: the subject
+        // changes the moment the Context Pane's repository does (#349, #345).
         state.follow_pane(key("/c"));
-        assert_eq!(state.active_repo(), Some(&key("/b")));
-        state.enter_tab(2);
         assert_eq!(state.active_repo(), Some(&key("/c")));
+        assert_eq!(state.pane_repo(), Some(&key("/c")));
     }
 
     #[test]
@@ -579,16 +529,15 @@ mod tests {
         let mut state = ScmPanelState::default();
         state.drafts.insert(local.clone(), "local wip".into());
         state.drafts.insert(remote.clone(), "remote wip".into());
-        state.select_repository(remote.clone(), 1);
+        state.follow_pane(remote.clone());
         state.forget_lost_hosts(&[local.host]);
         assert_eq!(state.draft(&local), "local wip");
         assert_eq!(state.draft(&remote), "remote wip");
-        state.select_repository(remote.clone(), 1);
         assert_eq!(state.active_repo(), Some(&remote));
     }
 
     #[gpui_kit::test]
-    fn an_offline_override_never_borrows_the_panes_host(cx: &mut gpui_kit::TestAppContext) {
+    fn an_offline_repository_never_borrows_the_panes_host(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
             let local = key("/local");
             let remote = RepoKey {
@@ -596,9 +545,13 @@ mod tests {
                 root: PathBuf::from("/remote"),
             };
             let mut state = ScmPanelState::default();
-            state.follow_pane(local.clone());
-            state.select_repository(remote.clone(), 1);
+            // The Context Pane moved onto a repository whose Host is gone:
+            // the panel names no repository at all rather than pairing the
+            // remembered root with the active pane's fallback Host.
+            state.follow_pane(remote.clone());
             assert!(remote.context(cx).is_none());
+            assert!(state.repository_context(cx).is_none());
+            state.follow_pane(local.clone());
             let (repo, host, epoch) = state.repository_context(cx).unwrap().into_parts();
             assert_eq!(repo, local);
             assert_eq!(host.id(), HostId::LOCAL);

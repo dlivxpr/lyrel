@@ -1,3 +1,4 @@
+use crate::ui::theme_transition;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
     App, Background, Hsla, Menu, MenuItem, OsAction, SystemMenuType, Window,
@@ -897,7 +898,10 @@ pub(crate) fn replay_window_backdrop_on_scale_change(window: &Window, cx: &mut A
 /// Install the configured preset as the live theme: the native appearance,
 /// the per-window backdrop, then the shared theme globals and chrome face in
 /// `lyrel_ui_base::presentation` (which the terminal client's tests also
-/// install directly).
+/// install directly). When the resolved preset's colors changed and motion
+/// is allowed, the install is driven by `theme_transition` as a crossfade
+/// from the colors on screen — every window and every terminal surface move
+/// together, and reduced motion (or the first install) lands in one step.
 pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     let follow = cx.global::<Config>().theme_follow_system;
     if follow {
@@ -937,16 +941,17 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    let theme_window = window.as_deref_mut();
-    #[cfg(not(target_os = "macos"))]
-    let theme_window = window;
-    lyrel_ui_base::presentation::install_preset_theme(
-        theme_window,
-        cx,
-        &theme,
-        material_active(backdrop, blur),
-    );
+    let material = material_active(backdrop, blur);
+    if matches!(
+        theme_transition::plan(theme.clone(), material, cx),
+        theme_transition::ThemePlan::InstallNow
+    ) {
+        #[cfg(target_os = "macos")]
+        let theme_window = window.as_deref_mut();
+        #[cfg(not(target_os = "macos"))]
+        let theme_window = window;
+        lyrel_ui_base::presentation::install_preset_theme(theme_window, cx, &theme, material);
+    }
 
     #[cfg(target_os = "macos")]
     if let Some(window) = window {

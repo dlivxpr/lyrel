@@ -10,8 +10,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Action, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _, FontWeight,
-    IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task,
+    Action, AnimationExt as _, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _,
+    FontWeight, IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task,
     TestSupportExt as _, Window, div, prelude::*, px, rems,
 };
 
@@ -1249,6 +1249,7 @@ impl Render for SearchView {
             .id("search-card")
             .test_support()
             .relative()
+            .occlude()
             .w(px((viewport.width.as_f32() - 32.).clamp(0., CARD_MAX_W)))
             .map(|panel| crate::ui::theme::floating_surface(panel, cx))
             .rounded(px(CARD_RADIUS))
@@ -1307,7 +1308,20 @@ impl Render for SearchView {
                     .pb(px(LIST_PAD))
                     .max_h(list_max_h),
             )
-            .child(self.render_footer(cx));
+            .child(self.render_footer(cx))
+            // Entrance on open only: the overlay unmounts when dismissed, so
+            // the one-shot replays each time the picker appears. Under Reduce
+            // the card renders at its final state and schedules no frames.
+            .with_animation(
+                "search-card-entrance",
+                crate::ui::motion::entrance(),
+                |card, delta| {
+                    // Start above the resting slot without adding height to
+                    // the card or using up its bottom viewport margin.
+                    card.opacity(delta)
+                        .top(px(crate::ui::motion::PICKER_DROP_PX * (delta - 1.0)))
+                },
+            );
 
         div()
             .absolute()
@@ -1354,7 +1368,7 @@ impl Render for SearchView {
                     cx.emit(SearchEvent::Dismiss);
                 }),
             )
-            .child(div().occlude().child(card))
+            .child(card)
     }
 }
 

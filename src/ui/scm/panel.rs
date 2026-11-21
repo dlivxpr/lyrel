@@ -17,7 +17,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, Context, Focusable as _, SharedString, Window, div, prelude::*, px, relative, rems,
+    AnyElement, Context, Focusable as _, SharedString, TestSupportExt as _, Window, div,
+    prelude::*, px, relative, rems,
 };
 
 use lyrel_core::core::git::diff::MAX_RENDERED_FILES;
@@ -186,7 +187,6 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.scm_watch_status(cx);
-        self.scm.enter_tab(self.tabs.active_index());
 
         let Some((host, cwd)) = self.scm_pane_target(window, cx) else {
             let title = self.panel_title(t(L10nKey::PanelScmTitle), None, None, window, cx);
@@ -300,12 +300,8 @@ impl LyrelApp {
         // cannot answer differently about the same HEAD.
         let unpushable = pushable_branch(&status.head).err();
         let busy = self.scm_network_busy(repo, cx);
-        let others = self.scm_other_repos(repo);
 
         let mut notes: Vec<AnyElement> = Vec::new();
-        if let Some(count) = others {
-            notes.push(branch_note(&format!("+{count}"), muted, &mono));
-        }
         if detached {
             notes.push(info_chip(
                 t(L10nKey::ScmDetached),
@@ -447,6 +443,24 @@ impl LyrelApp {
                         .children(notes),
                 )
             })
+            // The worktree entry: the same searchable picker the status bar's
+            // Git indicator opens (#351). Branch work stays on this row's
+            // menu and the sync tile; switching the checkout is navigation,
+            // not a branch operation, so it gets its own tile beside sync.
+            .child(
+                crate::ui::window_chrome::chrome_tile_sized(
+                    Button::new("scm-worktree").icon(Icon::empty().path("icons/folder.svg")),
+                    BRANCH_TILE,
+                    BRANCH_TILE_GLYPH,
+                    false,
+                    cx,
+                )
+                .rounded(px(6.))
+                .tooltip(t(L10nKey::WorktreePickerTitle))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_worktree_picker(window, cx);
+                })),
+            )
             .child(
                 crate::ui::window_chrome::chrome_tile_sized(
                     Button::new("scm-sync").icon(if busy {
@@ -495,13 +509,6 @@ impl LyrelApp {
             .is_some_and(|data| data.network_slots(repo.host, &repo.root) > 0)
     }
 
-    /// How many repositories other than this one the panel could switch to.
-    fn scm_other_repos(&self, current: &RepoKey) -> Option<usize> {
-        let choices = self.scm.repository_choices();
-        let count = choices.len().saturating_sub(1);
-        (count > 0 && choices.contains(current)).then_some(count)
-    }
-
     fn scm_branch_menu(
         &self,
         repo: &RepoKey,
@@ -516,7 +523,6 @@ impl LyrelApp {
             HeadState::Detached { .. } => String::new(),
         };
         let branches = self.scm.branches(&repo).to_vec();
-        let others = self.scm.repository_choices();
         let unpushable = pushable_branch(&status.head).is_err();
 
         move |menu, _window, _cx| {
@@ -579,29 +585,6 @@ impl LyrelApp {
                             }
                         }),
                 );
-            }
-            if others.len() > 1 {
-                menu = menu
-                    .separator()
-                    .item(PopupMenuItem::label(t(L10nKey::ScmSwitchRepository)));
-                for other in &others {
-                    let label = other
-                        .root
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| other.root.display().to_string());
-                    menu = menu.item(PopupMenuItem::new(label).checked(*other == repo).on_click({
-                        let app = app.clone();
-                        let other = other.clone();
-                        move |_, _window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.scm
-                                    .select_repository(other.clone(), this.tabs.active_index());
-                                cx.notify();
-                            });
-                        }
-                    }));
-                }
             }
             menu
         }
@@ -983,6 +966,7 @@ impl LyrelApp {
     ) -> AnyElement {
         let scroller = div()
             .id("panel-scm-body")
+            .test_support()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1008,10 +992,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, PathBuf)> {
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .detail_pane(window, cx)?;
+        let leaf = self.context_pane(window, cx)?;
         let view = leaf.read(cx);
         let cwd = view.effective_host_cwd()?;
         Some((view.host(cx)?, cwd))

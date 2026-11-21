@@ -2544,6 +2544,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelFilesTitle => "Files",
         L10nKey::PanelSearchTitle => "Search",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::ToolHostAdd => "Add Tool",
+        L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
             "Open a tab to see its shell, directory, and processes here."
@@ -2669,7 +2671,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ScmOpRevert => "reverting",
         L10nKey::ScmOpBisect => "bisecting",
         L10nKey::ScmOpAm => "applying",
-        L10nKey::ScmSwitchRepository => "Switch Repository",
         L10nKey::WindowStop => "Stop",
         L10nKey::WindowDelete => "Delete",
         L10nKey::WindowThisWorkspace => "this workspace",
@@ -2730,6 +2731,47 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::WorktreePromptCreating => "Creating…",
         L10nKey::WorktreePromptCreate => "Create",
         L10nKey::AppNewWorktreeFailed => "New worktree failed: {error}",
+        L10nKey::WorktreePickerTitle => "Switch Worktree",
+        L10nKey::WorktreePickerPlaceholder => "Search by directory, branch or path",
+        L10nKey::WorktreePickerCurrent => "current",
+        L10nKey::WorktreePickerEmpty => "No matching checkout",
+        L10nKey::WorktreePickerFailed => "Couldn't list worktrees: {error}",
+        L10nKey::WorktreePickerRemove => "Remove from Disk…",
+        L10nKey::WorktreePickerRemoveTitle => "Remove checkout from disk?",
+        L10nKey::WorktreePickerRemoveBranch => {
+            "Branch \"{branch}\" is deleted when fully merged; otherwise it is kept."
+        }
+        L10nKey::WorktreePickerRemoveDetached => "Detached HEAD — no branch is touched.",
+        L10nKey::WorktreePickerRemoveChecking => "Checking the checkout…",
+        L10nKey::WorktreePickerRemoveReady => "The checkout is clean and unused.",
+        L10nKey::WorktreePickerRemoveDirtyReady => {
+            "Removing this checkout deletes its files. lyrel will save uncommitted changes and untracked files to a Git recovery reference before removing it."
+        }
+        L10nKey::WorktreePickerRecoverAndRemove => "Save Recovery and Remove",
+        L10nKey::WorktreePickerRemoving => "Recording recovery and removing the checkout…",
+        L10nKey::WorktreePickerRemoveBlockedGone => {
+            "This checkout is no longer registered on its Host."
+        }
+        L10nKey::WorktreePickerRemoveBlockedMain => "The main checkout cannot be removed.",
+        L10nKey::WorktreePickerRemoveChanged => {
+            "The checkout or its uncommitted changes changed. Reopen the confirmation to review it."
+        }
+        L10nKey::WorktreePickerRemoveBlockedOccupied => "A pane is using this checkout.",
+        L10nKey::WorktreePickerRemoveBlockedUnsaved => {
+            "An unsaved document is open in this checkout."
+        }
+        L10nKey::WorktreePickerRemoveBlockedUnknown => {
+            "The checkout's state could not be verified on its Host."
+        }
+        L10nKey::WorktreePickerRemovedBranchDeleted => {
+            "Removed {path}. Branch \"{branch}\" was deleted; recovery reference {ref}."
+        }
+        L10nKey::WorktreePickerRemovedBranchKept => {
+            "Removed {path}. Branch \"{branch}\" was kept; recovery reference {ref}."
+        }
+        L10nKey::WorktreePickerRemovedDetached => "Removed {path}. Recovery reference {ref}.",
+        L10nKey::WorktreePickerRemoveFailed => "Couldn't remove the checkout: {error}",
+        L10nKey::StatusGitWorktree => "Switch worktree",
         L10nKey::HomeTimeJustNow => "just now",
         L10nKey::HomeTimeMinutesAgo => "{count} min ago",
         L10nKey::HomeTimeHourAgo => "1 hour ago",

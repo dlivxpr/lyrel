@@ -3,6 +3,7 @@ use lyrel_core::core::group_key::{AutoKey, GroupId, GroupKey};
 use lyrel_core::core::machine::TabId;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 pub(crate) type ReorderState = Rc<RefCell<Option<Reorder>>>;
 
@@ -174,6 +175,16 @@ pub(crate) fn suspend(state: &ReorderState, yes: bool) {
     }
 }
 
+/// The identity of the drag in flight, for keying the landing preview's
+/// transition. `None` when no drag is in flight.
+pub(crate) fn glide(state: &ReorderState) -> Option<usize> {
+    state.borrow().as_ref().map(|r| r.glide)
+}
+
+/// Hands each drag its own preview identity. Zero would be a fine first
+/// value; starting at one keeps the keyed transition IDs clear of defaults.
+static GLIDE_SEQ: AtomicUsize = AtomicUsize::new(1);
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Surface {
     SidebarRows(Option<GroupKey>),
@@ -195,6 +206,9 @@ pub(crate) struct Reorder {
     grab: Point<Pixels>,
     prev: Cell<usize>,
     generation: Cell<usize>,
+    /// A fresh value per drag, so a landing preview keyed by it never glides
+    /// from the rectangle a previous drag left behind.
+    glide: usize,
     pending: RefCell<Option<Vec<usize>>>,
     /// The group this drag is being held over, when the pointer has left the
     /// group the tab came from.
@@ -229,6 +243,7 @@ impl Reorder {
             grab,
             prev: Cell::new(from),
             generation: Cell::new(0),
+            glide: GLIDE_SEQ.fetch_add(1, AtomicOrdering::Relaxed),
             pending: RefCell::new(None),
             regroup: RefCell::new(None),
             auto: None,
@@ -583,6 +598,24 @@ mod tests {
         assert_eq!(r.begin_frame(1), (1, 0));
         assert_eq!(r.begin_frame(1), (1, 1));
         assert_eq!(r.begin_frame(2), (2, 1));
+    }
+
+    /// Two drags, same rows, same tab: still two previews. The landing
+    /// transition is keyed by the drag so a new one never starts from where
+    /// the last drag's preview ended.
+    #[test]
+    fn each_reorder_gets_a_fresh_glide_identity() {
+        let state: ReorderState = Rc::new(RefCell::new(Some(column(3, 30., 2., 0))));
+        let first = glide(&state).expect("a drag in flight has a glide identity");
+        take_landed(&state);
+        *state.borrow_mut() = Some(column(3, 30., 2., 0));
+        let second = glide(&state).expect("the next drag has one too");
+        assert_ne!(
+            first, second,
+            "lifting the same rows again is still a new drag"
+        );
+        *state.borrow_mut() = None;
+        assert_eq!(glide(&state), None, "and the identity dies with the drag");
     }
 
     /// A strip that overflows renders a window of chips and leaves the rest of

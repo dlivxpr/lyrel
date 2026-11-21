@@ -562,8 +562,9 @@ fn host_instance_repo_root_late_read_cannot_release_reconnected_resolution(
     });
     new_gate.release();
     until(&mut vcx, "new resolved root", |vcx| {
-        app.update_in(vcx, |app, _, cx| {
-            app.project_roots(cx).map(|(_, roots)| roots) == Some(vec![PathBuf::from("/repo")])
+        app.update_in(vcx, |app, window, cx| {
+            app.project_roots(window, cx).map(|(_, roots)| roots)
+                == Some(vec![PathBuf::from("/repo")])
         })
     });
     until(&mut vcx, "new root listing", |vcx| {

@@ -1,4 +1,5 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
@@ -395,6 +396,7 @@ impl LyrelApp {
             440.,
             cx,
         )
+        .test_support()
         .child(dialog::header(t(L10nKey::WorktreePromptTitle), cx))
         .child(
             dialog::body()

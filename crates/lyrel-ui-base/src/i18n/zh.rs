@@ -2296,6 +2296,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanelFilesTitle => "文件",
         L10nKey::PanelSearchTitle => "搜索",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::ToolHostAdd => "添加工具",
+        L10nKey::ToolHostClose => "关闭{tool}",
         L10nKey::PanelNoSession => "没有活动会话。",
         L10nKey::PanelNoSessionHint => "打开一个标签页以在此处查看其 shell、目录和进程。",
         L10nKey::PanelNoWorkingDirectory => "没有工作目录。",
@@ -2414,7 +2416,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ScmOpRevert => "还原中",
         L10nKey::ScmOpBisect => "二分查找中",
         L10nKey::ScmOpAm => "应用补丁中",
-        L10nKey::ScmSwitchRepository => "切换仓库",
         L10nKey::WindowStop => "停止",
         L10nKey::WindowDelete => "删除",
         L10nKey::WindowThisWorkspace => "此工作区",
@@ -2463,6 +2464,39 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::WorktreePromptCreating => "正在创建…",
         L10nKey::WorktreePromptCreate => "创建",
         L10nKey::AppNewWorktreeFailed => "新建 worktree 失败：{error}",
+        L10nKey::WorktreePickerTitle => "切换工作树",
+        L10nKey::WorktreePickerPlaceholder => "按目录、分支或路径搜索",
+        L10nKey::WorktreePickerCurrent => "当前",
+        L10nKey::WorktreePickerEmpty => "没有匹配的检出",
+        L10nKey::WorktreePickerFailed => "无法列出工作树：{error}",
+        L10nKey::WorktreePickerRemove => "从磁盘删除…",
+        L10nKey::WorktreePickerRemoveTitle => "从磁盘删除该检出？",
+        L10nKey::WorktreePickerRemoveBranch => "分支“{branch}”在已完全合并时会被删除，否则保留。",
+        L10nKey::WorktreePickerRemoveDetached => "分离 HEAD —— 不涉及分支。",
+        L10nKey::WorktreePickerRemoveChecking => "正在检查该检出…",
+        L10nKey::WorktreePickerRemoveReady => "该检出干净且未被使用。",
+        L10nKey::WorktreePickerRemoveDirtyReady => {
+            "删除检出会移除其中的文件。lyrel 会先将未提交的变更和未跟踪的文件保存到 Git 恢复引用，再删除检出。"
+        }
+        L10nKey::WorktreePickerRecoverAndRemove => "保存恢复点并删除",
+        L10nKey::WorktreePickerRemoving => "正在保存恢复点并删除检出…",
+        L10nKey::WorktreePickerRemoveBlockedGone => "该检出已不再注册在其所属 Host 上。",
+        L10nKey::WorktreePickerRemoveBlockedMain => "主检出不能被删除。",
+        L10nKey::WorktreePickerRemoveChanged => {
+            "检出或其未提交的变更已变化。请重新打开确认框核对。"
+        }
+        L10nKey::WorktreePickerRemoveBlockedOccupied => "有窗格正在使用该检出。",
+        L10nKey::WorktreePickerRemoveBlockedUnsaved => "该检出中有未保存的文档。",
+        L10nKey::WorktreePickerRemoveBlockedUnknown => "无法在其所属 Host 上验证该检出的状态。",
+        L10nKey::WorktreePickerRemovedBranchDeleted => {
+            "已删除 {path}。分支“{branch}”已删除；恢复引用 {ref}。"
+        }
+        L10nKey::WorktreePickerRemovedBranchKept => {
+            "已删除 {path}。分支“{branch}”已保留；恢复引用 {ref}。"
+        }
+        L10nKey::WorktreePickerRemovedDetached => "已删除 {path}。恢复引用 {ref}。",
+        L10nKey::WorktreePickerRemoveFailed => "无法删除该检出：{error}",
+        L10nKey::StatusGitWorktree => "切换工作树",
         L10nKey::HomeTimeJustNow => "刚刚",
         L10nKey::HomeTimeMinutesAgo => "{count} 分钟前",
         L10nKey::HomeTimeHourAgo => "1 小时前",

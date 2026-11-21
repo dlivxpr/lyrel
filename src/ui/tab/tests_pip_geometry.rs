@@ -198,6 +198,12 @@ fn pip_move_resize_and_zoom_preserve_the_live_terminal_and_focus(cx: &mut TestAp
                 assert!(pip.bottom() < window.find("workbench-status").bounds().top());
             });
         }
+        // Panel toggles now travel a 260 ms boundary slide; the next width
+        // iteration's toggles would be dropped as repeats mid-slide. Settle
+        // the seams so each width really exercises both panel states.
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(300));
+        vcx.run_until_parked();
     }
     app.update_in(&mut vcx, |app, _, _| {
         assert_eq!(

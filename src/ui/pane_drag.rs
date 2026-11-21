@@ -31,6 +31,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use gpui_kit::component::{
     ActiveTheme as _,
@@ -59,6 +60,13 @@ const BAND_MAX: f32 = 120.;
 
 /// The share of a pane, centred, that means "swap" rather than "split".
 const SWAP_CORE: f32 = 0.34;
+
+/// How long the drop preview takes to slide from one target's rectangle to
+/// the next. The reference this interaction is pinned to (Diri's `GLIDE`, see
+/// `docs/research/diri-right-panel-motion.md`) uses 110 ms: long enough to
+/// read as the target moving, short enough that nobody waits on it. The
+/// terminal underneath never moves — the glide is paint, not layout.
+pub(crate) const GLIDE_MS: u64 = 110;
 
 /// Where a dragged pane would land.
 ///
@@ -190,7 +198,14 @@ pub(crate) fn handle(
 pub(crate) struct PaneDrag {
     from: EntityId,
     landing: Cell<Option<DropZone<EntityId>>>,
+    /// A fresh value per drag, so the preview's transition never starts from
+    /// the rectangle a previous drag left behind.
+    glide: usize,
 }
+
+/// Hands each drag its own preview identity. Zero would be a fine first
+/// value; starting at one keeps the keyed transition IDs clear of defaults.
+static GLIDE_SEQ: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) type PaneDragState = Rc<RefCell<Option<PaneDrag>>>;
 
@@ -201,12 +216,27 @@ pub(crate) fn begin(state: &PaneDragState, from: EntityId) {
     *state.borrow_mut() = Some(PaneDrag {
         from,
         landing: Cell::new(None),
+        glide: GLIDE_SEQ.fetch_add(1, AtomicOrdering::Relaxed),
     });
 }
 
 /// Which pane is being dragged, if one is.
 pub(crate) fn lifted(state: &PaneDragState) -> Option<EntityId> {
     state.borrow().as_ref().map(|d| d.from)
+}
+
+/// The identity of this drag, for keying the landing preview's transition.
+pub(crate) fn glide(state: &PaneDragState) -> Option<usize> {
+    state.borrow().as_ref().map(|d| d.glide)
+}
+
+/// The preview's glide between targets: the reference's 110 ms on the curve
+/// every transition in the app runs. The policy's default reduced-motion
+/// behavior is `Finish`, so with motion reduced the preview is drawn at its
+/// target on the very frame it changes — no glide, no waiting.
+pub(crate) fn glide_transition() -> gpui_kit::base::Transition {
+    gpui_kit::base::Transition::new(std::time::Duration::from_millis(GLIDE_MS))
+        .ease(gpui_kit::ease_out_quint())
 }
 
 /// Forgets last frame's landing, so a frame that offers none drops on nothing.
@@ -812,5 +842,25 @@ mod tests {
         assert_eq!(got[0], rect(10., 20., 250., 600.));
         assert_eq!(got[1], rect(260., 20., 750., 300.));
         assert_eq!(got[2], rect(260., 320., 750., 300.));
+    }
+
+    /// The preview's transition is keyed by the drag, not the pane: picking
+    /// the same pane up again must not glide the new preview from where the
+    /// last drag's preview ended.
+    #[test]
+    fn each_drag_gets_a_fresh_glide_identity() {
+        let state: PaneDragState = Rc::new(RefCell::new(None));
+        let pane = gpui_kit::EntityId::from(7u64);
+        begin(&state, pane);
+        let first = glide(&state).expect("a drag in flight has a glide identity");
+        take_landing(&state);
+        begin(&state, pane);
+        let second = glide(&state).expect("the next drag has one too");
+        assert_ne!(
+            first, second,
+            "picking the same pane up is still a new drag"
+        );
+        take_landing(&state);
+        assert_eq!(glide(&state), None, "and the identity dies with the drag");
     }
 }

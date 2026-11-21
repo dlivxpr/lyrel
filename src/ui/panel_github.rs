@@ -59,11 +59,11 @@ impl LyrelApp {
                     Some(t(L10nKey::PanelNoWorkingDirectoryHint)),
                     cx,
                 );
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::Pending => {
                 let body = self.panel_empty(t(L10nKey::PanelLoading), None, cx);
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::NotARepo => {
                 let body = self.panel_empty(
@@ -71,7 +71,7 @@ impl LyrelApp {
                     Some(t(L10nKey::PanelNotAGitRepoHint)),
                     cx,
                 );
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::NoRemote { repo } => {
                 let body = self.panel_empty(
@@ -95,7 +95,7 @@ impl LyrelApp {
                         ),
                     )
                     .into_any_element();
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::Ready {
                 host,
@@ -105,15 +105,14 @@ impl LyrelApp {
             } => (host, repo, remotes, chosen),
         };
 
-        // A detail belongs to the repository it was opened from. If the pane
-        // has since moved to another one, the list of that one is what the
-        // panel is about now.
-        if let Some((slug, number)) = self.github.open.clone() {
-            if slug == chosen.slug {
-                let (pinned, body) = self.render_github_detail(&repo, &slug, number, window, cx);
-                return self.github_shell(title, pinned, body, true);
+        // A detail belongs to the repository it was opened from. The detail
+        // itself reads in the document area now; if the pane has since moved
+        // to another repository, the document closes with it, and the list of
+        // the repository shown is what the panel is about.
+        if let Some((slug, _)) = self.github.open.clone() {
+            if slug != chosen.slug {
+                self.github_close_detail(window, cx);
             }
-            self.github.open = None;
         }
 
         let query = self.github_query(&chosen.slug);
@@ -140,7 +139,7 @@ impl LyrelApp {
         // one unit and the list starts clear of it.
         pinned.push(div().flex_none().h(px(LIST_GAP)).into_any_element());
         let body = self.github_list_body(&chosen.slug, cx);
-        self.github_shell(title, pinned, body, false)
+        self.github_shell(title, pinned, body)
     }
 
     /// Title, the rows pinned under it, and a body that scrolls on its own.
@@ -149,19 +148,10 @@ impl LyrelApp {
         title: AnyElement,
         pinned: Vec<AnyElement>,
         body: AnyElement,
-        detail: bool,
     ) -> AnyElement {
-        let scroll = if detail {
-            &self.github.detail_scroll
-        } else {
-            &self.github.list_scroll
-        };
+        let scroll = &self.github.list_scroll;
         let scroller = div()
-            .id(if detail {
-                "panel-github-detail"
-            } else {
-                "panel-github-list"
-            })
+            .id("panel-github-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -182,6 +172,7 @@ impl LyrelApp {
 
     pub(crate) fn github_refresh_tile(
         &self,
+        id: &'static str,
         repo: Option<RepoKey>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -189,7 +180,7 @@ impl LyrelApp {
             || self.github.lists.values().any(|l| l.loading)
             || self.github.details.values().any(|d| d.loading);
         github_tile(
-            "panel-github-refresh",
+            id,
             if busy {
                 Icon::new(IconName::LoaderCircle)
             } else {
@@ -270,13 +261,12 @@ impl LyrelApp {
                                                 let app = app.clone();
                                                 let repo = repo.clone();
                                                 let name = r.remote.clone();
-                                                move |_, _window, cx| {
+                                                move |_, window, cx| {
                                                     let _ = app.update(cx, |this, cx| {
                                                         this.github
                                                             .remote_pick
                                                             .insert(repo.clone(), name.clone());
-                                                        this.github.open = None;
-                                                        cx.notify();
+                                                        this.github_close_detail(window, cx);
                                                     });
                                                 }
                                             }),
@@ -305,7 +295,7 @@ impl LyrelApp {
                     .text_color(muted),
             )
             .child(picker)
-            .child(self.github_refresh_tile(Some(repo.clone()), cx))
+            .child(self.github_refresh_tile("panel-github-refresh", Some(repo.clone()), cx))
             .child(
                 github_tile(
                     "panel-github-open-repo",
@@ -379,8 +369,8 @@ impl LyrelApp {
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(title.clone()).build(window, cx)
             })
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.github_open_detail(slug.clone(), number, cx);
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.github_open_detail(slug.clone(), number, window, cx);
             }))
             .child(div().flex_none().child(state_glyph(item.state, true, cx)))
             .child(
@@ -711,12 +701,12 @@ impl LyrelApp {
                     cx.notify();
                 }
             }))
-            .on_click(cx.listener(move |this, _, _window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 let query = this.github_query(&slug);
                 if let Some(cache) = this.github.lists.get_mut(&query) {
                     cache.selected = Some(number);
                 }
-                this.github_open_detail(slug.clone(), number, cx);
+                this.github_open_detail(slug.clone(), number, window, cx);
             }))
             .child(stack_glyph(
                 number,
@@ -1006,35 +996,112 @@ mod gpui_tests {
         asked: Mutex<Vec<String>>,
     }
 
+    /// The shared `acme/widgets` fixture: one issue, one pull request with
+    /// one changed file. `Fake` answers immediately; `LatchedFake` holds the
+    /// item endpoints back so a response can be made to land late on purpose.
+    fn fake_reply(path: &str) -> Result<Reply, ApiError> {
+        let body = if path.starts_with("/repos/acme/widgets/issues?") {
+            r#"[{"number": 7, "title": "Widgets wobble", "state": "open",
+                 "user": {"login": "ada"}, "labels": [{"name": "bug", "color": "d73a4a"}],
+                 "comments": 1, "created_at": "2026-09-01T10:00:00Z",
+                 "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/issues/7"},
+                {"number": 8, "title": "A pull request", "state": "open",
+                 "pull_request": {"merged_at": null},
+                 "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/pull/8"}]"#
+        } else if path.starts_with("/repos/acme/widgets/pulls?") {
+            r#"[{"number": 8, "title": "A pull request", "state": "open",
+                 "head": {"ref": "feature", "sha": "c0ffee42"}, "base": {"ref": "main"},
+                 "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/pull/8"}]"#
+        } else if path == "/repos/acme/widgets/issues/7" {
+            r#"{"number": 7, "title": "Widgets wobble", "state": "open",
+                "user": {"login": "ada"}, "labels": [], "comments": 1,
+                "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                "html_url": "https://github.com/acme/widgets/issues/7",
+                "body": "They **wobble**. ![shot](https://example.com/x.png)"}"#
+        } else if path.starts_with("/repos/acme/widgets/issues/7/comments") {
+            r#"[{"id": 1, "user": {"login": "bob"}, "body": "Seen it too.",
+                 "created_at": "2026-09-02T10:00:00Z", "html_url": "https://x/1"}]"#
+        } else if path == "/repos/acme/widgets/issues/8" {
+            r#"{"number": 8, "title": "A pull request", "state": "open",
+                "user": {"login": "ada"}, "labels": [],
+                "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                "html_url": "https://github.com/acme/widgets/pull/8",
+                "pull_request": {}, "body": "Reads better with the patch."}"#
+        } else if path.starts_with("/repos/acme/widgets/issues/8/comments") {
+            "[]"
+        } else if path == "/repos/acme/widgets/pulls/8" {
+            r#"{"number": 8, "title": "A pull request", "state": "open",
+                "user": {"login": "ada"}, "mergeable_state": "clean",
+                "head": {"ref": "feature", "sha": "c0ffee42"},
+                "base": {"ref": "main"}}"#
+        } else if path.starts_with("/repos/acme/widgets/pulls/8/reviews") {
+            "[]"
+        } else if path.starts_with("/repos/acme/widgets/pulls/8/files") {
+            r#"[{"filename": "src/lib.rs", "status": "modified",
+                 "additions": 1, "deletions": 0,
+                 "patch": "@@ -1,2 +1,3 @@\n one\n+pr_supplied_marker\n two"}]"#
+        } else if path.starts_with("/repos/acme/widgets/commits/c0ffee42/status")
+            || path.starts_with("/repos/acme/widgets/commits/c0ffee42/check-runs")
+        {
+            r#"{"total_count": 0, "statuses": [], "check_runs": []}"#
+        } else {
+            return Err(ApiError::NotFound);
+        };
+        Ok(Reply {
+            body: body.as_bytes().to_vec(),
+            has_next: false,
+        })
+    }
+
     impl Transport for Fake {
         fn get(&self, path: &str) -> Result<Reply, ApiError> {
             self.asked.lock().unwrap().push(path.to_string());
-            let body = if path.starts_with("/repos/acme/widgets/issues?") {
-                r#"[{"number": 7, "title": "Widgets wobble", "state": "open",
-                     "user": {"login": "ada"}, "labels": [{"name": "bug", "color": "d73a4a"}],
-                     "comments": 1, "created_at": "2026-09-01T10:00:00Z",
-                     "updated_at": "2026-09-02T10:00:00Z",
-                     "html_url": "https://github.com/acme/widgets/issues/7"},
-                    {"number": 8, "title": "A pull request", "state": "open",
-                     "pull_request": {"merged_at": null},
-                     "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
-                     "html_url": "https://github.com/acme/widgets/pull/8"}]"#
-            } else if path == "/repos/acme/widgets/issues/7" {
-                r#"{"number": 7, "title": "Widgets wobble", "state": "open",
-                    "user": {"login": "ada"}, "labels": [], "comments": 1,
-                    "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
-                    "html_url": "https://github.com/acme/widgets/issues/7",
-                    "body": "They **wobble**. ![shot](https://example.com/x.png)"}"#
-            } else if path.starts_with("/repos/acme/widgets/issues/7/comments") {
-                r#"[{"id": 1, "user": {"login": "bob"}, "body": "Seen it too.",
-                     "created_at": "2026-09-02T10:00:00Z", "html_url": "https://x/1"}]"#
-            } else {
-                return Err(ApiError::NotFound);
-            };
-            Ok(Reply {
-                body: body.as_bytes().to_vec(),
-                has_next: false,
-            })
+            fake_reply(path)
+        }
+
+        fn authenticated(&self) -> bool {
+            false
+        }
+    }
+
+    /// The same fixture with the item endpoints held behind a latch, so a
+    /// test can open one item, open another, and only then let the first
+    /// answer land — the late response an admission rule must reject.
+    struct LatchedFake {
+        asked: Mutex<Vec<String>>,
+        latch: (Mutex<bool>, std::sync::Condvar),
+    }
+
+    impl LatchedFake {
+        fn new() -> Self {
+            Self {
+                asked: Mutex::new(Vec::new()),
+                latch: (Mutex::new(false), std::sync::Condvar::new()),
+            }
+        }
+
+        fn release(&self) {
+            *self.latch.0.lock().unwrap() = true;
+            self.latch.1.notify_all();
+        }
+    }
+
+    impl Transport for LatchedFake {
+        fn get(&self, path: &str) -> Result<Reply, ApiError> {
+            self.asked.lock().unwrap().push(path.to_string());
+            let waits = path == "/repos/acme/widgets/issues/7"
+                || path == "/repos/acme/widgets/issues/8"
+                || path == "/repos/acme/widgets/pulls/8";
+            if waits {
+                let mut open = self.latch.0.lock().unwrap();
+                while !*open {
+                    open = self.latch.1.wait(open).unwrap();
+                }
+            }
+            fake_reply(path)
         }
 
         fn authenticated(&self) -> bool {
@@ -1181,6 +1248,36 @@ mod gpui_tests {
     fn the_tab_lists_and_opens_an_issue_without_touching_the_network(cx: &mut TestAppContext) {
         let root = scratch("list");
         git(&root, &["init", "--quiet"]);
+        std::fs::create_dir(root.join(".git/fixture-no-hooks")).unwrap();
+        git(
+            &root,
+            &[
+                "config",
+                "--local",
+                "core.hooksPath",
+                ".git/fixture-no-hooks",
+            ],
+        );
+        // No branch to pin: this test is about issue-list and detail requests.
+        // An unborn branch still has a symbolic HEAD and can start a separate
+        // PR lookup after the issue detail has already loaded.
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=GitHub Test",
+                "-c",
+                "user.email=github-test@lyrel.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+        );
+        git(&root, &["checkout", "--quiet", "--detach", "HEAD"]);
         git(
             &root,
             &[
@@ -1230,9 +1327,9 @@ mod gpui_tests {
         });
         assert_eq!(numbers, vec![7], "the pull request is not an issue");
 
-        let slug = app.update_in(&mut vcx, |app, _, cx| {
+        let slug = app.update_in(&mut vcx, |app, window, cx| {
             let slug = app.github.lists.keys().next().unwrap().slug.clone();
-            app.github_open_detail(slug.clone(), 7, cx);
+            app.github_open_detail(slug.clone(), 7, window, cx);
             slug
         });
         settle(&app, &mut vcx, "the detail", |app| {
@@ -1359,9 +1456,9 @@ mod gpui_tests {
                 .any(|p| p.item.as_ref().is_some_and(|i| i.number == 31))
         });
 
-        let slug = app.update_in(&mut vcx, |app, _, cx| {
+        let slug = app.update_in(&mut vcx, |app, window, cx| {
             let slug = app.github.branch_pulls.keys().next().unwrap().slug.clone();
-            app.github_open_detail(slug.clone(), 31, cx);
+            app.github_open_detail(slug.clone(), 31, window, cx);
             slug
         });
         let key = (slug.clone(), 31);
@@ -1535,4 +1632,5 @@ mod gpui_tests {
 
     include!("github/native_stack_test.rs");
     include!("github/stack_consumer_tests.rs");
+    include!("github/detail_document_tests.rs");
 }

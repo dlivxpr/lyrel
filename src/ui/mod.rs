@@ -35,6 +35,7 @@ pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;
 pub mod panel_github;
 pub mod panel_search;
+pub(crate) mod panel_slide;
 pub(crate) mod parked_deck;
 pub mod pending_pane;
 pub mod perf;
@@ -66,10 +67,12 @@ pub(crate) mod tab;
 pub mod tab_sidebar;
 pub mod tab_strip;
 pub mod theme;
+pub(crate) mod theme_transition;
 pub mod tray;
 pub mod tree_sync;
 mod window_chrome;
 pub mod windows;
+pub mod worktree_picker;
 pub mod worktree_prompt;
 
 /// The two answers a confirmation dialog gets, arranged the way macOS arranges

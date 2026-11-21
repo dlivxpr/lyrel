@@ -4,7 +4,7 @@ use chrono::Timelike as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
-use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems, svg};
+use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems};
 
 use crate::ui::app::LyrelApp;
 use lyrel_ui_base::actions::{OpenSettings, ToggleSwitcher};
@@ -60,6 +60,17 @@ impl Render for Clock {
     }
 }
 
+fn group_line_count(count: u32, sign: char) -> String {
+    let mut label = format!("{sign}{count}");
+    let start = sign.len_utf8();
+    let mut end = label.len();
+    while end > start + 3 {
+        end -= 3;
+        label.insert(end, ',');
+    }
+    label
+}
+
 impl LyrelApp {
     /// Only content focus changes this choice; opening a status control or a
     /// window overlay must not silently switch a docked editor back to a shell.
@@ -101,6 +112,10 @@ impl LyrelApp {
                 .diff_overlay
                 .as_ref()
                 .is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
+            || tab
+                .github_detail
+                .as_ref()
+                .is_some_and(|doc| doc.focus_handle.contains_focused(window, cx))
             || self
                 .status_document_focus
                 .filter(|(id, _)| *id == tab.id())
@@ -118,6 +133,11 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .and_then(|tab| tab.diff_overlay.as_ref())
                 .map(|diff| (diff.host_id, diff.cwd.as_path())),
+            Some(crate::ui::tab::OverlayTop::Github) => self
+                .tabs
+                .get(self.tabs.active_index())
+                .and_then(|tab| tab.github_detail.as_ref())
+                .map(|doc| (doc.host_id, doc.cwd.as_path())),
             None => None,
         };
         let host = location.map_or_else(
@@ -156,19 +176,32 @@ impl LyrelApp {
                 }
             })
         } else {
-            self.tab_cwd_text(self.tabs.active_index(), window, cx)
+            self.context_cwd_text(window, cx)
         };
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())
-            .and_then(|tab| tab.pane.focused_or_first(window, cx));
-        let branch = (!document)
-            .then(|| {
-                leaf.as_ref()
-                    .and_then(|leaf| leaf.read(cx).git_status(cx))
-                    .map(|git| git.branch)
-            })
-            .flatten();
+        // The Git context reads the Context Pane — the last valid terminal
+        // pane of the active Workspace — like every other surface that names
+        // a repository (#349). A document, a menu or the panel holding focus
+        // must not hand the subject back to the tab's first leaf.
+        let leaf = self.context_pane(window, cx);
+        let checkout = leaf.as_ref().and_then(|leaf| {
+            let pane = leaf.read(cx);
+            let cwd = pane.git_status_cwd()?;
+            let root = lyrel_ui_base::scm_snapshot::repo_root_for(cx, pane.host_id(), cwd)?;
+            Some((root, pane.git_status(cx)?))
+        });
+        let path = path.filter(|_| document || checkout.is_none());
+        let foreground = cx.theme().foreground;
+        let divider = cx.theme().border;
+        let muted = cx.theme().muted_foreground;
+        let added_ink = cx.theme().success;
+        let removed_ink = cx.theme().danger;
+        let rule = || {
+            div()
+                .flex_none()
+                .w(crate::ui::theme::hairline(window))
+                .h(rems(0.85))
+                .bg(divider)
+        };
         let program = (!document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
@@ -220,15 +253,68 @@ impl LyrelApp {
                         }),
                 )
             })
-            .when_some(branch, |row, branch| {
-                row.child(
-                    h_flex()
-                        .min_w_0()
-                        .max_w(rems(12.))
-                        .gap_1()
-                        .child(svg().path("icons/git-branch.svg").size_3().flex_none())
-                        .child(div().min_w_0().text_ellipsis().child(branch)),
-                )
+            .when_some(checkout, |row, (root, git)| {
+                let name = root
+                    .file_name()
+                    .unwrap_or(root.as_os_str())
+                    .to_string_lossy();
+                let label = format!("{name} / {}", git.branch);
+                let tooltip = format!(
+                    "{}\n{label}\n{}",
+                    t(L10nKey::StatusGitWorktree),
+                    root.display()
+                );
+                let checkout_button = Button::new("status-git-branch")
+                    .ghost()
+                    .xsmall()
+                    .flex_shrink_1()
+                    .min_w(rems(2.))
+                    .max_w(rems(22.))
+                    .icon(Icon::empty().path("icons/folder.svg").text_color(muted))
+                    .accessibility_label(label)
+                    .tooltip(tooltip)
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .text_color(foreground)
+                            .child(div().min_w_0().truncate().child(name.into_owned()))
+                            .child(div().flex_none().text_color(muted).child("/"))
+                            .child(div().min_w_0().truncate().child(git.branch)),
+                    )
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_worktree_picker(window, cx)),
+                    );
+                let row = row.child(checkout_button);
+                if git.added == 0 && git.removed == 0 {
+                    return row;
+                }
+                // The separate action inspects changes without navigating.
+                let added = group_line_count(git.added, '+');
+                let removed = group_line_count(git.removed, '−');
+                row.child(rule())
+                    .child(
+                        Button::new("status-git-counts")
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .accessibility_label(format!("{added} {removed}"))
+                            .tooltip(t(L10nKey::PanelScmTitle))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(div().text_color(added_ink).child(added))
+                                    .child(div().text_color(removed_ink).child(removed)),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_right_panel_tab(
+                                    lyrel_core::core::config::RightPanelTab::Scm,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(rule())
             });
         h_flex()
             .id("workbench-status")
@@ -516,6 +602,223 @@ mod tests {
                 "Markdown status sits above, not inside, the global status bar"
             );
         });
+    }
+
+    #[gpui_kit::test]
+    fn status_git_and_info_follow_the_context_pane(cx: &mut TestAppContext) {
+        use crate::ui::app::{LyrelApp, test_window::harness};
+        use crate::ui::pane::{Pane, PaneSlot};
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_core::core::config::MotionPreference;
+        use lyrel_terminal::view::quiet_test_pane;
+        use lyrel_ui_base::actions::{FocusRightPanelNavigation, ShowRightPanelInfo};
+        use lyrel_ui_base::host_ops::HostId;
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx) = harness(cx);
+        vcx.update(|_, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.cursor_blink = false;
+            cfg.motion_preference = MotionPreference::Reduce;
+            cx.set_global(cfg);
+        });
+        let (left, right, _streams) = app.update_in(&mut vcx, |app, window, cx| {
+            let (left, left_stream) = quiet_test_pane(1, window, cx);
+            let (right, right_stream) = quiet_test_pane(2, window, cx);
+            LyrelApp::watch_terminal(&left, window, cx);
+            LyrelApp::watch_terminal(&right, window, cx);
+            app.tabs.push(crate::ui::tab::Tab::new(Pane::split_node(
+                gpui_kit::Axis::Horizontal,
+                0.5,
+                Pane::leaf(PaneSlot::Ready(left.clone())),
+                Pane::leaf(PaneSlot::Ready(right.clone())),
+            )));
+            app.tabs.select(0);
+            // Two panes in two repositories: the cache knows each cwd's root
+            // and branch, the way the tab badge probe would have reported it.
+            for (view, cwd, branch) in [
+                (&left, "/repo-left", "ctx-left"),
+                (&right, "/repo-right", "ctx-right"),
+            ] {
+                let cwd = std::path::PathBuf::from(cwd);
+                let root = cwd.clone();
+                let home = cwd.clone();
+                view.update(cx, |view, _| {
+                    view.set_git_status_cwd_for_test(Some(cwd.clone()));
+                    view.terminal.seed_cwd(Some(cwd.clone()));
+                });
+                cx.default_global::<GitStatusCache>().finish_probe(
+                    HostId::LOCAL,
+                    &cwd,
+                    Some(RepoSnapshot {
+                        root,
+                        home,
+                        branch: branch.into(),
+                        counts: Some((0, 0)),
+                    }),
+                );
+            }
+            cx.notify();
+            (left, right, (left_stream, right_stream))
+        });
+        vcx.background_executor.run_until_parked();
+
+        let branch_text = |vcx: &mut VisualTestContext| -> Option<String> {
+            vcx.update(|window, _| {
+                window
+                    .try_find("status-git-branch")
+                    .filter(|element| element.visible())
+                    .and_then(|element| element.label().map(str::to_owned))
+            })
+        };
+        let info_cwd_shows = |vcx: &mut VisualTestContext, cwd: &str| -> bool {
+            vcx.update(|window, _| {
+                window
+                    .try_find("panel-info-row-0")
+                    .filter(|row| row.visible())
+                    .and_then(|row| row.label().map(str::to_owned))
+                    .is_some_and(|label| label.contains(cwd.trim_start_matches('/')))
+            })
+        };
+
+        // Start with the left pane focused; the harness may focus either pane at startup.
+        app.update_in(&mut vcx, |_, window, cx| {
+            left.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        vcx.dispatch_action(ShowRightPanelInfo);
+        settle(&mut vcx);
+        vcx.update(|window, _| assert!(window.find("workbench-status").visible()));
+        assert_eq!(
+            branch_text(&mut vcx).as_deref(),
+            Some("repo-left / ctx-left")
+        );
+        assert!(info_cwd_shows(&mut vcx, "/repo-left"));
+
+        // Focusing a different terminal pane moves the bottom Git indicator
+        // and the Info session together.
+        app.update_in(&mut vcx, |_, window, cx| {
+            right.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            branch_text(&mut vcx).as_deref(),
+            Some("repo-right / ctx-right")
+        );
+        assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+
+        // Moving focus into the panel does not change which pane supplies the
+        // data: the indicator stays on the last focused pane, not the tab's
+        // first leaf. The panel's tab list settles its roving stop over a few
+        // frames, the way the navigation consumer test settles it.
+        vcx.dispatch_action(FocusRightPanelNavigation);
+        for _ in 0..4 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.render_frame(cx);
+            });
+        }
+        vcx.run_until_parked();
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.find("tool-tab-info").focused(),
+                Some(true),
+                "the panel's tab list must own keyboard focus for this check"
+            );
+        });
+        assert_eq!(
+            branch_text(&mut vcx).as_deref(),
+            Some("repo-right / ctx-right")
+        );
+        assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+
+        // Opening a document changes its status controls, not the Git subject.
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, cx| app.active_buffer(cx).is_some()));
+        assert_eq!(
+            branch_text(&mut vcx).as_deref(),
+            Some("repo-right / ctx-right")
+        );
+
+        // Back in the terminal, then on to the other pane.
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |_, window, cx| {
+            left.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            branch_text(&mut vcx).as_deref(),
+            Some("repo-left / ctx-left")
+        );
+        assert!(info_cwd_shows(&mut vcx, "/repo-left"));
+    }
+
+    #[gpui_kit::test]
+    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(cx: &mut TestAppContext) {
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_ui_base::host_ops::HostId;
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        let pane = app.read_with(&vcx, |app, _| {
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .and_then(|slot| slot.terminal().cloned())
+                .expect("test pane")
+        });
+        let root = std::path::PathBuf::from("/repo-left");
+        let cwd = root.join("nested");
+        app.update_in(&mut vcx, |_, _, cx| {
+            pane.update(cx, |view, _| {
+                view.set_git_status_cwd_for_test(Some(cwd.clone()));
+            });
+            cx.default_global::<GitStatusCache>().finish_probe(
+                HostId::LOCAL,
+                &cwd,
+                Some(RepoSnapshot {
+                    root: root.clone(),
+                    home: root.clone(),
+                    branch: "ctx-left".into(),
+                    counts: Some((4_374, 5)),
+                }),
+            );
+            cx.notify();
+        });
+        settle(&mut vcx);
+
+        // Real +added −removed counts sit beside the branch…
+        vcx.update(|window, _| {
+            let counts = window.find("status-git-counts");
+            assert!(counts.visible());
+            assert_eq!(counts.label(), Some("+4,374 −5"));
+            assert_eq!(
+                window.find("status-git-branch").label(),
+                Some("repo-left / ctx-left")
+            );
+            assert!(window.try_find("status-path").is_none());
+        });
+        // …and open Changes — not the picker.
+        vcx.update(|window, cx| window.click("status-git-counts", cx));
+        settle(&mut vcx);
+        app.read_with(&vcx, |app, _| {
+            assert!(app.right_panel_visible, "counts open the Changes tool");
+            assert_eq!(
+                app.right_panel_tab,
+                lyrel_core::core::config::RightPanelTab::Scm
+            );
+            assert!(
+                app.worktree_picker.is_none(),
+                "the counts action never opens the worktree picker"
+            );
+        });
+
+        // The branch opens the shared picker instead.
+        vcx.update(|window, cx| window.click("status-git-branch", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_some()));
     }
 
     #[gpui_kit::test]

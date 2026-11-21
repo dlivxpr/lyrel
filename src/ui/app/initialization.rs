@@ -195,9 +195,14 @@ impl LyrelApp {
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
         let document_ratio = cx.global::<Config>().document_ratio;
-        let right_panel_visible = cx.global::<Config>().right_panel_visible;
-        let right_panel_tab =
-            crate::ui::right_panel::shown_tab(cx.global::<Config>().right_panel_tab);
+        // The tool layout is per workspace: the Workspace Store's versioned
+        // record is the one a restart restores (#348), and a workspace
+        // without one — every workspace that predates the field — starts
+        // with only Info prepared behind a collapsed panel. The old global
+        // config selection is deliberately not projected onto it (#345).
+        let tool_layout = Self::persisted_tool_layout(workspace, cx);
+        let right_panel_visible = tool_layout.open;
+        let right_panel_tab = tool_layout.active;
         let scm_graph_expanded = cx.global::<Config>().scm_graph_expanded;
         let sidebar_collapsed = cx.global::<Config>().sidebar_collapsed;
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {
@@ -371,8 +376,10 @@ impl LyrelApp {
             session: SessionLifecycle::default(),
             renaming: None,
             worktree_prompt: None,
+            worktree_picker: None,
             maximized: None,
             mod_hint_badges: false,
+            mod_hint_fade_generation: None,
             mod_hint_gen: 0,
             home_focus: cx.focus_handle(),
             home_cursor_on: true,
@@ -381,7 +388,10 @@ impl LyrelApp {
             shells_host: HostId::LOCAL,
             loopback_panel,
             sftp_panel,
-            right_panel: Default::default(),
+            right_panel: crate::ui::right_panel::RightPanelState::with_layout(
+                workspace,
+                tool_layout,
+            ),
             scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
             github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes: Default::default(),
@@ -406,6 +416,7 @@ impl LyrelApp {
             right_panel_nav_wait: Cell::new(0),
             right_panel_nav_renders: Cell::new(0),
             sidebar_collapsed,
+            panel_slides: Default::default(),
             sidebar_scroll: gpui_kit::ScrollHandle::new(),
             sidebar_reveal: Rc::new(RefCell::new(None)),
             sidebar_nav_focus: cx.focus_handle().tab_stop(true),
@@ -419,6 +430,7 @@ impl LyrelApp {
             sidebar_group_slots: Rc::new(RefCell::new(Vec::new())),
             sidebar_divider: Rc::new(Cell::new(None)),
             sidebar_groups: Default::default(),
+            sidebar_motion: RefCell::new(Default::default()),
             pane_area: Rc::new(Cell::new(None)),
             file_search,
             _file_search_sub: file_search_sub,
