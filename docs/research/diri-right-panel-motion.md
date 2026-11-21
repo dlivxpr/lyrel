@@ -1,0 +1,17 @@
+# Diri 右栏与动效源码核对
+
+只读核对公开源码，固定提交 `323a10ea51929955d366ec40dfeb70800add5499`；未安装、运行或移植 Diri。
+
+- [右栏工具页签](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/inspector.rs#L2527-L2536) 使用独立横向滚动区；[关闭按钮](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/inspector.rs#L2602-L2629) 有固定槽位；[加号和右栏开关](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/inspector.rs#L2710-L2740) 在滚动区外。
+- [右栏开合](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/root.rs#L4319-L4337) 区分视觉分隔边界和告知 PTY 的终态宽度。[`SeamSlide`](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/seam.rs#L14-L71) 使用共享的[无过冲缓动](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-ui/src/motion.rs#L21-L46)；Diri 会丢弃过渡中的重复开合请求。
+- [工具内容切换](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/inspector.rs#L6139-L6155) 用 `with_animation` 作 190 ms 的短位移和透明度变化；减少动效时直接呈现终态，不能共享裁剪和透明度的原生 Browser 不做该动画。
+
+动效按此提交中与 lyrel 对应的交互复现，匹配时序、方向和观感；通过 lyrel 已依赖的 [GPUI Kit 动效](https://gpui-kit.com/docs/animation.md) 独立实现，不复制 Diri 的 AGPL 源码，也不引入 lyrel 不具备的产品交互。保留 lyrel 现有动效偏好和固定窗口控件；PTY 使用目标几何，不随开合逐帧变更。Diri 的[侧栏开合基准](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-ui/src/tokens.rs#L731-L742)为 260 ms。
+
+## 超出右栏的动效
+
+- [左栏开合](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/root.rs#L4267-L4292)和[横置终端标签栏显隐](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/root.rs#L4833-L4843)也使用边界过渡。
+- [左栏会话行](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/sidebar/row_motion.rs#L1-L16)新增时先让出高度、再淡入，移除时先淡出、再收拢；[项目／会话折叠](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/sidebar/disclosure.rs#L38-L97)单独处理。[终端页签重排](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/sidebar/view/tabs.rs#L852-L872)时，其他页签滑向新位置，被拖动项仍跟手。
+- [窗格拖放](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/pane_drag.rs#L24-L38)的落点预览会移动，确认换位后窗格过渡到新位置。相反，[非活动窗格的弱化](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/pane_fade.rs#L1-L14)立即切换，不是终端内容动画。
+- [Toast](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/toast.rs#L441-L462)短位移加淡入；[长按快捷键提示](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/held_hints.rs#L180-L203)淡入淡出；也有[针对单个选择器的入场](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/root.rs#L5752-L5765)。这些不能证明所有菜单和设置页都做过场。
+- [主题切换](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/app_theme/live.rs#L1-L9)在所有窗口插值终端和界面色；[不确定进度](https://github.com/cristicretu/diri/blob/323a10ea51929955d366ec40dfeb70800add5499/diri/crates/diri-app/src/progress_mark.rs#L1-L9)可以循环，减少动态效果时为静态环。
