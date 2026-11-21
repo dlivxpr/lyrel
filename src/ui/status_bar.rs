@@ -225,6 +225,9 @@ impl LyrelApp {
                 row.child(
                     h_flex()
                         .id("status-git-branch")
+                        .test_support()
+                        .role(gpui_kit::Role::Status)
+                        .aria_label(branch.clone())
                         .min_w_0()
                         .max_w(rems(12.))
                         .gap_1()
@@ -563,6 +566,7 @@ mod tests {
                 let home = cwd.clone();
                 view.update(cx, |view, _| {
                     view.set_git_status_cwd_for_test(Some(cwd.clone()));
+                    view.terminal.seed_cwd(Some(cwd.clone()));
                 });
                 cx.default_global::<GitStatusCache>().finish_probe(
                     HostId::LOCAL,
@@ -582,21 +586,19 @@ mod tests {
 
         let branch_text = |vcx: &mut VisualTestContext| -> Option<String> {
             vcx.update(|window, _| {
-                gpui_kit::base::test_support::texts(window)
-                    .into_iter()
-                    .find(|text| {
-                        text.path()
-                            .iter()
-                            .any(|id| *id == gpui_kit::ElementId::from("status-git-branch"))
-                    })
-                    .map(|text| text.text().to_string())
+                window
+                    .try_find("status-git-branch")
+                    .filter(|element| element.visible())
+                    .and_then(|element| element.label().map(str::to_owned))
             })
         };
         let info_cwd_shows = |vcx: &mut VisualTestContext, cwd: &str| -> bool {
             vcx.update(|window, _| {
-                gpui_kit::base::test_support::texts(window)
-                    .into_iter()
-                    .any(|text| text.text() == cwd)
+                window
+                    .try_find("panel-info-row-0")
+                    .filter(|row| row.visible())
+                    .and_then(|row| row.label().map(str::to_owned))
+                    .is_some_and(|label| label.contains(cwd.trim_start_matches('/')))
             })
         };
 
