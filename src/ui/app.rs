@@ -246,9 +246,9 @@ pub struct LyrelApp {
     pub(crate) worktree_picker: Option<crate::ui::worktree_picker::WorktreePicker>,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
-    /// Badges stay mounted after the hold ends while they fade out; the
-    /// unmount timer then clears this. See `ui::hints`.
-    pub(crate) mod_hint_fading: bool,
+    /// Generation that owns the pending badge fade-out, independent of later
+    /// modifier events which only invalidate the hold-to-reveal timer.
+    pub(crate) mod_hint_fade_generation: Option<u64>,
     pub(crate) mod_hint_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
     /// Whether the home page's cursor block is on this half-second.

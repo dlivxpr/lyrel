@@ -708,7 +708,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lyrel-wt-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        // Git lists the resolved path, including on macOS where TMPDIR may
+        // reach the same directory through /var rather than /private/var.
+        crate::core::path_spelling::local_spelling_buf(std::fs::canonicalize(dir).unwrap())
     }
 
     fn plain(p: &Path) -> PathBuf {

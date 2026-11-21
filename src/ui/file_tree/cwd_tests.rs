@@ -28,8 +28,10 @@ struct Checkouts {
 }
 
 fn checkouts(name: &str) -> Checkouts {
-    let temp = tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap())
-        .unwrap_or_else(|e| panic!("checkouts base: {e}"));
+    let temp_root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(std::env::temp_dir()).unwrap(),
+    );
+    let temp = tempfile::tempdir_in(temp_root).unwrap_or_else(|e| panic!("checkouts base: {e}"));
     let base = temp.path().join(name);
     std::fs::create_dir_all(&base).unwrap();
     let repo_root = base.join("repo");

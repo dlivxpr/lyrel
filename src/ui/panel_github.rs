@@ -1248,6 +1248,36 @@ mod gpui_tests {
     fn the_tab_lists_and_opens_an_issue_without_touching_the_network(cx: &mut TestAppContext) {
         let root = scratch("list");
         git(&root, &["init", "--quiet"]);
+        std::fs::create_dir(root.join(".git/fixture-no-hooks")).unwrap();
+        git(
+            &root,
+            &[
+                "config",
+                "--local",
+                "core.hooksPath",
+                ".git/fixture-no-hooks",
+            ],
+        );
+        // No branch to pin: this test is about issue-list and detail requests.
+        // An unborn branch still has a symbolic HEAD and can start a separate
+        // PR lookup after the issue detail has already loaded.
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=GitHub Test",
+                "-c",
+                "user.email=github-test@lyrel.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+        );
+        git(&root, &["checkout", "--quiet", "--detach", "HEAD"]);
         git(
             &root,
             &[

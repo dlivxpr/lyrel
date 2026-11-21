@@ -108,6 +108,9 @@ fn toast_entrance_settles_and_reduce_keeps_the_pill_static(cx: &mut TestAppConte
         .advance_clock(std::time::Duration::from_millis(400));
     vcx.run_until_parked();
     vcx.update(|window, cx| {
+        // Deliver callbacks already queued by the entrance, then draw at the
+        // settled time and check whether that frame requests another one.
+        window.simulate_next_frame(cx);
         window.render_frame(cx);
         assert_eq!(
             window.simulate_next_frame(cx),
@@ -169,6 +172,7 @@ fn picker_entrance_settles_and_fast_dismiss_returns_the_keyboard(cx: &mut TestAp
         .advance_clock(std::time::Duration::from_millis(400));
     vcx.run_until_parked();
     vcx.update(|window, cx| {
+        window.simulate_next_frame(cx);
         window.render_frame(cx);
         assert_eq!(
             window.simulate_next_frame(cx),
@@ -189,6 +193,19 @@ fn picker_entrance_settles_and_fast_dismiss_returns_the_keyboard(cx: &mut TestAp
     // A fast dismissal does not wait for anything: the card is gone, the
     // keyboard is back on the pane, and the next keystroke reaches it.
     vcx.simulate_keystrokes(&chord);
+    vcx.simulate_keystrokes(&chord);
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(5));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let edge = gpui_kit::point(gpui_kit::px(24.), gpui_kit::px(2.));
+        window.click_at("search-card", edge, cx);
+        assert!(
+            window.try_find("search-card").is_some(),
+            "a press inside the moving card must not dismiss it"
+        );
+    });
+    vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
@@ -229,9 +246,7 @@ fn picker_entrance_settles_and_fast_dismiss_returns_the_keyboard(cx: &mut TestAp
     });
 }
 
-/// The hint reveal and fade-out timers are real-time (`smol::Timer` on a
-/// spawned task): sleeping past them and then running the executor is what
-/// lets their tasks land, as in the `ui::hints` tests.
+/// The hint reveal uses a real-time `smol::Timer`, as in the `ui::hints` tests.
 fn sleep_ms(ms: u64) {
     std::thread::sleep(std::time::Duration::from_millis(ms));
 }
@@ -239,6 +254,14 @@ fn sleep_ms(ms: u64) {
 #[gpui_kit::test]
 fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext) {
     let (_app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    set_motion(&mut vcx, MotionPreference::Allow);
+    // Finish the seeded row's own entrance first. Its clipped wrapper is
+    // temporary and would otherwise remount the badge when the row settles.
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
     let hold = vcx
         .update(|_, cx| crate::ui::keymap::tab_badge_hold(cx))
         .expect("the shipped tab chords are on a modifier");
@@ -259,6 +282,7 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
         .advance_clock(std::time::Duration::from_millis(600));
     vcx.run_until_parked();
     vcx.update(|window, cx| {
+        window.simulate_next_frame(cx);
         window.render_frame(cx);
         assert!(
             window.find(("tab-badge", 0usize)).visible(),
@@ -274,7 +298,6 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
     // Release: the badges dismiss instantly as state and fade out visually,
     // then unmount — the final state never waits on the transition.
     vcx.simulate_modifiers_change(gpui_kit::Modifiers::none());
-    sleep_ms(80);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
@@ -283,13 +306,45 @@ fn held_hint_badges_fade_in_and_out_without_idle_frames(cx: &mut TestAppContext)
             "the badges stay mounted while they fade out"
         );
     });
-    sleep_ms(300);
+    // A second, unrelated modifier event during the fade must not cancel
+    // unmounting. It only cancels a pending hold-to-reveal timer.
+    vcx.simulate_modifiers_change(gpui_kit::Modifiers::shift());
+    vcx.run_until_parked();
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
             window.find_all(("tab-badge", 0usize)).is_empty(),
             "the badges unmount once the fade-out completes"
+        );
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert_eq!(window.simulate_next_frame(cx), 0);
+    });
+
+    // Changing to Reduce consumes the running fade, so returning to Allow
+    // before its old deadline must not bring the badge slot back.
+    vcx.simulate_modifiers_change(hold);
+    sleep_ms(300);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find(("tab-badge", 0usize));
+    });
+    vcx.simulate_modifiers_change(gpui_kit::Modifiers::none());
+    set_motion(&mut vcx, MotionPreference::Reduce);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("tab-badge", 0usize)).is_none());
+    });
+    set_motion(&mut vcx, MotionPreference::Allow);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find(("tab-badge", 0usize)).is_none(),
+            "Allow does not replay a fade cancelled by Reduce"
         );
     });
 }
@@ -334,7 +389,6 @@ fn reduced_held_hints_appear_static_and_a_fast_tap_raises_nothing(cx: &mut TestA
 
     // Releasing under Reduce dismisses them; nothing keeps requesting frames.
     vcx.simulate_modifiers_change(gpui_kit::Modifiers::none());
-    sleep_ms(300);
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);

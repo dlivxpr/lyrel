@@ -715,11 +715,12 @@ impl LyrelApp {
                 let owed = this.update(cx, |this, cx| {
                     let now = cx.background_executor().now();
                     let owed = this.sidebar_motion.borrow().is_animating(now);
-                    if owed {
-                        cx.notify();
-                    } else {
+                    if !owed {
                         this.sidebar_motion.borrow_mut().ticking = false;
                     }
+                    // Present the terminal frame as well: it removes ghosts
+                    // and makes settled rows eligible drop targets again.
+                    cx.notify();
                     owed
                 });
                 match owed {
@@ -1255,7 +1256,8 @@ impl LyrelApp {
         let show_badges = self.mod_hint_badges;
         // The badges stay mounted while they fade out after the hold ends, so
         // the row budget and the close button's slot agree with what renders.
-        let badges_mounted = show_badges || self.mod_hint_fading;
+        let badges_mounted =
+            show_badges || (self.mod_hint_fade_generation.is_some() && !cx.reduce_motion());
         let width = self.sidebar_px(window, cx);
         *self.sidebar_slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
         // Read before it is blanked: the rectangles a tab held over the
@@ -5094,6 +5096,10 @@ mod fold_tests {
             cx.notify();
         });
         vcx.run_until_parked();
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(ROW_ENTER_MS + 50));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
 
         app.update(&mut vcx, |app, _| {
             assert!(
@@ -5759,6 +5765,7 @@ mod navigation_tests {
             ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
         };
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
         app.update(&mut vcx, |app, cx| {
             app.sidebar_collapsed = false;
             cx.notify();
@@ -6545,6 +6552,9 @@ mod motion_model_tests {
         let b = TabId::new();
         model.observe(&[a, b], true, start);
         let mid = at(start, 120);
+        model.begin_frame(mid);
+        model.slots(1, &[a, b], mid);
+        model.end_frame();
         let standing = model.presence(b, mid);
         assert!(
             standing.height > 0. && standing.height < 1.,
@@ -6699,6 +6709,13 @@ mod motion_consumer_tests {
         vcx.update(|window, cx| window.render_frame(cx));
     }
 
+    // Seeded tabs are installed after the test window has already drawn.
+    // Start each gesture from those rows at rest, not their initial entrance.
+    fn settle_seeded_rows(vcx: &mut gpui_kit::VisualTestContext, cx: &mut TestAppContext) {
+        frame(vcx, cx, 0);
+        frame(vcx, cx, ROW_ENTER_MS + 50);
+    }
+
     /// Put tab `i` in a directory of the repo `root`, as `fold_tests` does.
     fn plant_repo(app: &LyrelApp, i: usize, cwd: &str, root: &str, cx: &mut gpui_kit::App) {
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
@@ -6738,7 +6755,7 @@ mod motion_consumer_tests {
     #[gpui_kit::test]
     fn a_new_row_makes_room_before_its_content_arrives(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        frame(&mut vcx, cx, 0);
+        settle_seeded_rows(&mut vcx, cx);
         let stream = app.update_in(&mut vcx, |app, window, cx| {
             use crate::ui::pane::{Pane, PaneSlot};
             use lyrel_terminal::view::quiet_test_pane;
@@ -6753,16 +6770,20 @@ mod motion_consumer_tests {
         // First frame after the tab appears: the slot is a sliver and the
         // row registers nothing — the room is made before the content shows.
         frame(&mut vcx, cx, 0);
-        let opening = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        let opening = vcx.update(|window, _| window.find(("sidebar-row-slot", 1usize)).bounds());
         assert!(
             opening.size.height < px(ROW_HEIGHT / 2.),
             "the new row's slot opens before its content arrives"
         );
         // Partway: the slot is nearly full.
         frame(&mut vcx, cx, 100);
-        let growing = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        let growing = vcx.update(|window, _| window.find(("sidebar-row-slot", 1usize)).bounds());
         assert!(growing.size.height > px(ROW_HEIGHT / 2.));
         assert!(growing.size.height < px(ROW_HEIGHT));
+        assert_eq!(
+            app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1].size.height),
+            px(0.)
+        );
         // Settled: the row stands at its full height.
         frame(&mut vcx, cx, 150);
         let settled = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
@@ -6772,7 +6793,7 @@ mod motion_consumer_tests {
     #[gpui_kit::test]
     fn closing_a_row_keeps_its_ghost_before_the_space_is_reclaimed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-        frame(&mut vcx, cx, 0);
+        settle_seeded_rows(&mut vcx, cx);
         let (closed, last_before) = app.read_with(&vcx, |app, _| {
             (app.tabs[0].id(), app.sidebar_slots.borrow()[2])
         });
@@ -6823,7 +6844,7 @@ mod motion_consumer_tests {
     #[gpui_kit::test]
     fn a_leaving_row_takes_no_pointer_input(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-        frame(&mut vcx, cx, 0);
+        settle_seeded_rows(&mut vcx, cx);
         let closed = app.read_with(&vcx, |app, _| app.tabs[1].id());
         app.update_in(&mut vcx, |app, window, cx| {
             app.close_tab(1, window, cx);
@@ -6851,7 +6872,7 @@ mod motion_consumer_tests {
     fn folding_a_group_shuts_it_with_a_clip_and_unfolding_reopens_it(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
         let key = app.update(&mut vcx, |app, cx| grouped_three(app, cx));
-        frame(&mut vcx, cx, 0);
+        settle_seeded_rows(&mut vcx, cx);
         assert!(
             app.read_with(&vcx, |app, _| app
                 .sidebar_slots

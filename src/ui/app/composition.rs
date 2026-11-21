@@ -112,6 +112,9 @@ impl LyrelApp {
         // when the panel is shut so a change that lands hidden stays landed.
         self.observe_sidebar_motion(cx);
         self.reconcile_panel_slides(cx);
+        if cx.reduce_motion() {
+            self.mod_hint_fade_generation = None;
+        }
         let left_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Left);
         let right_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Right);
         let boundary_sliding = left_slide.is_some() || right_slide.is_some();

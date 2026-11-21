@@ -1249,6 +1249,7 @@ impl Render for SearchView {
             .id("search-card")
             .test_support()
             .relative()
+            .occlude()
             .w(px((viewport.width.as_f32() - 32.).clamp(0., CARD_MAX_W)))
             .map(|panel| crate::ui::theme::floating_surface(panel, cx))
             .rounded(px(CARD_RADIUS))
@@ -1315,10 +1316,10 @@ impl Render for SearchView {
                 "search-card-entrance",
                 crate::ui::motion::entrance(),
                 |card, delta| {
-                    // Short translation plus fade: the extra top margin drops
-                    // the card from above its settled slot as it releases.
+                    // Start above the resting slot without adding height to
+                    // the card or using up its bottom viewport margin.
                     card.opacity(delta)
-                        .mt(px(crate::ui::motion::PICKER_DROP_PX * (1.0 - delta)))
+                        .top(px(crate::ui::motion::PICKER_DROP_PX * (delta - 1.0)))
                 },
             );
 
@@ -1367,7 +1368,7 @@ impl Render for SearchView {
                     cx.emit(SearchEvent::Dismiss);
                 }),
             )
-            .child(div().occlude().child(card))
+            .child(card)
     }
 }
 

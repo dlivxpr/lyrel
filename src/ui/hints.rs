@@ -42,7 +42,7 @@ impl LyrelApp {
             let _ = this.update(cx, |this, cx| {
                 if this.mod_hint_gen == generation {
                     this.mod_hint_badges = true;
-                    this.mod_hint_fading = false;
+                    this.mod_hint_fade_generation = None;
                     cx.notify();
                 }
             });
@@ -62,26 +62,30 @@ impl LyrelApp {
 
     pub(crate) fn dismiss_mod_hint(&mut self, cx: &mut Context<Self>) {
         self.mod_hint_gen = self.mod_hint_gen.wrapping_add(1);
-        if !self.mod_hint_badges && !self.mod_hint_fading {
+        if cx.reduce_motion() {
+            let was_fading = self.mod_hint_fade_generation.take().is_some();
+            if std::mem::take(&mut self.mod_hint_badges) || was_fading {
+                cx.notify();
+            }
             return;
         }
-        // The visible state ends now; the badges stay mounted while they fade
-        // out, then unmount. A re-hold during the fade cancels the unmount
-        // through the generation and the spring reverses from its sampled
-        // value.
-        let was_shown = self.mod_hint_badges;
-        self.mod_hint_badges = false;
-        cx.notify();
-        if !was_shown {
+        if !std::mem::take(&mut self.mod_hint_badges) {
             return;
         }
-        self.mod_hint_fading = true;
+
+        // Keep the slot through the fade. Later modifier changes must not
+        // cancel its cleanup, but an actual reveal supersedes this fade.
         let generation = self.mod_hint_gen;
+        self.mod_hint_fade_generation = Some(generation);
+        cx.notify();
+        let delay = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(BADGE_FADE_MS));
         cx.spawn(async move |this, cx| {
-            smol::Timer::after(std::time::Duration::from_millis(BADGE_FADE_MS)).await;
+            delay.await;
             let _ = this.update(cx, |this, cx| {
-                if this.mod_hint_gen == generation {
-                    this.mod_hint_fading = false;
+                if this.mod_hint_fade_generation == Some(generation) {
+                    this.mod_hint_fade_generation = None;
                     cx.notify();
                 }
             });
