@@ -2736,6 +2736,36 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::WorktreePickerCurrent => "current",
         L10nKey::WorktreePickerEmpty => "No matching checkout",
         L10nKey::WorktreePickerFailed => "Couldn't list worktrees: {error}",
+        L10nKey::WorktreePickerRemove => "Remove from Disk…",
+        L10nKey::WorktreePickerRemoveTitle => "Remove checkout from disk?",
+        L10nKey::WorktreePickerRemoveBranch => {
+            "Branch \"{branch}\" is deleted when fully merged; otherwise it is kept."
+        }
+        L10nKey::WorktreePickerRemoveDetached => "Detached HEAD — no branch is touched.",
+        L10nKey::WorktreePickerRemoveChecking => "Checking the checkout…",
+        L10nKey::WorktreePickerRemoveReady => "The checkout is clean and unused.",
+        L10nKey::WorktreePickerRemoveBlockedGone => {
+            "This checkout is no longer registered on its Host."
+        }
+        L10nKey::WorktreePickerRemoveBlockedMain => "The main checkout cannot be removed.",
+        L10nKey::WorktreePickerRemoveBlockedDirty => {
+            "The checkout has uncommitted changes and will not be removed."
+        }
+        L10nKey::WorktreePickerRemoveBlockedOccupied => "A pane is using this checkout.",
+        L10nKey::WorktreePickerRemoveBlockedUnsaved => {
+            "An unsaved document is open in this checkout."
+        }
+        L10nKey::WorktreePickerRemoveBlockedUnknown => {
+            "The checkout's state could not be verified on its Host."
+        }
+        L10nKey::WorktreePickerRemovedBranchDeleted => {
+            "Removed {path}. Branch \"{branch}\" was deleted; recovery reference {ref}."
+        }
+        L10nKey::WorktreePickerRemovedBranchKept => {
+            "Removed {path}. Branch \"{branch}\" was kept (unmerged commits); recovery reference {ref}."
+        }
+        L10nKey::WorktreePickerRemovedDetached => "Removed {path}. Recovery reference {ref}.",
+        L10nKey::WorktreePickerRemoveFailed => "Couldn't remove the checkout: {error}",
         L10nKey::StatusGitWorktree => "Switch worktree",
         L10nKey::HomeTimeJustNow => "just now",
         L10nKey::HomeTimeMinutesAgo => "{count} min ago",

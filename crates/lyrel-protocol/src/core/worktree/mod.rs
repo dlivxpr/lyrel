@@ -135,6 +135,153 @@ pub fn occupied(host: &dyn Host, path: &Path, cwds: &[PathBuf]) -> bool {
         .any(|c| host.canonicalize(c).is_ok_and(|c| c.starts_with(&path)))
 }
 
+/// Whether a pane sits inside `path`, asked on the Host that owns both.
+/// Unlike [`occupied`], which answers `false` when a path cannot be
+/// canonicalized, a failed read here is `Err`: a check that did not run is
+/// not proof of absence, and a removal authorization must treat it as a
+/// block.
+pub fn occupancy(host: &dyn Host, path: &Path, cwds: &[PathBuf]) -> Result<bool, String> {
+    let root = host
+        .canonicalize(path)
+        .map_err(|e| format!("could not verify {}: {e}", path.display()))?;
+    for cwd in cwds {
+        let cwd = host
+            .canonicalize(cwd)
+            .map_err(|e| format!("could not verify {}: {e}", cwd.display()))?;
+        if cwd.starts_with(&root) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// What became of a removed checkout's branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchOutcome {
+    /// The checkout had a detached HEAD: there is no branch to clean up.
+    Detached,
+    /// `git branch -d` deleted the branch — it was fully merged.
+    Deleted,
+    /// `git branch -d` refused: unmerged commits remain, so the branch stays.
+    Kept,
+}
+
+/// A clean checkout the picker removed from disk. The recovery reference and
+/// the branch outcome are distinct facts; a result tells them apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutRemoval {
+    /// The create-only reference holding the checkout's last commit.
+    pub recovery: String,
+    pub branch: BranchOutcome,
+}
+
+/// The object name `update-ref` expects for a create-only write.
+const NO_OID: &str = "0000000000000000000000000000000000000000";
+
+/// Remove one linked checkout — the picker's clean, never-forced removal
+/// (#352). Unlike [`remove`], which only touches worktrees lyrel made, this
+/// takes any linked checkout, including one created outside lyrel.
+///
+/// The main checkout is refused and a dirty checkout is refused (dirty
+/// removal is #353); nothing here runs forced. Before anything is deleted
+/// the checkout's last commit is filed under `refs/lyrel/trash/<name>` with
+/// a create-only `update-ref`: an existing recovery reference — maybe from a
+/// different checkout that shared the basename — is never overwritten, a
+/// numeric suffix is tried instead, and when no recovery reference can be
+/// created nothing is removed. Only after the checkout is gone does the
+/// branch — never a basename, which is not checkout identity — get its safe
+/// cleanup, `git branch -d` only. A detached HEAD names no branch and gets
+/// no branch work.
+pub fn remove_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutRemoval, String> {
+    if checkout.main {
+        return Err("the main checkout cannot be removed".to_string());
+    }
+    let canonical = host
+        .canonicalize(&checkout.path)
+        .map_err(|e| format!("could not verify {}: {e}", checkout.path.display()))?;
+    let listed = list(host, &canonical)
+        .map_err(|e| format!("could not verify the checkout's registration: {e}"))?;
+    let found = listed
+        .iter()
+        .find(|wt| host.canonicalize(&wt.path).ok().as_deref() == Some(canonical.as_path()))
+        .ok_or_else(|| format!("{} is no longer a registered checkout", canonical.display()))?;
+    if found.main {
+        return Err("the main checkout cannot be removed".to_string());
+    }
+    let dirty = git(host, &found.path, &["status", "--porcelain"])
+        .map_err(|e| format!("could not verify the checkout is clean: {e}"))?;
+    if !dirty.is_empty() {
+        return Err(format!(
+            "{} has uncommitted changes and will not be removed",
+            canonical.display()
+        ));
+    }
+    let head = git(host, &found.path, &["rev-parse", "HEAD"])
+        .map_err(|e| format!("could not read the checkout's last commit: {e}"))?;
+    let name = canonical
+        .file_name()
+        .ok_or("the checkout has no name")?
+        .to_string_lossy()
+        .into_owned();
+    let main_root = git(
+        host,
+        &found.path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .map(|d| git_path(host, &d))
+    .and_then(|d| d.parent().map(Path::to_path_buf))
+    .ok_or_else(|| format!("could not find the repository of {}", canonical.display()))?;
+    let recovery = create_recovery_ref(host, &main_root, &name, &head)?;
+    let target = found
+        .path
+        .to_str()
+        .ok_or("checkout path is not valid UTF-8")?;
+    if let Err(e) = git(host, &main_root, &["worktree", "remove", target]) {
+        // The checkout stays, so the recovery reference must not retire the
+        // name: drop the ref we just created, best effort, expecting the
+        // value we wrote so a racing writer is never undone.
+        let _ = git(host, &main_root, &["update-ref", "-d", &recovery, &head]);
+        return Err(e);
+    }
+    let branch = match found.branch.as_deref() {
+        Some(branch) if branch != "HEAD" => {
+            if git(host, &main_root, &["branch", "-d", branch]).is_ok() {
+                BranchOutcome::Deleted
+            } else {
+                BranchOutcome::Kept
+            }
+        }
+        _ => BranchOutcome::Detached,
+    };
+    Ok(CheckoutRemoval { recovery, branch })
+}
+
+/// File `oid` under `refs/lyrel/trash/<name>`, creating only. When the name
+/// is taken — an older removal, or another checkout with the same basename
+/// that got there first — numeric suffixes are tried; a reference that
+/// already exists is never moved.
+fn create_recovery_ref(
+    host: &dyn Host,
+    repo: &Path,
+    name: &str,
+    oid: &str,
+) -> Result<String, String> {
+    for n in 1..100 {
+        let refname = if n == 1 {
+            format!("{TRASH_REFS}/{name}")
+        } else {
+            format!("{TRASH_REFS}/{name}-{n}")
+        };
+        if git(host, repo, &["update-ref", &refname, oid, NO_OID]).is_ok() {
+            return Ok(refname);
+        }
+    }
+    Err(format!(
+        "could not create a recovery reference under {TRASH_REFS}: every name is taken"
+    ))
+}
+
 pub fn remove(host: &dyn Host, wt: &ManagedWorktree, force: bool) -> Result<Removed, String> {
     let path = wt.path.to_str().ok_or("worktree path is not valid UTF-8")?;
     if wt.dirty && !force {
@@ -866,5 +1013,279 @@ mod tests {
             1
         );
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// The Listed entry git reports for `path` — what a picker row names.
+    fn listed_at(h: &dyn Host, repo: &Path, path: &Path) -> Listed {
+        list(h, repo)
+            .unwrap()
+            .into_iter()
+            .find(|wt| plain(&wt.path) == plain(path))
+            .unwrap_or_else(|| panic!("no listed checkout at {}", path.display()))
+    }
+
+    fn add_external_worktree(repo: &Path, path: &Path, branch: &str) {
+        sh(
+            repo,
+            &[
+                "git",
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                path.to_str().unwrap(),
+            ],
+        );
+    }
+
+    #[test]
+    fn remove_checkout_unregisters_an_external_clean_checkout_and_files_recovery() {
+        let h = h();
+        let repo = temp_repo("rmext");
+        let wt = scratch("rmext-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "ext-branch");
+        let head = git(&*h, &wt, &["rev-parse", "HEAD"]).unwrap();
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &wt)).unwrap();
+        assert_eq!(removed.branch, BranchOutcome::Deleted);
+        assert!(!wt.exists(), "the checkout directory is deleted");
+        let plain_wt = plain(&wt);
+        assert!(
+            !list(&*h, &repo)
+                .unwrap()
+                .iter()
+                .any(|listed| plain(&listed.path) == plain_wt),
+            "git worktree list no longer registers it"
+        );
+        assert!(
+            !branch_exists(&*h, &repo, "ext-branch"),
+            "a fully merged branch is deleted"
+        );
+        assert_eq!(
+            git(&*h, &repo, &["rev-parse", &removed.recovery]).unwrap(),
+            head,
+            "the recovery reference holds the checkout's last commit"
+        );
+        let name = wt.file_name().unwrap().to_str().unwrap();
+        assert_eq!(removed.recovery, format!("{TRASH_REFS}/{name}"));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_refuses_the_main_checkout() {
+        let h = h();
+        let repo = temp_repo("rmmain");
+        let main = listed_at(&*h, &repo, &repo);
+        assert!(main.main);
+        let err = remove_checkout(&*h, &main).unwrap_err();
+        assert!(err.contains("main checkout"), "{err}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_refuses_a_dirty_checkout_and_touches_nothing() {
+        let h = h();
+        let repo = temp_repo("rmdirty");
+        let wt = scratch("rmdirty-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "dirty-branch");
+        std::fs::write(wt.join("untracked.txt"), "dirty").unwrap();
+        let err = remove_checkout(&*h, &listed_at(&*h, &repo, &wt)).unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert!(wt.exists());
+        assert_eq!(
+            git(&*h, &repo, &["for-each-ref", "refs/lyrel/"]).unwrap(),
+            "",
+            "no recovery reference is created for a refused removal"
+        );
+        assert!(branch_exists(&*h, &repo, "dirty-branch"));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn remove_checkout_deletes_a_merged_branch_and_keeps_an_unmerged_one() {
+        let h = h();
+        let repo = temp_repo("rmbr");
+        let merged = scratch("rmbr-merged");
+        let _ = std::fs::remove_dir_all(&merged);
+        add_external_worktree(&repo, &merged, "merged-branch");
+        let kept = scratch("rmbr-kept");
+        let _ = std::fs::remove_dir_all(&kept);
+        add_external_worktree(&repo, &kept, "unmerged-branch");
+        std::fs::write(kept.join("own.txt"), "own").unwrap();
+        sh(&kept, &["git", "add", "."]);
+        sh(
+            &kept,
+            &[
+                "git",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "own",
+            ],
+        );
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &merged)).unwrap();
+        assert_eq!(removed.branch, BranchOutcome::Deleted);
+        assert!(!branch_exists(&*h, &repo, "merged-branch"));
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &kept)).unwrap();
+        assert_eq!(removed.branch, BranchOutcome::Kept);
+        assert!(
+            branch_exists(&*h, &repo, "unmerged-branch"),
+            "git branch -d refuses an unmerged branch and it stays"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_does_no_branch_work_on_a_detached_head() {
+        let h = h();
+        let repo = temp_repo("rmdetach");
+        let wt = scratch("rmdetach-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "detach-branch");
+        sh(&wt, &["git", "checkout", "-q", "--detach", "HEAD"]);
+        let listed = listed_at(&*h, &repo, &wt);
+        assert_eq!(listed.branch, None, "the checkout reads detached");
+        let before = git(&*h, &repo, &["for-each-ref", "refs/heads/"]).unwrap();
+        let removed = remove_checkout(&*h, &listed).unwrap();
+        assert_eq!(removed.branch, BranchOutcome::Detached);
+        assert_eq!(
+            git(&*h, &repo, &["for-each-ref", "refs/heads/"]).unwrap(),
+            before,
+            "no branch is deleted for a detached checkout"
+        );
+        assert!(
+            branch_exists(&*h, &repo, "detach-branch"),
+            "the branch the checkout was made on stays"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_never_overwrites_an_older_recovery_reference() {
+        let h = h();
+        let repo = temp_repo("rmref");
+        let wt = scratch("rmref-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "ref-branch");
+        let older = git(&*h, &repo, &["rev-parse", "HEAD"]).unwrap();
+        let name = wt.file_name().unwrap().to_str().unwrap();
+        sh(
+            &repo,
+            &["git", "update-ref", &format!("{TRASH_REFS}/{name}"), &older],
+        );
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &wt)).unwrap();
+        assert_eq!(removed.recovery, format!("{TRASH_REFS}/{name}-2"));
+        assert_eq!(
+            git(&*h, &repo, &["rev-parse", &format!("{TRASH_REFS}/{name}")]).unwrap(),
+            older,
+            "the older recovery reference still points where it did"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_picks_the_canonical_checkout_when_basenames_collide() {
+        let h = h();
+        let repo = temp_repo("rmbase");
+        let a = scratch("rmbase-a").join("checkout");
+        let b = scratch("rmbase-b").join("checkout");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        add_external_worktree(&repo, &a, "branch-a");
+        add_external_worktree(&repo, &b, "branch-b");
+        let head_a = git(&*h, &a, &["rev-parse", "HEAD"]).unwrap();
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &a)).unwrap();
+        assert_eq!(removed.recovery, format!("{TRASH_REFS}/checkout"));
+        assert!(!a.exists());
+        assert!(
+            b.exists(),
+            "the same-basename checkout that was not picked stays"
+        );
+        assert!(
+            branch_exists(&*h, &repo, "branch-b"),
+            "the surviving checkout's branch is untouched"
+        );
+        let removed = remove_checkout(&*h, &listed_at(&*h, &repo, &b)).unwrap();
+        assert_eq!(removed.recovery, format!("{TRASH_REFS}/checkout-2"));
+        assert_eq!(
+            git(
+                &*h,
+                &repo,
+                &["rev-parse", &format!("{TRASH_REFS}/checkout")]
+            )
+            .unwrap(),
+            head_a,
+            "the first recovery reference survived the second removal"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn remove_checkout_fails_closed_when_no_recovery_name_is_free() {
+        let h = h();
+        let repo = temp_repo("rmfull");
+        let wt = scratch("rmfull-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "full-branch");
+        let head = git(&*h, &repo, &["rev-parse", "HEAD"]).unwrap();
+        let name = wt.file_name().unwrap().to_str().unwrap();
+        // n in 1..100 tries <name> and <name>-2..<name>-99; take them all.
+        for n in 1..100 {
+            let refname = if n == 1 {
+                format!("{TRASH_REFS}/{name}")
+            } else {
+                format!("{TRASH_REFS}/{name}-{n}")
+            };
+            sh(&repo, &["git", "update-ref", &refname, &head]);
+        }
+        let err = remove_checkout(&*h, &listed_at(&*h, &repo, &wt)).unwrap_err();
+        assert!(err.contains("recovery reference"), "{err}");
+        assert!(
+            wt.exists(),
+            "nothing is removed without a recovery reference"
+        );
+        assert!(
+            branch_exists(&*h, &repo, "full-branch"),
+            "no branch cleanup is attempted either"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn occupancy_is_tri_state_and_fails_closed() {
+        let h = h();
+        let repo = temp_repo("occ3");
+        let wt = scratch("occ3-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        add_external_worktree(&repo, &wt, "occ3-branch");
+        let deep = wt.join("deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        let outside = scratch("occ3-out");
+        assert_eq!(
+            occupancy(&*h, &wt, &[outside.clone()]),
+            Ok(false),
+            "a cwd outside the checkout proves it is free"
+        );
+        assert_eq!(
+            occupancy(&*h, &wt, &[deep]),
+            Ok(true),
+            "a descendant cwd occupies the checkout"
+        );
+        assert!(
+            occupancy(&*h, &wt, &[outside.join("gone")]).is_err(),
+            "a cwd that cannot be canonicalized is not proof of absence"
+        );
+        assert!(
+            occupancy(&*h, &wt.join("gone"), &[outside]).is_err(),
+            "an unverifiable target blocks too"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&wt);
     }
 }
