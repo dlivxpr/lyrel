@@ -30,13 +30,26 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
             app.focus_active(window, cx);
             window.focused(cx).expect("terminal content owns focus")
         });
+        // Roving needs tabs to rove across: a fresh workspace prepares only
+        // Info, so open the other three tools through the same commands
+        // Search Everywhere dispatches, then select Info again so entry
+        // lands where the old fixed row used to start.
+        for action in [
+            lyrel_ui_base::actions::ShowRightPanelFiles,
+            lyrel_ui_base::actions::ShowRightPanelChanges,
+            lyrel_ui_base::actions::ShowRightPanelGitHub,
+            lyrel_ui_base::actions::ShowRightPanelInfo,
+        ] {
+            vcx.dispatch_action(action);
+        }
+        settle(&mut vcx);
         vcx.dispatch_action(FocusRightPanelNavigation);
         settle(&mut vcx);
         vcx.update(|window, cx| {
-            assert_eq!(window.find("right-panel-tab-info").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-info").focused(), Some(true));
             window.press("right", cx);
-            assert_eq!(window.find("right-panel-tab-files").focused(), Some(true));
-            assert_eq!(window.find("right-panel-tab-info").selected(), Some(true));
+            assert_eq!(window.find("tool-tab-files").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-info").selected(), Some(true));
             window.press("enter", cx);
         });
         settle(&mut vcx);
@@ -45,9 +58,9 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
             RightPanelTab::Files
         );
         vcx.update(|window, cx| {
-            assert_eq!(window.find("right-panel-tab-files").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-files").focused(), Some(true));
             window.press("right", cx);
-            assert_eq!(window.find("right-panel-tab-changes").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-changes").focused(), Some(true));
             window.press("space", cx);
         });
         settle(&mut vcx);
@@ -57,20 +70,20 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
         );
         vcx.update(|window, cx| {
             window.press("end", cx);
-            assert_eq!(window.find("right-panel-tab-github").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-github").focused(), Some(true));
             window.press("right", cx);
-            assert_eq!(window.find("right-panel-tab-info").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-info").focused(), Some(true));
             window.press("home", cx);
             window.press("tab", cx);
-            assert_ne!(window.find("right-panel-tab-info").focused(), Some(true));
+            assert_ne!(window.find("tool-tab-info").focused(), Some(true));
             window.press("shift-tab", cx);
-            assert_eq!(window.find("right-panel-tab-changes").focused(), Some(true));
+            assert_eq!(window.find("tool-tab-changes").focused(), Some(true));
             window.press("escape", cx);
             assert!(
                 content.is_focused(window),
                 "Escape returns to the owning terminal"
             );
-            window.click("right-panel-tab-files", cx);
+            window.click("tool-tab-files", cx);
             assert!(
                 content.is_focused(window),
                 "pointer activation keeps content focus"
@@ -107,7 +120,7 @@ fn panel_navigation_new_request_replaces_the_pending_origin(cx: &mut TestAppCont
     vcx.dispatch_action(FocusRightPanelNavigation);
     settle(&mut vcx);
     vcx.update(|window, cx| {
-        assert_eq!(window.find("right-panel-tab-info").focused(), Some(true));
+        assert_eq!(window.find("tool-tab-info").focused(), Some(true));
         window.press("escape", cx);
     });
     app.update_in(&mut vcx, |app, window, _| {

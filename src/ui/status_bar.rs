@@ -630,7 +630,7 @@ mod tests {
         vcx.run_until_parked();
         vcx.update(|window, _| {
             assert_eq!(
-                window.find("right-panel-tab-info").focused(),
+                window.find("tool-tab-info").focused(),
                 Some(true),
                 "the panel's tab list must own keyboard focus for this check"
             );

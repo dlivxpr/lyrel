@@ -1952,6 +1952,10 @@ l10n_keys! {
     PanelFilesTitle,
     PanelSearchTitle,
     PanelGitHubTitle,
+    /// The title-bar `+` that offers every tool.
+    ToolHostAdd,
+    /// A tool tab's close button; `{tool}` is the tool's visible name.
+    ToolHostClose,
     PanelNoSession,
     PanelNoSessionHint,
     PanelNoWorkingDirectory,
