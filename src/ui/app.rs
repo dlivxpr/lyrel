@@ -1608,6 +1608,31 @@ impl LyrelApp {
         if let Some(tab) = self.tabs.remember_leaf(leaf) {
             self.status_document_focus = Some((tab, false));
         }
+        // A terminal taking focus is the one moment the Context Pane is known
+        // to have changed without asking the layout. A repository pick made on
+        // another pane must not silently ride along with it (#349).
+        self.scm.note_context_leaf(leaf);
+    }
+
+    /// The Context Pane: the last valid terminal pane of the active
+    /// Workspace — the single subject the Side Panel tools (Info, Changes,
+    /// GitHub, Files) and the bottom Git indicator describe.
+    ///
+    /// The answer is *derived*, never remembered. A terminal leaf holding
+    /// keyboard focus wins; otherwise the leaf its tab last came back to;
+    /// otherwise the first visible leaf. Because every read walks the live
+    /// tab, a pane that was closed, or that belongs to a Workspace this
+    /// window no longer shows, can never supply the data — and focusing a
+    /// document, a menu or the panel itself changes nothing. Focusing a
+    /// different terminal pane is the only thing that moves it.
+    ///
+    /// This is the canonical resolution path: tool data sources and the
+    /// status bar read it instead of re-deriving their own pane, so all of
+    /// them agree by construction.
+    pub(crate) fn context_pane(&self, window: &Window, cx: &App) -> Option<Entity<TerminalView>> {
+        self.tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)
     }
 
     /// Toggle fullscreen, and say how to leave it on the way in.
@@ -3712,6 +3737,17 @@ impl LyrelApp {
     /// and the tab context menu) come through here so the two cannot drift.
     pub(crate) fn tab_cwd_text(&self, index: usize, window: &Window, cx: &App) -> Option<String> {
         let leaf = self.tabs.get(index)?.pane.focused_or_first(window, cx)?;
+        Self::cwd_text(&leaf, cx)
+    }
+
+    /// The Context Pane's working directory, spelled for the clipboard — the
+    /// same pane the bottom bar's Git indicator and the Side Panel tools
+    /// describe, so the path a user copies is the path the bar shows (#349).
+    pub(crate) fn context_cwd_text(&self, window: &Window, cx: &App) -> Option<String> {
+        Self::cwd_text(&self.context_pane(window, cx)?, cx)
+    }
+
+    fn cwd_text(leaf: &Entity<TerminalView>, cx: &App) -> Option<String> {
         let view = leaf.read(cx);
         let cwd = view.cwd()?;
         Some(match view.local_cwd().is_some() {
@@ -3723,7 +3759,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn copy_active_cwd(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.tab_cwd_text(self.tabs.active_index(), window, cx) {
+        if let Some(text) = self.context_cwd_text(window, cx) {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         }
     }
