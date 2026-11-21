@@ -688,6 +688,7 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
                 root: root.clone(),
             },
             0,
+            None,
         );
         for host in [dead, live] {
             app.scm

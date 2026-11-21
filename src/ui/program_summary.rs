@@ -291,8 +291,14 @@ impl Tab {
     }
 
     /// `true` when a frame changed what the active pane's status bar shows.
+    ///
+    /// Samples the same Context Pane the bar renders — the last valid
+    /// terminal pane — so a frame that only moved that pane's representative
+    /// is what asks for a repaint (#349).
     pub(crate) fn refresh_current_program_status(&self, window: &Window, cx: &App) -> bool {
-        let leaf = self.pane.focused_or_first(window, cx);
+        // `detail_pane` is the per-tab half of the app's Context Pane
+        // resolution — focused leaf, else the leaf the tab last came back to.
+        let leaf = self.detail_pane(window, cx);
         let (leaf_id, label) = match leaf {
             Some(leaf) => {
                 let id = leaf.entity_id();

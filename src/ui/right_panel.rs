@@ -952,8 +952,10 @@ impl LyrelApp {
         let mut diff_target: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)> = None;
         let mut git: Option<crate::ui::scm::status_cache::GitStatus> = None;
 
-        if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
-            if let Some(leaf) = tab.detail_pane(window, cx) {
+        // Which pane the sections describe comes from the canonical Context
+        // Pane resolution, the same call the port watch uses below.
+        if self.tabs.get(self.tabs.active_index()).is_some() {
+            if let Some(leaf) = self.context_pane(window, cx) {
                 let view = leaf.read(cx);
                 pane_id = Some(view.pane_id);
                 diff_target = view
@@ -1757,10 +1759,7 @@ impl LyrelApp {
         window: &Window,
         cx: &gpui_kit::App,
     ) -> Option<PaneForwardCtx> {
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .detail_pane(window, cx)?;
+        let leaf = self.context_pane(window, cx)?;
         let view = leaf.read(cx);
         // A pane holds managed forwards once it has somewhere to hold them:
         // a live native-ssh connection, or the workspace's shared one.
