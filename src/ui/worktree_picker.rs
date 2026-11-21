@@ -2428,7 +2428,7 @@ mod tests {
 
         open_picker(&mut vcx);
         open_removal(&mut vcx, "linked-checkout");
-        wait_for(&mut vcx, "the detached-checkout dialog", |vcx| {
+        wait_for(&mut vcx, "the detached checkout to be verified", |vcx| {
             removal_texts(vcx)
                 .iter()
                 .any(|text| text.contains("Detached HEAD"))
