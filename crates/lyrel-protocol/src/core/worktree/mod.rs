@@ -13,6 +13,7 @@
 //!   would open onto another task's conversations.
 
 pub mod include;
+mod recovery;
 pub mod setup;
 
 use std::path::{Path, PathBuf};
@@ -166,33 +167,40 @@ pub enum BranchOutcome {
     Kept,
 }
 
-/// A clean checkout the picker removed from disk. The recovery reference and
-/// the branch outcome are distinct facts; a result tells them apart.
+/// An unregistered checkout, with an independent recovery ref and the separate result of safe branch cleanup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckoutRemoval {
-    /// The create-only reference holding the checkout's last commit.
+    /// The create-only reference holding the recovery commit.
     pub recovery: String,
     pub branch: BranchOutcome,
 }
 
-/// The object name `update-ref` expects for a create-only write.
-const NO_OID: &str = "0000000000000000000000000000000000000000";
+/// The facts a confirmation authorizes. A changed checkout, repository,
+/// branch tip or clean/dirty state requires another decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutInspection {
+    canonical: PathBuf,
+    common: PathBuf,
+    admin: PathBuf,
+    marker: crate::host::Meta,
+    main_root: PathBuf,
+    branch: Option<String>,
+    head: String,
+    dirty: bool,
+}
 
-/// Remove one linked checkout — the picker's clean, never-forced removal
-/// (#352). Unlike [`remove`], which only touches worktrees lyrel made, this
-/// takes any linked checkout, including one created outside lyrel.
-///
-/// The main checkout is refused and a dirty checkout is refused (dirty
-/// removal is #353); nothing here runs forced. Before anything is deleted
-/// the checkout's last commit is filed under `refs/lyrel/trash/<name>` with
-/// a create-only `update-ref`: an existing recovery reference — maybe from a
-/// different checkout that shared the basename — is never overwritten, a
-/// numeric suffix is tried instead, and when no recovery reference can be
-/// created nothing is removed. Only after the checkout is gone does the
-/// branch — never a basename, which is not checkout identity — get its safe
-/// cleanup, `git branch -d` only. A detached HEAD names no branch and gets
-/// no branch work.
-pub fn remove_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutRemoval, String> {
+impl CheckoutInspection {
+    pub fn canonical(&self) -> &Path {
+        &self.canonical
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+}
+
+/// Resolve a linked checkout on its owning Host before asking for consent.
+pub fn inspect_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutInspection, String> {
     if checkout.main {
         return Err("the main checkout cannot be removed".to_string());
     }
@@ -208,51 +216,146 @@ pub fn remove_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutRem
     if found.main {
         return Err("the main checkout cannot be removed".to_string());
     }
-    let dirty = git(host, &found.path, &["status", "--porcelain"])
-        .map_err(|e| format!("could not verify the checkout is clean: {e}"))?;
-    if !dirty.is_empty() {
+    if found.branch != checkout.branch {
+        return Err("the checkout's branch changed; reopen the worktree picker".into());
+    }
+    let git_dir = |flag| {
+        git(
+            host,
+            &canonical,
+            &["rev-parse", "--path-format=absolute", flag],
+        )
+        .and_then(|p| {
+            host.canonicalize(&git_path(host, &p))
+                .map_err(|e| format!("could not verify the checkout's Git directory: {e}"))
+        })
+    };
+    let common = git_dir("--git-common-dir")?;
+    let admin = git_dir("--git-dir")?;
+    let marker = host
+        .stat(&host.join(&canonical, ".git"))
+        .map_err(|e| e.to_string())?;
+    if marker.is_dir || marker.is_symlink || marker.mtime.is_none() || admin == common {
+        return Err("could not verify the linked checkout's registration".into());
+    }
+    let main_root = listed
+        .first()
+        .ok_or("the repository has no main checkout")?
+        .path
+        .clone();
+    let head = git(
+        host,
+        &canonical,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    let dirty = !git(
+        host,
+        &canonical,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+    )?
+    .is_empty();
+    Ok(CheckoutInspection {
+        canonical,
+        common,
+        admin,
+        marker,
+        main_root,
+        branch: found.branch.clone(),
+        head,
+        dirty,
+    })
+}
+
+/// Clean-only removal for callers that have not authorized a dirty checkout.
+pub fn remove_checkout(host: &dyn Host, checkout: &Listed) -> Result<CheckoutRemoval, String> {
+    let expected = inspect_checkout(host, checkout)?;
+    if expected.dirty() {
         return Err(format!(
             "{} has uncommitted changes and will not be removed",
-            canonical.display()
+            expected.canonical.display()
         ));
     }
-    let head = git(host, &found.path, &["rev-parse", "HEAD"])
-        .map_err(|e| format!("could not read the checkout's last commit: {e}"))?;
-    let name = canonical
-        .file_name()
-        .ok_or("the checkout has no name")?
-        .to_string_lossy()
-        .into_owned();
-    let main_root = git(
-        host,
-        &found.path,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .ok()
-    .map(|d| git_path(host, &d))
-    .and_then(|d| d.parent().map(Path::to_path_buf))
-    .ok_or_else(|| format!("could not find the repository of {}", canonical.display()))?;
-    let recovery = create_recovery_ref(host, &main_root, &name, &head)?;
-    let target = found
-        .path
+    remove_confirmed_checkout(host, checkout, &expected)
+}
+
+/// Record recovery before unregistering a linked checkout. Only an explicit
+/// dirty inspection can authorize force, and the registration and snapshot
+/// are checked again before invoking Git. Branch cleanup is never forced.
+pub fn remove_confirmed_checkout(
+    host: &dyn Host,
+    checkout: &Listed,
+    expected: &CheckoutInspection,
+) -> Result<CheckoutRemoval, String> {
+    if inspect_checkout(host, checkout)? != *expected {
+        return Err("the checkout changed after confirmation; review it again".into());
+    }
+    let repo = &expected.main_root;
+    let target = expected
+        .canonical
         .to_str()
         .ok_or("checkout path is not valid UTF-8")?;
-    if let Err(e) = git(host, &main_root, &["worktree", "remove", target]) {
-        // The checkout stays, so the recovery reference must not retire the
-        // name: drop the ref we just created, best effort, expecting the
-        // value we wrote so a racing writer is never undone.
-        let _ = git(host, &main_root, &["update-ref", "-d", &recovery, &head]);
+    let name = expected
+        .canonical
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("invalid checkout name")?;
+    let snapshot = expected
+        .dirty
+        .then(|| recovery::Snapshot::record(host, expected))
+        .transpose()
+        .map_err(|e| {
+            format!("could not save uncommitted changes; the checkout was not removed: {e}")
+        })?;
+    let oid = snapshot
+        .as_ref()
+        .map_or(expected.head.as_str(), |snapshot| snapshot.commit());
+    let recovery = create_recovery_ref(host, repo, name, oid)?;
+    let unchanged = || -> Result<(), String> {
+        if inspect_checkout(host, checkout)? != *expected {
+            return Err("the checkout changed after confirmation; review it again".into());
+        }
+        if let Some(snapshot) = &snapshot {
+            snapshot.verify(host, expected)?;
+        }
+        Ok(())
+    };
+    if let Err(e) = unchanged() {
+        let _ = git(
+            host,
+            repo,
+            &["update-ref", "--no-deref", "-d", &recovery, oid],
+        );
         return Err(e);
     }
-    let branch = match found.branch.as_deref() {
-        Some(branch) if branch != "HEAD" => {
-            if git(host, &main_root, &["branch", "-d", branch]).is_ok() {
+    let args = if snapshot.is_some() {
+        vec!["worktree", "remove", "--force", "--", target]
+    } else {
+        vec!["worktree", "remove", "--", target]
+    };
+    if let Err(e) = git(host, repo, &args) {
+        // Git can fail after changing the filesystem. Keep the independent
+        // recovery point and never touch the branch on this path.
+        return Err(format!(
+            "could not remove the checkout: {e}. Recovery: {recovery}"
+        ));
+    }
+    let branch = match &expected.branch {
+        Some(branch) => {
+            let branch_ref = format!("refs/heads/{branch}");
+            let same_tip = git(host, repo, &["rev-parse", "--verify", &branch_ref]).as_deref()
+                == Ok(expected.head.as_str());
+            if same_tip && git(host, repo, &["branch", "-d", "--", branch]).is_ok() {
                 BranchOutcome::Deleted
             } else {
                 BranchOutcome::Kept
             }
         }
-        _ => BranchOutcome::Detached,
+        None => BranchOutcome::Detached,
     };
     Ok(CheckoutRemoval { recovery, branch })
 }
@@ -267,14 +370,43 @@ fn create_recovery_ref(
     name: &str,
     oid: &str,
 ) -> Result<String, String> {
+    let zeros = "0".repeat(oid.len());
+    let first = format!("{TRASH_REFS}/{name}");
+    let base = if git(host, repo, &["check-ref-format", &first]).is_ok() {
+        first
+    } else {
+        format!("{TRASH_REFS}/checkout-{}", uuid::Uuid::new_v4())
+    };
     for n in 1..100 {
         let refname = if n == 1 {
-            format!("{TRASH_REFS}/{name}")
+            base.clone()
         } else {
-            format!("{TRASH_REFS}/{name}-{n}")
+            format!("{base}-{n}")
         };
-        if git(host, repo, &["update-ref", &refname, oid, NO_OID]).is_ok() {
-            return Ok(refname);
+        match git(
+            host,
+            repo,
+            &[
+                "-c",
+                "core.fsync=loose-object,reference",
+                "update-ref",
+                "--no-deref",
+                &refname,
+                oid,
+                &zeros,
+            ],
+        ) {
+            Ok(_) => return Ok(refname),
+            Err(error) => {
+                let exists = host
+                    .git(repo, &["show-ref", "--verify", "--quiet", &refname])
+                    .is_ok_and(|out| out.success());
+                if !exists {
+                    return Err(format!(
+                        "could not create recovery reference {refname}: {error}"
+                    ));
+                }
+            }
         }
     }
     Err(format!(
@@ -1101,6 +1233,53 @@ mod tests {
         assert!(branch_exists(&*h, &repo, "dirty-branch"));
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn confirmed_dirty_removal_preserves_working_and_staged_bytes() {
+        let h = h();
+        let repo = temp_repo("recover-dirty");
+        let parent = scratch("recover-dirty-wt");
+        let wt = parent.join("checkout");
+        add_external_worktree(&repo, &wt, "recover-branch");
+        sh(&wt, &["git", "config", "core.autocrlf", "true"]);
+        std::fs::write(wt.join("a.txt"), b"staged\n").unwrap();
+        sh(&wt, &["git", "add", "a.txt"]);
+        std::fs::write(wt.join("a.txt"), b"modified\r\n").unwrap();
+        std::fs::write(wt.join("new.txt"), b"new\r\n\0").unwrap();
+
+        let listed = listed_at(&*h, &repo, &wt);
+        let approved = inspect_checkout(&*h, &listed).unwrap();
+        assert!(approved.dirty());
+        let removed = remove_confirmed_checkout(&*h, &listed, &approved).unwrap();
+        assert!(!wt.exists());
+        assert_eq!(removed.branch, BranchOutcome::Deleted);
+        assert!(
+            !list(&*h, &repo)
+                .unwrap()
+                .iter()
+                .any(|entry| entry == &listed)
+        );
+
+        let read_blob = |object: String| {
+            let output = h.git(&repo, &["cat-file", "blob", &object]).unwrap();
+            assert!(output.success(), "{}", output.stderr_trimmed());
+            output.stdout
+        };
+        assert_eq!(
+            read_blob(format!("{}:a.txt", removed.recovery)),
+            b"modified\r\n"
+        );
+        assert_eq!(
+            read_blob(format!("{}:new.txt", removed.recovery)),
+            b"new\r\n\0"
+        );
+        assert_eq!(
+            read_blob(format!("{}^2:a.txt", removed.recovery)),
+            b"staged\n"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
