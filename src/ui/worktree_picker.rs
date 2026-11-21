@@ -373,6 +373,7 @@ impl gpui_kit::RenderOnce for WorktreeRow {
         let (hover, picked) = (gpui_kit::rgb(sf.hover), gpui_kit::rgb(sf.selected));
         h_flex()
             .id(self.id)
+            .test_support()
             .role(gpui_kit::Role::ListBoxOption)
             .aria_label(self.label)
             .aria_selected(self.selected)
@@ -839,6 +840,32 @@ mod tests {
         vcx.run_until_parked();
     }
 
+    /// HostOps uses a real thread pool, outside the GPUI test executor.
+    fn wait_for(
+        vcx: &mut VisualTestContext,
+        what: &str,
+        mut ready: impl FnMut(&mut VisualTestContext) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            settle(vcx);
+            if ready(vcx) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn open_picker(vcx: &mut VisualTestContext) {
+        settle(vcx);
+        vcx.update(|window, cx| window.click("status-git-branch", cx));
+        wait_for(vcx, "both checkout rows", |vcx| row_labels(vcx).len() == 2);
+    }
+
     /// A real repository with one linked worktree: the main checkout at
     /// `main_root`, the linked one at `wt_root` on its own branch.
     fn repository_with_worktree() -> (tempfile::TempDir, tempfile::TempDir, PathBuf, PathBuf) {
@@ -847,9 +874,7 @@ mod tests {
         let main_root = lyrel_core::core::path_spelling::local_spelling_buf(
             std::fs::canonicalize(main.path()).unwrap(),
         );
-        let wt_root = lyrel_core::core::path_spelling::local_spelling_buf(
-            std::fs::canonicalize(wt.path()).unwrap(),
-        );
+        let wt_root = wt.path().join("linked-checkout");
         let git = |args: &[&str], cwd: &Path| {
             let output = std::process::Command::new("git")
                 .args(args)
@@ -862,7 +887,7 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         };
-        git(&["init", "--quiet"], &main_root);
+        git(&["init", "--quiet", "--initial-branch=main"], &main_root);
         std::fs::write(main_root.join("file.txt"), "base\n").unwrap();
         git(&["add", "file.txt"], &main_root);
         git(
@@ -888,6 +913,9 @@ mod tests {
                 "wt-branch",
             ],
             &main_root,
+        );
+        let wt_root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(wt_root).unwrap(),
         );
         (main, wt, main_root, wt_root)
     }
@@ -942,31 +970,22 @@ mod tests {
         })
     }
 
-    fn row_texts(vcx: &mut VisualTestContext) -> Vec<String> {
+    fn row_labels(vcx: &mut VisualTestContext) -> Vec<String> {
         vcx.update(|window, _| {
-            gpui_kit::base::test_support::texts(window)
-                .into_iter()
-                .filter(|text| {
-                    text.path().iter().any(|id| {
-                        matches!(
-                            id,
-                            gpui_kit::ElementId::NamedInteger(name, _)
-                                if name.as_ref() == "worktree-row"
-                        )
-                    })
-                })
-                .map(|text| text.text().to_string())
+            (0u64..2)
+                .filter_map(|row| window.try_find(("worktree-row", row)))
+                .filter(|row| row.visible())
+                .filter_map(|row| row.label().map(str::to_owned))
                 .collect()
         })
     }
 
-    fn type_in_picker(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, query: &str) {
-        app.update_in(vcx, |app, window, cx| {
-            let picker = app.worktree_picker.as_ref().expect("picker open");
-            picker.query.update(cx, |input, cx| {
-                input.set_value(query, window, cx);
-            });
+    fn type_in_picker(vcx: &mut VisualTestContext, query: &str) {
+        vcx.update(|window, cx| {
+            window.press("secondary-a", cx);
+            window.input(query, cx);
         });
+        settle(vcx);
     }
 
     #[gpui_kit::test]
@@ -981,14 +1000,12 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        settle(&mut vcx);
+        open_picker(&mut vcx);
         assert!(
             app.read_with(&vcx, |app, _| app.worktree_picker.is_some()),
             "the status bar Git indicator opens the picker"
         );
-        let rows = row_texts(&mut vcx);
+        let rows = row_labels(&mut vcx);
         assert_eq!(rows.len(), 2, "main + linked checkout are listed");
         vcx.update(|window, _| {
             assert!(window.find("worktree-picker-card").visible());
@@ -1002,14 +1019,12 @@ mod tests {
 
         // Search by branch narrows to the linked checkout; the
         // distinguishing path finds the same row again.
-        type_in_picker(&app, &mut vcx, "wt-branch");
-        settle(&mut vcx);
-        let by_branch = row_texts(&mut vcx);
+        type_in_picker(&mut vcx, "wt-branch");
+        let by_branch = row_labels(&mut vcx);
         assert_eq!(by_branch.len(), 1);
         assert!(by_branch[0].contains("wt-branch"));
-        type_in_picker(&app, &mut vcx, wt_root.parent().unwrap().to_str().unwrap());
-        settle(&mut vcx);
-        let by_path = row_texts(&mut vcx);
+        type_in_picker(&mut vcx, wt_root.parent().unwrap().to_str().unwrap());
+        let by_path = row_labels(&mut vcx);
         assert_eq!(
             by_path.len(),
             1,
@@ -1038,17 +1053,13 @@ mod tests {
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
         let tabs_before = app.read_with(&vcx, |app, _| app.tabs.len());
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        settle(&mut vcx);
-        type_in_picker(
-            &app,
-            &mut vcx,
-            wt_root.file_name().unwrap().to_str().unwrap(),
-        );
-        settle(&mut vcx);
+        open_picker(&mut vcx);
+        type_in_picker(&mut vcx, "wt-branch");
+        assert_eq!(row_labels(&mut vcx).len(), 1);
         vcx.simulate_keystrokes("enter");
-        settle(&mut vcx);
+        wait_for(&mut vcx, "one new terminal tab", |vcx| {
+            app.read_with(vcx, |app, _| app.tabs.len() == tabs_before + 1)
+        });
 
         assert!(
             app.read_with(&vcx, |app, _| app.worktree_picker.is_none()),
@@ -1107,17 +1118,13 @@ mod tests {
         seed_repo_pane(&mut vcx, &right, &subdir, "wt-branch");
 
         let tabs_before = app.read_with(&vcx, |app, _| app.tabs.len());
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        settle(&mut vcx);
-        type_in_picker(
-            &app,
-            &mut vcx,
-            wt_root.file_name().unwrap().to_str().unwrap(),
-        );
-        settle(&mut vcx);
+        open_picker(&mut vcx);
+        type_in_picker(&mut vcx, "wt-branch");
+        assert_eq!(row_labels(&mut vcx).len(), 1);
         vcx.simulate_keystrokes("enter");
-        settle(&mut vcx);
+        wait_for(&mut vcx, "focus on the checkout's existing pane", |vcx| {
+            vcx.update(|window, cx| right.read(cx).focus_handle(cx).is_focused(window))
+        });
 
         assert_eq!(
             app.read_with(&vcx, |app, _| app.tabs.len()),
@@ -1151,11 +1158,15 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        settle(&mut vcx);
+        open_picker(&mut vcx);
         vcx.update(|window, cx| window.click("worktree-picker-new", cx));
-        settle(&mut vcx);
+        wait_for(&mut vcx, "the worktree creation card", |vcx| {
+            vcx.update(|window, _| {
+                window
+                    .try_find("worktree-prompt-card")
+                    .is_some_and(|card| card.visible())
+            })
+        });
         assert!(
             app.read_with(&vcx, |app, _| app.worktree_picker.is_none()),
             "the picker hands over to the existing creation prompt"
@@ -1171,7 +1182,7 @@ mod tests {
         settle(&mut vcx);
         vcx.update(|window, _| {
             assert!(
-                !window.find("worktree-prompt-card").visible(),
+                window.try_find("worktree-prompt-card").is_none(),
                 "cancelling the prompt closes it"
             );
         });
