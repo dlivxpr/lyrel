@@ -17,7 +17,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, Context, Focusable as _, SharedString, Window, div, prelude::*, px, relative, rems,
+    AnyElement, Context, Focusable as _, SharedString, TestSupportExt as _, Window, div,
+    prelude::*, px, relative, rems,
 };
 
 use lyrel_core::core::git::diff::MAX_RENDERED_FILES;
@@ -965,6 +966,7 @@ impl LyrelApp {
     ) -> AnyElement {
         let scroller = div()
             .id("panel-scm-body")
+            .test_support()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
