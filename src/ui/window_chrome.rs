@@ -320,7 +320,6 @@ pub(crate) enum ChromeCommand {
 /// 常驻控件与原生窗口几何；拖动状态通过窗口内稳定 key 跨重绘保留。
 pub(crate) struct WindowChrome {
     left: AnyElement,
-    collapsed_tool_add: Option<AnyElement>,
     right: AnyElement,
 }
 
@@ -330,7 +329,6 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
-        collapsed_tool_add: Option<AnyElement>,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -438,7 +436,6 @@ impl WindowChrome {
             );
         Self {
             left: left.into_any_element(),
-            collapsed_tool_add,
             right: right.into_any_element(),
         }
     }
@@ -502,7 +499,6 @@ impl WindowChrome {
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
-            .children(self.collapsed_tool_add)
             .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
             .into_any_element()
     }
@@ -1061,9 +1057,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn tool_host_prepares_only_info_collapsed_and_the_add_menu_opens_tools(
-        cx: &mut TestAppContext,
-    ) {
+    fn tools_and_add_are_visible_only_in_the_open_side_panel(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         vcx.update(|window, cx| window.render_frame(cx));
@@ -1072,10 +1066,12 @@ mod gpui_tests {
         vcx.update(|window, _| {
             assert!(window.try_find("side-panel-tool-header").is_none());
             assert!(window.try_find("tool-tab-info").is_none());
-            assert!(window.find("titlebar-tool-add").visible());
+            assert!(window.try_find("side-panel-tool-add").is_none());
         });
-        // Choosing a tool from the fixed + opens the panel on it.
-        vcx.update(|window, cx| window.click("titlebar-tool-add", cx));
+        // The window toggle opens the panel on Info; the header's + adds Files.
+        vcx.update(|window, cx| window.click("titlebar-right-panel", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("side-panel-tool-add", cx));
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("tool-add-files", cx));
         settle(&mut vcx);
@@ -1086,13 +1082,13 @@ mod gpui_tests {
             let header = window.find("side-panel-tool-header");
             let toggle = window.find("titlebar-right-panel");
             let tab = window.find("tool-tab-files");
-            let add = window.find("titlebar-tool-add");
+            let add = window.find("side-panel-tool-add");
             assert!(header.bounds().top() >= toggle.bounds().bottom());
             assert!(header.bounds().contains(&tab.bounds().center()));
             assert!(header.bounds().contains(&add.bounds().center()));
         });
         // Picking the same tool again activates the same instance.
-        vcx.update(|window, cx| window.click("titlebar-tool-add", cx));
+        vcx.update(|window, cx| window.click("side-panel-tool-add", cx));
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("tool-add-files", cx));
         settle(&mut vcx);
@@ -1176,8 +1172,8 @@ mod gpui_tests {
         assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
         vcx.update(|window, _| {
             assert!(window.find_all("tool-tab-files").is_empty());
-            // The fixed + and toggle survive the collapse.
-            assert_eq!(window.find_all("titlebar-tool-add").len(), 1);
+            // Only the window toggle survives the collapse.
+            assert!(window.try_find("side-panel-tool-add").is_none());
             assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
         });
     }
@@ -1312,7 +1308,7 @@ mod gpui_tests {
                     window.find("tool-tab-close-files").label(),
                     Some(close_files)
                 );
-                assert_eq!(window.find("titlebar-tool-add").label(), Some(add_tool));
+                assert_eq!(window.find("side-panel-tool-add").label(), Some(add_tool));
             });
         }
         app.update(&mut vcx, |_, cx| {

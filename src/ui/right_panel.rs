@@ -1365,11 +1365,9 @@ impl LyrelApp {
         (status.total_entries > 0).then(|| status.total_entries.to_string())
     }
 
-    /// One add affordance: in the panel header when expanded, in the
-    /// fixed chrome when collapsed so a pick can reopen the panel.
-    pub(crate) fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        Button::new("titlebar-tool-add")
+        Button::new("side-panel-tool-add")
             .icon(Icon::new(IconName::Plus))
             .custom(
                 gpui_kit::component::button::ButtonCustomVariant::new(cx)
