@@ -2825,7 +2825,7 @@ impl LyrelApp {
         let shown = crate::ui::pane_drag::glide(&self.pane_drag)
             .map(|glide| {
                 gpui_kit::base::transition(
-                    ("pane-drop-preview", glide),
+                    (glide, "pane-drop-preview"),
                     rect,
                     crate::ui::pane_drag::glide_transition(),
                     window,
@@ -2908,7 +2908,7 @@ impl LyrelApp {
         let shown = crate::ui::reorder::glide(&self.reorder)
             .map(|glide| {
                 gpui_kit::base::transition(
-                    ("tab-drop-preview", glide),
+                    (glide, "tab-drop-preview"),
                     rect,
                     crate::ui::pane_drag::glide_transition(),
                     window,

@@ -4941,8 +4941,8 @@ mod navigation_tests {
 mod drag_tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::TestAppContext;
     use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    use gpui_kit::{TestAppContext, point, size};
 
     /// Three plain rows in the open sidebar, the first tab active and its
     /// terminal holding the keyboard.
@@ -4972,9 +4972,7 @@ mod drag_tests {
     }
 
     #[gpui_kit::test]
-    fn a_dragged_row_follows_the_pointer_and_the_drop_settles_the_order(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_dragged_row_follows_the_pointer_and_the_drop_settles_the_order(cx: &mut TestAppContext) {
         let (app, mut vcx, first, pane) = three_rows(cx);
         let (grab, row_h, top0, top1) = vcx.update(|window, cx| {
             window.render_frame(cx);
@@ -5038,9 +5036,8 @@ mod drag_tests {
         cx: &mut TestAppContext,
     ) {
         let (app, mut vcx, first, pane) = three_rows(cx);
-        let before: Vec<_> = app.read_with(&vcx, |app, _| {
-            app.tabs.iter().map(|tab| tab.id()).collect()
-        });
+        let before: Vec<_> =
+            app.read_with(&vcx, |app, _| app.tabs.iter().map(|tab| tab.id()).collect());
         let (grab, row_h, top1) = vcx.update(|window, cx| {
             window.render_frame(cx);
             let row0 = window.find(("tab-row", 0usize)).bounds();
@@ -5072,10 +5069,7 @@ mod drag_tests {
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             let ids: Vec<_> = app.tabs.iter().map(|tab| tab.id()).collect();
-            assert_eq!(
-                ids, before,
-                "cancellation leaves the prior order intact"
-            );
+            assert_eq!(ids, before, "cancellation leaves the prior order intact");
             assert_eq!(app.tabs.active_index(), 0);
             assert_eq!(app.tabs[0].id(), first);
             assert!(
@@ -5087,9 +5081,7 @@ mod drag_tests {
     }
 
     #[gpui_kit::test]
-    fn a_tab_held_over_the_layout_shows_its_landing_and_escape_returns_it(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_tab_held_over_the_layout_shows_its_landing_and_escape_returns_it(cx: &mut TestAppContext) {
         let (app, mut vcx, _first, _pane) = three_rows(cx);
         // Two tabs are enough for the merge offer; drop the third.
         app.update(&mut vcx, |app, cx| {
@@ -5102,7 +5094,9 @@ mod drag_tests {
             window.render_frame(cx);
             window.find(("tab-row", 1usize)).bounds().center()
         });
-        let area = app.read_with(&vcx, |app, _| app.pane_area.get()).expect("drawn");
+        let area = app
+            .read_with(&vcx, |app, _| app.pane_area.get())
+            .expect("drawn");
         let over_layout = point(
             area.origin.x + area.size.width / 2.,
             area.origin.y + area.size.height / 2.,

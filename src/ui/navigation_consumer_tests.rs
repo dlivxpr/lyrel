@@ -34,14 +34,10 @@ fn panel_navigation_enters_selected_roves_activates_and_returns_to_content(
         // Info, so open the other three tools through the same commands
         // Search Everywhere dispatches, then select Info again so entry
         // lands where the old fixed row used to start.
-        for action in [
-            lyrel_ui_base::actions::ShowRightPanelFiles,
-            lyrel_ui_base::actions::ShowRightPanelChanges,
-            lyrel_ui_base::actions::ShowRightPanelGitHub,
-            lyrel_ui_base::actions::ShowRightPanelInfo,
-        ] {
-            vcx.dispatch_action(action);
-        }
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelChanges);
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelGitHub);
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelInfo);
         settle(&mut vcx);
         vcx.dispatch_action(FocusRightPanelNavigation);
         settle(&mut vcx);

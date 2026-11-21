@@ -1,4 +1,3 @@
-use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
@@ -6,8 +5,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Side, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Axis, ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, Pixels,
-    SharedString, Window, div, prelude::*, px,
+    App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window, div, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -20,7 +18,6 @@ use crate::ui::tab::Tab;
 use crate::ui::window_chrome::{
     BUTTON_ICON_SCALE, TILE_GLYPH, chrome_tile_sized, chrome_tile_variant,
 };
-use lyrel_core::core::config::RightPanelTab;
 use lyrel_ui_base::actions::{
     CloseActiveTab, CloseOtherTabs, CloseTabsToTheRight, CopyAgentSessionId, CopyWorkingDirectory,
     ForkAgentSession, HibernateTab, MarkTabUnread, NewWorktreeTab, RenameTab, SelectWorkspace1,

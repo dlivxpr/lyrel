@@ -1141,9 +1141,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn closing_tool_tabs_follows_the_neighbours_and_empties_collapse(
-        cx: &mut TestAppContext,
-    ) {
+    fn closing_tool_tabs_follows_the_neighbours_and_empties_collapse(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         for tab in [
@@ -1238,9 +1236,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn tool_switches_keep_terminal_focus_and_closing_returns_it(
-        cx: &mut TestAppContext,
-    ) {
+    fn tool_switches_keep_terminal_focus_and_closing_returns_it(cx: &mut TestAppContext) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
@@ -1271,9 +1267,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn tool_tabs_close_from_the_keyboard_after_navigation_entry(
-        cx: &mut TestAppContext,
-    ) {
+    fn tool_tabs_close_from_the_keyboard_after_navigation_entry(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
@@ -1303,10 +1297,8 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn tool_host_carries_accessible_names_in_english_and_chinese(
-        cx: &mut TestAppContext,
-    ) {
-        let (_app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    fn tool_host_carries_accessible_names_in_english_and_chinese(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
         settle(&mut vcx);
@@ -1314,7 +1306,7 @@ mod gpui_tests {
             ("en", "Files", "Close Files", "Add Tool"),
             ("zh-CN", "文件", "关闭文件", "添加工具"),
         ] {
-            vcx.update(|_, cx| {
+            app.update(&mut vcx, |_, cx| {
                 lyrel_ui_base::i18n::set_locale(locale);
                 cx.notify();
             });
@@ -1328,7 +1320,7 @@ mod gpui_tests {
                 assert_eq!(window.find("titlebar-tool-add").label(), Some(add_tool));
             });
         }
-        vcx.update(|_, cx| {
+        app.update(&mut vcx, |_, cx| {
             lyrel_ui_base::i18n::set_locale("en");
             cx.notify();
         });

@@ -4,10 +4,8 @@ use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _, h_flex, v_flex,
-};
-use gpui_kit::{AnyElement, Axis, Context, Window, div, prelude::*, px, rems};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
 
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
@@ -351,7 +349,8 @@ pub(crate) struct RightPanelState {
     /// is mirrored onto `LyrelApp::right_panel_tab` / `right_panel_visible`
     /// (see [`LyrelApp::fold_mirror_into_tool_layout`]) so the rest of the
     /// panel code keeps reading the fields it always has.
-    pub(crate) tool_layouts: std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
+    pub(crate) tool_layouts:
+        std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
 }
 
 /// One workspace's right-panel tool layout — what the title-bar tool host
@@ -1159,12 +1158,7 @@ impl LyrelApp {
                 .text_size(gpui_kit::rems(TAB_TEXT))
                 .when(current, |tab| tab.bg(rail_selected))
                 .when(!current, |tab| tab.hover(move |style| style.bg(rail_hover)))
-                .child(
-                    Icon::empty()
-                        .path(icon)
-                        .size(px(14.))
-                        .text_color(ink),
-                )
+                .child(Icon::empty().path(icon).size(px(14.)).text_color(ink))
                 .child(
                     div()
                         .flex_shrink_0()
@@ -1203,39 +1197,40 @@ impl LyrelApp {
                         .items_center()
                         .justify_center()
                         .rounded(px(4.))
-                        .accessibility_label(t_fmt(
-                            L10nKey::ToolHostClose,
-                            &[("tool", t(label_key))],
-                        ))
+                        .role(gpui_kit::Role::Button)
+                        .aria_label(close_tip.clone())
                         .tooltip(move |window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(close_tip.clone())
                                 .build(window, cx)
                         })
                         .hover(move |style| style.bg(rail_hover))
                         .child(
-                            Icon::new(IconName::Close)
-                                .size(px(12.))
-                                .text_color(ink)
+                            div()
                                 .invisible()
                                 .when(current, |icon| icon.visible())
-                                .group_hover(group, |style| style.visible()),
+                                .group_hover(group, |style| style.visible())
+                                .child(Icon::new(IconName::Close).size(px(12.)).text_color(ink)),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
                             this.close_right_panel_tab(tab, window, cx);
                         })),
                 )
-                .on_click(cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                    if matches!(event, gpui_kit::ClickEvent::Mouse(_) | gpui_kit::ClickEvent::Touch(_))
-                    {
-                        this.right_panel_navigation_pointer(window, cx);
-                    }
-                    // The current one does nothing: only close and the panel
-                    // toggle put a tool away.
-                    if this.tool_layout().active != tab {
-                        this.set_right_panel_tab(tab, window, cx);
-                    }
-                }))
+                .on_click(
+                    cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if matches!(
+                            event,
+                            gpui_kit::ClickEvent::Mouse(_) | gpui_kit::ClickEvent::Touch(_)
+                        ) {
+                            this.right_panel_navigation_pointer(window, cx);
+                        }
+                        // The current one does nothing: only close and the panel
+                        // toggle put a tool away.
+                        if this.tool_layout().active != tab {
+                            this.set_right_panel_tab(tab, window, cx);
+                        }
+                    }),
+                )
         });
         NavTabs::new("tool-tabs")
             .axis(gpui_kit::Axis::Horizontal)
@@ -1249,22 +1244,24 @@ impl LyrelApp {
             .h_full()
             .flex_shrink_0()
             .min_w_0()
-            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape"
-                    && this.right_panel_nav_focus.contains_focused(window, cx)
-                {
-                    this.leave_right_panel_navigation(window, cx);
-                    cx.stop_propagation();
-                }
-                if event.keystroke.key == "w" && event.keystroke.modifiers.control {
-                    // The roving stop sits on the selected tab, so closing
-                    // it from the keyboard follows the same rule as the
-                    // pointer: right neighbour, otherwise left.
-                    let active = this.tool_layout().active;
-                    this.close_right_panel_tab(active, window, cx);
-                    cx.stop_propagation();
-                }
-            }))
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape"
+                        && this.right_panel_nav_focus.contains_focused(window, cx)
+                    {
+                        this.leave_right_panel_navigation(window, cx);
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "w" && event.keystroke.modifiers.control {
+                        // The roving stop sits on the selected tab, so closing
+                        // it from the keyboard follows the same rule as the
+                        // pointer: right neighbour, otherwise left.
+                        let active = this.tool_layout().active;
+                        this.close_right_panel_tab(active, window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .children(tabs)
             .child(self.tool_add_button(cx))
             .into_any_element()
@@ -1272,7 +1269,11 @@ impl LyrelApp {
 
     /// The real changed-item count for the Context Pane's repository, when
     /// one is known — the only badge a tool tab may carry.
-    fn tool_changes_count(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
+    fn tool_changes_count(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
         let (host, cwd) = self.scm_pane_target(window, cx)?;
         let root = match self.scm_repo_root(&host, &cwd, cx) {
             crate::ui::scm::panel::RepoLookup::Root(root) => root,
@@ -1305,8 +1306,9 @@ impl LyrelApp {
                 let id = format!("tool-add-{}", tool_name(tab));
                 menu = menu.item(
                     gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
-                        gpui_kit::h_flex()
+                        h_flex()
                             .id(id.clone())
+                            .test_support()
                             .w_full()
                             .items_center()
                             .gap(px(8.))
