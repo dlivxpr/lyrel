@@ -1,4 +1,5 @@
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::animation::ease_out_cubic;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
@@ -9,7 +10,6 @@ use gpui_kit::{
     Role, SharedString, Window, canvas, deferred, div, ease_out_quint, linear_color_stop,
     linear_gradient, prelude::*, px,
 };
-use gpui_kit::base::animation::ease_out_cubic;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -319,9 +319,9 @@ impl RowMotionEntry {
             }
             RowMotionKind::Exit => {
                 let fade = curve((progress / EXIT_CONTENT).clamp(0., 1.));
-                let collapse =
-                    curve(((progress - EXIT_COLLAPSE_DELAY) / (1. - EXIT_COLLAPSE_DELAY))
-                        .clamp(0., 1.));
+                let collapse = curve(
+                    ((progress - EXIT_COLLAPSE_DELAY) / (1. - EXIT_COLLAPSE_DELAY)).clamp(0., 1.),
+                );
                 RowPresence {
                     height: from.height * (1. - collapse),
                     opacity: from.opacity * (1. - fade),
@@ -391,10 +391,7 @@ impl SidebarRowMotion {
         for id in known.iter().filter(|id| !current.contains(id)) {
             // A row that was not on screen — folded away — has nothing to
             // collapse.
-            let on_screen = self
-                .laid_out
-                .values()
-                .any(|(_, rows)| rows.contains(id));
+            let on_screen = self.laid_out.values().any(|(_, rows)| rows.contains(id));
             if !on_screen {
                 self.entries.remove(id);
                 continue;
@@ -1569,7 +1566,10 @@ impl LyrelApp {
             let slot_plan: Vec<RowSlot> = match &row_preview {
                 None => self.sidebar_motion.borrow_mut().rows.slots(
                     container,
-                    &visible.iter().map(|&i| self.tabs[i].id()).collect::<Vec<_>>(),
+                    &visible
+                        .iter()
+                        .map(|&i| self.tabs[i].id())
+                        .collect::<Vec<_>>(),
                     now,
                 ),
                 Some(_) => Vec::new(),
@@ -1624,11 +1624,7 @@ impl LyrelApp {
                     Some(RowSlot::Real(_, presence)) => *presence,
                     _ => RowPresence::FULL,
                 };
-                let disclose_opacity = disclosure_frame
-                    .rows
-                    .get(slot)
-                    .copied()
-                    .unwrap_or(1.);
+                let disclose_opacity = disclosure_frame.rows.get(slot).copied().unwrap_or(1.);
                 // Only a fully settled row registers its rectangle: a row in
                 // any part of a gesture leaves the default box behind, which
                 // is what tells everything that reads these — drop targets,
@@ -1924,9 +1920,7 @@ impl LyrelApp {
                         branch: shown
                             .branch
                             .as_ref()
-                            .map(|(branch, _, added, removed)| {
-                                (branch.clone(), *added, *removed)
-                            }),
+                            .map(|(branch, _, added, removed)| (branch.clone(), *added, *removed)),
                         two_line,
                         active: is_active,
                         asleep,
@@ -2323,7 +2317,7 @@ impl LyrelApp {
                     true => sidebar_motion_row(
                         i,
                         row.into_any_element(),
-                        row_canvas,
+                        row_canvas.into_any_element(),
                         row_h,
                         presence,
                         presence.opacity * disclose_opacity,
@@ -2357,18 +2351,17 @@ impl LyrelApp {
                 .into_iter()
                 .map(|slot| match &row_preview {
                     Some(p) if p.from == slot => deferred(
-                        rows[slot]
-                            .take()
-                            .expect("each slot emitted once")
+                        div()
+                            .child(rows[slot].take().expect("each slot emitted once"))
                             .relative()
                             .top(p.held),
                     )
                     .into_any_element(),
                     Some(p) => {
                         let offset = p.offsets[slot].as_f32();
-                        rows[slot]
-                            .take()
-                            .expect("each slot emitted once")
+                        div()
+                            .child(rows[slot].take().expect("each slot emitted once"))
+                            .relative()
                             .with_animation(
                                 (
                                     SharedString::from(format!(
@@ -2393,16 +2386,13 @@ impl LyrelApp {
             // column hands itself to the block. This only runs when no drag
             // preview owns the section, so the plan's order and the paint
             // order are the same.
-            if row_preview.is_none() && slot_plan.iter().any(|s| matches!(s, RowSlot::Ghost(..)))
-            {
+            if row_preview.is_none() && slot_plan.iter().any(|s| matches!(s, RowSlot::Ghost(..))) {
                 let mut built: Vec<Option<AnyElement>> = rows.into_iter().map(Some).collect();
                 let mut ghost_heights: Vec<f32> = Vec::new();
                 rows = slot_plan
                     .iter()
                     .map(|slot| match slot {
-                        RowSlot::Real(ix, _) => built[*ix]
-                            .take()
-                            .expect("each row emitted once"),
+                        RowSlot::Real(ix, _) => built[*ix].take().expect("each row emitted once"),
                         RowSlot::Ghost(id, presence) => {
                             let ghost = self
                                 .sidebar_motion
@@ -5116,7 +5106,8 @@ mod fold_tests {
         vcx.run_until_parked();
         // The fold is a disclosure gesture: the rows fade and clip shut over
         // `DISCLOSE_CLOSE_MS`, so the settled assertion runs past it.
-        cx.advance_clock(std::time::Duration::from_millis(DISCLOSE_CLOSE_MS + 50));
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(DISCLOSE_CLOSE_MS + 50));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
 
@@ -5137,7 +5128,8 @@ mod fold_tests {
             app.toggle_sidebar_group(Some(&alpha_key), cx)
         });
         vcx.run_until_parked();
-        cx.advance_clock(std::time::Duration::from_millis(DISCLOSE_OPEN_MS + 50));
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(DISCLOSE_OPEN_MS + 50));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
 
@@ -5169,7 +5161,8 @@ mod fold_tests {
         });
         vcx.run_until_parked();
         // Past the closing gesture: the fold is drawn, not just decided.
-        cx.advance_clock(std::time::Duration::from_millis(DISCLOSE_CLOSE_MS + 50));
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(DISCLOSE_CLOSE_MS + 50));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
 
@@ -5182,7 +5175,8 @@ mod fold_tests {
             app.toggle_sidebar_group(Some(&alpha), cx)
         });
         vcx.run_until_parked();
-        cx.advance_clock(std::time::Duration::from_millis(DISCLOSE_OPEN_MS + 50));
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(DISCLOSE_OPEN_MS + 50));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
 
@@ -6391,7 +6385,10 @@ mod motion_model_tests {
     fn settled_model(ids: &[TabId], start: Instant) -> SidebarRowMotion {
         let mut model = SidebarRowMotion::default();
         model.observe(ids, true, start);
-        assert!(model.entries.is_empty(), "the first observation is a baseline");
+        assert!(
+            model.entries.is_empty(),
+            "the first observation is a baseline"
+        );
         model.begin_frame(start);
         let plan = model.slots(1, ids, start);
         assert!(
@@ -6422,9 +6419,10 @@ mod motion_model_tests {
         assert!(model.entries.is_empty(), "nothing is owed a frame");
         model.begin_frame(start);
         let plan = model.slots(1, &[a, b], start);
-        assert!(plan
-            .iter()
-            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+        assert!(
+            plan.iter()
+                .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL))
+        );
     }
 
     #[test]
@@ -6460,9 +6458,10 @@ mod motion_model_tests {
         let settled = at(start, 250);
         model.begin_frame(settled);
         let plan = model.slots(1, &[a, b], settled);
-        assert!(plan
-            .iter()
-            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+        assert!(
+            plan.iter()
+                .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL))
+        );
         assert!(model.entries.is_empty());
     }
 
@@ -6504,9 +6503,10 @@ mod motion_model_tests {
         model.begin_frame(settled);
         let plan = model.slots(1, &[a, c], settled);
         assert_eq!(plan.len(), 2);
-        assert!(plan
-            .iter()
-            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+        assert!(
+            plan.iter()
+                .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL))
+        );
     }
 
     #[test]
@@ -6664,7 +6664,8 @@ mod motion_consumer_tests {
     /// completes a frame — the same rhythm a running window would have.
     fn frame(vcx: &mut gpui_kit::VisualTestContext, cx: &mut TestAppContext, advance_ms: u64) {
         if advance_ms > 0 {
-            cx.advance_clock(Duration::from_millis(advance_ms));
+            vcx.executor()
+                .advance_clock(Duration::from_millis(advance_ms));
         }
         cx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
@@ -6679,7 +6680,9 @@ mod motion_consumer_tests {
         let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");
         leaf.terminal()
             .expect("test pane is a terminal")
-            .update(cx, |view, _| view.set_git_status_cwd_for_test(Some(cwd.clone())));
+            .update(cx, |view, _| {
+                view.set_git_status_cwd_for_test(Some(cwd.clone()))
+            });
         cx.update_global::<GitStatusCache, _>(|cache, _| {
             cache.finish_probe(
                 HostId::LOCAL,
@@ -6714,8 +6717,7 @@ mod motion_consumer_tests {
 
             let (view, stream) = quiet_test_pane(2, window, cx);
             LyrelApp::watch_terminal(&view, window, cx);
-            app.tabs
-                .push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+            app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
             cx.notify();
             stream
         });
@@ -6740,9 +6742,7 @@ mod motion_consumer_tests {
     }
 
     #[gpui_kit::test]
-    fn closing_a_row_keeps_its_ghost_before_the_space_is_reclaimed(
-        cx: &mut TestAppContext,
-    ) {
+    fn closing_a_row_keeps_its_ghost_before_the_space_is_reclaimed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
         frame(&mut vcx, cx, 0);
         let (closed, last_before) = app.read_with(&vcx, |app, _| {
@@ -6804,9 +6804,14 @@ mod motion_consumer_tests {
         // exact moment a click would matter most.
         frame(&mut vcx, cx, 30);
         vcx.update(|window, cx| {
-            window.click_at(format!("sidebar-ghost-{closed}"), point(px(20.), px(15.)), cx);
+            window.click_at(
+                format!("sidebar-ghost-{closed}"),
+                point(px(20.), px(15.)),
+                cx,
+            );
         });
-        let (active, count) = app.read_with(&vcx, |app, _| (app.tabs.active_index(), app.tabs.len()));
+        let (active, count) =
+            app.read_with(&vcx, |app, _| (app.tabs.active_index(), app.tabs.len()));
         assert_eq!(
             active, 0,
             "the press died on the ghost; the row that slid under it never saw it"
@@ -6815,14 +6820,13 @@ mod motion_consumer_tests {
     }
 
     #[gpui_kit::test]
-    fn folding_a_group_shuts_it_with_a_clip_and_unfolding_reopens_it(
-        cx: &mut TestAppContext,
-    ) {
+    fn folding_a_group_shuts_it_with_a_clip_and_unfolding_reopens_it(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
         let key = app.update(&mut vcx, |app, cx| grouped_three(app, cx));
         frame(&mut vcx, cx, 0);
         assert!(
-            app.read_with(&vcx, |app, _| app.sidebar_slots
+            app.read_with(&vcx, |app, _| app
+                .sidebar_slots
                 .borrow()
                 .iter()
                 .all(|b| b.size.height == px(ROW_HEIGHT))),
@@ -6838,21 +6842,20 @@ mod motion_consumer_tests {
         frame(&mut vcx, cx, 0);
         frame(&mut vcx, cx, 90);
         vcx.update(|window, _| {
-            let clip = window.find(("sidebar-rows", 0));
+            let clip = window.find(("sidebar-rows", 0usize));
             assert!(
                 clip.bounds().size.height < px(natural) && clip.bounds().size.height > px(0.),
                 "a shortening clip is shutting the group"
             );
         });
         assert!(
-            app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0].size.height)
-                == px(0.),
+            app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0].size.height) == px(0.),
             "a clipped row registers no rectangle — nothing can land on it"
         );
         // Settled shut: no rows, no clip, and only the header is a stop.
         frame(&mut vcx, cx, 120);
         vcx.update(|window, _| {
-            assert!(window.try_find(("sidebar-rows", 0)).is_none());
+            assert!(window.try_find(("sidebar-rows", 0usize)).is_none());
         });
         assert_eq!(
             app.read_with(&vcx, |app, cx| app.sidebar_nav_targets(cx)),
@@ -6867,7 +6870,7 @@ mod motion_consumer_tests {
         frame(&mut vcx, cx, 0);
         frame(&mut vcx, cx, 150);
         vcx.update(|window, _| {
-            let clip = window.find(("sidebar-rows", 0));
+            let clip = window.find(("sidebar-rows", 0usize));
             assert!(
                 clip.bounds().size.height > px(0.) && clip.bounds().size.height < px(natural),
                 "a growing clip is opening the group"
@@ -6876,12 +6879,13 @@ mod motion_consumer_tests {
         frame(&mut vcx, cx, 200);
         vcx.update(|window, _| {
             assert!(
-                window.try_find(("sidebar-rows", 0)).is_none(),
+                window.try_find(("sidebar-rows", 0usize)).is_none(),
                 "settled open draws the plain column again"
             );
         });
         assert!(
-            app.read_with(&vcx, |app, _| app.sidebar_slots
+            app.read_with(&vcx, |app, _| app
+                .sidebar_slots
                 .borrow()
                 .iter()
                 .all(|b| b.size.height == px(ROW_HEIGHT))),
@@ -6926,7 +6930,7 @@ mod motion_consumer_tests {
         frame(&mut vcx, cx, 0);
         vcx.update(|window, _| {
             assert!(
-                window.try_find(("sidebar-rows", 0)).is_none(),
+                window.try_find(("sidebar-rows", 0usize)).is_none(),
                 "Reduce plays no disclosure gesture"
             );
         });
