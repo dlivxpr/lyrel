@@ -32,7 +32,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, Focusable as _, IntoElement, MouseButton, MouseDownEvent,
-    SharedString, Subscription, Task, Window, div, prelude::*, px, rems,
+    SharedString, Subscription, Task, TestSupportExt as _, Window, div, prelude::*, px, rems,
 };
 
 use crate::ui::app::LyrelApp;
