@@ -1707,10 +1707,13 @@ impl LyrelApp {
                         window.on_mouse_event({
                             let strip_state = strip_state.clone();
                             let app = app.clone();
-                            move |event: &MouseMoveEvent, _phase, window, cx| {
+                            move |event: &MouseMoveEvent, phase, window, cx| {
+                                if !phase.capture() {
+                                    return;
+                                }
                                 let Some(app) = app.upgrade() else { return };
-                                let order: Vec<RightPanelTab> = app.read(cx).tool_layout().order;
                                 let state = strip_state.read(cx).clone();
+                                let order = &state.rendered_order;
                                 let Some(drag) = state.drag.clone() else {
                                     return;
                                 };
@@ -1763,7 +1766,7 @@ impl LyrelApp {
                                 let slots: Vec<_> = (0..order.len())
                                     .map(|slot| state.scroll.bounds_for_item(slot))
                                     .collect();
-                                let target = strip_target(&slots, &order, drag.tab, pointer_x);
+                                let target = strip_target(&slots, order, drag.tab, pointer_x);
                                 if Some(target) != order.iter().position(|open| *open == drag.tab) {
                                     app.update(cx, |this, _cx| {
                                         let mut layout = this.tool_layout();
@@ -1784,7 +1787,10 @@ impl LyrelApp {
                         window.on_mouse_event({
                             let strip_state = strip_state.clone();
                             let app = app.clone();
-                            move |event: &MouseUpEvent, _phase, window, cx| {
+                            move |event: &MouseUpEvent, phase, window, cx| {
+                                if !phase.capture() || event.button != MouseButton::Left {
+                                    return;
+                                }
                                 let drag = strip_state.update(cx, |state, _| state.drag.take());
                                 let Some(drag) = drag.filter(|drag| drag.started) else {
                                     return;
@@ -1794,12 +1800,12 @@ impl LyrelApp {
                                         let mut layout = this.tool_layout();
                                         let state = strip_state.read(cx).clone();
                                         let pointer_x = event.position.x - state.scroll.offset().x;
-                                        let slots: Vec<_> = (0..layout.order.len())
+                                        let slots: Vec<_> = (0..state.rendered_order.len())
                                             .map(|slot| state.scroll.bounds_for_item(slot))
                                             .collect();
                                         let target = strip_target(
                                             &slots,
-                                            &layout.order,
+                                            &state.rendered_order,
                                             drag.tab,
                                             pointer_x,
                                         );
