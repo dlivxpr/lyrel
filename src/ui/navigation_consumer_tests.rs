@@ -339,7 +339,11 @@ fn right_panel_toggle_slides_the_boundary_and_resizes_the_pty_once(cx: &mut Test
     vcx.update(|window, cx| {
         window.render_frame(cx);
         let seam = window.find("right-panel-slide").bounds();
-        assert_eq!(seam.size.width, px(0.), "the seam starts at the window edge");
+        assert_eq!(
+            seam.size.width,
+            px(0.),
+            "the seam starts at the window edge"
+        );
     });
     let opened = resize_frames(&mut stream);
     assert_eq!(
@@ -441,9 +445,7 @@ fn repeated_right_panel_toggles_during_a_slide_are_ignored(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn left_panel_toggle_slides_the_sidebar_boundary_and_resizes_the_pty_once(
-    cx: &mut TestAppContext,
-) {
+fn left_panel_toggle_slides_the_sidebar_boundary_and_resizes_the_pty_once(cx: &mut TestAppContext) {
     let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
     vcx.simulate_resize(size(px(1000.), px(720.)));
     settle(&mut vcx);
@@ -531,4 +533,72 @@ fn reduced_motion_renders_the_final_geometry_without_animation_frames(cx: &mut T
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(!app.read_with(&vcx, |app, _| app.right_panel_visible));
     assert_eq!(resize_frames(&mut stream).len(), 1);
+}
+
+fn tool_body_x(vcx: &mut VisualTestContext, id: &'static str) -> gpui_kit::Pixels {
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find(id).bounds().left()
+    })
+}
+
+fn settle_tool_entrance(vcx: &mut VisualTestContext) {
+    vcx.executor().advance_clock(Duration::from_millis(230));
+    settle(vcx);
+}
+
+#[gpui_kit::test]
+fn switching_tools_moves_only_the_incoming_body(cx: &mut TestAppContext) {
+    use lyrel_ui_base::actions::{ShowRightPanelChanges, ShowRightPanelInfo};
+
+    let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.simulate_resize(size(px(1000.), px(720.)));
+    let terminal = app.update_in(&mut vcx, |app, window, cx| {
+        app.focus_active(window, cx);
+        window.focused(cx).expect("terminal content owns focus")
+    });
+    vcx.update(|_, cx| {
+        cx.global_mut::<Config>().motion_preference = MotionPreference::Allow;
+        crate::ui::motion::apply(cx);
+    });
+    vcx.dispatch_action(ShowRightPanelInfo);
+    settle_tool_entrance(&mut vcx);
+    let header = vcx.update(|window, _| window.find("side-panel-tool-header").bounds());
+
+    vcx.dispatch_action(ShowRightPanelChanges);
+    let changes_start = tool_body_x(&mut vcx, "panel-scm-body");
+    settle_tool_entrance(&mut vcx);
+    let changes_rest = tool_body_x(&mut vcx, "panel-scm-body");
+    assert!((px(6.)..=px(8.5)).contains(&(changes_start - changes_rest)));
+
+    vcx.dispatch_action(ShowRightPanelChanges);
+    assert_eq!(tool_body_x(&mut vcx, "panel-scm-body"), changes_rest);
+
+    vcx.dispatch_action(ShowRightPanelInfo);
+    let info_start = tool_body_x(&mut vcx, "right-panel-body");
+    settle_tool_entrance(&mut vcx);
+    let info_rest = tool_body_x(&mut vcx, "right-panel-body");
+    assert!((px(6.)..=px(8.5)).contains(&(info_rest - info_start)));
+    vcx.update(|window, _| {
+        assert!(terminal.is_focused(window));
+        assert_eq!(window.find("side-panel-tool-header").bounds(), header);
+    });
+}
+
+#[gpui_kit::test]
+fn reduced_tool_switch_reaches_final_content_immediately(cx: &mut TestAppContext) {
+    use lyrel_ui_base::actions::{ShowRightPanelChanges, ShowRightPanelInfo};
+
+    let (_app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.simulate_resize(size(px(1000.), px(720.)));
+    vcx.update(|_, cx| {
+        cx.global_mut::<Config>().motion_preference = MotionPreference::Reduce;
+        crate::ui::motion::apply(cx);
+    });
+    vcx.dispatch_action(ShowRightPanelInfo);
+    settle(&mut vcx);
+    vcx.dispatch_action(ShowRightPanelChanges);
+    let immediate = tool_body_x(&mut vcx, "panel-scm-body");
+    settle_tool_entrance(&mut vcx);
+    assert_eq!(tool_body_x(&mut vcx, "panel-scm-body"), immediate);
 }

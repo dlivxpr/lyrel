@@ -5,7 +5,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
-use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
+use gpui_kit::{AnimationExt as _, AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
 
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
@@ -351,6 +351,19 @@ pub(crate) struct RightPanelState {
     /// panel code keeps reading the fields it always has.
     pub(crate) tool_layouts:
         std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
+    tool_switch: ToolSwitchMotion,
+}
+
+impl RightPanelState {
+    pub(crate) fn with_layout(
+        workspace: lyrel_ui_base::session::WorkspaceId,
+        layout: ToolLayout,
+    ) -> Self {
+        Self {
+            tool_layouts: std::collections::HashMap::from([(workspace, layout)]),
+            ..Self::default()
+        }
+    }
 }
 
 /// The tool layout rendered in the Side Panel's header and saved per Workspace.
@@ -475,6 +488,43 @@ impl ToolLayout {
     /// Collapse the panel; the tab set is kept.
     pub(crate) fn collapse(&mut self) {
         self.open = false;
+    }
+}
+
+const TOOL_SWITCH_ENTER_MS: u64 = 190;
+const TOOL_SWITCH_ENTER_OFFSET: f32 = 8.;
+const TOOL_SWITCH_ENTER_OPACITY: f32 = 0.70;
+
+#[derive(Default)]
+struct ToolSwitchMotion {
+    generation: u64,
+    direction: f32,
+}
+
+impl ToolSwitchMotion {
+    fn record(&mut self, previous: Option<&ToolLayout>, next: &ToolLayout) {
+        let Some(previous) = previous.filter(|previous| previous.open && next.open) else {
+            self.direction = 0.;
+            return;
+        };
+        if previous.active == next.active {
+            return;
+        }
+        let from = previous
+            .order
+            .iter()
+            .position(|tab| *tab == previous.active);
+        // A closing tab can shift its right neighbour into the same slot.
+        // Use the pre-close order, except for an entirely new tool.
+        let to = previous
+            .order
+            .iter()
+            .position(|tab| *tab == next.active)
+            .or_else(|| next.order.iter().position(|tab| *tab == next.active));
+        if let (Some(from), Some(to)) = (from, to) {
+            self.generation += 1;
+            self.direction = if to > from { 1. } else { -1. };
+        }
     }
 }
 
@@ -735,6 +785,7 @@ impl LyrelApp {
         cx: &gpui_kit::App,
     ) {
         let layout = Self::persisted_tool_layout(id, cx);
+        self.right_panel.tool_switch.direction = 0.;
         self.right_panel.tool_layouts.insert(id, layout.clone());
         self.right_panel_visible = layout.open;
         self.right_panel_tab = layout.active;
@@ -744,9 +795,7 @@ impl LyrelApp {
     /// reads, the Workspace Store record a restart restores (#348), and the
     /// global config, which keeps carrying the choice for an older build.
     fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
-        self.right_panel
-            .tool_layouts
-            .insert(self.workspace, layout.clone());
+        self.remember_tool_layout(layout.clone());
         self.right_panel_visible = layout.open;
         self.right_panel_tab = layout.active;
         lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
@@ -761,12 +810,18 @@ impl LyrelApp {
         cx.notify();
     }
 
+    fn remember_tool_layout(&mut self, layout: ToolLayout) {
+        self.right_panel
+            .tool_switch
+            .record(self.right_panel.tool_layouts.get(&self.workspace), &layout);
+        self.right_panel.tool_layouts.insert(self.workspace, layout);
+    }
+
     /// Reconcile the layout with the live mirror fields at the panel's render
     /// choke point. Legacy open entrypoints — the file tree's reveal, the
     /// palette, GitHub navigation — write `right_panel_tab` /
     /// `right_panel_visible` directly rather than through the layout API, and
-    /// folding them here keeps the layout — the value #348 persists — the
-    /// same layout the title-bar host renders, without touching those seams.
+    /// keeping the in-panel header consistent without touching those callers.
     fn fold_mirror_into_tool_layout(&mut self) {
         let tab = shown_tab(self.right_panel_tab);
         let mut layout = self.tool_layout();
@@ -788,7 +843,7 @@ impl LyrelApp {
             }
             layout.open = false;
         }
-        self.right_panel.tool_layouts.insert(self.workspace, layout);
+        self.remember_tool_layout(layout);
     }
 
     pub(crate) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
@@ -1021,7 +1076,11 @@ impl LyrelApp {
     /// The panel body at its settled width. Shared by the settled mount and
     /// the boundary slide's clip, so a sliding panel paints exactly what the
     /// settled one will.
-    fn render_right_panel_mount(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_right_panel_mount(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let width = self.right_panel_px(window, cx);
         let tab = self.right_panel_tab;
         let header = self.tool_host(window, cx);
@@ -1032,6 +1091,7 @@ impl LyrelApp {
             RightPanelTab::Files | RightPanelTab::Search => self.render_panel_files(window, cx),
             RightPanelTab::GitHub => self.render_panel_github(window, cx),
         };
+        let body = self.with_tool_page_entrance(body);
         let (backing, handle) = self.right_panel_resize(window, cx);
 
         v_flex()
@@ -1062,6 +1122,44 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.render_right_panel_mount(window, cx)
+    }
+
+    /// Offset only the incoming body, clipped to the panel's content band.
+    /// The header, resize handle, transfer footer and PTY keep their geometry.
+    fn with_tool_page_entrance(&self, body: AnyElement) -> AnyElement {
+        let ToolSwitchMotion {
+            generation,
+            direction,
+        } = self.right_panel.tool_switch;
+        if direction == 0. {
+            return body;
+        }
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                v_flex()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(body)
+                    .with_animation(
+                        ("tool-page-enter", generation),
+                        gpui_kit::Animation::new(std::time::Duration::from_millis(
+                            TOOL_SWITCH_ENTER_MS,
+                        ))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                        move |page, delta| {
+                            page.left(px(direction * TOOL_SWITCH_ENTER_OFFSET * (1. - delta)))
+                                .opacity(
+                                    TOOL_SWITCH_ENTER_OPACITY
+                                        + (1. - TOOL_SWITCH_ENTER_OPACITY) * delta,
+                                )
+                        },
+                    ),
+            )
+            .into_any_element()
     }
 
     fn right_panel_resize(

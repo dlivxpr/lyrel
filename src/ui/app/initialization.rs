@@ -387,10 +387,10 @@ impl LyrelApp {
             shells_host: HostId::LOCAL,
             loopback_panel,
             sftp_panel,
-            right_panel: crate::ui::right_panel::RightPanelState {
-                tool_layouts: std::collections::HashMap::from([(workspace, tool_layout)]),
-                ..Default::default()
-            },
+            right_panel: crate::ui::right_panel::RightPanelState::with_layout(
+                workspace,
+                tool_layout,
+            ),
             scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
             github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes: Default::default(),
@@ -415,8 +415,7 @@ impl LyrelApp {
             right_panel_nav_wait: Cell::new(0),
             right_panel_nav_renders: Cell::new(0),
             sidebar_collapsed,
-            panel_slides: [None, 2],
-            panel_slide_generations: [0, 2],
+            panel_slides: Default::default(),
             sidebar_scroll: gpui_kit::ScrollHandle::new(),
             sidebar_reveal: Rc::new(RefCell::new(None)),
             sidebar_nav_focus: cx.focus_handle().tab_stop(true),

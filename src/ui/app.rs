@@ -299,10 +299,7 @@ pub struct LyrelApp {
     /// Panel boundary slides in flight, one slot per `PanelBoundary`. A toggle
     /// flips the settled state immediately and parks the visual seam's journey
     /// here; see `crate::ui::panel_slide`.
-    pub(crate) panel_slides: [Option<crate::ui::panel_slide::PanelSlide>; 2],
-    /// Per-boundary generation, so a cleanup timer from a superseded slide
-    /// cannot clear the one now in flight.
-    panel_slide_generations: [u64; 2],
+    pub(crate) panel_slides: crate::ui::panel_slide::PanelSlides,
     pub(crate) sidebar_scroll: gpui_kit::ScrollHandle,
     /// The sidebar row or group header brought into view the next time it is
     /// drawn. Read by the row/header, not by `activate`: a new tab has no row

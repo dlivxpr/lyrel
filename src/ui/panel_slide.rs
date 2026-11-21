@@ -97,15 +97,22 @@ fn settled_right_panel_mount(width: f32, panel: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
+#[derive(Default)]
+pub(crate) struct PanelSlides {
+    active: [Option<PanelSlide>; 2],
+    // An older slide's timer must not clear its replacement.
+    generations: [u64; 2],
+}
+
 impl LyrelApp {
     pub(crate) fn panel_slide(&self, boundary: PanelBoundary) -> Option<PanelSlide> {
-        self.panel_slides[boundary.slot()]
+        self.panel_slides.active[boundary.slot()]
     }
 
     /// The toggle guard: while a boundary's seam is still travelling, further
     /// toggles of that boundary are dropped rather than queued or reversed.
     pub(crate) fn panel_slide_active(&self, boundary: PanelBoundary) -> bool {
-        self.panel_slides[boundary.slot()].is_some()
+        self.panel_slide(boundary).is_some()
     }
 
     /// Cancel slides whose settled state no longer matches their direction.
@@ -114,7 +121,7 @@ impl LyrelApp {
     /// contradictory slide painting underneath.
     pub(crate) fn reconcile_panel_slides(&mut self, cx: &mut Context<Self>) {
         for boundary in [PanelBoundary::Left, PanelBoundary::Right] {
-            let Some(slide) = self.panel_slides[boundary.slot()] else {
+            let Some(slide) = self.panel_slide(boundary) else {
                 continue;
             };
             let settled_open = match boundary {
@@ -122,7 +129,7 @@ impl LyrelApp {
                 PanelBoundary::Right => self.right_panel_open(cx),
             };
             if settled_open != slide.opening {
-                self.panel_slides[boundary.slot()] = None;
+                self.panel_slides.active[boundary.slot()] = None;
             }
         }
     }
@@ -139,10 +146,10 @@ impl LyrelApp {
         if cx.reduce_motion() {
             return;
         }
-        let generation = self.panel_slide_generations[boundary.slot()] + 1;
-        self.panel_slide_generations[boundary.slot()] = generation;
-        self.panel_slides[boundary.slot()] = Some(PanelSlide {
-            boundary,
+        let slot = boundary.slot();
+        let generation = self.panel_slides.generations[slot] + 1;
+        self.panel_slides.generations[slot] = generation;
+        self.panel_slides.active[slot] = Some(PanelSlide {
             opening,
             generation,
         });
@@ -151,9 +158,11 @@ impl LyrelApp {
                 .timer(Duration::from_millis(PANEL_SLIDE_MS))
                 .await;
             let _ = this.update(cx, |app, cx| {
-                let slot = boundary.slot();
-                if app.panel_slides[slot].is_some_and(|slide| slide.generation == generation) {
-                    app.panel_slides[slot] = None;
+                if app
+                    .panel_slide(boundary)
+                    .is_some_and(|slide| slide.generation == generation)
+                {
+                    app.panel_slides.active[slot] = None;
                     cx.notify();
                 }
             });
