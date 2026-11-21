@@ -3002,3 +3002,158 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod persistence_tests {
+    //! #348's consumer: the production workbench, not a serialization test.
+    //! Two workspaces keep their own ordered tools, selection and open state
+    //! across a simulated restart — the store global reloaded from the pinned
+    //! scratch `views.json` standing in for the process relaunch — and a
+    //! workspace without a written layout starts from Info, collapsed,
+    //! whatever the old global config selection says.
+
+    use super::ToolLayout;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm};
+    use lyrel_ui_base::actions::{
+        ShowRightPanelChanges, ShowRightPanelFiles, ShowRightPanelGitHub, ToggleRightPanel,
+    };
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::{Session, WorkspaceId, WorkspaceStore};
+
+    /// Only this module writes the scratch `views.json`, and the scenarios
+    /// below each reload the store from it; the lock keeps their fixtures
+    /// apart even as the suite grows more store-aware tests.
+    static VIEWS_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn settle(vcx: &mut VisualTestContext) {
+        for _ in 0..4 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.render_frame(cx);
+            });
+        }
+        vcx.run_until_parked();
+    }
+
+    fn claim_workspace(cx: &mut TestAppContext) -> WorkspaceId {
+        cx.update(|cx| WorkspaceStore::claim(cx, None))
+    }
+
+    #[gpui_kit::test]
+    fn workspaces_keep_their_own_tool_layout_across_relaunch(cx: &mut TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        cx.update(|cx| WorkspaceStore::init(cx));
+
+        // — First session: two workspaces used differently. —
+        let alpha = claim_workspace(cx);
+        let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, alpha);
+        for action in [
+            ShowRightPanelFiles,
+            ShowRightPanelChanges,
+            ShowRightPanelGitHub,
+        ] {
+            vcx.dispatch_action(action);
+        }
+        settle(&mut vcx);
+        // Select a tool that is not the last-opened one, then collapse: the
+        // persisted state has to carry order, active tool, last-used tool
+        // and open state together.
+        vcx.dispatch_action(ShowRightPanelFiles);
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, _window, cx| app.toggle_right_panel(cx));
+        settle(&mut vcx);
+        let written_alpha = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(written_alpha.order, [Info, Files, Scm, GitHub]);
+        assert_eq!(written_alpha.active, Files);
+        assert_eq!(written_alpha.last_used, Files);
+        assert!(!written_alpha.open, "alpha's panel was left collapsed");
+
+        // Switching in place takes up the other workspace's layout: beta has
+        // never been given one, so it starts from Info, collapsed — alpha's
+        // open, Files-first panel is not projected onto it.
+        let beta = claim_workspace(cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(beta, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            app.read_with(&vcx, |app, _| app.tool_layout()),
+            ToolLayout::default()
+        );
+        assert_eq!(
+            app.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (false, Info)
+        );
+
+        // Beta closes every tool it had: the written layout stays empty and
+        // keeps last-used, the state an emptied panel resumes from.
+        vcx.dispatch_action(ShowRightPanelChanges);
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.close_right_panel_tab(Info, window, cx);
+            app.close_right_panel_tab(Scm, window, cx);
+        });
+        settle(&mut vcx);
+        let written_beta = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert!(written_beta.order.is_empty(), "beta's tools are all closed");
+        assert!(!written_beta.open);
+        assert_eq!(written_beta.last_used, Scm);
+
+        // — Restart: the store global is rebuilt from disk, the windows are
+        // reopened on the same workspaces. —
+        cx.update(|cx| WorkspaceStore::init(cx));
+        let (relaunched, mut vcx) = crate::ui::app::test_window::open_window_on(cx, Some(alpha));
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            written_alpha,
+            "alpha comes back with its own order, selection and open state"
+        );
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (written_alpha.open, written_alpha.active),
+            "the live mirror fields the panel renders from agree"
+        );
+
+        // Switching to beta finds the emptied layout as written, and opening
+        // the panel resumes the last-used tool rather than Info.
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(beta, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            written_beta
+        );
+        relaunched.update_in(&mut vcx, |app, _window, cx| app.toggle_right_panel(cx));
+        let resumed = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(resumed.order, [Scm]);
+        assert_eq!(resumed.active, Scm);
+        assert!(resumed.open);
+
+        // A workspace without new-format layout data starts from Info,
+        // collapsed — even though the shared config still carries the old
+        // global selection (Files) for an older build.
+        assert_eq!(
+            cx.update(|cx| cx.global::<Config>().right_panel_tab),
+            Files,
+            "the first session left the old global selection written"
+        );
+        let gamma = claim_workspace(cx);
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(gamma, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            ToolLayout::default()
+        );
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (false, Info)
+        );
+    }
+}

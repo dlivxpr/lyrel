@@ -5366,7 +5366,26 @@ pub(crate) mod test_window {
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
         lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, None)
+    }
 
+    /// The production workbench on an already-claimed workspace — what a
+    /// window restored at launch gets, and what the tool-layout persistence
+    /// tests (#348) reopen at their simulated relaunch. Callers that simulate
+    /// the relaunch itself use [`test_window::open_window_on`] so the rest of
+    /// the app state — the config above all — survives the "restart".
+    pub(crate) fn harness_on_workspace(
+        cx: &mut TestAppContext,
+        workspace: lyrel_ui_base::session::WorkspaceId,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
+        lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, Some(workspace))
+    }
+
+    /// The globals every GUI test window needs, installed idempotently.
+    fn install_globals(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -5387,9 +5406,19 @@ pub(crate) mod test_window {
                     .display_hint(crate::ui::machine_mirror::display_hint),
             );
         });
+    }
+
+    /// A production window on `workspace` (`None` opens an unclaimed one),
+    /// without touching the app globals — the half of the harness a simulated
+    /// relaunch reuses as-is.
+    pub(crate) fn open_window_on(
+        cx: &mut TestAppContext,
+        workspace: Option<lyrel_ui_base::session::WorkspaceId>,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
         let window = cx.add_window(|window, cx| {
-            let app =
-                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
+            let app = cx.new(|cx| {
+                LyrelApp::with_session(workspace, Some(Session::default()), window, cx)
+            });
             gpui_kit::component::Root::new(app, window, cx)
         });
         window
