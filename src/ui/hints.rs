@@ -4,6 +4,10 @@ use crate::ui::app::LyrelApp;
 
 const BADGE_DELAY_MS: u64 = 200;
 
+/// How long the badges stay mounted after the hold ends, covering the
+/// fade-out before the rows reclaim the width.
+const BADGE_FADE_MS: u64 = 200;
+
 pub(crate) fn tab_badge_label(index: usize) -> String {
     (index + 1).to_string()
 }
@@ -38,6 +42,7 @@ impl LyrelApp {
             let _ = this.update(cx, |this, cx| {
                 if this.mod_hint_gen == generation {
                     this.mod_hint_badges = true;
+                    this.mod_hint_fading = false;
                     cx.notify();
                 }
             });
@@ -57,10 +62,31 @@ impl LyrelApp {
 
     pub(crate) fn dismiss_mod_hint(&mut self, cx: &mut Context<Self>) {
         self.mod_hint_gen = self.mod_hint_gen.wrapping_add(1);
-        if self.mod_hint_badges {
-            self.mod_hint_badges = false;
-            cx.notify();
+        if !self.mod_hint_badges && !self.mod_hint_fading {
+            return;
         }
+        // The visible state ends now; the badges stay mounted while they fade
+        // out, then unmount. A re-hold during the fade cancels the unmount
+        // through the generation and the spring reverses from its sampled
+        // value.
+        let was_shown = self.mod_hint_badges;
+        self.mod_hint_badges = false;
+        cx.notify();
+        if !was_shown {
+            return;
+        }
+        self.mod_hint_fading = true;
+        let generation = self.mod_hint_gen;
+        cx.spawn(async move |this, cx| {
+            smol::Timer::after(std::time::Duration::from_millis(BADGE_FADE_MS)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mod_hint_gen == generation {
+                    this.mod_hint_fading = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
 

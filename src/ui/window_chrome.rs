@@ -330,7 +330,7 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
-        collapsed_tool_add: Option<impl IntoElement>,
+        collapsed_tool_add: Option<AnyElement>,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -438,7 +438,7 @@ impl WindowChrome {
             );
         Self {
             left: left.into_any_element(),
-            collapsed_tool_add: collapsed_tool_add.map(IntoElement::into_any_element),
+            collapsed_tool_add,
             right: right.into_any_element(),
         }
     }
@@ -502,19 +502,7 @@ impl WindowChrome {
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
-            // The collapsed panel's `+` sits at the drag area's trailing end,
-            // anchored beside the fixed command group; the tool tabs
-            // themselves live in the panel header, so nothing renders here
-            // while the panel is open.
-            .when_some(self.collapsed_tool_add, |chrome, add| {
-                chrome.child(
-                    gpui_kit::div()
-                        .flex_none()
-                        .min_w_0()
-                        .h_full()
-                        .child(add),
-                )
-            })
+            .children(self.collapsed_tool_add)
             .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
             .into_any_element()
     }
@@ -1079,15 +1067,12 @@ mod gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         vcx.update(|window, cx| window.render_frame(cx));
-        // Only Info is prepared, behind a collapsed panel.
+        // No tool strip is painted into the window chrome while the panel is closed.
         assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
         vcx.update(|window, _| {
-            assert_eq!(window.find_all("tool-tab-info").len(), 1);
-            assert!(window.find_all("tool-tab-files").is_empty());
-            assert!(window.find_all("tool-tab-changes").is_empty());
-            assert!(window.find_all("tool-tab-github").is_empty());
-            // The old fixed row is not also drawn.
-            assert!(window.find_all("right-panel-tabs").is_empty());
+            assert!(window.try_find("side-panel-tool-header").is_none());
+            assert!(window.try_find("tool-tab-info").is_none());
+            assert!(window.find("titlebar-tool-add").visible());
         });
         // Choosing a tool from the fixed + opens the panel on it.
         vcx.update(|window, cx| window.click("titlebar-tool-add", cx));
@@ -1097,6 +1082,14 @@ mod gpui_tests {
         assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
         vcx.update(|window, _| {
             assert_eq!(window.find_all("tool-tab-files").len(), 1);
+            assert_eq!(window.find_all("tool-tab-info").len(), 1);
+            let header = window.find("side-panel-tool-header");
+            let toggle = window.find("titlebar-right-panel");
+            let tab = window.find("tool-tab-files");
+            let add = window.find("titlebar-tool-add");
+            assert!(header.bounds().top() >= toggle.bounds().bottom());
+            assert!(header.bounds().contains(&tab.bounds().center()));
+            assert!(header.bounds().contains(&add.bounds().center()));
         });
         // Picking the same tool again activates the same instance.
         vcx.update(|window, cx| window.click("titlebar-tool-add", cx));

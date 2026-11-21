@@ -242,6 +242,9 @@ pub struct LyrelApp {
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
+    /// Badges stay mounted after the hold ends while they fade out; the
+    /// unmount timer then clears this. See `ui::hints`.
+    pub(crate) mod_hint_fading: bool,
     pub(crate) mod_hint_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
     /// Whether the home page's cursor block is on this half-second.
@@ -346,6 +349,14 @@ pub struct LyrelApp {
     /// them. Adopted from every pull and every `GroupsChanged`, and pushed
     /// back as one `WorkspaceSetGroups` whenever this window edits it.
     pub(crate) sidebar_groups: crate::core::group_key::WorkspaceGroups,
+    /// Session-row and group-disclosure motion: which rows are arriving or
+    /// leaving, which groups are opening or shutting, and what the leaving
+    /// rows last showed. The work-area render feeds it a membership diff
+    /// each frame and the sidebar render paints what it returns; nothing
+    /// outside `tab_sidebar` touches it. RefCell, like the slot rectangles
+    /// beside it: render is `&self`, and the diff has to happen where the
+    /// frame is built.
+    pub(crate) sidebar_motion: RefCell<crate::ui::tab_sidebar::SidebarMotion>,
     /// Where the active tab's panes were last drawn, which is the frame of
     /// reference a drag's landing is worked out in.
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -729,6 +740,7 @@ impl LyrelApp {
         }
         let previous_host = self.spawn_host(cx);
         self.workspace = id;
+        self.adopt_tool_layout(id, cx);
         self.rebind_host(previous_host, cx);
         self.refresh_shells(cx);
         let font_size = self.font_size;
@@ -5432,7 +5444,26 @@ pub(crate) mod test_window {
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
         lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, None)
+    }
 
+    /// The production workbench on an already-claimed workspace — what a
+    /// window restored at launch gets, and what the tool-layout persistence
+    /// tests (#348) reopen at their simulated relaunch. Callers that simulate
+    /// the relaunch itself use [`open_window_on`] so the rest of the app
+    /// state — the config above all — survives the "restart".
+    pub(crate) fn harness_on_workspace(
+        cx: &mut TestAppContext,
+        workspace: lyrel_ui_base::session::WorkspaceId,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
+        lyrel_ui_base::config::pin_test_config_dir();
+        install_globals(cx);
+        open_window_on(cx, Some(workspace))
+    }
+
+    /// The globals every GUI test window needs, installed idempotently.
+    fn install_globals(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
@@ -5453,9 +5484,19 @@ pub(crate) mod test_window {
                     .display_hint(crate::ui::machine_mirror::display_hint),
             );
         });
+    }
+
+    /// A production window on `workspace` (`None` opens an unclaimed one),
+    /// without touching the app globals — the half of the harness a simulated
+    /// relaunch reuses as-is.
+    pub(crate) fn open_window_on(
+        cx: &mut TestAppContext,
+        workspace: Option<lyrel_ui_base::session::WorkspaceId>,
+    ) -> (Entity<LyrelApp>, VisualTestContext) {
         let window = cx.add_window(|window, cx| {
-            let app =
-                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
+            let app = cx.new(|cx| {
+                LyrelApp::with_session(workspace, Some(Session::default()), window, cx)
+            });
             gpui_kit::component::Root::new(app, window, cx)
         });
         window

@@ -80,7 +80,7 @@ impl LyrelApp {
         // The pill only. `body_area` anchors it, together with whatever else
         // is floating down there — see `ui::notice`.
         Some(
-            crate::ui::notice::pill(cx.theme().warning, cx)
+            crate::ui::notice::pill("remote-input-notice", cx.theme().warning, cx)
                 .child(notice)
                 .into_any_element(),
         )
@@ -108,6 +108,9 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
+        // Membership diff for the sidebar's row/disclosure motion, run even
+        // when the panel is shut so a change that lands hidden stays landed.
+        self.observe_sidebar_motion(cx);
         self.reconcile_panel_slides(cx);
         let left_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Left);
         let right_slide = self.panel_slide(crate::ui::panel_slide::PanelBoundary::Right);
@@ -291,7 +294,8 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
-        let collapsed_tool_add = self.collapsed_tool_add(cx);
+        let collapsed_tool_add =
+            (!self.right_panel_open(cx)).then(|| self.tool_add_button(cx).into_any_element());
         let top_chrome = WindowChrome::new(
             self.left_panel_open(cx),
             self.right_panel_open(cx),

@@ -1,7 +1,7 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -56,12 +56,15 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 4] = [
     ),
 ];
 
-/// The `+` tile: tall enough for the 24px hit-target floor, drawn at the
-/// same scale as the 26px tab pills it closes the strip with.
-const TOOL_TILE: f32 = 26.;
-
-/// How wide every tab's close slot is reserved, button painted or not.
-const TOOL_CLOSE_SLOT: f32 = 16.;
+// Inspector chrome stays compact and leaves the width to the tools. At the
+// default 16px rem, tabs and the add control are 26px tall.
+const TOOL_TILE: f32 = 26. / 16.;
+const TOOL_CLOSE_SLOT: f32 = 1.;
+const TOOL_TAB_MAX_WIDTH: f32 = 10.5;
+const TOOL_TAB_RADIUS: f32 = 5. / 16.;
+const TOOL_HOVER_OPACITY: f32 = 0.045;
+const TOOL_SELECTED_OPACITY: f32 = 0.085;
+const TOOL_DIVIDER_OPACITY: f32 = 0.09;
 
 /// What the host renders for `tab`: label key and icon path. Only ever
 /// called with the layout's identities — Search has already folded into
@@ -105,14 +108,11 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
     }
 }
 
-/// The narrowest the panel may be drawn. The tool tabs moved up into the
-/// window title bar (#345) and the strip scrolls there instead of squeezing
-/// the panel, so the floor no longer carries their labels.
+/// The narrowest the panel may be drawn. The header scrolls independently,
+/// so the width floor is set by the body, not by the open tabs.
 pub(crate) const MIN_WIDTH: f32 = 240.;
 
-/// How tall the band above a panel body is where one exists at all: the tab's
-/// 26px hover pill plus 2px either side. Only the SFTP browser still brings a
-/// trailing row since the tool tabs left for the title bar.
+/// Height of the SFTP browser's own action band below the tool header.
 const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
 
 /// How wide a panel edge is to grab. Both edges a window can drag — the tab
@@ -353,8 +353,7 @@ pub(crate) struct RightPanelState {
         std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
 }
 
-/// One workspace's right-panel tool layout — what the title-bar tool host
-/// renders from, and the value #348 persists per workspace.
+/// The tool layout rendered in the Side Panel's header and saved per Workspace.
 ///
 /// Holds the open tools in tab order, the active tool, the most recently
 /// used tool, and whether the panel column is expanded. A stored `Search`
@@ -387,6 +386,32 @@ impl Default for ToolLayout {
 }
 
 impl ToolLayout {
+    /// The Workspace Store record written for this layout (#348): versioned,
+    /// so a future shape can migrate or be dropped instead of misread. Only
+    /// the layout goes here — tool search text, filters, expansion and
+    /// drafts stay in memory, the way they always have.
+    fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
+        lyrel_core::core::session::ToolLayoutState {
+            version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
+            order: self.order.clone(),
+            active: self.active,
+            last_used: self.last_used,
+            open: self.open,
+        }
+    }
+
+    /// The layout a stored record restores. An emptied `order` is kept as
+    /// written — `last_used` is what an emptied panel resumes (#348), it is
+    /// not replaced by the default tab set.
+    fn from_state(state: &lyrel_core::core::session::ToolLayoutState) -> Self {
+        Self {
+            order: state.order.clone(),
+            active: state.active,
+            last_used: state.last_used,
+            open: state.open,
+        }
+    }
+
     /// Show `tab`: one instance per workspace, so an already-open tool is
     /// activated in place and a new one takes the trailing slot. Showing a
     /// tool always expands the panel — choosing it from `+`, its tab, or
@@ -682,15 +707,53 @@ impl LyrelApp {
             .unwrap_or_default()
     }
 
+    /// The tool layout the Workspace Store holds for workspace `id` — the
+    /// persisted choice where one was written, otherwise the
+    /// fresh-workspace default: Info only, behind a collapsed panel,
+    /// whatever the old global config selection says (#345). A record newer
+    /// than this build reads as absent rather than misread (#348).
+    pub(crate) fn persisted_tool_layout(
+        id: lyrel_ui_base::session::WorkspaceId,
+        cx: &gpui_kit::App,
+    ) -> ToolLayout {
+        lyrel_ui_base::session::WorkspaceStore::all(cx)
+            .get(id)
+            .and_then(|view| view.tool_layout.as_ref())
+            .filter(|state| state.readable())
+            .map(ToolLayout::from_state)
+            .unwrap_or_default()
+    }
+
+    /// Take up workspace `id`'s tool layout — on first open and on every
+    /// switch (#348). The mirror fields the panel code reads and the
+    /// per-workspace map the tool host renders from are both seeded from the
+    /// persisted record, so the arriving workspace neither inherits the
+    /// departing one's panel nor folds it into its own layout.
+    pub(crate) fn adopt_tool_layout(
+        &mut self,
+        id: lyrel_ui_base::session::WorkspaceId,
+        cx: &gpui_kit::App,
+    ) {
+        let layout = Self::persisted_tool_layout(id, cx);
+        self.right_panel.tool_layouts.insert(id, layout.clone());
+        self.right_panel_visible = layout.open;
+        self.right_panel_tab = layout.active;
+    }
+
     /// Write the layout back: the map, the live mirror fields the panel code
-    /// reads, and the global config, which keeps carrying the choice for an
-    /// older build until per-workspace persistence lands (#348).
+    /// reads, the Workspace Store record a restart restores (#348), and the
+    /// global config, which keeps carrying the choice for an older build.
     fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
         self.right_panel
             .tool_layouts
             .insert(self.workspace, layout.clone());
         self.right_panel_visible = layout.open;
         self.right_panel_tab = layout.active;
+        lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
+            cx,
+            self.workspace,
+            &layout.to_state(),
+        );
         self.update_config(cx, |cfg| {
             cfg.right_panel_tab = layout.active;
             cfg.right_panel_visible = layout.open;
@@ -885,7 +948,7 @@ impl LyrelApp {
         self.store_tool_layout(&layout, cx);
     }
 
-    /// Close `tab`'s tool tab from the title-bar host. Ordinary switches
+    /// Close `tab` in the Side Panel header. Ordinary switches
     /// never move the keyboard; closing only takes focus back when the panel
     /// collapsed under it or the closed tool owned the focus — otherwise the
     /// pointer and the keyboard stay wherever they were.
@@ -955,6 +1018,7 @@ impl LyrelApp {
     fn render_right_panel_mount(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let width = self.right_panel_px(window, cx);
         let tab = self.right_panel_tab;
+        let header = self.tool_host(window, cx);
 
         let body = match tab {
             RightPanelTab::Info => self.render_panel_info(window, cx),
@@ -974,6 +1038,7 @@ impl LyrelApp {
             .bg(crate::ui::theme::workspace_surface_color(cx))
             .border_l(crate::ui::theme::hairline(window))
             .border_color(cx.theme().sidebar_border)
+            .child(header)
             .child(body)
             .children(self.sftp_transfers_footer(cx))
             .child(handle)
@@ -1097,12 +1162,9 @@ impl LyrelApp {
         (backing, handle)
     }
 
-    /// The band above a panel body. The tool tabs and the Changes count this
-    /// row used to carry moved to the title-bar tool host (#345), so for the
-    /// four tool pages this renders nothing and the body starts on its
-    /// content. The row survives only for a sub-view that brings trailing
-    /// controls of its own — the SFTP browser — and the `_count` a caller
-    /// still passes is the host's, not a tab badge, so it is dropped here.
+    /// A sub-view's action band beneath the Side Panel header. Only the SFTP
+    /// browser supplies trailing controls; tool names and the Changes count
+    /// belong to the header, not a second tab row.
     pub(crate) fn panel_title(
         &self,
         _text: &str,
@@ -1126,17 +1188,14 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// The title-bar tool host: compact icon-and-label tabs for this
-    /// workspace's open tools — one instance each, the selected tab on a
-    /// neutral fill, a reserved close slot on every tab — and the fixed `+`
-    /// that offers every tool and opens the panel on its pick. The host stays
-    /// put and usable while the panel is collapsed: choosing a tool opens the
-    /// panel on it.
-    pub(crate) fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The Side Panel's own header. Only its tabs scroll; the add button
+    /// remains at the trailing edge of the panel.
+    fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let layout = self.tool_layout();
-        let rail = cx.global::<lyrel_ui_base::presets::Surfaces>().rail;
-        let rail_selected = gpui_kit::rgb(rail.selected);
-        let rail_hover = gpui_kit::rgb(rail.hover);
+        let selected_fill = cx.theme().foreground.opacity(TOOL_SELECTED_OPACITY);
+        let hover_fill = cx.theme().foreground.opacity(TOOL_HOVER_OPACITY);
+        let close_hover = cx.theme().foreground.opacity(0.10);
+        let divider = cx.theme().foreground.opacity(TOOL_DIVIDER_OPACITY);
         let body_ink = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let ring = cx.theme().ring;
@@ -1169,30 +1228,29 @@ impl LyrelApp {
                         inset: true,
                     }])
                 })
-                // The press must not start a window drag from the title bar
-                // the host sits in.
-                .occlude()
+                .flex_none()
                 .group(group.clone())
-                .flex_shrink_0()
-                .h_full()
+                .h(rems(TOOL_TILE))
+                .max_w(rems(TOOL_TAB_MAX_WIDTH))
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .px(px(8.))
-                .rounded(px(7.))
-                .text_size(gpui_kit::rems(TAB_TEXT))
-                .when(current, |tab| tab.bg(rail_selected))
-                .when(!current, |tab| tab.hover(move |style| style.bg(rail_hover)))
-                .child(Icon::empty().path(icon).size(px(14.)).text_color(ink))
+                .gap(rems(5. * STEP))
+                .pl_2()
+                .pr_1()
+                .rounded(rems(TOOL_TAB_RADIUS))
+                .text_size(rems(HEADING))
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(ink)
+                .when(current, |tab| tab.bg(selected_fill))
+                .when(!current, |tab| {
+                    tab.hover(move |style| style.bg(hover_fill).text_color(body_ink))
+                })
+                .child(Icon::empty().path(icon).size(rems(11. * STEP)).flex_none())
                 .child(
-                    div()
-                        .flex_shrink_0()
-                        .font_weight(match current {
-                            true => gpui_kit::FontWeight::MEDIUM,
-                            false => gpui_kit::FontWeight::NORMAL,
-                        })
-                        .text_color(ink)
-                        .child(t(label_key))
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().min_w_0().truncate().child(t(label_key)))
                         // Only Changes may show a real changed-item count,
                         // the same number its tool page headlines with.
                         .when(tab == RightPanelTab::Scm, |label| {
@@ -1217,24 +1275,28 @@ impl LyrelApp {
                         .id(tool_tab_close_id(tab))
                         .test_support()
                         .flex_shrink_0()
-                        .size(px(TOOL_CLOSE_SLOT))
+                        .size(rems(TOOL_CLOSE_SLOT))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(4.))
+                        .rounded(rems(TOOL_TAB_RADIUS))
                         .role(gpui_kit::Role::Button)
                         .aria_label(close_tip.clone())
                         .tooltip(move |window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(close_tip.clone())
                                 .build(window, cx)
                         })
-                        .hover(move |style| style.bg(rail_hover))
+                        .hover(move |style| style.bg(close_hover))
                         .child(
                             div()
                                 .invisible()
                                 .when(current, |icon| icon.visible())
                                 .group_hover(group, |style| style.visible())
-                                .child(Icon::new(IconName::Close).size(px(12.)).text_color(ink)),
+                                .child(
+                                    Icon::new(IconName::Close)
+                                        .size(rems(10. * STEP))
+                                        .text_color(muted),
+                                ),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
@@ -1249,15 +1311,14 @@ impl LyrelApp {
                         ) {
                             this.right_panel_navigation_pointer(window, cx);
                         }
-                        // The current one does nothing: only close and the panel
-                        // toggle put a tool away.
-                        if this.tool_layout().active != tab {
+                        let layout = this.tool_layout();
+                        if !layout.open || layout.active != tab {
                             this.set_right_panel_tab(tab, window, cx);
                         }
                     }),
                 )
         });
-        NavTabs::new("tool-tabs")
+        let strip = NavTabs::new("tool-tabs")
             .axis(gpui_kit::Axis::Horizontal)
             // One roving tab stop: focusing this scope then moving on lands
             // on the selected tab, while the scope itself is never a stop.
@@ -1266,6 +1327,7 @@ impl LyrelApp {
             .flex()
             .flex_row()
             .items_center()
+            .gap_0p5()
             .h_full()
             .flex_shrink_0()
             .min_w_0()
@@ -1287,7 +1349,27 @@ impl LyrelApp {
                     }
                 }),
             )
-            .children(tabs)
+            .children(tabs);
+        h_flex()
+            .id("side-panel-tool-header")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .h(rems(2.625))
+            .pl(rems(7. * STEP))
+            .pr_2()
+            .gap_1()
+            .border_b(crate::ui::theme::hairline(window))
+            .border_color(divider)
+            .child(
+                div()
+                    .id("side-panel-tool-scroll")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_x_scroll()
+                    .child(strip),
+            )
             .child(self.tool_add_button(cx))
             .into_any_element()
     }
@@ -1308,57 +1390,53 @@ impl LyrelApp {
         (status.total_entries > 0).then(|| status.total_entries.to_string())
     }
 
-    /// The fixed `+` at the host's trailing end. Works while the panel is
-    /// collapsed — a pick opens the panel on the tool, activating the
-    /// existing tab when the tool is already open.
-    fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// One add affordance: in the panel header when expanded, in the
+    /// fixed chrome when collapsed so a pick can reopen the panel.
+    pub(crate) fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        crate::ui::window_chrome::chrome_tile_sized(
-            Button::new("titlebar-tool-add").icon(Icon::new(IconName::Plus)),
-            TOOL_TILE,
-            crate::ui::window_chrome::TILE_GLYPH,
-            false,
-            cx,
-        )
-        .rounded(px(7.))
-        .accessibility_label(t(L10nKey::ToolHostAdd))
-        .tooltip(t(L10nKey::ToolHostAdd))
-        // Built when the menu opens, not when the strip draws.
-        .dropdown_menu(move |menu, _window, _cx| {
-            let mut menu = menu.min_w(px(180.));
-            for (tab, label_key, icon) in TOOL_HOST_TOOLS {
-                let app = app.clone();
-                let id = format!("tool-add-{}", tool_name(tab));
-                menu = menu.item(
-                    gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
-                        h_flex()
-                            .id(id.clone())
-                            .test_support()
-                            .w_full()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(Icon::empty().path(icon).size(px(14.)))
-                            .child(div().child(t(label_key)))
-                    })
-                    .on_click(move |_, window, cx| {
-                        if let Some(app) = app.upgrade() {
-                            app.update(cx, |this, cx| {
-                                this.set_right_panel_tab(tab, window, cx);
-                            });
-                        }
-                    }),
-                );
-            }
-            menu
-        })
-    }
-
-    /// The `+` the window chrome shows only while the Side Panel is
-    /// collapsed: the panel header (which carries its own `+`) is off screen
-    /// with the panel, so the add affordance stays reachable beside the
-    /// toggle. Nothing renders while the panel is open — no second strip.
-    pub(crate) fn collapsed_tool_add(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        (!self.right_panel_open(cx)).then(|| self.tool_add_button(cx).into_any_element())
+        Button::new("titlebar-tool-add")
+            .icon(Icon::new(IconName::Plus))
+            .custom(
+                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                    .color(cx.theme().transparent)
+                    .foreground(cx.theme().muted_foreground)
+                    .hover(cx.theme().foreground.opacity(0.06))
+                    .active(cx.theme().foreground.opacity(TOOL_SELECTED_OPACITY)),
+            )
+            .with_size(px(13. / crate::ui::window_chrome::BUTTON_ICON_SCALE))
+            .w(rems(TOOL_TILE))
+            .h(rems(TOOL_TILE))
+            .rounded(px(TOOL_TAB_RADIUS / STEP))
+            .accessibility_label(t(L10nKey::ToolHostAdd))
+            .tooltip(t(L10nKey::ToolHostAdd))
+            // Built when the menu opens, not when the strip draws.
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu.min_w(px(180.));
+                for (tab, label_key, icon) in TOOL_HOST_TOOLS {
+                    let app = app.clone();
+                    let id = format!("tool-add-{}", tool_name(tab));
+                    menu = menu.item(
+                        gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
+                            h_flex()
+                                .id(id.clone())
+                                .test_support()
+                                .w_full()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(Icon::empty().path(icon).size(px(14.)))
+                                .child(div().child(t(label_key)))
+                        })
+                        .on_click(move |_, window, cx| {
+                            if let Some(app) = app.upgrade() {
+                                app.update(cx, |this, cx| {
+                                    this.set_right_panel_tab(tab, window, cx);
+                                });
+                            }
+                        }),
+                    );
+                }
+                menu
+            })
     }
 
     pub(crate) fn panel_search(
@@ -3034,6 +3112,177 @@ mod tests {
             diff(3, 1, true).copyable().copy,
             None,
             "there is no sensible clipboard form of two coloured numbers"
+        );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    //! #348's consumer: the production workbench, not a serialization test.
+    //! Two workspaces keep their own ordered tools, selection and open state
+    //! across a simulated restart — the store global reloaded from the pinned
+    //! scratch `views.json` standing in for the process relaunch — and a
+    //! workspace without a written layout starts from Info, collapsed,
+    //! whatever the old global config selection says.
+
+    use super::ToolLayout;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm};
+    use lyrel_ui_base::actions::{
+        ShowRightPanelChanges, ShowRightPanelFiles, ShowRightPanelGitHub,
+    };
+    use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::session::{Session, WorkspaceId, WorkspaceStore};
+
+    /// Only this module writes the scratch `views.json`, and the scenarios
+    /// below each reload the store from it; the lock keeps their fixtures
+    /// apart even as the suite grows more store-aware tests.
+    static VIEWS_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn settle(vcx: &mut VisualTestContext) {
+        for _ in 0..4 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.render_frame(cx);
+            });
+        }
+        vcx.run_until_parked();
+    }
+
+    fn claim_workspace(cx: &mut TestAppContext) -> WorkspaceId {
+        cx.update(|cx| WorkspaceStore::claim(cx, None))
+    }
+
+    #[gpui_kit::test]
+    fn workspaces_keep_their_own_tool_layout_across_relaunch(cx: &mut TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        cx.update(|cx| WorkspaceStore::init(cx));
+
+        // — First session: two workspaces used differently. —
+        let alpha = claim_workspace(cx);
+        let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, alpha);
+        for action in [
+            ShowRightPanelFiles,
+            ShowRightPanelChanges,
+            ShowRightPanelGitHub,
+        ] {
+            vcx.dispatch_action(action);
+        }
+        settle(&mut vcx);
+        // Select a tool that is not the last-opened one, then collapse: the
+        // persisted state has to carry order, active tool, last-used tool
+        // and open state together.
+        vcx.dispatch_action(ShowRightPanelFiles);
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, _window, cx| app.toggle_right_panel(cx));
+        settle(&mut vcx);
+        let written_alpha = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(written_alpha.order, [Info, Files, Scm, GitHub]);
+        assert_eq!(written_alpha.active, Files);
+        assert_eq!(written_alpha.last_used, Files);
+        assert!(!written_alpha.open, "alpha's panel was left collapsed");
+        assert_eq!(
+            cx.update(|cx| {
+                WorkspaceStore::all(cx)
+                    .get(alpha)
+                    .and_then(|view| view.tool_layout.clone())
+            }),
+            Some(lyrel_core::core::session::ToolLayoutState {
+                version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
+                order: written_alpha.order.clone(),
+                active: written_alpha.active,
+                last_used: written_alpha.last_used,
+                open: written_alpha.open,
+            }),
+            "the store record is exactly the layout — search text, filters, \
+             expansion and drafts stay in memory"
+        );
+
+        // Switching in place takes up the other workspace's layout: beta has
+        // never been given one, so it starts from Info, collapsed — alpha's
+        // open, Files-first panel is not projected onto it.
+        let beta = claim_workspace(cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(beta, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            app.read_with(&vcx, |app, _| app.tool_layout()),
+            ToolLayout::default()
+        );
+        assert_eq!(
+            app.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (false, Info)
+        );
+
+        // Beta closes every tool it had: the written layout stays empty and
+        // keeps last-used, the state an emptied panel resumes from.
+        vcx.dispatch_action(ShowRightPanelChanges);
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.close_right_panel_tab(Info, window, cx);
+            app.close_right_panel_tab(Scm, window, cx);
+        });
+        settle(&mut vcx);
+        let written_beta = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert!(written_beta.order.is_empty(), "beta's tools are all closed");
+        assert!(!written_beta.open);
+        assert_eq!(written_beta.last_used, Scm);
+
+        // — Restart: the store global is rebuilt from disk, the windows are
+        // reopened on the same workspaces. —
+        cx.update(|cx| WorkspaceStore::init(cx));
+        let (relaunched, mut vcx) = crate::ui::app::test_window::open_window_on(cx, Some(alpha));
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            written_alpha,
+            "alpha comes back with its own order, selection and open state"
+        );
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (written_alpha.open, written_alpha.active),
+            "the live mirror fields the panel renders from agree"
+        );
+
+        // Switching to beta finds the emptied layout as written, and opening
+        // the panel resumes the last-used tool rather than Info.
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(beta, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            written_beta
+        );
+        relaunched.update_in(&mut vcx, |app, _window, cx| app.toggle_right_panel(cx));
+        let resumed = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(resumed.order, [Scm]);
+        assert_eq!(resumed.active, Scm);
+        assert!(resumed.open);
+
+        // A workspace without new-format layout data starts from Info,
+        // collapsed — even though the shared config still carries the old
+        // global selection (Files) for an older build.
+        assert_eq!(
+            cx.update(|cx| cx.global::<Config>().right_panel_tab),
+            Files,
+            "the first session left the old global selection written"
+        );
+        let gamma = claim_workspace(cx);
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.adopt_workspace(gamma, Session::default(), window, cx)
+        });
+        settle(&mut vcx);
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| app.tool_layout()),
+            ToolLayout::default()
+        );
+        assert_eq!(
+            relaunched.read_with(&vcx, |app, _| (app.right_panel_visible, app.right_panel_tab)),
+            (false, Info)
         );
     }
 }
