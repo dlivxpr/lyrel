@@ -419,6 +419,7 @@ impl LyrelApp {
             sidebar_group_slots: Rc::new(RefCell::new(Vec::new())),
             sidebar_divider: Rc::new(Cell::new(None)),
             sidebar_groups: Default::default(),
+            sidebar_motion: RefCell::new(Default::default()),
             pane_area: Rc::new(Cell::new(None)),
             file_search,
             _file_search_sub: file_search_sub,
