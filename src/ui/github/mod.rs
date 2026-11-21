@@ -2,8 +2,9 @@
 //!
 //! Read-only issues and pull requests for the repository the active pane is
 //! in. The rendering lives in `ui::panel_github` (the list) and
-//! [`detail`] (one issue or pull request); this module owns what they draw
-//! from and how it gets there:
+//! [`detail`] (one issue or pull request, opened as a read-only document in
+//! the tab's document area — see [`GithubDetailDoc`]); this module owns what
+//! they draw from and how it gets there:
 //!
 //! - **Which repository.** The pane's working tree, resolved to its root the
 //!   way the Source Control tab does (`scm_repo_root`), then its remotes read
@@ -25,7 +26,7 @@
 //! still running has just its checks re-read every [`CHECKS_POLL`], signed in
 //! only, so "waiting on 1 check" turns into a verdict without anyone pressing
 //! refresh. And the pane's branch is read every [`BRANCH_TTL`], so the pull
-//! request pinned over the list follows a `git switch`.
+//! request pinned in the document area follows a `git switch`.
 
 pub(crate) mod detail;
 pub(crate) mod rows;
@@ -143,6 +144,23 @@ pub(crate) struct BranchPullCache {
     pub(crate) fetched: Option<Instant>,
 }
 
+/// An issue or pull request opened as a read-only document in the tab's
+/// document column, beside the code document and the diff overlay. The panel
+/// state above keeps the list; this is the surface the list hands the reader
+/// to, and it owns what that surface needs to be read and dismissed on its
+/// own: focus, scroll, and the repository checkout the item belongs to.
+pub(crate) struct GithubDetailDoc {
+    pub(crate) slug: RepoSlug,
+    pub(crate) number: u64,
+    /// The checkout the item was opened from: what the status bar names and
+    /// the header refreshes. The detail stays meaningful when the pane moves
+    /// on — the ownership rule closes it — so the origin is recorded here.
+    pub(crate) host_id: HostId,
+    pub(crate) cwd: std::path::PathBuf,
+    pub(crate) focus_handle: gpui_kit::FocusHandle,
+    pub(crate) scroll: gpui_kit::ScrollHandle,
+}
+
 pub(crate) struct GitHubPanelState {
     pub(crate) connection: Option<Connection>,
     pub(crate) connecting: bool,
@@ -159,10 +177,11 @@ pub(crate) struct GitHubPanelState {
     pub(crate) label: Option<String>,
     pub(crate) lists: HashMap<ListQuery, ListCache>,
     pub(crate) details: HashMap<(RepoSlug, u64), DetailCache>,
-    /// The issue or pull request whose detail replaces the list.
+    /// The issue or pull request whose detail is open as a document. The
+    /// surface itself lives on the tab; this is the panel's identity for it,
+    /// what the list highlights and the checks poll gates on.
     pub(crate) open: Option<(RepoSlug, u64)>,
     pub(crate) list_scroll: gpui_kit::ScrollHandle,
-    pub(crate) detail_scroll: gpui_kit::ScrollHandle,
     pub(crate) list_focus: gpui_kit::FocusHandle,
     pub(crate) list_anchor: gpui_kit::ScrollAnchor,
     /// The list row under the pointer, by number: the one that shows its
@@ -195,7 +214,6 @@ impl GitHubPanelState {
             list_anchor: gpui_kit::ScrollAnchor::for_handle(list_scroll.clone()),
             list_scroll,
             list_focus: cx.focus_handle().tab_stop(true),
-            detail_scroll: gpui_kit::ScrollHandle::new(),
             hovered: None,
             branches: HashMap::new(),
             branch_pulls: HashMap::new(),
@@ -875,20 +893,69 @@ impl LyrelApp {
         }
     }
 
+    /// Open an issue or pull request as a read-only document in the active
+    /// tab's document area, over whatever document is there. The list stays
+    /// in the panel; explicit opening is a content action, so the keyboard
+    /// lands in the surface and can read it without a pointer.
     pub(crate) fn github_open_detail(
         &mut self,
         slug: RepoSlug,
         number: u64,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.github.open = Some((slug, number));
-        self.github.detail_scroll = gpui_kit::ScrollHandle::new();
+        self.github.open = Some((slug.clone(), number));
+        // The status bar and the header's refresh tile name the checkout the
+        // item was opened from. The target is cache-warm — the panel resolved
+        // it to render the row that is being opened.
+        let origin = match self.github_target(window, cx) {
+            GhTarget::Ready { host, repo, chosen, .. } if chosen.slug == slug => {
+                Some((host.id(), repo.root))
+            }
+            _ => None,
+        };
+        let (host_id, cwd) = origin.unwrap_or((
+            HostId::LOCAL,
+            std::path::PathBuf::new(),
+        ));
+        let focus_handle = cx.focus_handle().tab_stop(true);
+        self.watch_document_status_focus(&focus_handle, window, cx);
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        tab.github_detail = Some(GithubDetailDoc {
+            slug,
+            number,
+            host_id,
+            cwd,
+            focus_handle: focus_handle.clone(),
+            scroll: gpui_kit::ScrollHandle::new(),
+        });
+        tab.reveal_github();
+        window.focus(&focus_handle, cx);
         cx.notify();
     }
 
+    /// Close the open detail document. What held the keyboard gets it back:
+    /// the document the detail covered when there is one, otherwise the list
+    /// the item was opened from — and the terminal only when the panel is
+    /// nowhere to be seen, never an obscured shell.
     pub(crate) fn github_close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let had_surface = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.github_detail.take())
+            .is_some();
         self.github.open = None;
-        window.focus(&self.github.list_focus, cx);
+        if had_surface {
+            if self.document_front().is_some() {
+                self.focus_previous_content(window, cx);
+            } else if self.right_panel_open(cx) {
+                window.focus(&self.github.list_focus, cx);
+            } else {
+                self.focus_active(window, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -940,7 +1007,7 @@ impl LyrelApp {
             },
             "enter" => {
                 if let Some(number) = current.and(cache.selected) {
-                    self.github_open_detail(query.slug.clone(), number, cx);
+                    self.github_open_detail(query.slug.clone(), number, window, cx);
                     cx.stop_propagation();
                 }
                 return;

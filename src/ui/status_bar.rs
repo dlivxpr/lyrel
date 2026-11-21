@@ -101,6 +101,10 @@ impl LyrelApp {
                 .diff_overlay
                 .as_ref()
                 .is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
+            || tab
+                .github_detail
+                .as_ref()
+                .is_some_and(|doc| doc.focus_handle.contains_focused(window, cx))
             || self
                 .status_document_focus
                 .filter(|(id, _)| *id == tab.id())
@@ -118,6 +122,11 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .and_then(|tab| tab.diff_overlay.as_ref())
                 .map(|diff| (diff.host_id, diff.cwd.as_path())),
+            Some(crate::ui::tab::OverlayTop::Github) => self
+                .tabs
+                .get(self.tabs.active_index())
+                .and_then(|tab| tab.github_detail.as_ref())
+                .map(|doc| (doc.host_id, doc.cwd.as_path())),
             None => None,
         };
         let host = location.map_or_else(
