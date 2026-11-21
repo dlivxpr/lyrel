@@ -1593,6 +1593,7 @@ impl LyrelApp {
                         (Some(Some(from)), Some(Some(to))) => {
                             Some(from.center().x - to.center().x)
                         }
+                        (Some(Some(from)), Some(Some(to))) => Some(from.center().x - to.center().x),
                         _ => None,
                     }) {
                         Some(flip) if flip != px(0.) => ToolTabVisual::Slide(flip),
@@ -1677,6 +1678,9 @@ impl LyrelApp {
                     .children(tabs),
             )
             .child(gpui_kit::base::ScrollableMask::vertical_wheel(&state.scroll));
+            .child(gpui_kit::base::ScrollableMask::vertical_wheel(
+                &state.scroll,
+            ));
         // Remember what this frame rendered so the next can slide changed
         // slots and reveal a changed selection. Written only on change: the
         // write notifies, and an unconditional one would render forever.
@@ -1684,6 +1688,7 @@ impl LyrelApp {
         if state.rendered_order != layout.order
             || strip_state.read(cx).prev_active != prev_active
         {
+        if state.rendered_order != layout.order || strip_state.read(cx).prev_active != prev_active {
             strip_state.update(cx, |state, _| {
                 state.rendered_order = layout.order.clone();
                 state.prev_active = prev_active;
@@ -1800,6 +1805,24 @@ impl LyrelApp {
                                     let drag =
                                         strip_state.update(cx, |state, _| state.drag.take());
                                     let Some(drag) = drag.filter(|drag| drag.started) else {
+                canvas(|_, _, _| {}, {
+                    let strip_state = strip_state.clone();
+                    let app = cx.entity().downgrade();
+                    move |_bounds, _state, window, cx| {
+                        window.on_mouse_event({
+                            let strip_state = strip_state.clone();
+                            let app = app.clone();
+                            move |event: &MouseMoveEvent, _phase, window, cx| {
+                                let Some(app) = app.upgrade() else { return };
+                                let order: Vec<RightPanelTab> = app.read(cx).tool_layout().order;
+                                let state = strip_state.read(cx).clone();
+                                let Some(drag) = state.drag.clone() else {
+                                    return;
+                                };
+                                if !drag.started {
+                                    let dx = (event.position.x - drag.grab.x).as_f32().abs();
+                                    let dy = (event.position.y - drag.grab.y).as_f32().abs();
+                                    if dx.max(dy) <= TOOL_DRAG_THRESHOLD {
                                         return;
                                     };
                                     if let Some(app) = app.upgrade() {
@@ -1824,11 +1847,102 @@ impl LyrelApp {
                                         });
                                     }
                                     window.refresh();
+                                    strip_state.update(cx, |state, _| {
+                                        if let Some(drag) = state.drag.as_mut() {
+                                            drag.pointer = event.position;
+                                            drag.started = true;
+                                        }
+                                    });
+                                } else {
+                                    strip_state.update(cx, |state, _| {
+                                        if let Some(drag) = state.drag.as_mut() {
+                                            drag.pointer = event.position;
+                                        }
+                                    });
                                 }
                             });
                         }
                     },
                 )
+                                // Follow the pointer past the viewport
+                                // edges so off-screen tabs stay reachable.
+                                let view = state.scroll.bounds();
+                                let max = state.scroll.max_offset().x.as_f32();
+                                let mut offset = state.scroll.offset();
+                                let mut ox = offset.x.as_f32();
+                                if event.position.x.as_f32()
+                                    > view.right().as_f32() - TOOL_SCROLL_EDGE
+                                    && ox > -max
+                                {
+                                    ox = (ox - TOOL_SCROLL_STEP).max(-max);
+                                } else if event.position.x.as_f32()
+                                    < view.left().as_f32() + TOOL_SCROLL_EDGE
+                                    && ox < 0.
+                                {
+                                    ox = (ox + TOOL_SCROLL_STEP).min(0.);
+                                }
+                                if ox != offset.x.as_f32() {
+                                    offset.x = px(ox);
+                                    state.scroll.set_offset(offset);
+                                }
+                                // Commit the reorder under the pointer:
+                                // the layout is what the strip renders,
+                                // so the tabs settle into the preview as
+                                // the drag crosses them. The mirror and
+                                // config are stored once, on release.
+                                let pointer_x = event.position.x - state.scroll.offset().x;
+                                let slots: Vec<_> = (0..order.len())
+                                    .map(|slot| state.scroll.bounds_for_item(slot))
+                                    .collect();
+                                let target = strip_target(&slots, &order, drag.tab, pointer_x);
+                                if target != order.iter().position(|open| *open == drag.tab) {
+                                    app.update(cx, |this, _cx| {
+                                        let mut layout = this.tool_layout();
+                                        layout.move_tab(drag.tab, target);
+                                        this.right_panel
+                                            .tool_layouts
+                                            .insert(this.workspace, layout);
+                                    });
+                                    strip_state.update(cx, |state, _| {
+                                        if let Some(drag) = state.drag.as_mut() {
+                                            drag.generation += 1;
+                                        }
+                                    });
+                                }
+                                window.refresh();
+                            }
+                        });
+                        window.on_mouse_event({
+                            let strip_state = strip_state.clone();
+                            let app = app.clone();
+                            move |event: &MouseUpEvent, _phase, window, cx| {
+                                let drag = strip_state.update(cx, |state, _| state.drag.take());
+                                let Some(drag) = drag.filter(|drag| drag.started) else {
+                                    return;
+                                };
+                                if let Some(app) = app.upgrade() {
+                                    app.update(cx, |this, cx| {
+                                        let mut layout = this.tool_layout();
+                                        let state = strip_state.read(cx).clone();
+                                        let pointer_x = event.position.x - state.scroll.offset().x;
+                                        let slots: Vec<_> = (0..layout.order.len())
+                                            .map(|slot| state.scroll.bounds_for_item(slot))
+                                            .collect();
+                                        let target = strip_target(
+                                            &slots,
+                                            &layout.order,
+                                            drag.tab,
+                                            pointer_x,
+                                        );
+                                        layout.move_tab(drag.tab, target);
+                                        this.store_tool_layout(&layout, cx);
+                                    });
+                                }
+                                window.refresh();
+                            }
+                        });
+                    }
+                })
                 .absolute()
                 .size_full(),
             )

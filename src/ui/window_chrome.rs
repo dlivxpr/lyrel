@@ -1144,6 +1144,10 @@ mod gpui_tests {
     fn closing_tool_tabs_follows_the_neighbours_and_empties_collapse(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.update_config(cx, |cfg| cfg.right_panel_width = 460.);
+            app.right_panel_width.set(460.);
+        });
         for tab in [
             RightPanelTab::Files,
             RightPanelTab::Scm,
@@ -1374,7 +1378,7 @@ mod gpui_tests {
         settle(&mut vcx);
         let fixed = vcx.update(|window, _| {
             (
-                window.find("titlebar-tool-add").bounds(),
+                window.find("side-panel-tool-add").bounds(),
                 window.find("titlebar-right-panel").bounds(),
                 window.find("titlebar-split-right").bounds(),
             )
@@ -1403,7 +1407,7 @@ mod gpui_tests {
                 !view.intersects(&info),
                 "the leading tab scrolled out while the fixed controls stayed"
             );
-            let add = window.find("titlebar-tool-add").bounds();
+            let add = window.find("side-panel-tool-add").bounds();
             let toggle = window.find("titlebar-right-panel").bounds();
             let split = window.find("titlebar-split-right").bounds();
             assert_eq!(add, fixed.0, "the + does not travel with the tabs");
@@ -1425,9 +1429,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn clamping_for_a_narrow_window_leaves_the_global_preferred_width(
-        cx: &mut TestAppContext,
-    ) {
+    fn clamping_for_a_narrow_window_leaves_the_global_preferred_width(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         app.update_in(&mut vcx, |app, window, cx| {
