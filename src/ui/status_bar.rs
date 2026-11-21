@@ -101,6 +101,10 @@ impl LyrelApp {
                 .diff_overlay
                 .as_ref()
                 .is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
+            || tab
+                .github_detail
+                .as_ref()
+                .is_some_and(|doc| doc.focus_handle.contains_focused(window, cx))
             || self
                 .status_document_focus
                 .filter(|(id, _)| *id == tab.id())
@@ -118,6 +122,11 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .and_then(|tab| tab.diff_overlay.as_ref())
                 .map(|diff| (diff.host_id, diff.cwd.as_path())),
+            Some(crate::ui::tab::OverlayTop::Github) => self
+                .tabs
+                .get(self.tabs.active_index())
+                .and_then(|tab| tab.github_detail.as_ref())
+                .map(|doc| (doc.host_id, doc.cwd.as_path())),
             None => None,
         };
         let host = location.map_or_else(
@@ -156,12 +165,13 @@ impl LyrelApp {
                 }
             })
         } else {
-            self.tab_cwd_text(self.tabs.active_index(), window, cx)
+            self.context_cwd_text(window, cx)
         };
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())
-            .and_then(|tab| tab.pane.focused_or_first(window, cx));
+        // The Git context reads the Context Pane — the last valid terminal
+        // pane of the active Workspace — like every other surface that names
+        // a repository (#349). A document, a menu or the panel holding focus
+        // must not hand the subject back to the tab's first leaf.
+        let leaf = self.context_pane(window, cx);
         let branch = (!document)
             .then(|| {
                 leaf.as_ref()
@@ -223,6 +233,10 @@ impl LyrelApp {
             .when_some(branch, |row, branch| {
                 row.child(
                     h_flex()
+                        .id("status-git-branch")
+                        .test_support()
+                        .role(gpui_kit::Role::Status)
+                        .aria_label(branch.clone())
                         .min_w_0()
                         .max_w(rems(12.))
                         .gap_1()
@@ -516,6 +530,161 @@ mod tests {
                 "Markdown status sits above, not inside, the global status bar"
             );
         });
+    }
+
+    #[gpui_kit::test]
+    fn status_git_and_info_follow_the_context_pane_and_a_repo_pick_yields(cx: &mut TestAppContext) {
+        use crate::ui::app::{LyrelApp, test_window::harness};
+        use crate::ui::pane::{Pane, PaneSlot};
+        use crate::ui::scm::state::RepoKey;
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_core::core::config::RightPanelTab;
+        use lyrel_terminal::view::quiet_test_pane;
+        use lyrel_ui_base::actions::FocusRightPanelNavigation;
+        use lyrel_ui_base::host_ops::HostId;
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx) = harness(cx);
+        vcx.update(|_, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.cursor_blink = false;
+            cx.set_global(cfg);
+        });
+        let (left, right, _streams) = app.update_in(&mut vcx, |app, window, cx| {
+            let (left, left_stream) = quiet_test_pane(1, window, cx);
+            let (right, right_stream) = quiet_test_pane(2, window, cx);
+            LyrelApp::watch_terminal(&left, window, cx);
+            LyrelApp::watch_terminal(&right, window, cx);
+            app.tabs.push(crate::ui::tab::Tab::new(Pane::split_node(
+                gpui_kit::Axis::Horizontal,
+                0.5,
+                Pane::leaf(PaneSlot::Ready(left.clone())),
+                Pane::leaf(PaneSlot::Ready(right.clone())),
+            )));
+            app.tabs.select(0);
+            app.right_panel_visible = true;
+            app.right_panel_tab = RightPanelTab::Info;
+            // Two panes in two repositories: the cache knows each cwd's root
+            // and branch, the way the tab badge probe would have reported it.
+            for (view, cwd, branch) in [
+                (&left, "/repo-left", "ctx-left"),
+                (&right, "/repo-right", "ctx-right"),
+            ] {
+                let cwd = std::path::PathBuf::from(cwd);
+                let root = cwd.clone();
+                let home = cwd.clone();
+                view.update(cx, |view, _| {
+                    view.set_git_status_cwd_for_test(Some(cwd.clone()));
+                    view.terminal.seed_cwd(Some(cwd.clone()));
+                });
+                cx.default_global::<GitStatusCache>().finish_probe(
+                    HostId::LOCAL,
+                    &cwd,
+                    Some(RepoSnapshot {
+                        root,
+                        home,
+                        branch: branch.into(),
+                        counts: Some((0, 0)),
+                    }),
+                );
+            }
+            cx.notify();
+            (left, right, (left_stream, right_stream))
+        });
+        vcx.background_executor.run_until_parked();
+
+        let branch_text = |vcx: &mut VisualTestContext| -> Option<String> {
+            vcx.update(|window, _| {
+                window
+                    .try_find("status-git-branch")
+                    .filter(|element| element.visible())
+                    .and_then(|element| element.label().map(str::to_owned))
+            })
+        };
+        let info_cwd_shows = |vcx: &mut VisualTestContext, cwd: &str| -> bool {
+            vcx.update(|window, _| {
+                window
+                    .try_find("panel-info-row-0")
+                    .filter(|row| row.visible())
+                    .and_then(|row| row.label().map(str::to_owned))
+                    .is_some_and(|label| label.contains(cwd.trim_start_matches('/')))
+            })
+        };
+
+        // Nothing has focus yet: the first visible leaf is the subject.
+        settle(&mut vcx);
+        vcx.update(|window, _| assert!(window.find("workbench-status").visible()));
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-left"));
+        assert!(info_cwd_shows(&mut vcx, "/repo-left"));
+
+        // Focusing a different terminal pane moves the bottom Git indicator
+        // and the Info session together.
+        app.update_in(&mut vcx, |_, window, cx| {
+            right.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        settle(&mut vcx);
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
+        assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+
+        // Moving focus into the panel does not change which pane supplies the
+        // data: the indicator stays on the last focused pane, not the tab's
+        // first leaf. The panel's tab list settles its roving stop over a few
+        // frames, the way the navigation consumer test settles it.
+        vcx.dispatch_action(FocusRightPanelNavigation);
+        for _ in 0..4 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.render_frame(cx);
+            });
+        }
+        vcx.run_until_parked();
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.find("tool-tab-info").focused(),
+                Some(true),
+                "the panel's tab list must own keyboard focus for this check"
+            );
+        });
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-right"));
+        assert!(info_cwd_shows(&mut vcx, "/repo-right"));
+
+        // Back in the terminal, then on to the other pane.
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |_, window, cx| {
+            left.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        settle(&mut vcx);
+        assert_eq!(branch_text(&mut vcx).as_deref(), Some("ctx-left"));
+        assert!(info_cwd_shows(&mut vcx, "/repo-left"));
+
+        // A repository pick stands while the pane it was made on supplies the
+        // data; focusing a different terminal pane hands the subject back to
+        // the pane — the choice must not silently override it.
+        app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.context_pane(window, cx).map(|leaf| leaf.entity_id());
+            app.scm.select_repository(
+                RepoKey {
+                    host: HostId::LOCAL,
+                    root: std::path::PathBuf::from("/repo-left"),
+                },
+                app.tabs.active_index(),
+                pane,
+            );
+        });
+        assert!(
+            app.read_with(&vcx, |app, _| app.scm.active_repo().is_some()),
+            "the explicit pick stands while its pane remains the Context Pane"
+        );
+        app.update_in(&mut vcx, |_, window, cx| {
+            right.read(cx).focus_handle.clone().focus(window, cx);
+        });
+        settle(&mut vcx);
+        assert!(
+            app.read_with(&vcx, |app, _| app.scm.active_repo().is_none()),
+            "the pick yields once a different pane takes context"
+        );
     }
 
     #[gpui_kit::test]

@@ -4938,6 +4938,208 @@ mod navigation_tests {
 }
 
 #[cfg(test)]
+mod drag_tests {
+    use super::*;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    use gpui_kit::{TestAppContext, point, size};
+
+    /// Three plain rows in the open sidebar, the first tab active and its
+    /// terminal holding the keyboard.
+    fn three_rows(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui_kit::Entity<LyrelApp>,
+        gpui_kit::VisualTestContext,
+        lyrel_core::core::machine::TabId,
+        crate::ui::pane::PaneSlot,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        let first = app.update(&mut vcx, |app, cx| {
+            app.sidebar_collapsed = false;
+            app.tabs.select(0);
+            cx.notify();
+            app.tabs[0].id()
+        });
+        vcx.run_until_parked();
+        let pane = app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.tabs[0].pane.first_leaf().expect("tab holds a pane");
+            window.focus(&pane.focus_handle(cx), cx);
+            pane
+        });
+        (app, vcx, first, pane)
+    }
+
+    #[gpui_kit::test]
+    fn a_dragged_row_follows_the_pointer_and_the_drop_settles_the_order(cx: &mut TestAppContext) {
+        let (app, mut vcx, first, pane) = three_rows(cx);
+        let (grab, row_h, top0, top1) = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row0 = window.find(("tab-row", 0usize)).bounds();
+            let row1 = window.find(("tab-row", 1usize)).bounds();
+            (row0.center(), row0.size.height, row0, row1)
+        });
+
+        vcx.update(|window, cx| {
+            window.pointer_down(grab, MouseButton::Left, cx);
+            // A small sideways step crosses gpui's drag threshold without
+            // disturbing the vertical grab offset the row was picked up with.
+            window.pointer_move(grab + point(px(4.), px(0.)), Some(MouseButton::Left), cx);
+            let over = point(grab.x, top1.center().y);
+            window.pointer_move(over, Some(MouseButton::Left), cx);
+
+            // The grabbed row tracks the pointer exactly — it is positioned,
+            // never animated, so it cannot lag a frame behind.
+            let dragged = window.find(("tab-row", 0usize)).bounds();
+            assert!(
+                (dragged.origin.y - (over.y - row_h / 2.)).abs() < px(1.5),
+                "the grabbed row sits where the pointer holds it, not a slide behind"
+            );
+            // The neighbour it crossed has taken its old slot already: with
+            // motion reduced the slide resolves on the frame it happens.
+            let neighbour = window.find(("tab-row", 1usize)).bounds();
+            assert!(
+                (neighbour.origin.y - top0.origin.y).abs() < px(1.5),
+                "the crossed neighbour settles into the row's old slot"
+            );
+
+            window.pointer_up(over, MouseButton::Left, cx);
+            assert!(!cx.has_active_drag());
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            assert_eq!(app.tabs.active_index(), 1);
+            assert_eq!(
+                app.tabs[1].id(),
+                first,
+                "the dragged tab is still the active one, at its new index"
+            );
+            assert!(
+                pane.contains_focused(window, cx),
+                "the keyboard never left the dragged terminal"
+            );
+            assert!(app.reorder.borrow().is_none());
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                (window.find(("tab-row", 0usize)).bounds().origin.y - top1.origin.y).abs()
+                    < px(1.5),
+                "after the drop the rows read in the settled order"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn escape_while_dragging_a_row_leaves_the_order_and_active_tab_untouched(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, first, pane) = three_rows(cx);
+        let before: Vec<_> =
+            app.read_with(&vcx, |app, _| app.tabs.iter().map(|tab| tab.id()).collect());
+        let (grab, row_h, top1) = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row0 = window.find(("tab-row", 0usize)).bounds();
+            let row1 = window.find(("tab-row", 1usize)).bounds();
+            (row0.center(), row0.size.height, row1)
+        });
+
+        vcx.update(|window, cx| {
+            window.pointer_down(grab, MouseButton::Left, cx);
+            window.pointer_move(grab + point(px(4.), px(0.)), Some(MouseButton::Left), cx);
+            let over = point(grab.x, top1.center().y);
+            window.pointer_move(over, Some(MouseButton::Left), cx);
+            let dragged = window.find(("tab-row", 0usize)).bounds();
+            assert!(
+                (dragged.origin.y - (over.y - row_h / 2.)).abs() < px(1.5),
+                "the row really is in the air before it is cancelled"
+            );
+
+            window.press("escape", cx);
+            assert!(!cx.has_active_drag(), "escape ends the drag");
+            assert!(
+                app.read_with(cx, |app, _| app.reorder.borrow().is_none()),
+                "and drops the pending order with it"
+            );
+            // A late release over the crossed row must not land.
+            window.pointer_up(over, MouseButton::Left, cx);
+            assert!(!cx.has_active_drag());
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            let ids: Vec<_> = app.tabs.iter().map(|tab| tab.id()).collect();
+            assert_eq!(ids, before, "cancellation leaves the prior order intact");
+            assert_eq!(app.tabs.active_index(), 0);
+            assert_eq!(app.tabs[0].id(), first);
+            assert!(
+                pane.contains_focused(window, cx),
+                "the active terminal is the one that was active"
+            );
+            assert!(app.reorder.borrow().is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_tab_held_over_the_layout_shows_its_landing_and_escape_returns_it(cx: &mut TestAppContext) {
+        let (app, mut vcx, _first, _pane) = three_rows(cx);
+        // Two tabs are enough for the merge offer; drop the third.
+        app.update(&mut vcx, |app, cx| {
+            app.tabs.remove(2);
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let second = app.read_with(&vcx, |app, _| app.tabs[1].id());
+        let grab = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find(("tab-row", 1usize)).bounds().center()
+        });
+        let area = app
+            .read_with(&vcx, |app, _| app.pane_area.get())
+            .expect("drawn");
+        let over_layout = point(
+            area.origin.x + area.size.width / 2.,
+            area.origin.y + area.size.height / 2.,
+        );
+        // Held over the middle of a wide single pane, the arriving tab would
+        // split it and take the right half.
+        let landing = Bounds {
+            origin: point(area.origin.x + area.size.width / 2., area.origin.y),
+            size: size(area.size.width / 2., area.size.height),
+        };
+
+        vcx.update(|window, cx| {
+            window.pointer_down(grab, MouseButton::Left, cx);
+            window.pointer_move(grab + point(px(4.), px(0.)), Some(MouseButton::Left), cx);
+            window.pointer_move(over_layout, Some(MouseButton::Left), cx);
+            let preview = window.find("tab-drop-preview").bounds();
+            assert!(
+                (preview.origin.x - landing.origin.x).abs() < px(1.5)
+                    && (preview.size.width - landing.size.width).abs() < px(1.5),
+                "the preview is where the tab's panes would land"
+            );
+
+            window.press("escape", cx);
+            assert!(!cx.has_active_drag());
+            assert!(
+                window.try_find("tab-drop-preview").is_none(),
+                "no stale landing after the cancel"
+            );
+            window.pointer_up(over_layout, MouseButton::Left, cx);
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(app.tabs.len(), 2, "the cancelled tab did not merge");
+            assert!(
+                app.tabs.iter().any(|tab| tab.id() == second),
+                "both tabs are still here"
+            );
+            assert!(app.reorder.borrow().is_none());
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

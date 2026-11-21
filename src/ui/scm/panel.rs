@@ -593,10 +593,19 @@ impl LyrelApp {
                     menu = menu.item(PopupMenuItem::new(label).checked(*other == repo).on_click({
                         let app = app.clone();
                         let other = other.clone();
-                        move |_, _window, cx| {
+                        move |_, window, cx| {
                             let _ = app.update(cx, |this, cx| {
-                                this.scm
-                                    .select_repository(other.clone(), this.tabs.active_index());
+                                // The pick is scoped to the Context Pane that
+                                // supplies the panel right now; focusing a
+                                // different terminal pane makes it yield
+                                // (#349).
+                                let pane =
+                                    this.context_pane(window, cx).map(|leaf| leaf.entity_id());
+                                this.scm.select_repository(
+                                    other.clone(),
+                                    this.tabs.active_index(),
+                                    pane,
+                                );
                                 cx.notify();
                             });
                         }
@@ -1008,10 +1017,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, PathBuf)> {
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .detail_pane(window, cx)?;
+        let leaf = self.context_pane(window, cx)?;
         let view = leaf.read(cx);
         let cwd = view.effective_host_cwd()?;
         Some((view.host(cx)?, cwd))

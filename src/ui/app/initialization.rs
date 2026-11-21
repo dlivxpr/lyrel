@@ -195,9 +195,12 @@ impl LyrelApp {
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
         let document_ratio = cx.global::<Config>().document_ratio;
-        let right_panel_visible = cx.global::<Config>().right_panel_visible;
-        let right_panel_tab =
-            crate::ui::right_panel::shown_tab(cx.global::<Config>().right_panel_tab);
+        // The tool layout is per workspace (#348); until its persisted form
+        // lands, every workspace — existing ones included — starts with only
+        // Info prepared behind a collapsed panel. The old global selection is
+        // deliberately not projected onto them (#345).
+        let right_panel_visible = false;
+        let right_panel_tab = lyrel_core::core::config::RightPanelTab::Info;
         let scm_graph_expanded = cx.global::<Config>().scm_graph_expanded;
         let sidebar_collapsed = cx.global::<Config>().sidebar_collapsed;
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {

@@ -104,6 +104,11 @@ pub(crate) struct ScmPanelState {
     repo_override: Option<RepoKey>,
     /// The tab the override was made on, so the jump away can be noticed.
     override_tab: Option<usize>,
+    /// The Context Pane the pick was made on. The choice stands only while
+    /// that pane remains the one supplying the panel's data; the moment a
+    /// different terminal pane takes focus the pick yields, because the pane
+    /// — not a remembered choice — is the panel's subject (#349).
+    picked_on: Option<gpui_kit::EntityId>,
     /// Local branch names per repository, with the epoch they were read at.
     /// Anything that could have moved a ref bumps the epoch, so the list in
     /// the switcher is never older than the last operation.
@@ -194,12 +199,30 @@ impl ScmPanelState {
         if self.override_tab != Some(tab) {
             self.repo_override = None;
             self.override_tab = None;
+            self.picked_on = None;
         }
     }
 
-    pub(crate) fn select_repository(&mut self, repo: RepoKey, tab: usize) {
+    pub(crate) fn select_repository(
+        &mut self,
+        repo: RepoKey,
+        tab: usize,
+        pane: Option<gpui_kit::EntityId>,
+    ) {
         self.repo_override = Some(repo);
         self.override_tab = Some(tab);
+        self.picked_on = pane;
+    }
+
+    /// Drop the repository pick once the Context Pane moves to a different
+    /// pane. A terminal taking focus is the one moment that change is known
+    /// without asking the layout, so it is where the yield happens.
+    pub(crate) fn note_context_leaf(&mut self, leaf: gpui_kit::EntityId) {
+        if self.picked_on.is_some_and(|picked| picked != leaf) {
+            self.repo_override = None;
+            self.override_tab = None;
+            self.picked_on = None;
+        }
     }
 
     pub(crate) fn repository_context(&mut self, cx: &App) -> Option<RepositoryContext> {
@@ -210,6 +233,7 @@ impl ScmPanelState {
         {
             self.repo_override = None;
             self.override_tab = None;
+            self.picked_on = None;
         }
         self.active_repo()?.context(cx)
     }
@@ -560,12 +584,33 @@ mod tests {
         assert!(state.active_repo().is_none());
         state.follow_pane(key("/a"));
         assert_eq!(state.active_repo(), Some(&key("/a")));
-        state.select_repository(key("/b"), 1);
+        // Made while pane 1 — the Context Pane at the time — is supplying the
+        // panel's data.
+        state.select_repository(key("/b"), 1, Some(gpui_kit::EntityId::from(1)));
         assert_eq!(state.active_repo(), Some(&key("/b")));
         state.enter_tab(1);
         state.follow_pane(key("/c"));
         assert_eq!(state.active_repo(), Some(&key("/b")));
         state.enter_tab(2);
+        assert_eq!(state.active_repo(), Some(&key("/c")));
+    }
+
+    #[test]
+    fn a_repository_pick_yields_when_a_different_pane_takes_context() {
+        let mut state = ScmPanelState::default();
+        let pane_a = gpui_kit::EntityId::from(1);
+        let pane_b = gpui_kit::EntityId::from(2);
+        state.follow_pane(key("/a"));
+        // The pick stands while the pane it was made on remains the Context
+        // Pane…
+        state.select_repository(key("/b"), 1, Some(pane_a));
+        state.note_context_leaf(pane_a);
+        assert_eq!(state.active_repo(), Some(&key("/b")));
+        // …and yields the moment a different terminal pane takes focus: a
+        // repository choice must not silently override the pane (#349).
+        state.note_context_leaf(pane_b);
+        assert_eq!(state.active_repo(), Some(&key("/a")));
+        state.follow_pane(key("/c"));
         assert_eq!(state.active_repo(), Some(&key("/c")));
     }
 
@@ -579,11 +624,11 @@ mod tests {
         let mut state = ScmPanelState::default();
         state.drafts.insert(local.clone(), "local wip".into());
         state.drafts.insert(remote.clone(), "remote wip".into());
-        state.select_repository(remote.clone(), 1);
+        state.select_repository(remote.clone(), 1, None);
         state.forget_lost_hosts(&[local.host]);
         assert_eq!(state.draft(&local), "local wip");
         assert_eq!(state.draft(&remote), "remote wip");
-        state.select_repository(remote.clone(), 1);
+        state.select_repository(remote.clone(), 1, None);
         assert_eq!(state.active_repo(), Some(&remote));
     }
 
@@ -597,7 +642,7 @@ mod tests {
             };
             let mut state = ScmPanelState::default();
             state.follow_pane(local.clone());
-            state.select_repository(remote.clone(), 1);
+            state.select_repository(remote.clone(), 1, None);
             assert!(remote.context(cx).is_none());
             let (repo, host, epoch) = state.repository_context(cx).unwrap().into_parts();
             assert_eq!(repo, local);
