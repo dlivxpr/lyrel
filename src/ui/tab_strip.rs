@@ -1,5 +1,4 @@
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
@@ -577,64 +576,6 @@ pub(crate) const MIN_TARGET: f32 = 24.;
 pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
 }
-
-/// Stable, domain-derived identity for each panel tab. Reordering the tab
-/// enum or list must not move focus to a different page.
-fn right_panel_tab_id(tab: RightPanelTab) -> &'static str {
-    match tab {
-        RightPanelTab::Info => "right-panel-tab-info",
-        RightPanelTab::Files | RightPanelTab::Search => "right-panel-tab-files",
-        RightPanelTab::Scm => "right-panel-tab-changes",
-        RightPanelTab::GitHub => "right-panel-tab-github",
-    }
-}
-
-/// The right panel's tabs, left to right, by name. Info leads as the default
-/// and the pane's overview; then the project's files, and its version
-/// control, local to remote (Changes, GitHub). GitHub is last so that hiding
-/// it for a repository without a GitHub remote moves nothing. Search is not
-/// among them: the Files tab searches names and contents in one field.
-const RIGHT_PANEL_TABS: [(RightPanelTab, L10nKey); 4] = [
-    (RightPanelTab::Info, L10nKey::PanelInfoTitle),
-    (RightPanelTab::Files, L10nKey::PanelFilesTitle),
-    (RightPanelTab::Scm, L10nKey::PanelChangesTitle),
-    (RightPanelTab::GitHub, L10nKey::PanelGitHubTitle),
-];
-
-fn right_panel_tab_size(window: &Window) -> f32 {
-    window.rem_size().as_f32() * crate::ui::right_panel::TAB_TEXT
-}
-
-fn right_panel_tab_font(cx: &gpui_kit::App) -> gpui_kit::Font {
-    gpui_kit::Font {
-        family: cx.theme().font_family.clone(),
-        features: Default::default(),
-        fallbacks: None,
-        // The current tab's weight, which is the widest any label is drawn at.
-        weight: FontWeight::MEDIUM,
-        style: Default::default(),
-    }
-}
-
-/// What the bare tab labels take, padding included. The panel's floor is
-/// built on it, so the chrome tiles beside them always fit.
-pub(crate) fn right_panel_tab_labels_w(window: &Window, cx: &gpui_kit::App) -> f32 {
-    let size = right_panel_tab_size(window);
-    let font = right_panel_tab_font(cx);
-    RIGHT_PANEL_TABS
-        .iter()
-        .map(|(_, key)| {
-            measure_text(window.text_system(), &font, size, t(*key))
-                + 2. * (TAB_OUTER_PAD + TAB_INNER_PAD)
-        })
-        .sum()
-}
-
-/// Right panel tab geometry: each tab's click target reaches this far past
-/// its pill, so neighbouring pills sit twice this apart.
-pub(crate) const TAB_OUTER_PAD: f32 = 2.;
-/// A label's hover target reaches this far past its word.
-const TAB_INNER_PAD: f32 = 4.;
 
 /// How many saved hosts the New Tab menu names.
 ///
@@ -1217,111 +1158,6 @@ impl LyrelApp {
                         this.toggle_switcher(window, cx);
                     })),
             )
-            .into_any_element()
-    }
-
-    /// 右侧面板使用文字页签；当前页仅提高文字对比与字重，不叠加胶囊底色。
-    pub(crate) fn right_panel_tabs(
-        &self,
-        changes_count: Option<SharedString>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let active_tab = self.right_panel_tab;
-        let body_ink = cx.theme().foreground;
-        let muted = cx.theme().muted_foreground;
-        let ring = cx.theme().ring;
-        let tabs = RIGHT_PANEL_TABS.into_iter().map(|(tab, label_key)| {
-            let current = active_tab == tab;
-            let ink = match current {
-                true => body_ink,
-                false => muted,
-            };
-            NavTab::new(right_panel_tab_id(tab))
-                .selected(current)
-                .accessibility_label(t(label_key))
-                .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
-                // Pointer activation keeps the established content focus:
-                // the framework would otherwise focus the tab on mouse down.
-                .capture_any_mouse_down(|_, window, _| window.prevent_default())
-                .focus(move |style| {
-                    style.shadow(vec![gpui_kit::BoxShadow {
-                        color: ring,
-                        offset: gpui_kit::point(px(0.), px(0.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(2.),
-                        inset: true,
-                    }])
-                })
-                // The press must not start a window drag from the title bar
-                // the tabs sit in.
-                .occlude()
-                .flex_shrink_0()
-                .h_full()
-                .flex()
-                .items_center()
-                .px(px(TAB_OUTER_PAD))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(px(TAB_INNER_PAD))
-                        .py_0p5()
-                        .rounded_md()
-                        .text_size(gpui_kit::rems(crate::ui::right_panel::TAB_TEXT))
-                        .font_weight(match current {
-                            true => FontWeight::MEDIUM,
-                            false => FontWeight::NORMAL,
-                        })
-                        .text_color(ink)
-                        .hover(move |s| s.text_color(body_ink))
-                        .child(t(label_key))
-                        .when(tab == RightPanelTab::Scm, |label| {
-                            label.when_some(changes_count.clone(), |label, count| {
-                                label.child(
-                                    div()
-                                        .id("right-panel-change-count")
-                                        .test_support()
-                                        .aria_label(count.clone())
-                                        .font_weight(FontWeight::NORMAL)
-                                        .text_color(muted)
-                                        .child(count),
-                                )
-                            })
-                        }),
-                )
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    if matches!(event, ClickEvent::Mouse(_) | ClickEvent::Touch(_)) {
-                        this.right_panel_navigation_pointer(window, cx);
-                    }
-                    // The current one does nothing: only ⌘J and the title-bar
-                    // panel tile put the panel away.
-                    if this.right_panel_tab != tab {
-                        this.set_right_panel_tab(tab, window, cx);
-                    }
-                }))
-        });
-        NavTabs::new("right-panel-tabs")
-            .axis(Axis::Horizontal)
-            // One roving tab stop: focusing this scope then moving on lands
-            // on the selected tab, while the scope itself is never a stop.
-            .track_focus(&self.right_panel_nav_focus)
-            .tab_stop(false)
-            .flex()
-            .flex_row()
-            .items_center()
-            .h_full()
-            .flex_shrink_0()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape"
-                    && this.right_panel_nav_focus.contains_focused(window, cx)
-                {
-                    this.leave_right_panel_navigation(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .children(tabs)
             .into_any_element()
     }
 

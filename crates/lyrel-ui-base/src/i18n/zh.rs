@@ -2296,6 +2296,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanelFilesTitle => "文件",
         L10nKey::PanelSearchTitle => "搜索",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::ToolHostAdd => "添加工具",
+        L10nKey::ToolHostClose => "关闭{tool}",
         L10nKey::PanelNoSession => "没有活动会话。",
         L10nKey::PanelNoSessionHint => "打开一个标签页以在此处查看其 shell、目录和进程。",
         L10nKey::PanelNoWorkingDirectory => "没有工作目录。",
