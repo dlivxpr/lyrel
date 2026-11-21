@@ -559,7 +559,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn status_git_and_info_follow_the_context_pane(cx: &mut TestAppContext) {
-        use crate::ui::app::test_window::harness;
+        use crate::ui::app::{LyrelApp, test_window::harness};
         use crate::ui::pane::{Pane, PaneSlot};
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use lyrel_core::core::config::RightPanelTab;
@@ -699,9 +699,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(
-        cx: &mut TestAppContext,
-    ) {
+    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(cx: &mut TestAppContext) {
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use lyrel_ui_base::host_ops::HostId;
 
@@ -715,7 +713,7 @@ mod tests {
                 .expect("test pane")
         });
         let cwd = std::path::PathBuf::from("/repo-left");
-        app.update_in(&mut vcx, |app, _, cx| {
+        app.update_in(&mut vcx, |_, _, cx| {
             pane.update(cx, |view, _| {
                 view.set_git_status_cwd_for_test(Some(cwd.clone()));
             });
@@ -724,7 +722,7 @@ mod tests {
                 &cwd,
                 Some(RepoSnapshot {
                     root: cwd.clone(),
-                    home: cwd,
+                    home: cwd.clone(),
                     branch: "ctx-left".into(),
                     counts: Some((5, 3)),
                 }),

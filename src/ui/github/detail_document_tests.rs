@@ -198,9 +198,7 @@ fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppCont
 /// that pull request — never a local working-copy diff — and each Escape
 /// hands the keyboard to the surface underneath.
 #[gpui_kit::test]
-fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(
-    cx: &mut TestAppContext,
-) {
+fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &mut TestAppContext) {
     let (root, app, mut vcx, _pane) = detail_doc_panel(cx);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
@@ -263,7 +261,7 @@ fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(
         // What the pull request is read for stays reachable in the document.
         assert!(window.find("github-detail-refresh").visible());
         assert!(window.find("panel-github-open-item").visible());
-        window.click(("panel-github-file", 0), cx);
+        window.click(("panel-github-file", 0usize), cx);
         window.render_frame(cx);
     });
 
@@ -357,7 +355,7 @@ fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(
     open_pr(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click(("panel-github-file", 0), cx);
+        window.click(("panel-github-file", 0usize), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         app.set_document_layout(lyrel_core::core::config::DocumentLayout::Fill, cx);
@@ -415,7 +413,7 @@ fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click(("panel-github-file", 0), cx);
+        window.click(("panel-github-file", 0usize), cx);
         window.render_frame(cx);
         assert!(window.find("diff-overlay-header").visible());
         window.press("escape", cx);
@@ -438,9 +436,7 @@ fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
 /// stays the pull request's own supplied patch, named by the checkout it was
 /// opened from, and closing it still returns to that pull request.
 #[gpui_kit::test]
-fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(
-    cx: &mut TestAppContext,
-) {
+fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(cx: &mut TestAppContext) {
     let (root, app, mut vcx, mut pane) = detail_doc_panel(cx);
     let key = app.read_with(&vcx, |app, _| {
         app.github
@@ -464,7 +460,7 @@ fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click(("panel-github-file", 0), cx);
+        window.click(("panel-github-file", 0usize), cx);
     });
 
     // The context pane moves to a different checkout of the same repository
@@ -498,10 +494,7 @@ fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(
             "the patch keeps the checkout the item was opened from, not the pane's current one"
         );
         assert!(
-            matches!(
-                overlay.load,
-                crate::ui::diff_overlay::DiffLoad::Ready(_)
-            ),
+            matches!(overlay.load, crate::ui::diff_overlay::DiffLoad::Ready(_)),
             "no probe re-read the new pane's repository into the pull request's patch"
         );
     });

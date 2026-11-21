@@ -725,7 +725,7 @@ impl LyrelApp {
             input.set_placeholder(t(L10nKey::WorktreePickerPlaceholder), window, cx);
         });
         let rungs = crate::ui::dialog::popover_rungs(cx);
-        let card = crate::ui::dialog::card("worktree-picker-card", title.clone(), CARD_W, cx)
+        let card = crate::ui::dialog::card("worktree-picker-card", title, CARD_W, cx)
             .child(crate::ui::dialog::header(title, cx))
             .child(
                 h_flex()
@@ -905,7 +905,7 @@ mod tests {
         vcx.update(|_, cx| {
             pane.update(cx, |view, _| {
                 view.set_git_status_cwd_for_test(Some(cwd.clone()));
-                view.terminal().seed_cwd(Some(cwd.clone()));
+                view.terminal.seed_cwd(Some(cwd.clone()));
             });
             cx.default_global::<GitStatusCache>().finish_probe(
                 HostId::LOCAL,

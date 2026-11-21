@@ -1585,7 +1585,7 @@ impl LyrelApp {
                         })
                         .unwrap_or(px(0.)),
                 ),
-                Some(drag) => {
+                Some(_) => {
                     let from = rendered_order.iter().position(|open| *open == tab);
                     match from.and_then(|from| match (slots.get(from), slots.get(slot)) {
                         (Some(Some(from)), Some(Some(to))) => Some(from.center().x - to.center().x),
@@ -1703,7 +1703,7 @@ impl LyrelApp {
                 canvas(|_, _, _| {}, {
                     let strip_state = strip_state.clone();
                     let app = cx.entity().downgrade();
-                    move |_bounds, _state, window, cx| {
+                    move |_bounds, _state, window, _cx| {
                         window.on_mouse_event({
                             let strip_state = strip_state.clone();
                             let app = app.clone();
