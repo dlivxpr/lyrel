@@ -12,7 +12,10 @@
 
 use std::time::Duration;
 
-use gpui_kit::{Animation, AnimationExt as _, AnyElement, Context, TestSupportExt as _, Window, div, px};
+use gpui_kit::{
+    Animation, AnimationExt as _, AnyElement, Context, TestSupportExt as _, Window, div,
+    prelude::*, px,
+};
 
 use crate::ui::app::LyrelApp;
 
