@@ -23,6 +23,19 @@
             )
             .child(
                 crate::ui::window_chrome::chrome_tile_sized(
+                    BRANCH_TILE,
+                    BRANCH_TILE_GLYPH,
+                    false,
+                    cx,
+                )
+                .rounded(px(6.))
+                .tooltip(t(L10nKey::WorktreePickerTitle))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_worktree_picker(window, cx);
+                })),
+            )
+            .child(
+                crate::ui::window_chrome::chrome_tile_sized(
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
