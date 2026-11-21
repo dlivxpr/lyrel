@@ -56,12 +56,15 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 4] = [
     ),
 ];
 
-/// The `+` tile: tall enough for the 24px hit-target floor, drawn at the
-/// same scale as the 26px tab pills it closes the strip with.
-const TOOL_TILE: f32 = 26.;
-
-/// How wide every tab's close slot is reserved, button painted or not.
-const TOOL_CLOSE_SLOT: f32 = 16.;
+// Inspector chrome stays compact and leaves the width to the tools. At the
+// default 16px rem, tabs and the add control are 26px tall.
+const TOOL_TILE: f32 = 26. / 16.;
+const TOOL_CLOSE_SLOT: f32 = 1.;
+const TOOL_TAB_MAX_WIDTH: f32 = 10.5;
+const TOOL_TAB_RADIUS: f32 = 5. / 16.;
+const TOOL_HOVER_OPACITY: f32 = 0.045;
+const TOOL_SELECTED_OPACITY: f32 = 0.085;
+const TOOL_DIVIDER_OPACITY: f32 = 0.09;
 
 /// What the host renders for `tab`: label key and icon path. Only ever
 /// called with the layout's identities — Search has already folded into
@@ -105,14 +108,11 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
     }
 }
 
-/// The narrowest the panel may be drawn. The tool tabs moved up into the
-/// window title bar (#345) and the strip scrolls there instead of squeezing
-/// the panel, so the floor no longer carries their labels.
+/// The narrowest the panel may be drawn. The header scrolls independently,
+/// so the width floor is set by the body, not by the open tabs.
 pub(crate) const MIN_WIDTH: f32 = 240.;
 
-/// How tall the band above a panel body is where one exists at all: the tab's
-/// 26px hover pill plus 2px either side. Only the SFTP browser still brings a
-/// trailing row since the tool tabs left for the title bar.
+/// Height of the SFTP browser's own action band below the tool header.
 const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
 
 /// How wide a panel edge is to grab. Both edges a window can drag — the tab
@@ -941,6 +941,7 @@ impl LyrelApp {
         }
         let width = self.right_panel_px(window, cx);
         let tab = self.right_panel_tab;
+        let header = self.tool_host(window, cx);
 
         let body = match tab {
             RightPanelTab::Info => self.render_panel_info(window, cx),
@@ -961,6 +962,7 @@ impl LyrelApp {
                 .bg(crate::ui::theme::workspace_surface_color(cx))
                 .border_l(crate::ui::theme::hairline(window))
                 .border_color(cx.theme().sidebar_border)
+                .child(header)
                 .child(body)
                 .children(self.sftp_transfers_footer(cx))
                 .child(handle)
@@ -1101,17 +1103,14 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// The title-bar tool host: compact icon-and-label tabs for this
-    /// workspace's open tools — one instance each, the selected tab on a
-    /// neutral fill, a reserved close slot on every tab — and the fixed `+`
-    /// that offers every tool and opens the panel on its pick. The host stays
-    /// put and usable while the panel is collapsed: choosing a tool opens the
-    /// panel on it.
-    pub(crate) fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The Side Panel's own header. Only its tabs scroll; the add button
+    /// remains at the trailing edge of the panel.
+    fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let layout = self.tool_layout();
-        let rail = cx.global::<lyrel_ui_base::presets::Surfaces>().rail;
-        let rail_selected = gpui_kit::rgb(rail.selected);
-        let rail_hover = gpui_kit::rgb(rail.hover);
+        let selected_fill = cx.theme().foreground.opacity(TOOL_SELECTED_OPACITY);
+        let hover_fill = cx.theme().foreground.opacity(TOOL_HOVER_OPACITY);
+        let close_hover = cx.theme().foreground.opacity(0.10);
+        let divider = cx.theme().foreground.opacity(TOOL_DIVIDER_OPACITY);
         let body_ink = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let ring = cx.theme().ring;
@@ -1144,30 +1143,29 @@ impl LyrelApp {
                         inset: true,
                     }])
                 })
-                // The press must not start a window drag from the title bar
-                // the host sits in.
-                .occlude()
+                .flex_none()
                 .group(group.clone())
-                .flex_shrink_0()
-                .h_full()
+                .h(rems(TOOL_TILE))
+                .max_w(rems(TOOL_TAB_MAX_WIDTH))
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .px(px(8.))
-                .rounded(px(7.))
-                .text_size(gpui_kit::rems(TAB_TEXT))
-                .when(current, |tab| tab.bg(rail_selected))
-                .when(!current, |tab| tab.hover(move |style| style.bg(rail_hover)))
-                .child(Icon::empty().path(icon).size(px(14.)).text_color(ink))
+                .gap(rems(5. * STEP))
+                .pl_2()
+                .pr_1()
+                .rounded(rems(TOOL_TAB_RADIUS))
+                .text_size(rems(HEADING))
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(ink)
+                .when(current, |tab| tab.bg(selected_fill))
+                .when(!current, |tab| {
+                    tab.hover(move |style| style.bg(hover_fill).text_color(body_ink))
+                })
+                .child(Icon::empty().path(icon).size(rems(11. * STEP)).flex_none())
                 .child(
-                    div()
-                        .flex_shrink_0()
-                        .font_weight(match current {
-                            true => gpui_kit::FontWeight::MEDIUM,
-                            false => gpui_kit::FontWeight::NORMAL,
-                        })
-                        .text_color(ink)
-                        .child(t(label_key))
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().min_w_0().truncate().child(t(label_key)))
                         // Only Changes may show a real changed-item count,
                         // the same number its tool page headlines with.
                         .when(tab == RightPanelTab::Scm, |label| {
@@ -1192,24 +1190,28 @@ impl LyrelApp {
                         .id(tool_tab_close_id(tab))
                         .test_support()
                         .flex_shrink_0()
-                        .size(px(TOOL_CLOSE_SLOT))
+                        .size(rems(TOOL_CLOSE_SLOT))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(4.))
+                        .rounded(rems(TOOL_TAB_RADIUS))
                         .role(gpui_kit::Role::Button)
                         .aria_label(close_tip.clone())
                         .tooltip(move |window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(close_tip.clone())
                                 .build(window, cx)
                         })
-                        .hover(move |style| style.bg(rail_hover))
+                        .hover(move |style| style.bg(close_hover))
                         .child(
                             div()
                                 .invisible()
                                 .when(current, |icon| icon.visible())
                                 .group_hover(group, |style| style.visible())
-                                .child(Icon::new(IconName::Close).size(px(12.)).text_color(ink)),
+                                .child(
+                                    Icon::new(IconName::Close)
+                                        .size(rems(10. * STEP))
+                                        .text_color(muted),
+                                ),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
@@ -1231,7 +1233,7 @@ impl LyrelApp {
                     }),
                 )
         });
-        NavTabs::new("tool-tabs")
+        let strip = NavTabs::new("tool-tabs")
             .axis(gpui_kit::Axis::Horizontal)
             // One roving tab stop: focusing this scope then moving on lands
             // on the selected tab, while the scope itself is never a stop.
@@ -1240,6 +1242,7 @@ impl LyrelApp {
             .flex()
             .flex_row()
             .items_center()
+            .gap_0p5()
             .h_full()
             .flex_shrink_0()
             .min_w_0()
@@ -1261,7 +1264,27 @@ impl LyrelApp {
                     }
                 }),
             )
-            .children(tabs)
+            .children(tabs);
+        h_flex()
+            .id("side-panel-tool-header")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .h(rems(2.625))
+            .pl(rems(7. * STEP))
+            .pr_2()
+            .gap_1()
+            .border_b(crate::ui::theme::hairline(window))
+            .border_color(divider)
+            .child(
+                div()
+                    .id("side-panel-tool-scroll")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_x_scroll()
+                    .child(strip),
+            )
             .child(self.tool_add_button(cx))
             .into_any_element()
     }
@@ -1282,49 +1305,53 @@ impl LyrelApp {
         (status.total_entries > 0).then(|| status.total_entries.to_string())
     }
 
-    /// The fixed `+` at the host's trailing end. Works while the panel is
-    /// collapsed — a pick opens the panel on the tool, activating the
-    /// existing tab when the tool is already open.
-    fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// One add affordance: in the panel header when expanded, in the
+    /// fixed chrome when collapsed so a pick can reopen the panel.
+    pub(crate) fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        crate::ui::window_chrome::chrome_tile_sized(
-            Button::new("titlebar-tool-add").icon(Icon::new(IconName::Plus)),
-            TOOL_TILE,
-            crate::ui::window_chrome::TILE_GLYPH,
-            false,
-            cx,
-        )
-        .rounded(px(7.))
-        .accessibility_label(t(L10nKey::ToolHostAdd))
-        .tooltip(t(L10nKey::ToolHostAdd))
-        // Built when the menu opens, not when the strip draws.
-        .dropdown_menu(move |menu, _window, _cx| {
-            let mut menu = menu.min_w(px(180.));
-            for (tab, label_key, icon) in TOOL_HOST_TOOLS {
-                let app = app.clone();
-                let id = format!("tool-add-{}", tool_name(tab));
-                menu = menu.item(
-                    gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
-                        h_flex()
-                            .id(id.clone())
-                            .test_support()
-                            .w_full()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(Icon::empty().path(icon).size(px(14.)))
-                            .child(div().child(t(label_key)))
-                    })
-                    .on_click(move |_, window, cx| {
-                        if let Some(app) = app.upgrade() {
-                            app.update(cx, |this, cx| {
-                                this.set_right_panel_tab(tab, window, cx);
-                            });
-                        }
-                    }),
-                );
-            }
-            menu
-        })
+        Button::new("titlebar-tool-add")
+            .icon(Icon::new(IconName::Plus))
+            .custom(
+                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                    .color(cx.theme().transparent)
+                    .foreground(cx.theme().muted_foreground)
+                    .hover(cx.theme().foreground.opacity(0.06))
+                    .active(cx.theme().foreground.opacity(TOOL_SELECTED_OPACITY)),
+            )
+            .with_size(px(13. / crate::ui::window_chrome::BUTTON_ICON_SCALE))
+            .w(rems(TOOL_TILE))
+            .h(rems(TOOL_TILE))
+            .rounded(rems(TOOL_TAB_RADIUS))
+            .accessibility_label(t(L10nKey::ToolHostAdd))
+            .tooltip(t(L10nKey::ToolHostAdd))
+            // Built when the menu opens, not when the strip draws.
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu.min_w(px(180.));
+                for (tab, label_key, icon) in TOOL_HOST_TOOLS {
+                    let app = app.clone();
+                    let id = format!("tool-add-{}", tool_name(tab));
+                    menu = menu.item(
+                        gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
+                            h_flex()
+                                .id(id.clone())
+                                .test_support()
+                                .w_full()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(Icon::empty().path(icon).size(px(14.)))
+                                .child(div().child(t(label_key)))
+                        })
+                        .on_click(move |_, window, cx| {
+                            if let Some(app) = app.upgrade() {
+                                app.update(cx, |this, cx| {
+                                    this.set_right_panel_tab(tab, window, cx);
+                                });
+                            }
+                        }),
+                    );
+                }
+                menu
+            })
     }
 
     pub(crate) fn panel_search(

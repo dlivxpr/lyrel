@@ -288,13 +288,14 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
-        let tool_host = self.tool_host(window, cx);
+        let collapsed_tool_add =
+            (!self.right_panel_open(cx)).then(|| self.tool_add_button(cx).into_any_element());
         let top_chrome = WindowChrome::new(
             self.left_panel_open(cx),
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
-            tool_host,
+            collapsed_tool_add,
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
