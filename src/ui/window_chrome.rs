@@ -1292,6 +1292,183 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
+    fn dragging_tool_tabs_reorders_and_keeps_the_selection(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        // Room for the whole strip: the drag asserts positions, and a
+        // scrolling strip would make them frame-dependent.
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.update_config(cx, |cfg| cfg.right_panel_width = 460.);
+            app.right_panel_width.set(460.);
+        });
+        settle(&mut vcx);
+        // Files leads, Changes stays selected: the strip is Info, Files,
+        // Changes and the drag below must not move the selection.
+        for tab in [RightPanelTab::Files, RightPanelTab::Scm] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.set_right_panel_tab(tab, window, cx);
+            });
+            settle(&mut vcx);
+        }
+        vcx.update(|window, cx| {
+            let from = window.find("tool-tab-info").bounds().center();
+            let to = window.find("tool-tab-changes").bounds().center();
+            window.drag(from, to, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let files = window.find("tool-tab-files").bounds().origin.x;
+            let changes = window.find("tool-tab-changes").bounds().origin.x;
+            let info = window.find("tool-tab-info").bounds().origin.x;
+            assert!(
+                files < changes && changes < info,
+                "the drag lands Info after its neighbours: {files} {changes} {info}"
+            );
+            assert_eq!(
+                window.find("tool-tab-changes").selected(),
+                Some(true),
+                "reordering does not change which tool is selected"
+            );
+            assert_eq!(window.find("tool-tab-info").selected(), Some(false));
+            for tab in ["tool-tab-info", "tool-tab-files", "tool-tab-changes"] {
+                assert_eq!(window.find_all(tab).len(), 1, "one instance per tool");
+            }
+        });
+        // The moved tab still activates normally.
+        vcx.update(|window, cx| window.click("tool-tab-info", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-info").selected(), Some(true));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn overflow_scrolls_only_the_tool_tab_strip_and_reveals_a_hidden_selection(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        for tab in [RightPanelTab::Files, RightPanelTab::GitHub] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.set_right_panel_tab(tab, window, cx);
+            });
+            settle(&mut vcx);
+        }
+        // Files selected with GitHub open behind it: at the zoom below,
+        // GitHub overflows the strip while staying one command away.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Files, window, cx);
+        });
+        settle(&mut vcx);
+        // Constrained width at increased UI zoom: the strip no longer fits
+        // the header. The window re-reads the rem from the config on every
+        // render, so the zoom goes through the preference.
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.update_config(cx, |cfg| cfg.ui_font_size = 24.);
+        });
+        settle(&mut vcx);
+        let fixed = vcx.update(|window, _| {
+            (
+                window.find("titlebar-tool-add").bounds(),
+                window.find("titlebar-right-panel").bounds(),
+                window.find("titlebar-split-right").bounds(),
+            )
+        });
+        vcx.update(|window, _| {
+            let view = window.find("side-panel-tool-scroll").bounds();
+            let github = window.find("tool-tab-github").bounds();
+            assert!(
+                !view.intersects(&github),
+                "the trailing tab sits outside the scrolled viewport"
+            );
+        });
+        // Scrolling the strip moves the tabs, not the fixed controls.
+        vcx.update(|window, cx| {
+            window.scroll(
+                "side-panel-tool-scroll",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-240.), px(0.))),
+                cx,
+            );
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let view = window.find("side-panel-tool-scroll").bounds();
+            let info = window.find("tool-tab-info").bounds();
+            assert!(
+                !view.intersects(&info),
+                "the leading tab scrolled out while the fixed controls stayed"
+            );
+            let add = window.find("titlebar-tool-add").bounds();
+            let toggle = window.find("titlebar-right-panel").bounds();
+            let split = window.find("titlebar-split-right").bounds();
+            assert_eq!(add, fixed.0, "the + does not travel with the tabs");
+            assert_eq!(toggle, fixed.1, "the panel toggle stays in the chrome");
+            assert_eq!(split, fixed.2, "the split control stays in the chrome");
+        });
+        // Selecting a hidden tab reveals it inside the viewport.
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelGitHub);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let view = window.find("side-panel-tool-scroll").bounds();
+            let github = window.find("tool-tab-github").bounds();
+            assert!(
+                view.contains(&github.center()),
+                "selecting the hidden tab scrolled it into view"
+            );
+            assert_eq!(window.find("tool-tab-github").selected(), Some(true));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn clamping_for_a_narrow_window_leaves_the_global_preferred_width(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Files, window, cx);
+        });
+        settle(&mut vcx);
+        // An explicit width change is the global preference.
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.update_config(cx, |cfg| cfg.right_panel_width = 460.);
+            app.right_panel_width.set(460.);
+        });
+        settle(&mut vcx);
+        let effective = |app: &gpui_kit::Entity<LyrelApp>,
+                         vcx: &mut gpui_kit::VisualTestContext| {
+            app.update_in(vcx, |app, window, cx| app.right_panel_px(window, cx))
+        };
+        assert_eq!(
+            effective(&app, &mut vcx),
+            460.,
+            "a wide window draws the preferred width"
+        );
+        // Narrowing the window clamps the effective width without saving the
+        // smaller value.
+        vcx.simulate_resize(size(px(700.), px(900.)));
+        settle(&mut vcx);
+        let clamped = effective(&app, &mut vcx);
+        assert!(
+            (240. ..460.).contains(&clamped),
+            "a narrow window clamps the effective width, got {clamped}"
+        );
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                cx.global::<lyrel_ui_base::config::Config>()
+                    .right_panel_width,
+                460.,
+                "automatic clamping never writes the preference"
+            );
+            assert_eq!(app.right_panel_width.get(), 460.);
+        });
+        // Widening restores the preference verbatim.
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        settle(&mut vcx);
+        assert_eq!(effective(&app, &mut vcx), 460.);
+    }
+
+    #[gpui_kit::test]
     fn tool_host_carries_accessible_names_in_english_and_chinese(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));

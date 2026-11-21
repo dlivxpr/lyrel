@@ -4,7 +4,9 @@ use gpui_kit::base::{Tab as NavTab, Tabs as NavTabs};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
 
@@ -451,6 +453,105 @@ impl ToolLayout {
     pub(crate) fn collapse(&mut self) {
         self.open = false;
     }
+
+    /// Move an open tool to strip slot `target`, the landing position of a
+    /// drag-reorder. Only the order changes: the selection, the last-used
+    /// tool and the open state stay exactly as they were, and the entry is
+    /// the tool's identity itself, so the per-tool state keyed by it —
+    /// search, filters, expansion, drafts — travels with the tab. `target`
+    /// is clamped to the open tabs; a tool that is not open has no slot to
+    /// move and is ignored.
+    pub(crate) fn move_tab(&mut self, tab: RightPanelTab, target: usize) {
+        let tab = shown_tab(tab);
+        let Some(from) = self.order.iter().position(|open| *open == tab) else {
+            return;
+        };
+        self.order.remove(from);
+        self.order.insert(target.min(self.order.len()), tab);
+    }
+}
+
+/// A tool-tab drag in flight inside the panel header's tab strip.
+#[derive(Clone, Debug)]
+struct ToolTabDrag {
+    /// The tool being dragged. The strip's order holds identities, so the
+    /// tool's instance state travels with the tab no matter where it lands.
+    tab: RightPanelTab,
+    /// Where the pointer went down (window coordinates).
+    grab: gpui_kit::Point<gpui_kit::Pixels>,
+    /// The pointer's latest position (window coordinates).
+    pointer: gpui_kit::Point<gpui_kit::Pixels>,
+    /// Set once the pointer has moved past [`TOOL_DRAG_THRESHOLD`]; until
+    /// then the press is still an ordinary click and commits nothing.
+    started: bool,
+    /// Bumped on every reorder committed during the drag, so a tab's settle
+    /// slide restarts cleanly from wherever the last one left it.
+    generation: u64,
+}
+
+/// What the header's tab strip renders from and what its window-level drag
+/// handlers mutate, kept in one keyed state: it survives repaints, and it is
+/// dropped with the header's element state when the panel collapses, so a
+/// reopened strip starts clean.
+#[derive(Clone)]
+struct ToolStripState {
+    /// The tracked scroll of `side-panel-tool-scroll`: reveal, wheel
+    /// forwarding, edge-following and slot geometry all read it.
+    scroll: gpui_kit::ScrollHandle,
+    /// The order the strip last rendered. The strip commits reorders as a
+    /// drag crosses neighbours; comparing against this slides each tab from
+    /// the slot it occupied last frame to the one it occupies now.
+    rendered_order: Vec<RightPanelTab>,
+    /// The selection the strip last rendered. Opening or selecting a tab
+    /// that sits outside the scrolled viewport reveals it, exactly once per
+    /// change — a re-expansion mounts fresh state and reveals again.
+    prev_active: Option<RightPanelTab>,
+    /// The drag in flight, armed on pointer-down on a tab.
+    drag: Option<ToolTabDrag>,
+}
+
+impl Default for ToolStripState {
+    fn default() -> Self {
+        Self {
+            scroll: gpui_kit::ScrollHandle::new(),
+            rendered_order: Vec::new(),
+            prev_active: None,
+            drag: None,
+        }
+    }
+}
+
+/// How far the pointer must travel before a press on a tab counts as a drag
+/// rather than a click.
+const TOOL_DRAG_THRESHOLD: f32 = 3.;
+
+/// How close to the scrolled viewport's edge the pointer must sit while
+/// dragging before the strip scrolls to keep following it, and how far one
+/// such step travels.
+const TOOL_SCROLL_EDGE: f32 = 18.;
+const TOOL_SCROLL_STEP: f32 = 14.;
+
+/// The strip slot a dragged `tab` lands in when the pointer's content-x is
+/// `pointer_x`: one slot past every other tab's centre the pointer has
+/// crossed. `slots` are last frame's laid-out tab bounds, unscrolled, so the
+/// answer is stable for the whole frame a drag commits in.
+fn strip_target(
+    slots: &[Option<gpui_kit::Bounds<gpui_kit::Pixels>>],
+    order: &[RightPanelTab],
+    tab: RightPanelTab,
+    pointer_x: gpui_kit::Pixels,
+) -> usize {
+    order
+        .iter()
+        .enumerate()
+        .filter(|(_, open)| **open != tab)
+        .filter(|(slot, _)| {
+            slots
+                .get(*slot)
+                .and_then(|bounds| bounds.map(|bounds| pointer_x > bounds.center().x))
+                .unwrap_or(false)
+        })
+        .count()
 }
 
 /// How many renders a reveal waits for its row to show up. Generous: it costs
@@ -1106,7 +1207,11 @@ impl LyrelApp {
     /// The Side Panel's own header. Only its tabs scroll; the add button
     /// remains at the trailing edge of the panel.
     fn tool_host(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let layout = self.tool_layout();
+        use gpui_kit::{
+            Animation, AnimationExt as _, MouseButton, MouseDownEvent, MouseMoveEvent,
+            MouseUpEvent, canvas, ease_out_quint,
+        };
+
         let selected_fill = cx.theme().foreground.opacity(TOOL_SELECTED_OPACITY);
         let hover_fill = cx.theme().foreground.opacity(TOOL_HOVER_OPACITY);
         let close_hover = cx.theme().foreground.opacity(0.10);
@@ -1117,8 +1222,32 @@ impl LyrelApp {
         // Only Changes may carry a real count; the host asks for the same
         // pane status the tool page itself renders from.
         let changes_count = self.tool_changes_count(window, cx);
-        let tabs = layout.order.iter().map(|tab| {
-            let tab = *tab;
+        let strip_state = window
+            .use_keyed_state("tool-strip", cx, |_, _| ToolStripState::default())
+            .read(cx)
+            .clone();
+        let state = strip_state.read(cx).clone();
+        let layout = self.tool_layout();
+
+        // Opening or selecting a tab reveals it: `prev_active` starts `None`
+        // on a fresh mount (the keyed state is dropped with the collapsed
+        // header), so a re-expanded panel re-reveals its selection too. The
+        // handle applies the reveal while its container lays out.
+        if state.prev_active != Some(layout.active) {
+            if let Some(index) = layout.order.iter().position(|open| *open == layout.active) {
+                state.scroll.scroll_to_item(index);
+            }
+        }
+        // The slots the strip rendered last frame, in last frame's order —
+        // the geometry a drag measures against for one whole frame.
+        let slots: Vec<Option<gpui_kit::Bounds<gpui_kit::Pixels>>> = (0..layout.order.len())
+            .map(|slot| state.scroll.bounds_for_item(slot))
+            .collect();
+        let offset_x = state.scroll.offset().x;
+        let drag = state.drag.clone().filter(|drag| drag.started);
+        let rendered_order = state.rendered_order.clone();
+        let tabs = layout.order.iter().enumerate().map(|(slot, open)| {
+            let tab = *open;
             let current = layout.active == tab;
             let (_, label_key, icon) = tool_spec(tab);
             let ink = match current {
@@ -1127,13 +1256,29 @@ impl LyrelApp {
             };
             let group = gpui_kit::SharedString::from(tool_tab_id(tab));
             let close_tip = t_fmt(L10nKey::ToolHostClose, &[("tool", t(label_key))]);
-            NavTab::new(tool_tab_id(tab))
+            let el = NavTab::new(tool_tab_id(tab))
                 .selected(current)
                 .accessibility_label(t(label_key))
                 .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
                 // Pointer activation keeps the established content focus:
                 // the framework would otherwise focus the tab on mouse down.
                 .capture_any_mouse_down(|_, window, _| window.prevent_default())
+                // Arm a potential drag; the window-level handlers in the
+                // header's canvas decide whether the press becomes one.
+                .on_mouse_down(MouseButton::Left, {
+                    let strip_state = strip_state.clone();
+                    move |event: &MouseDownEvent, _window, cx| {
+                        strip_state.update(cx, |state, _| {
+                            state.drag = Some(ToolTabDrag {
+                                tab,
+                                grab: event.position,
+                                pointer: event.position,
+                                started: false,
+                                generation: 0,
+                            });
+                        });
+                    }
+                })
                 .focus(move |style| {
                     style.shadow(vec![gpui_kit::BoxShadow {
                         color: ring,
@@ -1213,6 +1358,9 @@ impl LyrelApp {
                                         .text_color(muted),
                                 ),
                         )
+                        // A press on the close button is never the start of a
+                        // tab drag.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
                             this.close_right_panel_tab(tab, window, cx);
@@ -1231,7 +1379,62 @@ impl LyrelApp {
                             this.set_right_panel_tab(tab, window, cx);
                         }
                     }),
-                )
+                );
+            // Drag visuals. The dragged tab rides the pointer, painted last
+            // so it crosses over its neighbours; the tabs it is crossing
+            // slide from the slot they rendered last frame to their committed
+            // one. Layout positions, not these offsets, own the hit geometry,
+            // so the window-level handlers keep working while the pointer
+            // travels.
+            enum ToolTabVisual {
+                Plain,
+                Float(gpui_kit::Pixels),
+                Slide(gpui_kit::Pixels),
+            }
+            let visual = match drag.as_ref() {
+                Some(drag) if drag.tab == tab => ToolTabVisual::Float(
+                    slots
+                        .get(slot)
+                        .and_then(|bounds| {
+                            bounds.map(|b| drag.pointer.x - (b.center().x + offset_x))
+                        })
+                        .unwrap_or(px(0.)),
+                ),
+                Some(drag) => {
+                    let from = rendered_order.iter().position(|open| *open == tab);
+                    match from.and_then(|from| match (slots.get(from), slots.get(slot)) {
+                        (Some(Some(from)), Some(Some(to))) => {
+                            Some(from.center().x - to.center().x)
+                        }
+                        _ => None,
+                    }) {
+                        Some(flip) if flip != px(0.) => ToolTabVisual::Slide(flip),
+                        _ => ToolTabVisual::Plain,
+                    }
+                }
+                None => ToolTabVisual::Plain,
+            };
+            let generation = drag.as_ref().map(|drag| drag.generation).unwrap_or(0);
+            match visual {
+                ToolTabVisual::Plain => el.into_any_element(),
+                ToolTabVisual::Float(offset) => {
+                    gpui_kit::deferred(el.relative().left(offset)).into_any_element()
+                }
+                ToolTabVisual::Slide(flip) => el
+                    .with_animation(
+                        gpui_kit::SharedString::from(format!(
+                            "tool-tab-slide-{}-{}",
+                            tool_tab_id(tab),
+                            generation
+                        )),
+                        Animation::new(std::time::Duration::from_millis(
+                            crate::ui::tab_strip::REORDER_SLIDE_MS,
+                        ))
+                        .with_easing(ease_out_quint()),
+                        move |el, delta| el.left(px(flip.as_f32() * (1. - delta))),
+                    )
+                    .into_any_element(),
+            }
         });
         let strip = NavTabs::new("tool-tabs")
             .axis(gpui_kit::Axis::Horizontal)
@@ -1239,12 +1442,15 @@ impl LyrelApp {
             // on the selected tab, while the scope itself is never a stop.
             .track_focus(&self.right_panel_nav_focus)
             .tab_stop(false)
+            .relative()
             .flex()
             .flex_row()
             .items_center()
-            .gap_0p5()
             .h_full()
-            .flex_shrink_0()
+            // The header's width is definite, so filling it bounds the scroll
+            // viewport: the tabs overflow *inside* the strip instead of the
+            // header growing past the panel.
+            .flex_1()
             .min_w_0()
             .on_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
@@ -1264,10 +1470,42 @@ impl LyrelApp {
                     }
                 }),
             )
-            .children(tabs);
+            // Only the tab strip scrolls; the header around it — the fixed
+            // `+` included — does not travel with it. The scroll container's
+            // own children are the tabs, so the tracked handle addresses each
+            // tab by its strip index for reveals and drag geometry.
+            .child(
+                div()
+                    .id("side-panel-tool-scroll")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .overflow_x_scroll()
+                    .lock_scroll_axis()
+                    .track_scroll(&state.scroll)
+                    .children(tabs),
+            )
+            .child(gpui_kit::base::ScrollableMask::vertical_wheel(&state.scroll));
+        // Remember what this frame rendered so the next can slide changed
+        // slots and reveal a changed selection. Written only on change: the
+        // write notifies, and an unconditional one would render forever.
+        let prev_active = Some(layout.active);
+        if state.rendered_order != layout.order
+            || strip_state.read(cx).prev_active != prev_active
+        {
+            strip_state.update(cx, |state, _| {
+                state.rendered_order = layout.order.clone();
+                state.prev_active = prev_active;
+            });
+        }
         h_flex()
             .id("side-panel-tool-header")
             .test_support()
+            .relative()
             .flex_none()
             .w_full()
             .h(rems(2.625))
@@ -1276,15 +1514,138 @@ impl LyrelApp {
             .gap_1()
             .border_b(crate::ui::theme::hairline(window))
             .border_color(divider)
+            // Window-level pointer handling for the drag: the pressed tab
+            // may leave the strip (and its hitboxes) before the release, so
+            // the move/up handling lives here rather than on the tabs.
             .child(
-                div()
-                    .id("side-panel-tool-scroll")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_x_scroll()
-                    .child(strip),
+                canvas(
+                    |_, _, _| {},
+                    {
+                        let strip_state = strip_state.clone();
+                        let app = cx.entity().downgrade();
+                        move |_bounds, _state, window, cx| {
+                            window.on_mouse_event({
+                                let strip_state = strip_state.clone();
+                                let app = app.clone();
+                                move |event: &MouseMoveEvent, _phase, window, cx| {
+                                    let Some(app) = app.upgrade() else { return };
+                                    let order: Vec<RightPanelTab> =
+                                        app.read(cx).tool_layout().order;
+                                    let state = strip_state.read(cx).clone();
+                                    let Some(drag) = state.drag.clone() else { return };
+                                    if !drag.started {
+                                        let dx =
+                                            (event.position.x - drag.grab.x).as_f32().abs();
+                                        let dy =
+                                            (event.position.y - drag.grab.y).as_f32().abs();
+                                        if dx.max(dy) <= TOOL_DRAG_THRESHOLD {
+                                            return;
+                                        }
+                                        strip_state.update(cx, |state, _| {
+                                            if let Some(drag) = state.drag.as_mut() {
+                                                drag.pointer = event.position;
+                                                drag.started = true;
+                                            }
+                                        });
+                                    } else {
+                                        strip_state.update(cx, |state, _| {
+                                            if let Some(drag) = state.drag.as_mut() {
+                                                drag.pointer = event.position;
+                                            }
+                                        });
+                                    }
+                                    // Follow the pointer past the viewport
+                                    // edges so off-screen tabs stay reachable.
+                                    let view = state.scroll.bounds();
+                                    let max = state.scroll.max_offset().x.as_f32();
+                                    let mut offset = state.scroll.offset();
+                                    let mut ox = offset.x.as_f32();
+                                    if event.position.x.as_f32()
+                                        > view.right().as_f32() - TOOL_SCROLL_EDGE
+                                        && ox > -max
+                                    {
+                                        ox = (ox - TOOL_SCROLL_STEP).max(-max);
+                                    } else if event.position.x.as_f32()
+                                        < view.left().as_f32() + TOOL_SCROLL_EDGE
+                                        && ox < 0.
+                                    {
+                                        ox = (ox + TOOL_SCROLL_STEP).min(0.);
+                                    }
+                                    if ox != offset.x.as_f32() {
+                                        offset.x = px(ox);
+                                        state.scroll.set_offset(offset);
+                                    }
+                                    // Commit the reorder under the pointer:
+                                    // the layout is what the strip renders,
+                                    // so the tabs settle into the preview as
+                                    // the drag crosses them. The mirror and
+                                    // config are stored once, on release.
+                                    let pointer_x =
+                                        event.position.x - state.scroll.offset().x;
+                                    let slots: Vec<_> = (0..order.len())
+                                        .map(|slot| state.scroll.bounds_for_item(slot))
+                                        .collect();
+                                    let target =
+                                        strip_target(&slots, &order, drag.tab, pointer_x);
+                                    if target
+                                        != order.iter().position(|open| *open == drag.tab)
+                                    {
+                                        app.update(cx, |this, _cx| {
+                                            let mut layout = this.tool_layout();
+                                            layout.move_tab(drag.tab, target);
+                                            this.right_panel
+                                                .tool_layouts
+                                                .insert(this.workspace, layout);
+                                        });
+                                        strip_state.update(cx, |state, _| {
+                                            if let Some(drag) = state.drag.as_mut() {
+                                                drag.generation += 1;
+                                            }
+                                        });
+                                    }
+                                    window.refresh();
+                                }
+                            });
+                            window.on_mouse_event({
+                                let strip_state = strip_state.clone();
+                                let app = app.clone();
+                                move |event: &MouseUpEvent, _phase, window, cx| {
+                                    let drag =
+                                        strip_state.update(cx, |state, _| state.drag.take());
+                                    let Some(drag) = drag.filter(|drag| drag.started) else {
+                                        return;
+                                    };
+                                    if let Some(app) = app.upgrade() {
+                                        app.update(cx, |this, cx| {
+                                            let mut layout = this.tool_layout();
+                                            let state = strip_state.read(cx).clone();
+                                            let pointer_x =
+                                                event.position.x - state.scroll.offset().x;
+                                            let slots: Vec<_> = (0..layout.order.len())
+                                                .map(|slot| {
+                                                    state.scroll.bounds_for_item(slot)
+                                                })
+                                                .collect();
+                                            let target = strip_target(
+                                                &slots,
+                                                &layout.order,
+                                                drag.tab,
+                                                pointer_x,
+                                            );
+                                            layout.move_tab(drag.tab, target);
+                                            this.store_tool_layout(&layout, cx);
+                                        });
+                                    }
+                                    window.refresh();
+                                }
+                            });
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
             )
+            .child(strip)
             .child(self.tool_add_button(cx))
             .into_any_element()
     }
@@ -2877,6 +3238,46 @@ mod tests {
         layout.expand();
         assert!(layout.open);
         assert_eq!(layout.active, Files);
+    }
+
+    /// Dragging a tab to a new slot reorders the strip without touching the
+    /// selection, the last-used tool or the panel's openness — and the entry
+    /// is the tool's identity, so nothing its instance was showing is lost
+    /// (#347).
+    #[test]
+    fn moving_a_tab_reorders_without_changing_the_selection() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.show(Scm);
+        layout.show(GitHub);
+        assert_eq!(layout.order, [Info, Files, Scm, GitHub]);
+        // Drag Info across both neighbours to the trailing end while
+        // Changes stays selected.
+        layout.move_tab(Info, 3);
+        assert_eq!(layout.order, [Files, Scm, GitHub, Info]);
+        assert_eq!(layout.active, Scm);
+        assert_eq!(layout.last_used, Scm);
+        assert!(layout.open);
+        // And back to the front.
+        layout.move_tab(Info, 0);
+        assert_eq!(layout.order, [Info, Files, Scm, GitHub]);
+        assert_eq!(layout.active, Scm, "reordering never reselects");
+    }
+
+    /// A landing past the end clamps to the last slot, and a drag that never
+    /// crosses a neighbour leaves the strip alone. A tool that is not open
+    /// has no slot to move.
+    #[test]
+    fn moving_a_tab_clamps_the_landing_and_ignores_closed_tools() {
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.move_tab(Info, 99);
+        assert_eq!(layout.order, [Files, Info], "the landing clamps");
+        let settled = layout.clone();
+        layout.move_tab(Info, 0);
+        assert_eq!(layout.order, [Files, Info], "no neighbour crossed");
+        layout.move_tab(GitHub, 0);
+        assert_eq!(layout, settled, "a closed tool has no slot to move");
     }
 
     fn forward(kind: SshForwardKind, target_host: &str, target_port: u16) -> ManagedForward {
