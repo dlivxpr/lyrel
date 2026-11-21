@@ -80,7 +80,7 @@ impl LyrelApp {
         // The pill only. `body_area` anchors it, together with whatever else
         // is floating down there — see `ui::notice`.
         Some(
-            crate::ui::notice::pill(cx.theme().warning, cx)
+            crate::ui::notice::pill("remote-input-notice", cx.theme().warning, cx)
                 .child(notice)
                 .into_any_element(),
         )

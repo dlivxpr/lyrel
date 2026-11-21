@@ -15,7 +15,9 @@
 //! landing on it.
 
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
-use gpui_kit::{AnyElement, App, Div, Hsla, div, prelude::*, px};
+use gpui_kit::{
+    AnimationElement, AnimationExt as _, AnyElement, App, Div, Hsla, div, prelude::*, px,
+};
 
 /// Chrome for one floating notice. `accent` is the leading dot, and is the
 /// only thing that says how bad this one is; the rest of the pill is the same
@@ -26,7 +28,12 @@ use gpui_kit::{AnyElement, App, Div, Hsla, div, prelude::*, px};
 /// dot is the shape the rail and the switcher already use for "this state,
 /// in this colour", and it leaves the edge the same hairline every other
 /// floating surface has.
-pub(crate) fn pill(accent: Hsla, cx: &App) -> Div {
+///
+/// `entrance_id` keys the toast's short translation-plus-fade entrance. It
+/// must be unique per pill instance: two stacked notices share the anchor,
+/// and animation state is keyed by element id. Under Reduce the pill renders
+/// at its final state and schedules no frames.
+pub(crate) fn pill(entrance_id: &'static str, accent: Hsla, cx: &App) -> AnimationElement<Div> {
     let theme = cx.theme();
     h_flex()
         .occlude()
@@ -43,6 +50,17 @@ pub(crate) fn pill(accent: Hsla, cx: &App) -> Div {
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(div().flex_none().size(px(DOT)).rounded_full().bg(accent))
+        .with_animation(
+            entrance_id,
+            crate::ui::motion::entrance(),
+            |pill, delta| {
+                // Short translation plus fade: a negative margin-bottom dips
+                // the pill below its settled slot in the bottom-anchored
+                // stack, and it rises into place as the margin releases.
+                pill.opacity(delta)
+                    .mb(px(-crate::ui::motion::TOAST_RISE_PX * (1.0 - delta)))
+            },
+        )
 }
 
 /// A one-line pill's floor. A longer reason still wraps it taller; this only

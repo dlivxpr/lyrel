@@ -10,8 +10,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Action, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _, FontWeight,
-    IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task,
+    Action, AnimationExt as _, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _,
+    FontWeight, IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task,
     TestSupportExt as _, Window, div, prelude::*, px, rems,
 };
 
@@ -1307,7 +1307,20 @@ impl Render for SearchView {
                     .pb(px(LIST_PAD))
                     .max_h(list_max_h),
             )
-            .child(self.render_footer(cx));
+            .child(self.render_footer(cx))
+            // Entrance on open only: the overlay unmounts when dismissed, so
+            // the one-shot replays each time the picker appears. Under Reduce
+            // the card renders at its final state and schedules no frames.
+            .with_animation(
+                "search-card-entrance",
+                crate::ui::motion::entrance(),
+                |card, delta| {
+                    // Short translation plus fade: the extra top margin drops
+                    // the card from above its settled slot as it releases.
+                    card.opacity(delta)
+                        .mt(px(crate::ui::motion::PICKER_DROP_PX * (1.0 - delta)))
+                },
+            );
 
         div()
             .absolute()

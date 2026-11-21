@@ -1254,6 +1254,9 @@ impl LyrelApp {
         let nav_target = self.sidebar_nav_target.clone();
         let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().rail;
         let show_badges = self.mod_hint_badges;
+        // The badges stay mounted while they fade out after the hold ends, so
+        // the row budget and the close button's slot agree with what renders.
+        let badges_mounted = show_badges || self.mod_hint_fading;
         let width = self.sidebar_px(window, cx);
         *self.sidebar_slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
         // Read before it is blanked: the rectangles a tab held over the
@@ -1642,7 +1645,7 @@ impl LyrelApp {
                 let agent_status = tab.agent_status(cx);
                 let agent_unread = tab.agent_unread_count(cx);
                 let git_cwd = git_click(tab, window, cx);
-                let badge_extra = if show_badges && badge_pos < 9 {
+                let badge_extra = if badges_mounted && badge_pos < 9 {
                     row_metrics::BADGE + row_metrics::GAP
                 } else {
                     0.
@@ -1662,7 +1665,7 @@ impl LyrelApp {
                 };
                 // Status rides at the row's trailing end, where the badge
                 // would be; the badge wins while the modifier is held.
-                let status_dot = match show_badges && badge_pos < 9 {
+                let status_dot = match badges_mounted && badge_pos < 9 {
                     true => None,
                     false => self.row_status_dot(agent_status, agent_unread, rail_fill),
                 };
@@ -2218,9 +2221,11 @@ impl LyrelApp {
                     })
                     .child(label_region)
                     .children(status_dot)
-                    .when(show_badges && badge_pos < 9, |row| {
+                    .when(badges_mounted && badge_pos < 9, |row| {
                         row.child(
                             div()
+                                .id(("tab-badge", badge_pos))
+                                .test_support()
                                 .flex_shrink_0()
                                 .flex()
                                 .items_center()
@@ -2233,10 +2238,22 @@ impl LyrelApp {
                                 } else {
                                     cx.theme().muted_foreground
                                 })
+                                // The spring, not a one-shot entrance: the same
+                                // element fades in on the hold and back out on
+                                // the release, and a re-hold mid-fade reverses
+                                // from the sampled value. Under Reduce the
+                                // spring renders at its target with no frames.
+                                .with_spring(
+                                    ("tab-badge-fade", badge_pos),
+                                    gpui_kit::SpringAnimation::new(crate::ui::motion::HINT_FADE)
+                                        .to(if show_badges { 1.0f32 } else { 0.0f32 })
+                                        .from(0.0f32),
+                                    |badge, opacity| badge.opacity(opacity),
+                                )
                                 .child(tab_badge_label(badge_pos)),
                         )
                     })
-                    .when(!(show_badges && badge_pos < 9), |row| {
+                    .when(!(badges_mounted && badge_pos < 9), |row| {
                         let backing: gpui_kit::Hsla = if is_active {
                             gpui_kit::rgb(sf.selected).into()
                         } else {
