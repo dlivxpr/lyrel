@@ -51,9 +51,9 @@ impl PanelBoundary {
 /// One panel open/close in flight. The boundary's settled state flipped at
 /// toggle time; the visual seam interpolates toward it. `generation` keeps a
 /// late-ending cleanup from clearing a newer slide that replaced this one.
+/// The boundary itself is implicit in the slot the slide is stored in.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PanelSlide {
-    pub(crate) boundary: PanelBoundary,
     pub(crate) opening: bool,
     generation: u64,
 }

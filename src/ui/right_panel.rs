@@ -1353,6 +1353,14 @@ impl LyrelApp {
         })
     }
 
+    /// The `+` the window chrome shows only while the Side Panel is
+    /// collapsed: the panel header (which carries its own `+`) is off screen
+    /// with the panel, so the add affordance stays reachable beside the
+    /// toggle. Nothing renders while the panel is open — no second strip.
+    pub(crate) fn collapsed_tool_add(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        (!self.right_panel_open(cx)).then(|| self.tool_add_button(cx).into_any_element())
+    }
+
     pub(crate) fn panel_search(
         &self,
         input: &gpui_kit::Entity<gpui_kit::component::input::InputState>,

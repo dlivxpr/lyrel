@@ -320,7 +320,7 @@ pub(crate) enum ChromeCommand {
 /// 常驻控件与原生窗口几何；拖动状态通过窗口内稳定 key 跨重绘保留。
 pub(crate) struct WindowChrome {
     left: AnyElement,
-    tool_host: AnyElement,
+    collapsed_tool_add: Option<AnyElement>,
     right: AnyElement,
 }
 
@@ -330,7 +330,7 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
-        tool_host: impl IntoElement,
+        collapsed_tool_add: Option<impl IntoElement>,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -438,7 +438,7 @@ impl WindowChrome {
             );
         Self {
             left: left.into_any_element(),
-            tool_host: tool_host.into_any_element(),
+            collapsed_tool_add: collapsed_tool_add.map(IntoElement::into_any_element),
             right: right.into_any_element(),
         }
     }
@@ -502,17 +502,19 @@ impl WindowChrome {
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
-            // The tool host sits at the drag area's trailing end, anchored
-            // beside the fixed command group: the tabs scroll between these
-            // two fixed ends rather than travelling with either (#347 owns
-            // the scrolling itself).
-            .child(
-                gpui_kit::div()
-                    .flex_none()
-                    .min_w_0()
-                    .h_full()
-                    .child(self.tool_host),
-            )
+            // The collapsed panel's `+` sits at the drag area's trailing end,
+            // anchored beside the fixed command group; the tool tabs
+            // themselves live in the panel header, so nothing renders here
+            // while the panel is open.
+            .when_some(self.collapsed_tool_add, |chrome, add| {
+                chrome.child(
+                    gpui_kit::div()
+                        .flex_none()
+                        .min_w_0()
+                        .h_full()
+                        .child(add),
+                )
+            })
             .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
             .into_any_element()
     }
