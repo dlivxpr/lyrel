@@ -996,35 +996,107 @@ mod gpui_tests {
         asked: Mutex<Vec<String>>,
     }
 
+    /// The shared `acme/widgets` fixture: one issue, one pull request with
+    /// one changed file. `Fake` answers immediately; `LatchedFake` holds the
+    /// item endpoints back so a response can be made to land late on purpose.
+    fn fake_reply(path: &str) -> Result<Reply, ApiError> {
+        let body = if path.starts_with("/repos/acme/widgets/issues?") {
+            r#"[{"number": 7, "title": "Widgets wobble", "state": "open",
+                 "user": {"login": "ada"}, "labels": [{"name": "bug", "color": "d73a4a"}],
+                 "comments": 1, "created_at": "2026-09-01T10:00:00Z",
+                 "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/issues/7"},
+                {"number": 8, "title": "A pull request", "state": "open",
+                 "pull_request": {"merged_at": null},
+                 "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                 "html_url": "https://github.com/acme/widgets/pull/8"}]"#
+        } else if path == "/repos/acme/widgets/issues/7" {
+            r#"{"number": 7, "title": "Widgets wobble", "state": "open",
+                "user": {"login": "ada"}, "labels": [], "comments": 1,
+                "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                "html_url": "https://github.com/acme/widgets/issues/7",
+                "body": "They **wobble**. ![shot](https://example.com/x.png)"}"#
+        } else if path.starts_with("/repos/acme/widgets/issues/7/comments") {
+            r#"[{"id": 1, "user": {"login": "bob"}, "body": "Seen it too.",
+                 "created_at": "2026-09-02T10:00:00Z", "html_url": "https://x/1"}]"#
+        } else if path == "/repos/acme/widgets/issues/8" {
+            r#"{"number": 8, "title": "A pull request", "state": "open",
+                "user": {"login": "ada"}, "labels": [],
+                "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
+                "html_url": "https://github.com/acme/widgets/pull/8",
+                "pull_request": {}, "body": "Reads better with the patch."}"#
+        } else if path.starts_with("/repos/acme/widgets/issues/8/comments") {
+            "[]"
+        } else if path == "/repos/acme/widgets/pulls/8" {
+            r#"{"number": 8, "title": "A pull request", "state": "open",
+                "user": {"login": "ada"}, "mergeable_state": "clean",
+                "head": {"ref": "feature", "sha": "c0ffee42"},
+                "base": {"ref": "main"}}"#
+        } else if path.starts_with("/repos/acme/widgets/pulls/8/reviews") {
+            "[]"
+        } else if path.starts_with("/repos/acme/widgets/pulls/8/files") {
+            r#"[{"filename": "src/lib.rs", "status": "modified",
+                 "additions": 1, "deletions": 0,
+                 "patch": "@@ -1,2 +1,3 @@\n one\n+pr_supplied_marker\n two"}]"#
+        } else if path.starts_with("/repos/acme/widgets/commits/c0ffee42/status")
+            || path.starts_with("/repos/acme/widgets/commits/c0ffee42/check-runs")
+        {
+            r#"{"total_count": 0, "statuses": [], "check_runs": []}"#
+        } else {
+            return Err(ApiError::NotFound);
+        };
+        Ok(Reply {
+            body: body.as_bytes().to_vec(),
+            has_next: false,
+        })
+    }
+
     impl Transport for Fake {
         fn get(&self, path: &str) -> Result<Reply, ApiError> {
             self.asked.lock().unwrap().push(path.to_string());
-            let body = if path.starts_with("/repos/acme/widgets/issues?") {
-                r#"[{"number": 7, "title": "Widgets wobble", "state": "open",
-                     "user": {"login": "ada"}, "labels": [{"name": "bug", "color": "d73a4a"}],
-                     "comments": 1, "created_at": "2026-09-01T10:00:00Z",
-                     "updated_at": "2026-09-02T10:00:00Z",
-                     "html_url": "https://github.com/acme/widgets/issues/7"},
-                    {"number": 8, "title": "A pull request", "state": "open",
-                     "pull_request": {"merged_at": null},
-                     "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
-                     "html_url": "https://github.com/acme/widgets/pull/8"}]"#
-            } else if path == "/repos/acme/widgets/issues/7" {
-                r#"{"number": 7, "title": "Widgets wobble", "state": "open",
-                    "user": {"login": "ada"}, "labels": [], "comments": 1,
-                    "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z",
-                    "html_url": "https://github.com/acme/widgets/issues/7",
-                    "body": "They **wobble**. ![shot](https://example.com/x.png)"}"#
-            } else if path.starts_with("/repos/acme/widgets/issues/7/comments") {
-                r#"[{"id": 1, "user": {"login": "bob"}, "body": "Seen it too.",
-                     "created_at": "2026-09-02T10:00:00Z", "html_url": "https://x/1"}]"#
-            } else {
-                return Err(ApiError::NotFound);
-            };
-            Ok(Reply {
-                body: body.as_bytes().to_vec(),
-                has_next: false,
-            })
+            fake_reply(path)
+        }
+
+        fn authenticated(&self) -> bool {
+            false
+        }
+    }
+
+    /// The same fixture with the item endpoints held behind a latch, so a
+    /// test can open one item, open another, and only then let the first
+    /// answer land — the late response an admission rule must reject.
+    struct LatchedFake {
+        asked: Mutex<Vec<String>>,
+        latch: (Mutex<bool>, std::sync::Condvar),
+    }
+
+    impl LatchedFake {
+        fn new() -> Self {
+            Self {
+                asked: Mutex::new(Vec::new()),
+                latch: (Mutex::new(false), std::sync::Condvar::new()),
+            }
+        }
+
+        fn release(&self) {
+            *self.latch.0.lock().unwrap() = true;
+            self.latch.1.notify_all();
+        }
+    }
+
+    impl Transport for LatchedFake {
+        fn get(&self, path: &str) -> Result<Reply, ApiError> {
+            self.asked.lock().unwrap().push(path.to_string());
+            let waits = path == "/repos/acme/widgets/issues/7"
+                || path == "/repos/acme/widgets/issues/8"
+                || path == "/repos/acme/widgets/pulls/8";
+            if waits {
+                let mut open = self.latch.0.lock().unwrap();
+                while !*open {
+                    open = self.latch.1.wait(open).unwrap();
+                }
+            }
+            fake_reply(path)
         }
 
         fn authenticated(&self) -> bool {

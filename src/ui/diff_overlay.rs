@@ -267,7 +267,11 @@ impl LyrelApp {
             .get_mut(active)
             .and_then(|t| t.diff_overlay.take());
         if taken.is_some() {
-            self.focus_active(window, cx);
+            // Return to whatever the patch covered — the pull request's
+            // detail document, a code document, or the terminal when the
+            // document area is empty — never an obscured shell: the document
+            // the reader sees must be the one the keyboard lands in.
+            self.focus_previous_content(window, cx);
             cx.notify();
         }
     }
