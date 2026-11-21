@@ -59,11 +59,11 @@ impl LyrelApp {
                     Some(t(L10nKey::PanelNoWorkingDirectoryHint)),
                     cx,
                 );
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::Pending => {
                 let body = self.panel_empty(t(L10nKey::PanelLoading), None, cx);
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::NotARepo => {
                 let body = self.panel_empty(
@@ -71,7 +71,7 @@ impl LyrelApp {
                     Some(t(L10nKey::PanelNotAGitRepoHint)),
                     cx,
                 );
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::NoRemote { repo } => {
                 let body = self.panel_empty(
@@ -95,7 +95,7 @@ impl LyrelApp {
                         ),
                     )
                     .into_any_element();
-                return self.github_shell(title, Vec::new(), body, false);
+                return self.github_shell(title, Vec::new(), body);
             }
             GhTarget::Ready {
                 host,
@@ -105,15 +105,14 @@ impl LyrelApp {
             } => (host, repo, remotes, chosen),
         };
 
-        // A detail belongs to the repository it was opened from. If the pane
-        // has since moved to another one, the list of that one is what the
-        // panel is about now.
-        if let Some((slug, number)) = self.github.open.clone() {
-            if slug == chosen.slug {
-                let (pinned, body) = self.render_github_detail(&repo, &slug, number, window, cx);
-                return self.github_shell(title, pinned, body, true);
+        // A detail belongs to the repository it was opened from. The detail
+        // itself reads in the document area now; if the pane has since moved
+        // to another repository, the document closes with it, and the list of
+        // the repository shown is what the panel is about.
+        if let Some((slug, _)) = self.github.open.clone() {
+            if slug != chosen.slug {
+                self.github_close_detail(window, cx);
             }
-            self.github.open = None;
         }
 
         let query = self.github_query(&chosen.slug);
@@ -140,7 +139,7 @@ impl LyrelApp {
         // one unit and the list starts clear of it.
         pinned.push(div().flex_none().h(px(LIST_GAP)).into_any_element());
         let body = self.github_list_body(&chosen.slug, cx);
-        self.github_shell(title, pinned, body, false)
+        self.github_shell(title, pinned, body)
     }
 
     /// Title, the rows pinned under it, and a body that scrolls on its own.
@@ -149,19 +148,10 @@ impl LyrelApp {
         title: AnyElement,
         pinned: Vec<AnyElement>,
         body: AnyElement,
-        detail: bool,
     ) -> AnyElement {
-        let scroll = if detail {
-            &self.github.detail_scroll
-        } else {
-            &self.github.list_scroll
-        };
+        let scroll = &self.github.list_scroll;
         let scroller = div()
-            .id(if detail {
-                "panel-github-detail"
-            } else {
-                "panel-github-list"
-            })
+            .id("panel-github-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -182,6 +172,7 @@ impl LyrelApp {
 
     pub(crate) fn github_refresh_tile(
         &self,
+        id: &'static str,
         repo: Option<RepoKey>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -189,7 +180,7 @@ impl LyrelApp {
             || self.github.lists.values().any(|l| l.loading)
             || self.github.details.values().any(|d| d.loading);
         github_tile(
-            "panel-github-refresh",
+            id,
             if busy {
                 Icon::new(IconName::LoaderCircle)
             } else {
@@ -270,13 +261,12 @@ impl LyrelApp {
                                                 let app = app.clone();
                                                 let repo = repo.clone();
                                                 let name = r.remote.clone();
-                                                move |_, _window, cx| {
+                                                move |_, window, cx| {
                                                     let _ = app.update(cx, |this, cx| {
                                                         this.github
                                                             .remote_pick
                                                             .insert(repo.clone(), name.clone());
-                                                        this.github.open = None;
-                                                        cx.notify();
+                                                        this.github_close_detail(window, cx);
                                                     });
                                                 }
                                             }),
@@ -305,7 +295,7 @@ impl LyrelApp {
                     .text_color(muted),
             )
             .child(picker)
-            .child(self.github_refresh_tile(Some(repo.clone()), cx))
+            .child(self.github_refresh_tile("panel-github-refresh", Some(repo.clone()), cx))
             .child(
                 github_tile(
                     "panel-github-open-repo",
@@ -379,8 +369,8 @@ impl LyrelApp {
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(title.clone()).build(window, cx)
             })
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.github_open_detail(slug.clone(), number, cx);
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.github_open_detail(slug.clone(), number, window, cx);
             }))
             .child(div().flex_none().child(state_glyph(item.state, true, cx)))
             .child(
@@ -711,12 +701,12 @@ impl LyrelApp {
                     cx.notify();
                 }
             }))
-            .on_click(cx.listener(move |this, _, _window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 let query = this.github_query(&slug);
                 if let Some(cache) = this.github.lists.get_mut(&query) {
                     cache.selected = Some(number);
                 }
-                this.github_open_detail(slug.clone(), number, cx);
+                this.github_open_detail(slug.clone(), number, window, cx);
             }))
             .child(stack_glyph(
                 number,
@@ -1230,9 +1220,9 @@ mod gpui_tests {
         });
         assert_eq!(numbers, vec![7], "the pull request is not an issue");
 
-        let slug = app.update_in(&mut vcx, |app, _, cx| {
+        let slug = app.update_in(&mut vcx, |app, window, cx| {
             let slug = app.github.lists.keys().next().unwrap().slug.clone();
-            app.github_open_detail(slug.clone(), 7, cx);
+            app.github_open_detail(slug.clone(), 7, window, cx);
             slug
         });
         settle(&app, &mut vcx, "the detail", |app| {
@@ -1359,9 +1349,9 @@ mod gpui_tests {
                 .any(|p| p.item.as_ref().is_some_and(|i| i.number == 31))
         });
 
-        let slug = app.update_in(&mut vcx, |app, _, cx| {
+        let slug = app.update_in(&mut vcx, |app, window, cx| {
             let slug = app.github.branch_pulls.keys().next().unwrap().slug.clone();
-            app.github_open_detail(slug.clone(), 31, cx);
+            app.github_open_detail(slug.clone(), 31, window, cx);
             slug
         });
         let key = (slug.clone(), 31);
@@ -1535,4 +1525,5 @@ mod gpui_tests {
 
     include!("github/native_stack_test.rs");
     include!("github/stack_consumer_tests.rs");
+    include!("github/detail_document_tests.rs");
 }

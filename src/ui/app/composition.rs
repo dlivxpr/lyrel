@@ -108,6 +108,9 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
+        // Membership diff for the sidebar's row/disclosure motion, run even
+        // when the panel is shut so a change that lands hidden stays landed.
+        self.observe_sidebar_motion(cx);
         let sidebar = self
             .sidebar_open(cx)
             .then(|| self.tab_sidebar(window, cx).into_any_element());
@@ -243,21 +246,32 @@ impl LyrelApp {
                     window,
                     cx,
                 );
+                let github_document = self.render_github_detail_document(
+                    crate::ui::document_column::DocumentChrome::Fill,
+                    window,
+                    cx,
+                );
                 let code_overlay = self.render_code_overlay(
                     crate::ui::document_column::DocumentChrome::Fill,
                     window,
                     cx,
                 );
-                let mut pair = vec![
-                    (OverlayTop::Diff, diff_overlay),
+                // Every open document surface paints, the stack's bottom
+                // first — code, then the detail over it, then the patch over
+                // the detail — and the raised surface, which may sit anywhere
+                // in that stack, paints last and wins on paint order the way
+                // overlay_top always has.
+                let front = self.document_front();
+                let mut pair: Vec<(OverlayTop, Option<gpui_kit::AnyElement>)> = vec![
                     (OverlayTop::Code, code_overlay),
+                    (OverlayTop::Github, github_document),
+                    (OverlayTop::Diff, diff_overlay),
                 ];
-                if self
-                    .tabs
-                    .get(self.tabs.active_index())
-                    .is_some_and(Tab::is_diff_on_top)
-                {
-                    pair.reverse();
+                if let Some(ix) = front.and_then(|surface| {
+                    pair.iter().position(|(candidate, _)| *candidate == surface)
+                }) {
+                    let raised = pair.remove(ix);
+                    pair.push(raised);
                 }
                 (
                     pair.into_iter()
@@ -274,11 +288,13 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
+        let tool_host = self.tool_host(window, cx);
         let top_chrome = WindowChrome::new(
             self.left_panel_open(cx),
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
+            tool_host,
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
@@ -329,11 +345,15 @@ impl LyrelApp {
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
                         && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
+                            || this.reorder.borrow().is_some()
                             || this
                                 .tabs
                                 .get(this.tabs.active_index())
                                 .is_some_and(|tab| tab.pip_interaction.has_gesture()))
                     {
+                        // Escape cancels whichever drag is in flight — a pane
+                        // hunting a landing or a terminal tab hunting a new
+                        // order — and leaves nothing of it behind to land late.
                         this.cancel_pane_drag(window, cx);
                         cx.stop_propagation();
                     }

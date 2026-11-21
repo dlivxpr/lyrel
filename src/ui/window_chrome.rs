@@ -320,6 +320,7 @@ pub(crate) enum ChromeCommand {
 /// 常驻控件与原生窗口几何；拖动状态通过窗口内稳定 key 跨重绘保留。
 pub(crate) struct WindowChrome {
     left: AnyElement,
+    tool_host: AnyElement,
     right: AnyElement,
 }
 
@@ -329,6 +330,7 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
+        tool_host: impl IntoElement,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -436,6 +438,7 @@ impl WindowChrome {
             );
         Self {
             left: left.into_any_element(),
+            tool_host: tool_host.into_any_element(),
             right: right.into_any_element(),
         }
     }
@@ -499,6 +502,17 @@ impl WindowChrome {
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
+            // The tool host sits at the drag area's trailing end, anchored
+            // beside the fixed command group: the tabs scroll between these
+            // two fixed ends rather than travelling with either (#347 owns
+            // the scrolling itself).
+            .child(
+                gpui_kit::div()
+                    .flex_none()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.tool_host),
+            )
             .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
             .into_any_element()
     }
@@ -1044,14 +1058,272 @@ mod gpui_tests {
                     assert!(counts.is_empty(), "a clean working tree clears the count");
                 } else {
                     assert_eq!(counts.len(), 1, "Changes owns the only count surface");
+                    // The count lives on the Changes tool tab in the title
+                    // bar now, not on the panel's retired fixed row.
                     let count = window
-                        .within("panel-title")
+                        .within("tool-tab-changes")
                         .find("right-panel-change-count");
                     assert!(count.visible());
                     assert_eq!(count.label(), Some(expected.to_string().as_str()));
                 }
             });
         }
+    }
+
+    #[gpui_kit::test]
+    fn tool_host_prepares_only_info_collapsed_and_the_add_menu_opens_tools(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        vcx.update(|window, cx| window.render_frame(cx));
+        // Only Info is prepared, behind a collapsed panel.
+        assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        vcx.update(|window, _| {
+            assert_eq!(window.find_all("tool-tab-info").len(), 1);
+            assert!(window.find_all("tool-tab-files").is_empty());
+            assert!(window.find_all("tool-tab-changes").is_empty());
+            assert!(window.find_all("tool-tab-github").is_empty());
+            // The old fixed row is not also drawn.
+            assert!(window.find_all("right-panel-tabs").is_empty());
+        });
+        // Choosing a tool from the fixed + opens the panel on it.
+        vcx.update(|window, cx| window.click("titlebar-tool-add", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("tool-add-files", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        vcx.update(|window, _| {
+            assert_eq!(window.find_all("tool-tab-files").len(), 1);
+        });
+        // Picking the same tool again activates the same instance.
+        vcx.update(|window, cx| window.click("titlebar-tool-add", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("tool-add-files", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.find_all("tool-tab-files").len(),
+                1,
+                "one tab per tool, whatever the opening command"
+            );
+        });
+        assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+    }
+
+    #[gpui_kit::test]
+    fn tool_tab_clicks_activate_the_open_instance(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Files, window, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-files").selected(), Some(true));
+            assert_eq!(window.find("tool-tab-info").selected(), Some(false));
+        });
+        // Its existing tab activates the same instance.
+        vcx.update(|window, cx| window.click("tool-tab-info", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-info").selected(), Some(true));
+            assert_eq!(window.find("tool-tab-files").selected(), Some(false));
+        });
+        // And back, with still one tab per tool.
+        vcx.update(|window, cx| window.click("tool-tab-files", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-files").selected(), Some(true));
+            assert_eq!(window.find_all("tool-tab-info").len(), 1);
+            assert_eq!(window.find_all("tool-tab-files").len(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn closing_tool_tabs_follows_the_neighbours_and_empties_collapse(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        for tab in [
+            RightPanelTab::Files,
+            RightPanelTab::Scm,
+            RightPanelTab::GitHub,
+        ] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.set_right_panel_tab(tab, window, cx);
+            });
+        }
+        settle(&mut vcx);
+        // Close a background tab: selection stays on GitHub.
+        vcx.update(|window, cx| window.click("tool-tab-close-info", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert!(window.find_all("tool-tab-info").is_empty());
+            assert_eq!(window.find("tool-tab-github").selected(), Some(true));
+        });
+        // Close the active rightmost tab: the left neighbour wins.
+        vcx.update(|window, cx| window.click("tool-tab-close-github", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-changes").selected(), Some(true));
+        });
+        // Close the active middle tab: the right neighbour wins.
+        vcx.update(|window, cx| window.click("tool-tab-close-changes", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-files").selected(), Some(true));
+            assert!(window.find("tool-tab-files").visible());
+        });
+        // Close the last tab: the panel collapses rather than leaving an
+        // empty shell.
+        vcx.update(|window, cx| window.click("tool-tab-close-files", cx));
+        settle(&mut vcx);
+        assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        vcx.update(|window, _| {
+            assert!(window.find_all("tool-tab-files").is_empty());
+            // The fixed + and toggle survive the collapse.
+            assert_eq!(window.find_all("titlebar-tool-add").len(), 1);
+            assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn reopening_an_emptied_panel_restores_the_last_used_tool(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Scm, window, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("tool-tab-close-info", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("tool-tab-close-changes", cx));
+        settle(&mut vcx);
+        assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        // The emptied panel reopens on the last-used tool.
+        vcx.update(|window, cx| window.click("titlebar-right-panel", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        vcx.update(|window, _| {
+            assert_eq!(window.find_all("tool-tab-changes").len(), 1);
+            assert_eq!(window.find("tool-tab-changes").selected(), Some(true));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn search_everywhere_command_activates_the_tool_tab_once(cx: &mut TestAppContext) {
+        let (_app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        // The commands Search Everywhere dispatches.
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        settle(&mut vcx);
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.find_all("tool-tab-files").len(),
+                1,
+                "repeated commands activate the same instance"
+            );
+        });
+        // Search is the Files tool's explicit input mode: the Files tab is
+        // what exists, commanded as Search or Files.
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelSearch);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find_all("tool-tab-files").len(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn tool_switches_keep_terminal_focus_and_closing_returns_it(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
+        // Ordinary opens and switches do not steal the keyboard.
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
+        vcx.update(|window, cx| window.click("tool-tab-info", cx));
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
+        vcx.simulate_keystrokes("x");
+        settle(&mut vcx);
+        assert_eq!(dispatched_input(&mut streams[0]).as_slice(), &b"x"[..]);
+        // Close both tools: the second close collapses the panel and the
+        // keyboard is back where it started.
+        vcx.update(|window, cx| window.click("tool-tab-close-info", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        vcx.update(|window, cx| window.click("tool-tab-close-files", cx));
+        settle(&mut vcx);
+        assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        assert!(terminal_focused(&app, &mut vcx));
+        vcx.simulate_keystrokes("y");
+        settle(&mut vcx);
+        assert_eq!(dispatched_input(&mut streams[0]).as_slice(), &b"y"[..]);
+    }
+
+    #[gpui_kit::test]
+    fn tool_tabs_close_from_the_keyboard_after_navigation_entry(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        settle(&mut vcx);
+        // Enter the tab list by keyboard: the roving stop lands on the
+        // selected tab.
+        vcx.dispatch_action(lyrel_ui_base::actions::FocusRightPanelNavigation);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("tool-tab-files").focused(), Some(true));
+        });
+        // Ctrl+W closes the selected tab; with a tab remaining, the panel
+        // stays open and the neighbour inherits the selection.
+        vcx.simulate_keystrokes("ctrl-w");
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert!(window.find_all("tool-tab-files").is_empty());
+            assert_eq!(window.find("tool-tab-info").selected(), Some(true));
+        });
+        // Closing the last tab collapses the panel and returns focus to the
+        // terminal content.
+        vcx.simulate_keystrokes("ctrl-w");
+        settle(&mut vcx);
+        assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+        assert!(terminal_focused(&app, &mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn tool_host_carries_accessible_names_in_english_and_chinese(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        vcx.dispatch_action(lyrel_ui_base::actions::ShowRightPanelFiles);
+        settle(&mut vcx);
+        for (locale, files, close_files, add_tool) in [
+            ("en", "Files", "Close Files", "Add Tool"),
+            ("zh-CN", "文件", "关闭文件", "添加工具"),
+        ] {
+            app.update(&mut vcx, |_, cx| {
+                lyrel_ui_base::i18n::set_locale(locale);
+                cx.notify();
+            });
+            settle(&mut vcx);
+            vcx.update(|window, _| {
+                assert_eq!(window.find("tool-tab-files").label(), Some(files));
+                assert_eq!(
+                    window.find("tool-tab-close-files").label(),
+                    Some(close_files)
+                );
+                assert_eq!(window.find("titlebar-tool-add").label(), Some(add_tool));
+            });
+        }
+        app.update(&mut vcx, |_, cx| {
+            lyrel_ui_base::i18n::set_locale("en");
+            cx.notify();
+        });
     }
 
     #[gpui_kit::test]

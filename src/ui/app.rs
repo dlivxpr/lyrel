@@ -342,6 +342,14 @@ pub struct LyrelApp {
     /// them. Adopted from every pull and every `GroupsChanged`, and pushed
     /// back as one `WorkspaceSetGroups` whenever this window edits it.
     pub(crate) sidebar_groups: crate::core::group_key::WorkspaceGroups,
+    /// Session-row and group-disclosure motion: which rows are arriving or
+    /// leaving, which groups are opening or shutting, and what the leaving
+    /// rows last showed. The work-area render feeds it a membership diff
+    /// each frame and the sidebar render paints what it returns; nothing
+    /// outside `tab_sidebar` touches it. RefCell, like the slot rectangles
+    /// beside it: render is `&self`, and the diff has to happen where the
+    /// frame is built.
+    pub(crate) sidebar_motion: RefCell<crate::ui::tab_sidebar::SidebarMotion>,
     /// Where the active tab's panes were last drawn, which is the frame of
     /// reference a drag's landing is worked out in.
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1611,6 +1619,31 @@ impl LyrelApp {
         if let Some(tab) = self.tabs.remember_leaf(leaf) {
             self.status_document_focus = Some((tab, false));
         }
+        // A terminal taking focus is the one moment the Context Pane is known
+        // to have changed without asking the layout. A repository pick made on
+        // another pane must not silently ride along with it (#349).
+        self.scm.note_context_leaf(leaf);
+    }
+
+    /// The Context Pane: the last valid terminal pane of the active
+    /// Workspace — the single subject the Side Panel tools (Info, Changes,
+    /// GitHub, Files) and the bottom Git indicator describe.
+    ///
+    /// The answer is *derived*, never remembered. A terminal leaf holding
+    /// keyboard focus wins; otherwise the leaf its tab last came back to;
+    /// otherwise the first visible leaf. Because every read walks the live
+    /// tab, a pane that was closed, or that belongs to a Workspace this
+    /// window no longer shows, can never supply the data — and focusing a
+    /// document, a menu or the panel itself changes nothing. Focusing a
+    /// different terminal pane is the only thing that moves it.
+    ///
+    /// This is the canonical resolution path: tool data sources and the
+    /// status bar read it instead of re-deriving their own pane, so all of
+    /// them agree by construction.
+    pub(crate) fn context_pane(&self, window: &Window, cx: &App) -> Option<Entity<TerminalView>> {
+        self.tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)
     }
 
     /// Toggle fullscreen, and say how to leave it on the way in.
@@ -2671,8 +2704,18 @@ impl LyrelApp {
             .map(|slot| slot.entity_id())
     }
 
+    /// Cancel whatever drag is in flight — a pane on its way to a landing or
+    /// a terminal tab on its way to a new order. Escape, capture loss, tab
+    /// switches and window deactivation only cancel; a finished drag is the
+    /// release's to land.
     fn cancel_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_drag.borrow_mut().take();
+        // A tab drag cancelled mid-flight must not leave the pending order or
+        // the merge offer the last previewed frame recorded: letting go
+        // later, anywhere, would land them. Taking the drag drops the pending
+        // order with it; the merge offer outlives the drag, so it goes too.
+        self.reorder.borrow_mut().take();
+        self.tab_merge.take();
         if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             tab.pip_interaction.cancel();
         }
@@ -2718,7 +2761,7 @@ impl LyrelApp {
                         } else if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
                             // Re-read the release position; a stale highlighted frame cannot park or rearrange.
                             crate::ui::pane_drag::clear_landing(&app.pane_drag);
-                            let _ = app.pane_landing(window, cx);
+                            let _ = app.pane_landing_offer(window, cx);
                             let landing = crate::ui::pane_drag::take_landing(&app.pane_drag);
                             let tiled = app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
                                 !tab.pip_slot(cx)
@@ -2785,7 +2828,48 @@ impl LyrelApp {
     /// Also records that landing as the one a drop would take, so the drop and
     /// the highlight can never disagree: a zone the tree refuses to carry out
     /// is neither drawn nor remembered, and releasing over it does nothing.
-    fn pane_landing(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
+    fn pane_landing(&self, window: &mut Window, cx: &mut App) -> Option<gpui_kit::AnyElement> {
+        let rect = self.pane_landing_offer(window, cx)?;
+        // The highlight glides between the targets the pointer crosses rather
+        // than jumping; with motion reduced the transition resolves to its
+        // target on the frame it changes, so the feedback stays direct.
+        let shown = crate::ui::pane_drag::glide(&self.pane_drag)
+            .map(|glide| {
+                gpui_kit::base::transition(
+                    (glide, "pane-drop-preview"),
+                    rect,
+                    crate::ui::pane_drag::glide_transition(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap_or(rect);
+        let area = self.pane_area.get()?;
+
+        let accent = cx.theme().drag_border;
+        Some(
+            div()
+                .id("pane-drop-preview")
+                .test_support()
+                .absolute()
+                .left(shown.origin.x - area.origin.x)
+                .top(shown.origin.y - area.origin.y)
+                .w(shown.size.width)
+                .h(shown.size.height)
+                .rounded(px(6.))
+                .border_2()
+                .border_color(accent)
+                .bg(accent.opacity(0.15))
+                .into_any_element(),
+        )
+    }
+
+    /// Where a pane being dragged would land right now, remembered as the
+    /// landing a drop would take.
+    ///
+    /// Split from the highlight so the release path can re-read the offer for
+    /// the position the button came up at without painting anything.
+    fn pane_landing_offer(&self, window: &Window, cx: &App) -> Option<Bounds<Pixels>> {
         use crate::ui::pane_drag;
 
         let from = pane_drag::lifted(&self.pane_drag)?;
@@ -2811,21 +2895,7 @@ impl LyrelApp {
         let pinned = zone.map(|i| leaves.get(i).map(|l| l.entity_id()))?;
         let rect = pane_drag::landing(&tab.pane, slot, here, area)?;
         pane_drag::set_landing(&self.pane_drag, pinned);
-
-        let accent = cx.theme().drag_border;
-        Some(
-            div()
-                .absolute()
-                .left(rect.origin.x - area.origin.x)
-                .top(rect.origin.y - area.origin.y)
-                .w(rect.size.width)
-                .h(rect.size.height)
-                .rounded(px(6.))
-                .border_2()
-                .border_color(accent)
-                .bg(accent.opacity(0.15))
-                .into_any_element(),
-        )
+        Some(rect)
     }
 
     /// The patch of the layout a tab held over it would be grafted into, lit
@@ -2835,7 +2905,7 @@ impl LyrelApp {
     /// readings share one gesture: over the strip or the sidebar it is a
     /// reorder, out over the panes it is a merge. Suspending the reorder is
     /// what keeps the drop from being both.
-    fn tab_landing(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
+    fn tab_landing(&self, window: &mut Window, cx: &mut App) -> Option<gpui_kit::AnyElement> {
         self.tab_merge.set(None);
         let dragged = crate::ui::reorder::dragged_tab(&self.reorder);
         let offer = dragged.and_then(|id| self.tab_landing_rect(id, window));
@@ -2843,15 +2913,31 @@ impl LyrelApp {
         let (zone, rect) = offer?;
         let area = self.pane_area.get()?;
         self.tab_merge.set(Some((dragged?, zone)));
+        // The same glide the pane preview rides: the highlight follows the
+        // pointer across targets, and with motion reduced it is drawn at its
+        // target on the frame it changes.
+        let shown = crate::ui::reorder::glide(&self.reorder)
+            .map(|glide| {
+                gpui_kit::base::transition(
+                    (glide, "tab-drop-preview"),
+                    rect,
+                    crate::ui::pane_drag::glide_transition(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap_or(rect);
 
         let accent = cx.theme().drag_border;
         Some(
             div()
+                .id("tab-drop-preview")
+                .test_support()
                 .absolute()
-                .left(rect.origin.x - area.origin.x)
-                .top(rect.origin.y - area.origin.y)
-                .w(rect.size.width)
-                .h(rect.size.height)
+                .left(shown.origin.x - area.origin.x)
+                .top(shown.origin.y - area.origin.y)
+                .w(shown.size.width)
+                .h(shown.size.height)
                 .rounded(px(6.))
                 .border_2()
                 .border_color(accent)
@@ -3715,6 +3801,17 @@ impl LyrelApp {
     /// and the tab context menu) come through here so the two cannot drift.
     pub(crate) fn tab_cwd_text(&self, index: usize, window: &Window, cx: &App) -> Option<String> {
         let leaf = self.tabs.get(index)?.pane.focused_or_first(window, cx)?;
+        Self::cwd_text(&leaf, cx)
+    }
+
+    /// The Context Pane's working directory, spelled for the clipboard — the
+    /// same pane the bottom bar's Git indicator and the Side Panel tools
+    /// describe, so the path a user copies is the path the bar shows (#349).
+    pub(crate) fn context_cwd_text(&self, window: &Window, cx: &App) -> Option<String> {
+        Self::cwd_text(&self.context_pane(window, cx)?, cx)
+    }
+
+    fn cwd_text(leaf: &Entity<TerminalView>, cx: &App) -> Option<String> {
         let view = leaf.read(cx);
         let cwd = view.cwd()?;
         Some(match view.local_cwd().is_some() {
@@ -3726,7 +3823,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn copy_active_cwd(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.tab_cwd_text(self.tabs.active_index(), window, cx) {
+        if let Some(text) = self.context_cwd_text(window, cx) {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         }
     }
@@ -5855,3 +5952,7 @@ mod sidecar_snapshot_gpui_tests;
 #[cfg(test)]
 #[path = "tab/tests_parking.rs"]
 mod parking_gpui_tests;
+
+#[cfg(test)]
+#[path = "tab/tests_drag.rs"]
+mod drag_gpui_tests;
