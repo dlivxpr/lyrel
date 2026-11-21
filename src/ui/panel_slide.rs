@@ -207,12 +207,12 @@ impl LyrelApp {
             .bottom_0()
             .left_0()
             .overflow_hidden()
+            .child(sidebar)
             .with_animation(
-                "left-panel-slide-motion",
+                ("left-panel-slide-motion", slide.generation),
                 slide_animation(),
                 move |el, delta| el.w(px(seam_at(slide.opening, full, delta))),
             )
-            .child(sidebar)
             .into_any_element()
     }
 
@@ -234,12 +234,12 @@ impl LyrelApp {
             .bottom_0()
             .right_0()
             .overflow_hidden()
+            .child(panel)
             .with_animation(
-                "right-panel-slide-motion",
+                ("right-panel-slide-motion", slide.generation),
                 slide_animation(),
                 move |el, delta| el.w(px(seam_at(slide.opening, full, delta))),
             )
-            .child(panel)
             .into_any_element()
     }
 

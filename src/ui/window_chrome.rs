@@ -583,6 +583,15 @@ mod gpui_tests {
         vcx.run_until_parked();
     }
 
+    fn settle_panel_toggle(vcx: &mut VisualTestContext) {
+        vcx.run_until_parked();
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(
+                crate::ui::panel_slide::PANEL_SLIDE_MS + 1,
+            ));
+        settle(vcx);
+    }
+
     fn wait_for_editor(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
         // HostOps 的真实线程池不随 GPUI executor 一起排空。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1070,7 +1079,7 @@ mod gpui_tests {
         });
         // The window toggle opens the panel on Info; the header's + adds Files.
         vcx.update(|window, cx| window.click("titlebar-right-panel", cx));
-        settle(&mut vcx);
+        settle_panel_toggle(&mut vcx);
         vcx.update(|window, cx| window.click("side-panel-tool-add", cx));
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("tool-add-files", cx));
@@ -1193,7 +1202,7 @@ mod gpui_tests {
         assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
         // The emptied panel reopens on the last-used tool.
         vcx.update(|window, cx| window.click("titlebar-right-panel", cx));
-        settle(&mut vcx);
+        settle_panel_toggle(&mut vcx);
         assert!(app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
         vcx.update(|window, _| {
             assert_eq!(window.find_all("tool-tab-changes").len(), 1);
@@ -1350,7 +1359,7 @@ mod gpui_tests {
                 assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
                 window.click("titlebar-right-panel", cx);
             });
-            settle(&mut vcx);
+            settle_panel_toggle(&mut vcx);
             app.update_in(&mut vcx, |app, window, cx| {
                 assert!(app.right_panel_open(cx));
                 app.file_search
@@ -1361,7 +1370,7 @@ mod gpui_tests {
                 assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
                 window.click("titlebar-right-panel", cx);
             });
-            settle(&mut vcx);
+            settle_panel_toggle(&mut vcx);
             assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
             assert!(terminal_focused(&app, &mut vcx));
 
@@ -1554,7 +1563,7 @@ mod gpui_tests {
                 window.click("titlebar-left-panel", cx);
                 window.click("titlebar-right-panel", cx);
             });
-            settle(&mut vcx);
+            settle_panel_toggle(&mut vcx);
             vcx.update(|window, cx| window.click("titlebar-add", cx));
             settle(&mut vcx);
             vcx.simulate_keystrokes("q");
