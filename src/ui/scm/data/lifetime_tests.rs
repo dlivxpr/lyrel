@@ -678,18 +678,13 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
     });
     subscribe(&mut vcx, 8300, ScmWatcher::Panel, dead, &root);
     app.update_in(&mut vcx, |app, _, cx| {
+        // The Context Pane moved onto the dead Host's repository: nothing may
+        // pair that remembered root with the live pane's fallback Host, so
+        // the panel can name no repository until the pane itself moves.
         app.scm.follow_pane(RepoKey {
-            host: live,
+            host: dead,
             root: root.clone(),
         });
-        app.scm.select_repository(
-            RepoKey {
-                host: dead,
-                root: root.clone(),
-            },
-            0,
-            None,
-        );
         for host in [dead, live] {
             app.scm
                 .roots
@@ -704,10 +699,15 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
         assert!(!app.scm.root_lookups.contains(&(dead, root.clone())));
         assert!(app.scm.roots.contains_key(&(live, root.clone())));
         assert!(app.scm.root_lookups.contains(&(live, root.clone())));
+        assert!(app.scm.repository_context(cx).is_none());
+        app.scm.follow_pane(RepoKey {
+            host: live,
+            root: root.clone(),
+        });
         assert_eq!(
             app.scm.active_repo().unwrap().host,
             live,
-            "the dead override cannot survive until reconnect"
+            "the live pane's repository is the subject again"
         );
     });
 }
