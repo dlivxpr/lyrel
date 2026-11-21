@@ -1207,12 +1207,22 @@ mod gpui_tests {
             .expect("the pane's socket takes the new cwd");
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
-            // files_cwd follows the foreground coordinator's cached cwd after
-            // startup. Drive its production timer, not only wall-clock sleep.
-            vcx.executor().advance_clock(Duration::from_millis(300));
-            vcx.background_executor.run_until_parked();
+            // Drive the cwd poll, but advance less than the search debounce.
+            // A larger step can resolve the checkout and finish its search
+            // before we ever observe the pending state on a fast runner.
+            vcx.executor().advance_clock(DEBOUNCE / 2);
+            vcx.run_until_parked();
             let rooted = app.update_in(&mut vcx, |app, window, cx| {
-                app.project_roots(window, cx).map(|(_, roots)| roots) == Some(vec![second.clone()])
+                if app.project_roots(window, cx).map(|(_, roots)| roots)
+                    != Some(vec![second.clone()])
+                {
+                    return false;
+                }
+                assert!(
+                    matches!(app.panel_search_body(window, cx), Body::Searching),
+                    "the newly resolved checkout must hide old hits while its search is pending"
+                );
+                true
             });
             if rooted {
                 break;
@@ -1223,16 +1233,6 @@ mod gpui_tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Between the retarget and the new answer, the old checkout's hits
-        // are the wrong subject: the panel says it is searching, not that it
-        // has results.
-        let body = app.update_in(&mut vcx, |app, window, cx| {
-            app.panel_search_body(window, cx)
-        });
-        assert!(
-            matches!(body, Body::Searching),
-            "stale hits from the old checkout"
-        );
         assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
         assert_eq!(
             groups(&app, &mut vcx),
