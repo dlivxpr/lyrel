@@ -904,1384 +904,6 @@ fn sidebar_motion_row(
         .into_any_element()
 }
 
-// ── Session-row and group disclosure motion ─────────────────────────────
-//
-// Behavioral reference: Diri's `sidebar/row_motion.rs` and
-// `sidebar/disclosure.rs` at the pinned commit recorded in
-// docs/research/diri-right-panel-motion.md, independently implemented on
-// GPUI Kit. The model is pure: render feeds it the executor's clock and
-// paints what it returns, and a short task keeps frames coming only while
-// something owes one.
-
-/// A row arriving opens its slot by height before its content fades in, so
-/// text never appears squashed into a sliver; a row leaving fades its
-/// content first and reclaims the slot right behind it.
-const ROW_ENTER_MS: u64 = 220;
-const ROW_EXIT_MS: u64 = 200;
-/// More rows than this in motion at once is a bulk change — a project
-/// closed, an import, a resync — and everything lands at once instead.
-const ROW_MOTION_BULK: usize = 4;
-/// Share of the arrival spent opening the gap before content starts to show.
-const ENTER_CONTENT_DELAY: f32 = 0.35;
-/// Share of the departure spent fading content out, and where the gap starts
-/// to close. They overlap a little so the exit reads as one gesture.
-const EXIT_CONTENT: f32 = 0.4;
-const EXIT_COLLAPSE_DELAY: f32 = 0.2;
-
-/// A group opening reveals its rows with a growing clip while their short,
-/// staggered arrivals settle; shutting fades every row together, sooner.
-const DISCLOSE_OPEN_MS: u64 = 300;
-const DISCLOSE_CLOSE_MS: u64 = 180;
-/// 22 ms between arrivals on open, capped so a large group still finishes
-/// inside the one 300 ms gesture.
-const DISCLOSE_STAGGER: f32 = 0.073;
-const DISCLOSE_STAGGER_CAP: f32 = 0.36;
-
-/// How often the frame task below re-renders while a gesture is owed.
-const SIDEBAR_MOTION_TICK_MS: u64 = 16;
-
-/// What one row paints at one instant: the share of its natural height its
-/// slot takes, and how loudly its content speaks inside that slot.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct RowPresence {
-    height: f32,
-    opacity: f32,
-}
-
-impl RowPresence {
-    const FULL: RowPresence = RowPresence {
-        height: 1.,
-        opacity: 1.,
-    };
-    const GONE: RowPresence = RowPresence {
-        height: 0.,
-        opacity: 0.,
-    };
-}
-
-/// A row's membership change: it was not in the sidebar and now is, or the
-/// reverse. Folding, regrouping and reordering only hide and show rows the
-/// list already knows, so they never animate here.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum RowMotionKind {
-    Enter,
-    Exit,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RowMotionEntry {
-    kind: RowMotionKind,
-    started: Instant,
-    /// What was on screen when this motion began, so a reversal turns around
-    /// where the row stands instead of jumping to an old endpoint.
-    from: RowPresence,
-}
-
-impl RowMotionEntry {
-    fn duration(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(match self.kind {
-            RowMotionKind::Enter => ROW_ENTER_MS,
-            RowMotionKind::Exit => ROW_EXIT_MS,
-        })
-    }
-
-    fn done(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.started) >= self.duration()
-    }
-
-    fn sample(&self, now: Instant) -> RowPresence {
-        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
-            / self.duration().as_secs_f32())
-        .clamp(0., 1.);
-        // The shared curve never overshoots: a row pushing its neighbours
-        // never drags them past their resting place.
-        let curve = ease_out_quint();
-        let from = self.from;
-        match self.kind {
-            RowMotionKind::Enter => {
-                let phase =
-                    ((progress - ENTER_CONTENT_DELAY) / (1. - ENTER_CONTENT_DELAY)).clamp(0., 1.);
-                RowPresence {
-                    height: from.height + (1. - from.height) * curve(progress),
-                    opacity: from.opacity + (1. - from.opacity) * curve(phase),
-                }
-            }
-            RowMotionKind::Exit => {
-                let fade = curve((progress / EXIT_CONTENT).clamp(0., 1.));
-                let collapse =
-                    curve(((progress - EXIT_COLLAPSE_DELAY) / (1. - EXIT_COLLAPSE_DELAY))
-                        .clamp(0., 1.));
-                RowPresence {
-                    height: from.height * (1. - collapse),
-                    opacity: from.opacity * (1. - fade),
-                }
-            }
-        }
-    }
-}
-
-/// One slot of a group's rows while something in it moves: a row that is
-/// still there, or a ghost of one that left, woven back in where it last
-/// stood.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum RowSlot {
-    Real(usize, RowPresence),
-    Ghost(TabId, RowPresence),
-}
-
-#[derive(Default)]
-struct SidebarRowMotion {
-    /// Every tab the sidebar held at the last observation, in tab order.
-    /// `None` until the first observation, which is a baseline and never
-    /// animates.
-    known: Option<Vec<TabId>>,
-    entries: HashMap<TabId, RowMotionEntry>,
-    /// What each group's rows last laid out, ghosts included, so a leaving
-    /// row has a place to fade from. A container no frame laid out — one
-    /// folded away — is dropped with it.
-    laid_out: HashMap<u64, (u64, Vec<TabId>)>,
-    pass: u64,
-}
-
-impl SidebarRowMotion {
-    /// Records which tabs exist now. `animate` is false under Reduce Motion
-    /// and on the baseline observation: the change lands and nothing
-    /// replays later. Most renders replay the same membership, which costs
-    /// one compare, not a walk.
-    fn observe(&mut self, current: &[TabId], animate: bool, now: Instant) {
-        if let Some(known) = &self.known
-            && known == current
-        {
-            return;
-        }
-        let known = self.known.replace(current.to_vec());
-        let Some(known) = known else {
-            return;
-        };
-        if !animate {
-            self.entries.clear();
-            return;
-        }
-        self.entries.retain(|_, entry| !entry.done(now));
-        for &id in current.iter().filter(|id| !known.contains(id)) {
-            let from = self
-                .entries
-                .get(&id)
-                .map_or(RowPresence::GONE, |entry| entry.sample(now));
-            self.entries.insert(
-                id,
-                RowMotionEntry {
-                    kind: RowMotionKind::Enter,
-                    started: now,
-                    from,
-                },
-            );
-        }
-        for id in known.iter().filter(|id| !current.contains(id)) {
-            // A row that was not on screen — folded away — has nothing to
-            // collapse.
-            let on_screen = self
-                .laid_out
-                .values()
-                .any(|(_, rows)| rows.contains(id));
-            if !on_screen {
-                self.entries.remove(id);
-                continue;
-            }
-            let from = self
-                .entries
-                .get(id)
-                .map_or(RowPresence::FULL, |entry| entry.sample(now));
-            self.entries.insert(
-                *id,
-                RowMotionEntry {
-                    kind: RowMotionKind::Exit,
-                    started: now,
-                    from,
-                },
-            );
-        }
-        if self.entries.len() > ROW_MOTION_BULK {
-            self.entries.clear();
-        }
-    }
-
-    /// Starts a frame: finished motions are forgotten, so a list at rest
-    /// allocates nothing for them.
-    fn begin_frame(&mut self, now: Instant) {
-        self.entries.retain(|_, entry| !entry.done(now));
-        self.pass += 1;
-    }
-
-    /// Ends a frame: a container nothing laid out is off screen, and its
-    /// rows have nothing left to collapse.
-    fn end_frame(&mut self) {
-        let pass = self.pass;
-        self.laid_out.retain(|_, (p, _)| *p == pass);
-    }
-
-    /// The presence of a row still in the list; rows with no entry are
-    /// simply full.
-    fn presence(&self, id: TabId, now: Instant) -> RowPresence {
-        match self.entries.get(&id) {
-            Some(entry) if entry.kind == RowMotionKind::Enter => entry.sample(now),
-            _ => RowPresence::FULL,
-        }
-    }
-
-    /// A leaving row's presence, while its exit is still running.
-    fn ghost(&self, id: TabId, now: Instant) -> Option<RowPresence> {
-        match self.entries.get(&id) {
-            Some(entry) if entry.kind == RowMotionKind::Exit && !entry.done(now) => {
-                Some(entry.sample(now))
-            }
-            _ => None,
-        }
-    }
-
-    /// Lays out one group's rows at `now`: the current rows with their
-    /// presences, and every leaving row of this container woven back in
-    /// after the row it last followed. `ids` is the display order, which
-    /// the identity unless a drag preview has the section — previews own
-    /// their section's geometry and motion yields to them.
-    fn slots(&mut self, container: u64, ids: &[TabId], now: Instant) -> Vec<RowSlot> {
-        let pass = self.pass;
-        let mut out: Vec<RowSlot> = ids
-            .iter()
-            .enumerate()
-            .map(|(ix, id)| RowSlot::Real(ix, self.presence(*id, now)))
-            .collect();
-        if !self.entries.is_empty() {
-            let previous = self
-                .laid_out
-                .get(&container)
-                .map(|(_, rows)| rows.clone())
-                .unwrap_or_default();
-            let mut placed: Vec<TabId> = ids.to_vec();
-            for (position, id) in previous.iter().enumerate() {
-                let Some(presence) = self.ghost(*id, now) else {
-                    continue;
-                };
-                if placed.contains(id) {
-                    continue;
-                }
-                let at = previous[..position]
-                    .iter()
-                    .rev()
-                    .find_map(|before| placed.iter().position(|p| p == before))
-                    .map_or(0, |ix| ix + 1);
-                placed.insert(at, *id);
-                out.insert(at, RowSlot::Ghost(*id, presence));
-            }
-        }
-        let record: Vec<TabId> = out
-            .iter()
-            .map(|slot| match slot {
-                RowSlot::Real(ix, _) => ids[*ix],
-                RowSlot::Ghost(id, _) => *id,
-            })
-            .collect();
-        let entry = self.laid_out.entry(container).or_insert((pass, Vec::new()));
-        entry.0 = pass;
-        entry.1 = record;
-        out
-    }
-}
-
-/// One group disclosure's sampled instant: how much of the rows' column the
-/// clip reveals, and how loudly each row speaks. Rows stay at their natural
-/// size throughout — the clip, not a height change, shows and hides them.
-#[derive(Clone, Debug, PartialEq)]
-struct DisclosureFrame {
-    reveal: f32,
-    rows: Vec<f32>,
-    animating: bool,
-}
-
-#[derive(Clone, Debug)]
-struct DisclosureMotion {
-    expanded: bool,
-    started: Instant,
-    from: DisclosureFrame,
-}
-
-impl DisclosureMotion {
-    fn new(expanded: bool, count: usize, now: Instant) -> Self {
-        Self {
-            expanded,
-            started: now,
-            from: Self::settled(expanded, count),
-        }
-    }
-
-    fn settled(expanded: bool, count: usize) -> DisclosureFrame {
-        let value = if expanded { 1. } else { 0. };
-        DisclosureFrame {
-            reveal: value,
-            rows: vec![value; count],
-            animating: false,
-        }
-    }
-
-    /// `expanded` is whether the group draws its rows, `count` how many it
-    /// has — data changes resize the gesture's rows without replaying it.
-    fn update(
-        &mut self,
-        expanded: bool,
-        count: usize,
-        now: Instant,
-        reduce_motion: bool,
-    ) -> DisclosureFrame {
-        if reduce_motion {
-            self.expanded = expanded;
-            self.from = Self::settled(expanded, count);
-        } else if expanded != self.expanded {
-            self.from = self.sample(now);
-            self.from.rows.resize(count, self.from.reveal);
-            self.from.animating = true;
-            self.expanded = expanded;
-            self.started = now;
-        } else if self.from.rows.len() != count {
-            // Data changes are not disclosure gestures: keep new and removed
-            // rows current without replaying an arrival on every update.
-            self.from = Self::settled(expanded, count);
-        }
-        let frame = self.sample(now);
-        if !frame.animating {
-            self.from = frame.clone();
-        }
-        frame
-    }
-
-    fn sample(&self, now: Instant) -> DisclosureFrame {
-        if !self.from.animating {
-            return self.from.clone();
-        }
-        let duration = if self.expanded {
-            DISCLOSE_OPEN_MS
-        } else {
-            DISCLOSE_CLOSE_MS
-        };
-        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
-            / std::time::Duration::from_millis(duration).as_secs_f32())
-        .clamp(0., 1.);
-        let target = if self.expanded { 1. } else { 0. };
-        let interpolate = |from: f32, t: f32| from + (target - from) * ease_out_cubic(t);
-        DisclosureFrame {
-            reveal: interpolate(self.from.reveal, progress),
-            rows: self
-                .from
-                .rows
-                .iter()
-                .enumerate()
-                .map(|(index, from)| {
-                    let delay = if self.expanded {
-                        (index as f32 * DISCLOSE_STAGGER).min(DISCLOSE_STAGGER_CAP)
-                    } else {
-                        0.
-                    };
-                    let local = ((progress - delay) / (1. - delay)).clamp(0., 1.);
-                    interpolate(*from, local)
-                })
-                .collect(),
-            animating: progress < 1.,
-        }
-    }
-
-    fn animating(&self, now: Instant) -> bool {
-        self.from.animating && self.sample(now).animating
-    }
-}
-
-/// What a leaving row last showed: the exact strings it drew, enough to
-/// repaint it fading out without re-deriving anything from a tab that no
-/// longer exists.
-#[derive(Clone)]
-struct RowGhost {
-    /// The title exactly as drawn — placeholder included.
-    title: SharedString,
-    /// The elided working directory beside the title, when there was one.
-    cwd: Option<SharedString>,
-    /// The elided branch and its counts, when the row carried a second line.
-    branch: Option<(SharedString, u32, u32)>,
-    two_line: bool,
-    active: bool,
-    asleep: bool,
-}
-
-/// The sidebar's motion, owned by the app and read only by its renderer:
-/// which rows are arriving or leaving, which groups are opening or
-/// shutting, and what the leaving rows last showed.
-#[derive(Default)]
-pub(crate) struct SidebarMotion {
-    rows: SidebarRowMotion,
-    disclosures: HashMap<u64, DisclosureMotion>,
-    disclosure_pass: HashMap<u64, u64>,
-    last_shown: HashMap<TabId, RowGhost>,
-    /// The frame counter `begin_frame` bumps, which `disclose` stamps so
-    /// `end_frame` can drop groups no render asked about (a deleted group).
-    pass: u64,
-    /// Whether the frame-pumping task below is live. Render arms it the
-    /// first frame a gesture is owed; the task clears it when the model
-    /// settles, and the next gesture arms it again.
-    ticking: bool,
-}
-
-impl SidebarMotion {
-    fn observe(&mut self, current: &[TabId], animate: bool, now: Instant) {
-        self.rows.observe(current, animate, now);
-        self.last_shown
-            .retain(|id, _| current.contains(id) || self.rows.entries.contains_key(id));
-    }
-
-    fn begin_frame(&mut self, now: Instant) {
-        self.rows.begin_frame(now);
-        self.pass += 1;
-    }
-
-    fn end_frame(&mut self) {
-        self.rows.end_frame();
-        let pass = self.pass;
-        self.disclosure_pass
-            .retain(|container, p| *p == pass && self.disclosures.contains_key(container));
-        self.disclosures
-            .retain(|container, _| self.disclosure_pass.get(container) == Some(&pass));
-    }
-
-    fn is_animating(&self, now: Instant) -> bool {
-        self.rows.entries.values().any(|entry| !entry.done(now))
-            || self
-                .disclosures
-                .values()
-                .any(|motion| motion.animating(now))
-    }
-
-    /// The disclosure frame for one group this render, creating the motion
-    /// settled when the group is first seen.
-    fn disclose(
-        &mut self,
-        container: u64,
-        expanded: bool,
-        count: usize,
-        now: Instant,
-        reduce_motion: bool,
-    ) -> DisclosureFrame {
-        self.disclosure_pass.insert(container, self.pass);
-        self.disclosures
-            .entry(container)
-            .or_insert_with(|| DisclosureMotion::new(expanded, count, now))
-            .update(expanded, count, now, reduce_motion)
-    }
-}
-
-impl LyrelApp {
-    /// Records the sidebar's membership for this frame. Called from the
-    /// work-area render whether or not the sidebar is on screen: a change
-    /// that lands while the panel is shut, or under Reduce Motion, is a
-    /// landing — nothing replays when the panel opens or motion returns.
-    pub(crate) fn observe_sidebar_motion(&self, cx: &gpui_kit::App) {
-        let now = cx.background_executor().now();
-        let animate = self.sidebar_open(cx) && !cx.reduce_motion();
-        let tab_ids: Vec<TabId> = self.tabs.iter().map(|tab| tab.id()).collect();
-        self.sidebar_motion
-            .borrow_mut()
-            .observe(&tab_ids, animate, now);
-    }
-
-    /// Keeps frames coming while a sidebar gesture owes one, on the same
-    /// timer-and-notify footing as the home cursor's blink. Spawned lazily
-    /// by the render that starts a gesture; settles itself when the model
-    /// does, so an idle sidebar costs nothing.
-    fn ensure_sidebar_motion_tick(motion: &RefCell<SidebarMotion>, cx: &mut Context<Self>) {
-        if motion.borrow().ticking {
-            return;
-        }
-        motion.borrow_mut().ticking = true;
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(SIDEBAR_MOTION_TICK_MS))
-                    .await;
-                let owed = this.update(cx, |this, cx| {
-                    let now = cx.background_executor().now();
-                    let owed = this.sidebar_motion.borrow().is_animating(now);
-                    if owed {
-                        cx.notify();
-                    } else {
-                        this.sidebar_motion.borrow_mut().ticking = false;
-                    }
-                    owed
-                });
-                match owed {
-                    Ok(true) => {}
-                    _ => break,
-                }
-            }
-        })
-        .detach();
-    }
-}
-
-/// A stable table key for one group's rows.
-fn sidebar_container(key: &Option<GroupKey>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// A leaving row's fading echo, riding in the clipped slot the exit keeps
-/// open: same shape and the strings it last drew, and inert — the overlay
-/// swallows every press, so nothing a ghost covers answers to a row that is
-/// already gone.
-fn sidebar_ghost_row(
-    id: TabId,
-    ghost: &RowGhost,
-    presence: RowPresence,
-    natural: f32,
-    sf: &lyrel_ui_base::presets::Surface,
-    cx: &gpui_kit::App,
-) -> AnyElement {
-    let height = natural * presence.height;
-    let theme = cx.theme();
-    let title_line = h_flex()
-        .w_full()
-        .items_center()
-        .gap_1p5()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_sm()
-                .when(ghost.active, |d| d.font_weight(FontWeight::MEDIUM))
-                .child(ghost.title.clone()),
-        )
-        .when_some(ghost.cwd.clone(), |line, cwd| {
-            line.child(
-                div()
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(cwd),
-            )
-        });
-    let git_line = ghost.branch.clone().map(|(branch, added, removed)| {
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap_1p5()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(
-                gpui_kit::svg()
-                    .path("icons/git-branch.svg")
-                    .flex_shrink_0()
-                    .size(px(11.))
-                    .text_color(theme.muted_foreground),
-            )
-            .child(div().min_w_0().truncate().child(branch))
-            .when(added > 0, |line| {
-                line.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("+{added}")),
-                )
-            })
-            .when(removed > 0, |line| {
-                line.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("−{removed}")),
-                )
-            })
-    });
-    div()
-        .id(SharedString::from(format!("sidebar-ghost-{id}")))
-        .test_support()
-        .relative()
-        .flex_none()
-        .w_full()
-        .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px((height - natural) / 2.))
-                .h(px(natural))
-                .opacity(presence.opacity)
-                .child(
-                    h_flex()
-                        .w_full()
-                        .h(px(natural))
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(row_metrics::GAP))
-                        .px_2()
-                        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
-                        .when(ghost.active, |row| {
-                            row.bg(gpui_kit::rgb(sf.selected))
-                                .text_color(gpui_kit::rgb(sf.text_selected))
-                        })
-                        .when(!ghost.active, |row| {
-                            row.text_color(gpui_kit::rgb(sf.text_resting))
-                        })
-                        .when(ghost.asleep, |row| row.opacity(0.6))
-                        // A quiet circle where the avatar stood: the shape
-                        // reads as the row without borrowing its marks.
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .size(px(row_metrics::AVATAR))
-                                .rounded_full()
-                                .bg(gpui_kit::rgb(sf.base)),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .justify_center()
-                                .child(title_line)
-                                .children(git_line),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .occlude()
-                .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                .capture_any_mouse_up(|_, _, cx| cx.stop_propagation()),
-        )
-        .into_any_element()
-}
-
-/// A row mid-gesture rides in a clipped slot that takes only the share of
-/// its height the presence allows, the row itself laid out at full size and
-/// centred inside — so nothing paints outside the gap it is opening or
-/// closing. `opacity` folds the disclosure fade into the content's own.
-fn sidebar_motion_row(
-    i: usize,
-    row: AnyElement,
-    canvas: AnyElement,
-    natural: f32,
-    presence: RowPresence,
-    opacity: f32,
-) -> AnyElement {
-    let height = natural * presence.height;
-    div()
-        .id(("sidebar-row-slot", i))
-        .test_support()
-        .relative()
-        .flex_none()
-        .w_full()
-        .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px((height - natural) / 2.))
-                .h(px(natural))
-                .opacity(opacity)
-                .child(row),
-        )
-        .child(canvas)
-        .into_any_element()
-}
-
-// ── Session-row and group disclosure motion ─────────────────────────────
-//
-// Behavioral reference: Diri's `sidebar/row_motion.rs` and
-// `sidebar/disclosure.rs` at the pinned commit recorded in
-// docs/research/diri-right-panel-motion.md, independently implemented on
-// GPUI Kit. The model is pure: render feeds it the executor's clock and
-// paints what it returns, and a short task keeps frames coming only while
-// something owes one.
-
-/// A row arriving opens its slot by height before its content fades in, so
-/// text never appears squashed into a sliver; a row leaving fades its
-/// content first and reclaims the slot right behind it.
-const ROW_ENTER_MS: u64 = 220;
-const ROW_EXIT_MS: u64 = 200;
-/// More rows than this in motion at once is a bulk change — a project
-/// closed, an import, a resync — and everything lands at once instead.
-const ROW_MOTION_BULK: usize = 4;
-/// Share of the arrival spent opening the gap before content starts to show.
-const ENTER_CONTENT_DELAY: f32 = 0.35;
-/// Share of the departure spent fading content out, and where the gap starts
-/// to close. They overlap a little so the exit reads as one gesture.
-const EXIT_CONTENT: f32 = 0.4;
-const EXIT_COLLAPSE_DELAY: f32 = 0.2;
-
-/// A group opening reveals its rows with a growing clip while their short,
-/// staggered arrivals settle; shutting fades every row together, sooner.
-const DISCLOSE_OPEN_MS: u64 = 300;
-const DISCLOSE_CLOSE_MS: u64 = 180;
-/// 22 ms between arrivals on open, capped so a large group still finishes
-/// inside the one 300 ms gesture.
-const DISCLOSE_STAGGER: f32 = 0.073;
-const DISCLOSE_STAGGER_CAP: f32 = 0.36;
-
-/// How often the frame task below re-renders while a gesture is owed.
-const SIDEBAR_MOTION_TICK_MS: u64 = 16;
-
-/// What one row paints at one instant: the share of its natural height its
-/// slot takes, and how loudly its content speaks inside that slot.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct RowPresence {
-    height: f32,
-    opacity: f32,
-}
-
-impl RowPresence {
-    const FULL: RowPresence = RowPresence {
-        height: 1.,
-        opacity: 1.,
-    };
-    const GONE: RowPresence = RowPresence {
-        height: 0.,
-        opacity: 0.,
-    };
-}
-
-/// A row's membership change: it was not in the sidebar and now is, or the
-/// reverse. Folding, regrouping and reordering only hide and show rows the
-/// list already knows, so they never animate here.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum RowMotionKind {
-    Enter,
-    Exit,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RowMotionEntry {
-    kind: RowMotionKind,
-    started: Instant,
-    /// What was on screen when this motion began, so a reversal turns around
-    /// where the row stands instead of jumping to an old endpoint.
-    from: RowPresence,
-}
-
-impl RowMotionEntry {
-    fn duration(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(match self.kind {
-            RowMotionKind::Enter => ROW_ENTER_MS,
-            RowMotionKind::Exit => ROW_EXIT_MS,
-        })
-    }
-
-    fn done(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.started) >= self.duration()
-    }
-
-    fn sample(&self, now: Instant) -> RowPresence {
-        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
-            / self.duration().as_secs_f32())
-        .clamp(0., 1.);
-        // The shared curve never overshoots: a row pushing its neighbours
-        // never drags them past their resting place.
-        let curve = ease_out_quint();
-        let from = self.from;
-        match self.kind {
-            RowMotionKind::Enter => {
-                let phase =
-                    ((progress - ENTER_CONTENT_DELAY) / (1. - ENTER_CONTENT_DELAY)).clamp(0., 1.);
-                RowPresence {
-                    height: from.height + (1. - from.height) * curve(progress),
-                    opacity: from.opacity + (1. - from.opacity) * curve(phase),
-                }
-            }
-            RowMotionKind::Exit => {
-                let fade = curve((progress / EXIT_CONTENT).clamp(0., 1.));
-                let collapse =
-                    curve(((progress - EXIT_COLLAPSE_DELAY) / (1. - EXIT_COLLAPSE_DELAY))
-                        .clamp(0., 1.));
-                RowPresence {
-                    height: from.height * (1. - collapse),
-                    opacity: from.opacity * (1. - fade),
-                }
-            }
-        }
-    }
-}
-
-/// One slot of a group's rows while something in it moves: a row that is
-/// still there, or a ghost of one that left, woven back in where it last
-/// stood.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum RowSlot {
-    Real(usize, RowPresence),
-    Ghost(TabId, RowPresence),
-}
-
-#[derive(Default)]
-struct SidebarRowMotion {
-    /// Every tab the sidebar held at the last observation, in tab order.
-    /// `None` until the first observation, which is a baseline and never
-    /// animates.
-    known: Option<Vec<TabId>>,
-    entries: HashMap<TabId, RowMotionEntry>,
-    /// What each group's rows last laid out, ghosts included, so a leaving
-    /// row has a place to fade from. A container no frame laid out — one
-    /// folded away — is dropped with it.
-    laid_out: HashMap<u64, (u64, Vec<TabId>)>,
-    pass: u64,
-}
-
-impl SidebarRowMotion {
-    /// Records which tabs exist now. `animate` is false under Reduce Motion
-    /// and on the baseline observation: the change lands and nothing
-    /// replays later. Most renders replay the same membership, which costs
-    /// one compare, not a walk.
-    fn observe(&mut self, current: &[TabId], animate: bool, now: Instant) {
-        if let Some(known) = &self.known
-            && known == current
-        {
-            return;
-        }
-        let known = self.known.replace(current.to_vec());
-        let Some(known) = known else {
-            return;
-        };
-        if !animate {
-            self.entries.clear();
-            return;
-        }
-        self.entries.retain(|_, entry| !entry.done(now));
-        for &id in current.iter().filter(|id| !known.contains(id)) {
-            let from = self
-                .entries
-                .get(&id)
-                .map_or(RowPresence::GONE, |entry| entry.sample(now));
-            self.entries.insert(
-                id,
-                RowMotionEntry {
-                    kind: RowMotionKind::Enter,
-                    started: now,
-                    from,
-                },
-            );
-        }
-        for id in known.iter().filter(|id| !current.contains(id)) {
-            // A row that was not on screen — folded away — has nothing to
-            // collapse.
-            let on_screen = self
-                .laid_out
-                .values()
-                .any(|(_, rows)| rows.contains(id));
-            if !on_screen {
-                self.entries.remove(id);
-                continue;
-            }
-            let from = self
-                .entries
-                .get(id)
-                .map_or(RowPresence::FULL, |entry| entry.sample(now));
-            self.entries.insert(
-                *id,
-                RowMotionEntry {
-                    kind: RowMotionKind::Exit,
-                    started: now,
-                    from,
-                },
-            );
-        }
-        if self.entries.len() > ROW_MOTION_BULK {
-            self.entries.clear();
-        }
-    }
-
-    /// Starts a frame: finished motions are forgotten, so a list at rest
-    /// allocates nothing for them.
-    fn begin_frame(&mut self, now: Instant) {
-        self.entries.retain(|_, entry| !entry.done(now));
-        self.pass += 1;
-    }
-
-    /// Ends a frame: a container nothing laid out is off screen, and its
-    /// rows have nothing left to collapse.
-    fn end_frame(&mut self) {
-        let pass = self.pass;
-        self.laid_out.retain(|_, (p, _)| *p == pass);
-    }
-
-    /// The presence of a row still in the list; rows with no entry are
-    /// simply full.
-    fn presence(&self, id: TabId, now: Instant) -> RowPresence {
-        match self.entries.get(&id) {
-            Some(entry) if entry.kind == RowMotionKind::Enter => entry.sample(now),
-            _ => RowPresence::FULL,
-        }
-    }
-
-    /// A leaving row's presence, while its exit is still running.
-    fn ghost(&self, id: TabId, now: Instant) -> Option<RowPresence> {
-        match self.entries.get(&id) {
-            Some(entry) if entry.kind == RowMotionKind::Exit && !entry.done(now) => {
-                Some(entry.sample(now))
-            }
-            _ => None,
-        }
-    }
-
-    /// Lays out one group's rows at `now`: the current rows with their
-    /// presences, and every leaving row of this container woven back in
-    /// after the row it last followed. `ids` is the display order, which
-    /// the identity unless a drag preview has the section — previews own
-    /// their section's geometry and motion yields to them.
-    fn slots(&mut self, container: u64, ids: &[TabId], now: Instant) -> Vec<RowSlot> {
-        let pass = self.pass;
-        let mut out: Vec<RowSlot> = ids
-            .iter()
-            .enumerate()
-            .map(|(ix, id)| RowSlot::Real(ix, self.presence(*id, now)))
-            .collect();
-        if !self.entries.is_empty() {
-            let previous = self
-                .laid_out
-                .get(&container)
-                .map(|(_, rows)| rows.clone())
-                .unwrap_or_default();
-            let mut placed: Vec<TabId> = ids.to_vec();
-            for (position, id) in previous.iter().enumerate() {
-                let Some(presence) = self.ghost(*id, now) else {
-                    continue;
-                };
-                if placed.contains(id) {
-                    continue;
-                }
-                let at = previous[..position]
-                    .iter()
-                    .rev()
-                    .find_map(|before| placed.iter().position(|p| p == before))
-                    .map_or(0, |ix| ix + 1);
-                placed.insert(at, *id);
-                out.insert(at, RowSlot::Ghost(*id, presence));
-            }
-        }
-        let record: Vec<TabId> = out
-            .iter()
-            .map(|slot| match slot {
-                RowSlot::Real(ix, _) => ids[*ix],
-                RowSlot::Ghost(id, _) => *id,
-            })
-            .collect();
-        let entry = self.laid_out.entry(container).or_insert((pass, Vec::new()));
-        entry.0 = pass;
-        entry.1 = record;
-        out
-    }
-}
-
-/// One group disclosure's sampled instant: how much of the rows' column the
-/// clip reveals, and how loudly each row speaks. Rows stay at their natural
-/// size throughout — the clip, not a height change, shows and hides them.
-#[derive(Clone, Debug, PartialEq)]
-struct DisclosureFrame {
-    reveal: f32,
-    rows: Vec<f32>,
-    animating: bool,
-}
-
-#[derive(Clone, Debug)]
-struct DisclosureMotion {
-    expanded: bool,
-    started: Instant,
-    from: DisclosureFrame,
-}
-
-impl DisclosureMotion {
-    fn new(expanded: bool, count: usize, now: Instant) -> Self {
-        Self {
-            expanded,
-            started: now,
-            from: Self::settled(expanded, count),
-        }
-    }
-
-    fn settled(expanded: bool, count: usize) -> DisclosureFrame {
-        let value = if expanded { 1. } else { 0. };
-        DisclosureFrame {
-            reveal: value,
-            rows: vec![value; count],
-            animating: false,
-        }
-    }
-
-    /// `expanded` is whether the group draws its rows, `count` how many it
-    /// has — data changes resize the gesture's rows without replaying it.
-    fn update(
-        &mut self,
-        expanded: bool,
-        count: usize,
-        now: Instant,
-        reduce_motion: bool,
-    ) -> DisclosureFrame {
-        if reduce_motion {
-            self.expanded = expanded;
-            self.from = Self::settled(expanded, count);
-        } else if expanded != self.expanded {
-            self.from = self.sample(now);
-            self.from.rows.resize(count, self.from.reveal);
-            self.from.animating = true;
-            self.expanded = expanded;
-            self.started = now;
-        } else if self.from.rows.len() != count {
-            // Data changes are not disclosure gestures: keep new and removed
-            // rows current without replaying an arrival on every update.
-            self.from = Self::settled(expanded, count);
-        }
-        let frame = self.sample(now);
-        if !frame.animating {
-            self.from = frame.clone();
-        }
-        frame
-    }
-
-    fn sample(&self, now: Instant) -> DisclosureFrame {
-        if !self.from.animating {
-            return self.from.clone();
-        }
-        let duration = if self.expanded {
-            DISCLOSE_OPEN_MS
-        } else {
-            DISCLOSE_CLOSE_MS
-        };
-        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
-            / std::time::Duration::from_millis(duration).as_secs_f32())
-        .clamp(0., 1.);
-        let target = if self.expanded { 1. } else { 0. };
-        let interpolate = |from: f32, t: f32| from + (target - from) * ease_out_cubic(t);
-        DisclosureFrame {
-            reveal: interpolate(self.from.reveal, progress),
-            rows: self
-                .from
-                .rows
-                .iter()
-                .enumerate()
-                .map(|(index, from)| {
-                    let delay = if self.expanded {
-                        (index as f32 * DISCLOSE_STAGGER).min(DISCLOSE_STAGGER_CAP)
-                    } else {
-                        0.
-                    };
-                    let local = ((progress - delay) / (1. - delay)).clamp(0., 1.);
-                    interpolate(*from, local)
-                })
-                .collect(),
-            animating: progress < 1.,
-        }
-    }
-
-    fn animating(&self, now: Instant) -> bool {
-        self.from.animating && self.sample(now).animating
-    }
-}
-
-/// What a leaving row last showed: the exact strings it drew, enough to
-/// repaint it fading out without re-deriving anything from a tab that no
-/// longer exists.
-#[derive(Clone)]
-struct RowGhost {
-    /// The title exactly as drawn — placeholder included.
-    title: SharedString,
-    /// The elided working directory beside the title, when there was one.
-    cwd: Option<SharedString>,
-    /// The elided branch and its counts, when the row carried a second line.
-    branch: Option<(SharedString, u32, u32)>,
-    two_line: bool,
-    active: bool,
-    asleep: bool,
-}
-
-/// The sidebar's motion, owned by the app and read only by its renderer:
-/// which rows are arriving or leaving, which groups are opening or
-/// shutting, and what the leaving rows last showed.
-#[derive(Default)]
-pub(crate) struct SidebarMotion {
-    rows: SidebarRowMotion,
-    disclosures: HashMap<u64, DisclosureMotion>,
-    disclosure_pass: HashMap<u64, u64>,
-    last_shown: HashMap<TabId, RowGhost>,
-    /// The frame counter `begin_frame` bumps, which `disclose` stamps so
-    /// `end_frame` can drop groups no render asked about (a deleted group).
-    pass: u64,
-    /// Whether the frame-pumping task below is live. Render arms it the
-    /// first frame a gesture is owed; the task clears it when the model
-    /// settles, and the next gesture arms it again.
-    ticking: bool,
-}
-
-impl SidebarMotion {
-    fn observe(&mut self, current: &[TabId], animate: bool, now: Instant) {
-        self.rows.observe(current, animate, now);
-        self.last_shown
-            .retain(|id, _| current.contains(id) || self.rows.entries.contains_key(id));
-    }
-
-    fn begin_frame(&mut self, now: Instant) {
-        self.rows.begin_frame(now);
-        self.pass += 1;
-    }
-
-    fn end_frame(&mut self) {
-        self.rows.end_frame();
-        let pass = self.pass;
-        self.disclosure_pass
-            .retain(|container, p| *p == pass && self.disclosures.contains_key(container));
-        self.disclosures
-            .retain(|container, _| self.disclosure_pass.get(container) == Some(&pass));
-    }
-
-    fn is_animating(&self, now: Instant) -> bool {
-        self.rows.entries.values().any(|entry| !entry.done(now))
-            || self
-                .disclosures
-                .values()
-                .any(|motion| motion.animating(now))
-    }
-
-    /// The disclosure frame for one group this render, creating the motion
-    /// settled when the group is first seen.
-    fn disclose(
-        &mut self,
-        container: u64,
-        expanded: bool,
-        count: usize,
-        now: Instant,
-        reduce_motion: bool,
-    ) -> DisclosureFrame {
-        self.disclosure_pass.insert(container, self.pass);
-        self.disclosures
-            .entry(container)
-            .or_insert_with(|| DisclosureMotion::new(expanded, count, now))
-            .update(expanded, count, now, reduce_motion)
-    }
-}
-
-impl LyrelApp {
-    /// Records the sidebar's membership for this frame. Called from the
-    /// work-area render whether or not the sidebar is on screen: a change
-    /// that lands while the panel is shut, or under Reduce Motion, is a
-    /// landing — nothing replays when the panel opens or motion returns.
-    pub(crate) fn observe_sidebar_motion(&self, cx: &gpui_kit::App) {
-        let now = cx.background_executor().now();
-        let animate = self.sidebar_open(cx) && !cx.reduce_motion();
-        let tab_ids: Vec<TabId> = self.tabs.iter().map(|tab| tab.id()).collect();
-        self.sidebar_motion
-            .borrow_mut()
-            .observe(&tab_ids, animate, now);
-    }
-
-    /// Keeps frames coming while a sidebar gesture owes one, on the same
-    /// timer-and-notify footing as the home cursor's blink. Spawned lazily
-    /// by the render that starts a gesture; settles itself when the model
-    /// does, so an idle sidebar costs nothing.
-    fn ensure_sidebar_motion_tick(motion: &RefCell<SidebarMotion>, cx: &mut Context<Self>) {
-        if motion.borrow().ticking {
-            return;
-        }
-        motion.borrow_mut().ticking = true;
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(SIDEBAR_MOTION_TICK_MS))
-                    .await;
-                let owed = this.update(cx, |this, cx| {
-                    let now = cx.background_executor().now();
-                    let owed = this.sidebar_motion.borrow().is_animating(now);
-                    if owed {
-                        cx.notify();
-                    } else {
-                        this.sidebar_motion.borrow_mut().ticking = false;
-                    }
-                    owed
-                });
-                match owed {
-                    Ok(true) => {}
-                    _ => break,
-                }
-            }
-        })
-        .detach();
-    }
-}
-
-/// A stable table key for one group's rows.
-fn sidebar_container(key: &Option<GroupKey>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// A leaving row's fading echo, riding in the clipped slot the exit keeps
-/// open: same shape and the strings it last drew, and inert — the overlay
-/// swallows every press, so nothing a ghost covers answers to a row that is
-/// already gone.
-fn sidebar_ghost_row(
-    id: TabId,
-    ghost: &RowGhost,
-    presence: RowPresence,
-    natural: f32,
-    sf: &lyrel_ui_base::presets::Surface,
-    cx: &gpui_kit::App,
-) -> AnyElement {
-    let height = natural * presence.height;
-    let theme = cx.theme();
-    let title_line = h_flex()
-        .w_full()
-        .items_center()
-        .gap_1p5()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_sm()
-                .when(ghost.active, |d| d.font_weight(FontWeight::MEDIUM))
-                .child(ghost.title.clone()),
-        )
-        .when_some(ghost.cwd.clone(), |line, cwd| {
-            line.child(
-                div()
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(cwd),
-            )
-        });
-    let git_line = ghost.branch.clone().map(|(branch, added, removed)| {
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap_1p5()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(
-                gpui_kit::svg()
-                    .path("icons/git-branch.svg")
-                    .flex_shrink_0()
-                    .size(px(11.))
-                    .text_color(theme.muted_foreground),
-            )
-            .child(div().min_w_0().truncate().child(branch))
-            .when(added > 0, |line| {
-                line.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("+{added}")),
-                )
-            })
-            .when(removed > 0, |line| {
-                line.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("−{removed}")),
-                )
-            })
-    });
-    div()
-        .id(SharedString::from(format!("sidebar-ghost-{id}")))
-        .test_support()
-        .relative()
-        .flex_none()
-        .w_full()
-        .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px((height - natural) / 2.))
-                .h(px(natural))
-                .opacity(presence.opacity)
-                .child(
-                    h_flex()
-                        .w_full()
-                        .h(px(natural))
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(row_metrics::GAP))
-                        .px_2()
-                        .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
-                        .when(ghost.active, |row| {
-                            row.bg(gpui_kit::rgb(sf.selected))
-                                .text_color(gpui_kit::rgb(sf.text_selected))
-                        })
-                        .when(!ghost.active, |row| {
-                            row.text_color(gpui_kit::rgb(sf.text_resting))
-                        })
-                        .when(ghost.asleep, |row| row.opacity(0.6))
-                        // A quiet circle where the avatar stood: the shape
-                        // reads as the row without borrowing its marks.
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .size(px(row_metrics::AVATAR))
-                                .rounded_full()
-                                .bg(gpui_kit::rgb(sf.base)),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .justify_center()
-                                .child(title_line)
-                                .children(git_line),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .occlude()
-                .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                .capture_any_mouse_up(|_, _, cx| cx.stop_propagation()),
-        )
-        .into_any_element()
-}
-
-/// A row mid-gesture rides in a clipped slot that takes only the share of
-/// its height the presence allows, the row itself laid out at full size and
-/// centred inside — so nothing paints outside the gap it is opening or
-/// closing. `opacity` folds the disclosure fade into the content's own.
-fn sidebar_motion_row(
-    i: usize,
-    row: AnyElement,
-    canvas: AnyElement,
-    natural: f32,
-    presence: RowPresence,
-    opacity: f32,
-) -> AnyElement {
-    let height = natural * presence.height;
-    div()
-        .id(("sidebar-row-slot", i))
-        .test_support()
-        .relative()
-        .flex_none()
-        .w_full()
-        .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px((height - natural) / 2.))
-                .h(px(natural))
-                .opacity(opacity)
-                .child(row),
-        )
-        .child(canvas)
-        .into_any_element()
-}
-
 /// Every detail a sidebar row could not fit, collected so the hover card can
 /// be rendered from cloneable data (an `AnyElement` cannot be cloned, but the
 /// tooltip closure has to rebuild its content on every hover).
@@ -7530,5 +6152,589 @@ mod tests {
     #[test]
     fn the_heading_keeps_a_floor_on_a_narrow_sidebar() {
         assert_eq!(header_name_avail(60., Some(400.)), HEADER_NAME_FLOOR);
+    }
+}
+
+#[cfg(test)]
+mod motion_model_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn at(start: Instant, n: u64) -> Instant {
+        start + ms(n)
+    }
+
+    /// A model that has seen `ids` once, at rest, laid out in container 1.
+    fn settled_model(ids: &[TabId], start: Instant) -> SidebarRowMotion {
+        let mut model = SidebarRowMotion::default();
+        model.observe(ids, true, start);
+        assert!(model.entries.is_empty(), "the first observation is a baseline");
+        model.begin_frame(start);
+        let plan = model.slots(1, ids, start);
+        assert!(
+            plan.iter()
+                .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)),
+            "a settled list paints everything at full presence"
+        );
+        model.end_frame();
+        model
+    }
+
+    #[test]
+    fn a_replayed_membership_is_a_no_op() {
+        let start = Instant::now();
+        let mut model = settled_model(&[TabId::new(), TabId::new()], start);
+        let ids: Vec<TabId> = model.known.clone().expect("the baseline is recorded");
+        model.observe(&ids, true, at(start, 10));
+        assert!(model.entries.is_empty());
+    }
+
+    #[test]
+    fn reduce_motion_lands_the_membership_without_motion() {
+        let start = Instant::now();
+        let a = TabId::new();
+        let mut model = settled_model(&[a], start);
+        let b = TabId::new();
+        model.observe(&[a, b], false, start);
+        assert!(model.entries.is_empty(), "nothing is owed a frame");
+        model.begin_frame(start);
+        let plan = model.slots(1, &[a, b], start);
+        assert!(plan
+            .iter()
+            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+    }
+
+    #[test]
+    fn an_arrival_opens_its_gap_before_its_content_shows() {
+        let start = Instant::now();
+        let a = TabId::new();
+        let mut model = settled_model(&[a], start);
+        let b = TabId::new();
+        model.observe(&[a, b], true, start);
+        model.begin_frame(start);
+        // At the very first frame the slot is a sliver and the content is
+        // silent: the room is made before anything moves in.
+        let plan = model.slots(1, &[a, b], start);
+        match plan[1] {
+            RowSlot::Real(_, presence) => {
+                assert!(presence.height < 0.05, "the gap has barely opened");
+                assert_eq!(presence.opacity, 0., "no content in a sliver");
+            }
+            slot => panic!("expected the arriving row, got {slot:?}"),
+        }
+        // Partway in the gap is mostly open while the content has not caught up.
+        let mid = at(start, 60);
+        model.begin_frame(mid);
+        let plan = model.slots(1, &[a, b], mid);
+        match plan[1] {
+            RowSlot::Real(_, presence) => {
+                assert!(presence.height > 0.7, "the room is mostly made");
+                assert_eq!(presence.opacity, 0., "the content still waits");
+            }
+            slot => panic!("expected the arriving row, got {slot:?}"),
+        }
+        // Past the duration everything is full and nothing is owed.
+        let settled = at(start, 250);
+        model.begin_frame(settled);
+        let plan = model.slots(1, &[a, b], settled);
+        assert!(plan
+            .iter()
+            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+        assert!(model.entries.is_empty());
+    }
+
+    #[test]
+    fn a_departure_fades_before_it_reclaims_the_space() {
+        let start = Instant::now();
+        let (a, b, c) = (TabId::new(), TabId::new(), TabId::new());
+        let mut model = settled_model(&[a, b, c], start);
+        model.observe(&[a, c], true, start);
+        model.begin_frame(start);
+        // The leaving row is woven back in where it stood, holding its slot.
+        let plan = model.slots(1, &[a, c], start);
+        assert!(
+            matches!(plan[0], RowSlot::Real(0, RowPresence::FULL)),
+            "the row above is untouched"
+        );
+        assert!(
+            matches!(plan[1], RowSlot::Ghost(id, RowPresence::FULL) if id == b),
+            "the leaving row holds its place at full height"
+        );
+        assert!(
+            matches!(plan[2], RowSlot::Real(1, RowPresence::FULL)),
+            "the row below has not moved"
+        );
+        // Partway out the content is gone but the gap is only starting to close.
+        let mid = at(start, 40);
+        model.begin_frame(mid);
+        let plan = model.slots(1, &[a, c], mid);
+        match plan[1] {
+            RowSlot::Ghost(id, presence) => {
+                assert_eq!(id, b);
+                assert!(presence.opacity < 0.1, "the content has faded");
+                assert!(presence.height > 0.95, "the space is not reclaimed yet");
+            }
+            slot => panic!("expected the leaving row's ghost, got {slot:?}"),
+        }
+        // Past the duration the ghost is gone: the layout reclaims the slot.
+        let settled = at(start, 220);
+        model.begin_frame(settled);
+        let plan = model.slots(1, &[a, c], settled);
+        assert_eq!(plan.len(), 2);
+        assert!(plan
+            .iter()
+            .all(|slot| matches!(slot, RowSlot::Real(_, p) if *p == RowPresence::FULL)));
+    }
+
+    #[test]
+    fn a_reversal_turns_around_from_where_the_row_stands() {
+        let start = Instant::now();
+        let a = TabId::new();
+        let mut model = settled_model(&[a], start);
+        let b = TabId::new();
+        model.observe(&[a, b], true, start);
+        let mid = at(start, 120);
+        let standing = model.presence(b, mid);
+        assert!(
+            standing.height > 0. && standing.height < 1.,
+            "the arrival is partway when the reversal lands"
+        );
+        // Close it before the arrival settles: the exit starts exactly where
+        // the arrival stood, and keeps moving from there.
+        model.observe(&[a], true, mid);
+        let turned = model.ghost(b, mid).expect("the exit runs");
+        assert_eq!(turned, standing, "no jump to an old endpoint");
+        let later = model.ghost(b, mid + ms(30)).expect("the exit continues");
+        assert!(later.opacity < turned.opacity);
+        assert!(later.height <= turned.height);
+    }
+
+    #[test]
+    fn five_rows_in_motion_lands_everything_at_once() {
+        let start = Instant::now();
+        let a = TabId::new();
+        let mut model = settled_model(&[a], start);
+        let mut all = vec![a];
+        all.extend((0..5).map(|_| TabId::new()));
+        model.observe(&all, true, start);
+        assert!(
+            model.entries.is_empty(),
+            "a bulk change plays no per-row motion"
+        );
+    }
+
+    #[test]
+    fn a_row_never_on_screen_has_nothing_to_collapse() {
+        let start = Instant::now();
+        let (a, b) = (TabId::new(), TabId::new());
+        let mut model = SidebarRowMotion::default();
+        model.observe(&[a, b], true, start);
+        // b was never laid out — a fold hides a row without unmaking it —
+        // so removing it now is not a departure the eye can see.
+        model.observe(&[a], true, start);
+        assert!(model.entries.is_empty());
+    }
+
+    #[test]
+    fn leaving_rows_weave_back_where_they_last_stood() {
+        let start = Instant::now();
+        let (a, b, c) = (TabId::new(), TabId::new(), TabId::new());
+        let mut model = settled_model(&[a, b, c], start);
+        model.observe(&[b], true, start);
+        model.begin_frame(start);
+        let plan = model.slots(1, &[b], start);
+        assert!(
+            matches!(plan[0], RowSlot::Ghost(id, _) if id == a),
+            "the first leaver stays at the head"
+        );
+        assert!(matches!(plan[1], RowSlot::Real(0, _)));
+        assert!(
+            matches!(plan[2], RowSlot::Ghost(id, _) if id == c),
+            "the last leaver stays at the tail"
+        );
+    }
+
+    #[test]
+    fn opening_staggers_row_arrivals_inside_one_gesture() {
+        let start = Instant::now();
+        let mut motion = DisclosureMotion::new(false, 6, start);
+        let first = motion.update(true, 6, start, false);
+        assert!(first.animating);
+        let mid = motion.update(true, 6, start + ms(100), false);
+        assert!(mid.rows[0] > mid.rows[3], "earlier rows arrive sooner");
+        assert!(mid.rows[3] > mid.rows[5], "later rows are still waiting");
+        let done = motion.update(true, 6, start + ms(300), false);
+        assert_eq!(done.reveal, 1.0);
+        assert_eq!(done.rows, vec![1.0; 6]);
+        assert!(!done.animating);
+    }
+
+    #[test]
+    fn shutting_fades_every_row_together_and_sooner() {
+        let start = Instant::now();
+        let mut motion = DisclosureMotion::new(true, 4, start);
+        assert!(!motion.update(true, 4, start, false).animating);
+        assert!(motion.update(false, 4, start, false).animating);
+        let mid = motion.update(false, 4, start + ms(90), false);
+        assert!(
+            mid.rows
+                .iter()
+                .all(|&o| (o - mid.rows[0]).abs() < f32::EPSILON),
+            "the exit fades the rows as one"
+        );
+        assert!(mid.reveal > 0. && mid.reveal < 1.);
+        let done = motion.update(false, 4, start + ms(180), false);
+        assert_eq!(done.reveal, 0.0);
+        assert_eq!(done.rows, vec![0.0; 4]);
+        assert!(!done.animating);
+    }
+
+    #[test]
+    fn reversing_a_disclosure_continues_from_the_sampled_frame() {
+        let start = Instant::now();
+        let mut motion = DisclosureMotion::new(false, 6, start);
+        motion.update(true, 6, start, false);
+        let halfway = start + ms(120);
+        let before = motion.update(true, 6, halfway, false);
+        let reversed = motion.update(false, 6, halfway, false);
+        assert_eq!(before.reveal, reversed.reveal, "no jump on the reversal");
+        assert_eq!(before.rows, reversed.rows);
+        let closing = motion.update(false, 6, halfway + ms(50), false);
+        assert!(closing.reveal < reversed.reveal);
+    }
+
+    #[test]
+    fn reduced_motion_reaches_the_settled_frame_immediately() {
+        let start = Instant::now();
+        let mut motion = DisclosureMotion::new(true, 6, start);
+        assert!(motion.update(false, 6, start, false).animating);
+        let reduced = motion.update(true, 6, start, true);
+        assert_eq!(reduced.reveal, 1.0);
+        assert_eq!(reduced.rows, vec![1.0; 6]);
+        assert!(!reduced.animating);
+    }
+
+    #[test]
+    fn a_data_change_mid_gesture_does_not_replay_the_arrival() {
+        let start = Instant::now();
+        let mut motion = DisclosureMotion::new(false, 6, start);
+        motion.update(true, 6, start, false);
+        let changed = motion.update(true, 8, start + ms(100), false);
+        assert!(
+            !changed.animating,
+            "rows coming and going land the gesture, not a new one"
+        );
+        assert_eq!(changed.rows, vec![1.0; 8]);
+    }
+}
+
+#[cfg(test)]
+mod motion_consumer_tests {
+    use super::*;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::TestAppContext;
+    use gpui_kit::point;
+    use gpui_kit::test::TestWindowExt as _;
+    use std::time::Duration;
+
+    /// Advances the clock, lets the frame task and notifications run, and
+    /// completes a frame — the same rhythm a running window would have.
+    fn frame(vcx: &mut gpui_kit::VisualTestContext, cx: &mut TestAppContext, advance_ms: u64) {
+        if advance_ms > 0 {
+            cx.advance_clock(Duration::from_millis(advance_ms));
+        }
+        cx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+    }
+
+    /// Put tab `i` in a directory of the repo `root`, as `fold_tests` does.
+    fn plant_repo(app: &LyrelApp, i: usize, cwd: &str, root: &str, cx: &mut gpui_kit::App) {
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_ui_base::host_ops::HostId;
+
+        let cwd = PathBuf::from(cwd);
+        let leaf = app.tabs[i].pane.first_leaf().expect("test tab has a pane");
+        leaf.terminal()
+            .expect("test pane is a terminal")
+            .update(cx, |view, _| view.set_git_status_cwd_for_test(Some(cwd.clone())));
+        cx.update_global::<GitStatusCache, _>(|cache, _| {
+            cache.finish_probe(
+                HostId::LOCAL,
+                &cwd,
+                Some(RepoSnapshot {
+                    root: PathBuf::from(root),
+                    home: PathBuf::from(root),
+                    branch: "main".into(),
+                    counts: Some((0, 0)),
+                }),
+            );
+        });
+    }
+
+    /// Every quiet tab in one repo group.
+    fn grouped_three(app: &LyrelApp, cx: &mut gpui_kit::App) -> GroupKey {
+        for i in 0..3 {
+            plant_repo(app, i, "/w/probed/sub", "/w/probed", cx);
+        }
+        app.sidebar_group_keys(cx)[0]
+            .clone()
+            .expect("the repo group")
+    }
+
+    #[gpui_kit::test]
+    fn a_new_row_makes_room_before_its_content_arrives(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        frame(&mut vcx, cx, 0);
+        let stream = app.update_in(&mut vcx, |app, window, cx| {
+            use crate::ui::pane::{Pane, PaneSlot};
+            use lyrel_terminal::view::quiet_test_pane;
+
+            let (view, stream) = quiet_test_pane(2, window, cx);
+            LyrelApp::watch_terminal(&view, window, cx);
+            app.tabs
+                .push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+            cx.notify();
+            stream
+        });
+        let _stream = stream;
+        // First frame after the tab appears: the slot is a sliver and the
+        // row registers nothing — the room is made before the content shows.
+        frame(&mut vcx, cx, 0);
+        let opening = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        assert!(
+            opening.size.height < px(ROW_HEIGHT / 2.),
+            "the new row's slot opens before its content arrives"
+        );
+        // Partway: the slot is nearly full.
+        frame(&mut vcx, cx, 100);
+        let growing = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        assert!(growing.size.height > px(ROW_HEIGHT / 2.));
+        assert!(growing.size.height < px(ROW_HEIGHT));
+        // Settled: the row stands at its full height.
+        frame(&mut vcx, cx, 150);
+        let settled = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        assert_eq!(settled.size.height, px(ROW_HEIGHT));
+    }
+
+    #[gpui_kit::test]
+    fn closing_a_row_keeps_its_ghost_before_the_space_is_reclaimed(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        frame(&mut vcx, cx, 0);
+        let (closed, last_before) = app.read_with(&vcx, |app, _| {
+            (app.tabs[0].id(), app.sidebar_slots.borrow()[2])
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.close_tab(0, window, cx);
+        });
+        // First frame: the ghost holds the row's slot at full height, and
+        // the row beneath has not moved.
+        frame(&mut vcx, cx, 0);
+        vcx.update(|window, _| {
+            let ghost = window.find(format!("sidebar-ghost-{closed}"));
+            assert_eq!(
+                ghost.bounds().size.height,
+                px(ROW_HEIGHT),
+                "the fading row keeps its place"
+            );
+        });
+        let waiting = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[1]);
+        assert_eq!(
+            waiting.origin, last_before.origin,
+            "the neighbour waits out the fade where it was"
+        );
+        // Partway: the content is gone and the gap is closing.
+        frame(&mut vcx, cx, 120);
+        vcx.update(|window, _| {
+            let ghost = window.find(format!("sidebar-ghost-{closed}"));
+            assert!(
+                ghost.bounds().size.height < px(ROW_HEIGHT / 2.),
+                "the space is only now reclaimed"
+            );
+        });
+        // Settled: no ghost, and the neighbour sits in the reclaimed space.
+        frame(&mut vcx, cx, 120);
+        vcx.update(|window, _| {
+            assert!(
+                window.try_find(format!("sidebar-ghost-{closed}")).is_none(),
+                "the ghost is gone once the exit settles"
+            );
+        });
+        let reclaimed = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0]);
+        assert_eq!(reclaimed.size.height, px(ROW_HEIGHT));
+        assert!(
+            reclaimed.origin.y < last_before.origin.y,
+            "the neighbour has slid up into the reclaimed gap"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_leaving_row_takes_no_pointer_input(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        frame(&mut vcx, cx, 0);
+        let closed = app.read_with(&vcx, |app, _| app.tabs[1].id());
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.close_tab(1, window, cx);
+        });
+        // The content is already silent but the slot is still held: the
+        // exact moment a click would matter most.
+        frame(&mut vcx, cx, 30);
+        vcx.update(|window, cx| {
+            window.click_at(format!("sidebar-ghost-{closed}"), point(px(20.), px(15.)), cx);
+        });
+        let (active, count) = app.read_with(&vcx, |app, _| (app.tabs.active_index(), app.tabs.len()));
+        assert_eq!(
+            active, 0,
+            "the press died on the ghost; the row that slid under it never saw it"
+        );
+        assert_eq!(count, 2, "and nothing was closed through it");
+    }
+
+    #[gpui_kit::test]
+    fn folding_a_group_shuts_it_with_a_clip_and_unfolding_reopens_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        let key = app.update(&mut vcx, |app, cx| grouped_three(app, cx));
+        frame(&mut vcx, cx, 0);
+        assert!(
+            app.read_with(&vcx, |app, _| app.sidebar_slots
+                .borrow()
+                .iter()
+                .all(|b| b.size.height == px(ROW_HEIGHT))),
+            "all three rows are drawn before the fold"
+        );
+        let natural = 3. * ROW_HEIGHT + 2. * ROW_GAP;
+        app.update(&mut vcx, |app, cx| {
+            app.toggle_sidebar_group(Some(&key), cx);
+        });
+        // The gesture starts on the next render, from the fully open group;
+        // a beat later the clip has taken over and rows stop being drop
+        // targets while clipped.
+        frame(&mut vcx, cx, 0);
+        frame(&mut vcx, cx, 90);
+        vcx.update(|window, _| {
+            let clip = window.find(("sidebar-rows", 0));
+            assert!(
+                clip.bounds().size.height < px(natural) && clip.bounds().size.height > px(0.),
+                "a shortening clip is shutting the group"
+            );
+        });
+        assert!(
+            app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0].size.height)
+                == px(0.),
+            "a clipped row registers no rectangle — nothing can land on it"
+        );
+        // Settled shut: no rows, no clip, and only the header is a stop.
+        frame(&mut vcx, cx, 120);
+        vcx.update(|window, _| {
+            assert!(window.try_find(("sidebar-rows", 0)).is_none());
+        });
+        assert_eq!(
+            app.read_with(&vcx, |app, cx| app.sidebar_nav_targets(cx)),
+            vec![SidebarNavTarget::Group(Some(key.clone()))],
+            "the folded rows are no keyboard stops either"
+        );
+        // Unfold: the gesture starts from the fully shut group, and a beat
+        // later a growing clip is revealing the rows again.
+        app.update(&mut vcx, |app, cx| {
+            app.toggle_sidebar_group(Some(&key), cx);
+        });
+        frame(&mut vcx, cx, 0);
+        frame(&mut vcx, cx, 150);
+        vcx.update(|window, _| {
+            let clip = window.find(("sidebar-rows", 0));
+            assert!(
+                clip.bounds().size.height > px(0.) && clip.bounds().size.height < px(natural),
+                "a growing clip is opening the group"
+            );
+        });
+        frame(&mut vcx, cx, 200);
+        vcx.update(|window, _| {
+            assert!(
+                window.try_find(("sidebar-rows", 0)).is_none(),
+                "settled open draws the plain column again"
+            );
+        });
+        assert!(
+            app.read_with(&vcx, |app, _| app.sidebar_slots
+                .borrow()
+                .iter()
+                .all(|b| b.size.height == px(ROW_HEIGHT))),
+            "every row is back at its full height"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn reduced_motion_lands_row_and_group_changes_at_once(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
+        vcx.update(|_, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.motion_preference = lyrel_core::core::config::MotionPreference::Reduce;
+            cx.set_global(cfg);
+            crate::ui::motion::apply(cx);
+            assert!(cx.reduce_motion());
+        });
+        let key = app.update(&mut vcx, |app, cx| grouped_three(app, cx));
+        frame(&mut vcx, cx, 0);
+        // A close lands whole: no ghost, the space reclaimed in the same frame.
+        let closed = app.read_with(&vcx, |app, _| app.tabs[0].id());
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.close_tab(0, window, cx);
+        });
+        frame(&mut vcx, cx, 0);
+        vcx.update(|window, _| {
+            assert!(
+                window.try_find(format!("sidebar-ghost-{closed}")).is_none(),
+                "Reduce plays no exit"
+            );
+        });
+        let reclaimed = app.read_with(&vcx, |app, _| app.sidebar_slots.borrow()[0]);
+        assert_eq!(
+            reclaimed.size.height,
+            px(ROW_HEIGHT),
+            "the neighbour sits in the reclaimed space immediately"
+        );
+        // A fold lands whole: no clip gesture, the rows simply gone.
+        app.update(&mut vcx, |app, cx| {
+            app.toggle_sidebar_group(Some(&key), cx);
+        });
+        frame(&mut vcx, cx, 0);
+        vcx.update(|window, _| {
+            assert!(
+                window.try_find(("sidebar-rows", 0)).is_none(),
+                "Reduce plays no disclosure gesture"
+            );
+        });
+        assert_eq!(
+            app.read_with(&vcx, |app, cx| app.sidebar_nav_targets(cx)),
+            vec![SidebarNavTarget::Group(Some(key))],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn five_rows_leaving_together_land_without_motion(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 6);
+        frame(&mut vcx, cx, 0);
+        app.update_in(&mut vcx, |app, window, cx| {
+            for _ in 0..5 {
+                app.close_tab(1, window, cx);
+            }
+        });
+        frame(&mut vcx, cx, 0);
+        let (row, count) = app.read_with(&vcx, |app, _| {
+            (app.sidebar_slots.borrow()[0], app.tabs.len())
+        });
+        assert_eq!(count, 1, "five closes landed in one observation");
+        assert_eq!(
+            row.size.height,
+            px(ROW_HEIGHT),
+            "a bulk close reclaims the space in a single frame"
+        );
     }
 }
