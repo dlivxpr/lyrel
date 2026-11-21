@@ -19,9 +19,13 @@
 //! occupied while the dialog was open. Dirty removal needs its own explicit
 //! confirmation and a durable recovery point before Git removes the checkout.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use gpui_kit::base::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use gpui_kit::base::{
+    Popup,
+    actions::{Cancel, Confirm, SelectDown, SelectUp},
+};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListState};
@@ -30,8 +34,9 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, Focusable as _, IntoElement, MouseButton, MouseDownEvent,
-    SharedString, Subscription, Task, TestSupportExt as _, Window, div, prelude::*, px, rems,
+    Anchor, AnyElement, App, Context, Entity, Focusable as _, IntoElement, KeyDownEvent,
+    MouseButton, SharedString, Subscription, Task, TestSupportExt as _, Window, div, prelude::*,
+    px, rems,
 };
 
 use crate::ui::app::LyrelApp;
@@ -43,13 +48,13 @@ use lyrel_core::core::worktree::{
 use lyrel_ui_base::host_ops::SharedHost;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
-/// The card's fixed width — two-line rows need more room than the 260px
-/// panel the picker opens over.
-const CARD_W: f32 = 480.;
+/// The confirmation needs room for a full checkout path and the recovery notice.
+const REMOVAL_CARD_W: f32 = 480.;
+const PICKER_W: f32 = 24.;
 /// One row carries two lines: the directory name, then branch and
 /// distinguishing path. Every row is the same height, which the list
 /// component requires.
-const ROW_H: f32 = 44.;
+const ROW_H: f32 = 44. / 16.;
 const ROW_PAD: f32 = 10.;
 const LIST_PAD: f32 = 8.;
 /// The list stops growing at five rows; past that it scrolls.
@@ -112,9 +117,20 @@ struct WorktreeRemoval {
     removing: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorktreePickerEntrance {
+    StatusBar,
+    Changes,
+}
+
 /// The picker, while open. One instance serves both entrances: they name the
 /// same choice, so opening one closes the other.
 pub(crate) struct WorktreePicker {
+    entrance: WorktreePickerEntrance,
+    workspace: lyrel_ui_base::session::WorkspaceId,
+    pane: gpui_kit::EntityId,
+    anchor_seen: Cell<bool>,
+    focus_on_mount: std::rc::Rc<Cell<bool>>,
     /// The Host the list was read on — also where a new tab opens.
     host: SharedHost,
     /// The Context Pane's spawn route, distinct from the window's route for
@@ -289,7 +305,7 @@ impl ListDelegate for WorktreeDelegate {
         }
         .into();
 
-        let mut first = h_flex().flex_1().min_w_0().items_center().gap(px(6.));
+        let mut first = h_flex().flex_none().min_w_0().items_center().gap(px(6.));
         first = first.child(
             div()
                 .flex_1()
@@ -350,7 +366,7 @@ impl ListDelegate for WorktreeDelegate {
         h_flex()
             .id("worktree-picker-empty")
             .w_full()
-            .h(px(ROW_H))
+            .h(rems(ROW_H))
             .px(px(ROW_PAD + LIST_PAD))
             .items_center()
             .child(
@@ -455,7 +471,7 @@ impl gpui_kit::RenderOnce for WorktreeRow {
             .aria_selected(self.selected)
             .items_center()
             .flex_none()
-            .h(px(ROW_H))
+            .h(rems(ROW_H))
             .mx(px(LIST_PAD))
             .px(px(ROW_PAD))
             .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
@@ -475,21 +491,35 @@ impl LyrelApp {
     /// disagree about the choices or the active checkout. Opening while one
     /// is up closes it: a second entrance is a change of mind, not a second
     /// question.
-    pub(crate) fn open_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_worktree_picker(
+        &mut self,
+        entrance: WorktreePickerEntrance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.worktree_picker.is_some() {
             self.cancel_worktree_picker(window, cx);
             return;
         }
-        let Some((host, cwd)) = self.scm_pane_target(window, cx) else {
+        let target = self.context_pane(window, cx).and_then(|pane| {
+            let view = pane.read(cx);
+            Some((
+                pane.entity_id(),
+                view.host(cx)?,
+                view.effective_host_cwd()?,
+                view.workspace().cloned(),
+            ))
+        });
+        let Some((pane, host, cwd, spawn_workspace)) = target else {
             window.notify_app(t(L10nKey::PanelNoWorkingDirectory), cx);
             return;
         };
-        let spawn_workspace = self
-            .context_pane(window, cx)
-            .and_then(|pane| pane.read(cx).workspace().cloned());
-        let query = cx.new(|cx| InputState::new(window, cx));
+        let query = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t(L10nKey::WorktreePickerPlaceholder))
+        });
         let delegate = WorktreeDelegate::new(host.clone());
         let list = cx.new(|cx| ListState::new(delegate, window, cx));
+        let request = list.entity_id();
         let _sub = cx.subscribe_in(&list, window, Self::on_worktree_list_event);
         let _query_sub = cx.subscribe_in(
             &query,
@@ -501,6 +531,11 @@ impl LyrelApp {
             },
         );
         self.worktree_picker = Some(WorktreePicker {
+            entrance,
+            workspace: self.workspace,
+            pane,
+            anchor_seen: Cell::new(false),
+            focus_on_mount: std::rc::Rc::new(Cell::new(true)),
             host: host.clone(),
             spawn_workspace,
             cwd: cwd.clone(),
@@ -511,13 +546,9 @@ impl LyrelApp {
             _sub,
             _query_sub,
         });
-        if let Some(picker) = self.worktree_picker.as_ref() {
-            picker.query.update(cx, |state, cx| state.focus(window, cx));
-        }
         cx.notify();
 
-        let read_host_id = host.id();
-        let read_cwd = cwd.clone();
+        let read_cwd = cwd;
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
@@ -534,9 +565,7 @@ impl LyrelApp {
                 });
                 Ok((worktrees, active))
             },
-            move |this, result, window, cx| {
-                this.land_worktree_list(read_host_id, &cwd, result, window, cx)
-            },
+            move |this, result, window, cx| this.land_worktree_list(request, result, window, cx),
         );
     }
 
@@ -593,13 +622,10 @@ impl LyrelApp {
         }
     }
 
-    /// The `git worktree list` read landed. It only applies while the picker
-    /// it was started for is still the open one — a closed picker, or one
-    /// opened for another Host or directory since, drops the answer.
+    /// Only the picker that issued the read may display its result.
     fn land_worktree_list(
         &mut self,
-        host_id: lyrel_ui_base::host_ops::HostId,
-        cwd: &Path,
+        request: gpui_kit::EntityId,
         result: Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -607,7 +633,9 @@ impl LyrelApp {
         let Some(picker) = self.worktree_picker.as_ref() else {
             return;
         };
-        if picker.host.id() != host_id || picker.cwd.as_path() != cwd {
+        if picker.list.entity_id() != request
+            || !self.worktree_picker_context_current(picker, window, cx)
+        {
             return;
         }
         let list = picker.list.clone();
@@ -742,7 +770,7 @@ impl LyrelApp {
             return;
         };
         cx.notify();
-        self.new_worktree_at(picker.host, picker.cwd, window, cx);
+        self.new_worktree_at(picker.host, picker.cwd, picker.spawn_workspace, window, cx);
     }
 
     /// The picker's removal action, named for what it does: remove the
@@ -962,8 +990,13 @@ impl LyrelApp {
         {
             return;
         }
-        if self.worktree_picker.take().is_some() {
-            self.focus_active(window, cx);
+        if let Some(picker) = self.worktree_picker.take() {
+            if picker.anchor_seen.get() && self.worktree_picker_context_current(&picker, window, cx)
+            {
+                window.focus(self.worktree_trigger_focus(picker.entrance), cx);
+            } else {
+                self.focus_previous_content(window, cx);
+            }
             cx.notify();
         }
     }
@@ -1114,136 +1147,271 @@ impl LyrelApp {
             .collect()
     }
 
-    pub(crate) fn render_worktree_picker_overlay(
+    fn worktree_picker_context_current(
+        &self,
+        picker: &WorktreePicker,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        picker.workspace == self.workspace
+            && crate::ui::worktree_prompt::same_worktree_host(&picker.host, cx)
+            && self.context_pane(window, cx).is_some_and(|pane| {
+                let view = pane.read(cx);
+                pane.entity_id() == picker.pane
+                    && view.host_id() == picker.host.id()
+                    && view.effective_host_cwd().as_ref() == Some(&picker.cwd)
+            })
+    }
+
+    pub(crate) fn begin_worktree_picker_frame(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(picker) = self.worktree_picker.as_ref() {
+            picker.anchor_seen.set(false);
+            let closed_changes = picker.entrance == WorktreePickerEntrance::Changes
+                && (!self.right_panel_open(cx)
+                    || self.right_panel_tab != lyrel_core::core::config::RightPanelTab::Scm);
+            if closed_changes || !self.worktree_picker_context_current(picker, window, cx) {
+                self.retire_worktree_picker(window, cx);
+            }
+        }
+    }
+
+    pub(crate) fn finish_worktree_picker_frame(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .worktree_picker
+            .as_ref()
+            .is_some_and(|picker| !picker.anchor_seen.get())
+        {
+            self.retire_worktree_picker(window, cx);
+        }
+    }
+
+    fn retire_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(picker) = self.worktree_picker.as_ref() else {
+            return;
+        };
+        if picker
+            .removal
+            .as_ref()
+            .is_some_and(|removal| removal.removing)
+        {
+            return;
+        }
+        let had_focus = picker
+            .query
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+            || picker.removal_focus.contains_focused(window, cx);
+        self.worktree_picker = None;
+        if had_focus {
+            self.focus_previous_content(window, cx);
+        }
+    }
+
+    pub(crate) fn worktree_picker_is_open_from(&self, entrance: WorktreePickerEntrance) -> bool {
+        self.worktree_picker
+            .as_ref()
+            .is_some_and(|picker| picker.entrance == entrance)
+    }
+
+    fn worktree_trigger_focus(&self, entrance: WorktreePickerEntrance) -> &gpui_kit::FocusHandle {
+        match entrance {
+            WorktreePickerEntrance::StatusBar => &self.status_checkout_focus,
+            WorktreePickerEntrance::Changes => &self.changes_worktree_focus,
+        }
+    }
+
+    pub(crate) fn worktree_picker_trigger(
+        &self,
+        entrance: WorktreePickerEntrance,
+        button: Button,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Popup {
+        let (id, anchor) = match entrance {
+            WorktreePickerEntrance::StatusBar => ("status-worktree-popup", Anchor::BottomLeft),
+            WorktreePickerEntrance::Changes => ("scm-worktree-popup", Anchor::TopRight),
+        };
+        let picker = self
+            .worktree_picker
+            .as_ref()
+            .filter(|picker| picker.entrance == entrance);
+        if let Some(picker) = picker {
+            picker.anchor_seen.set(true);
+        }
+        let trigger = button
+            .track_focus(self.worktree_trigger_focus(entrance))
+            .open(picker.is_some())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_worktree_picker(entrance, window, cx);
+            }));
+        let popup = Popup::new(id, trigger)
+            .anchor(anchor)
+            .offset(rems(0.25).to_pixels(window.rem_size()));
+        match picker.filter(|picker| picker.removal.is_none()) {
+            Some(picker) => popup.content(self.render_worktree_picker(picker, window, cx)),
+            None => popup,
+        }
+    }
+
+    fn render_worktree_picker(
+        &self,
+        picker: &WorktreePicker,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let rungs = crate::ui::dialog::popover_rungs(cx);
+        let title = t(L10nKey::WorktreePickerTitle);
+        let muted = cx.theme().muted_foreground;
+        let focus_on_mount = picker.focus_on_mount.clone();
+        let request = picker.list.entity_id();
+        let app = cx.entity().downgrade();
+        crate::ui::dialog::card("worktree-picker-card", title, PICKER_W * 16., cx)
+            .test_support()
+            .w(rems(PICKER_W))
+            .max_w((window.viewport_size().width - window.rem_size()).max(px(0.)))
+            .child(
+                gpui_kit::canvas(
+                    |_, _, _| (),
+                    move |_, (), window, cx| {
+                        if !focus_on_mount.replace(false) {
+                            return;
+                        }
+                        // The trigger's menu may have just dismissed. Give focus to
+                        // the input only after it is in the window's dispatch tree.
+                        let handle = window.window_handle();
+                        cx.defer(move |cx| {
+                            _ = handle.update(cx, |_, window, cx| {
+                                _ = app.update(cx, |this, cx| {
+                                    if let Some(picker) = this.worktree_picker.as_ref()
+                                        && picker.list.entity_id() == request
+                                        && picker.removal.is_none()
+                                    {
+                                        picker
+                                            .query
+                                            .update(cx, |input, cx| input.focus(window, cx));
+                                    }
+                                });
+                            });
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                h_flex()
+                    .id("worktree-picker-search")
+                    .key_context("List")
+                    .flex_none()
+                    .w_full()
+                    // Keep the framework's list navigation without moving
+                    // focus out of the input. These handlers belong only to
+                    // this row: the list's propagated Cancel must not loop
+                    // back into them.
+                    .on_action(cx.listener(|this, action: &SelectUp, window, cx| {
+                        this.dispatch_worktree_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &SelectDown, window, cx| {
+                        this.dispatch_worktree_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &Confirm, window, cx| {
+                        this.dispatch_worktree_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &Cancel, window, cx| {
+                        this.dispatch_worktree_list_action(action, window, cx);
+                    }))
+                    .px_2()
+                    .pt_2()
+                    .child(
+                        Input::new(&picker.query)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).text_color(muted))
+                            .cleanable(true),
+                    ),
+            )
+            .child(
+                div().px(px(LIST_PAD)).py(px(LIST_PAD)).child(
+                    List::new(&picker.list).max_h(
+                        window.rem_size() * (ROW_H * LIST_MAX_ROWS as f32) + px(LIST_PAD * 2.),
+                    ),
+                ),
+            )
+            .child(
+                crate::ui::dialog::footer(cx)
+                    .child(crate::ui::dialog::button(
+                        "worktree-picker-remove",
+                        t(L10nKey::WorktreePickerRemove),
+                        crate::ui::dialog::Tone::Secondary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(|this, _, window, cx| {
+                            this.worktree_picker_remove_selected(window, cx)
+                        }),
+                    ))
+                    .child(crate::ui::dialog::button(
+                        "worktree-picker-new",
+                        t(L10nKey::CmdNewWorktreeTab),
+                        crate::ui::dialog::Tone::Secondary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(|this, _, window, cx| this.worktree_picker_create(window, cx)),
+                    )),
+            )
+            .on_mouse_down_out(
+                cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Left {
+                        // Spend the press on dismissal; in particular, do not reopen on the trigger.
+                        cx.stop_propagation();
+                        this.cancel_worktree_picker(window, cx);
+                    }
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.cancel_worktree_picker(window, cx);
+                }
+            }))
+    }
+
+    pub(crate) fn render_worktree_removal_overlay(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let picker = self.worktree_picker.as_ref()?;
-        let rungs = crate::ui::dialog::popover_rungs(cx);
-        let card: AnyElement = if let Some(removal) = picker.removal.as_ref() {
-            self.render_worktree_removal(picker, removal, window, cx)
-                .into_any_element()
-        } else {
-            let title = t(L10nKey::WorktreePickerTitle);
-            let muted = cx.theme().muted_foreground;
-            picker.query.update(cx, |input, cx| {
-                input.set_placeholder(t(L10nKey::WorktreePickerPlaceholder), window, cx);
-            });
-            crate::ui::dialog::card("worktree-picker-card", title, CARD_W, cx)
-                .test_support()
-                .child(crate::ui::dialog::header(title, cx))
-                .child(
-                    h_flex()
-                        .id("worktree-picker-search")
-                        .key_context("List")
-                        .flex_none()
-                        .w_full()
-                        // Keep the framework's list navigation without moving
-                        // focus out of the input. These handlers belong only to
-                        // this row: the list's propagated Cancel must not loop
-                        // back into them.
-                        .on_action(cx.listener(|this, action: &SelectUp, window, cx| {
-                            this.dispatch_worktree_list_action(action, window, cx);
-                        }))
-                        .on_action(cx.listener(|this, action: &SelectDown, window, cx| {
-                            this.dispatch_worktree_list_action(action, window, cx);
-                        }))
-                        .on_action(cx.listener(|this, action: &Confirm, window, cx| {
-                            this.dispatch_worktree_list_action(action, window, cx);
-                        }))
-                        .on_action(cx.listener(|this, action: &Cancel, window, cx| {
-                            this.dispatch_worktree_list_action(action, window, cx);
-                        }))
-                        .px(px(crate::ui::dialog::INSET))
-                        // `dialog::body`'s own field gap (14): one step under the
-                        // header, a breath above the list.
-                        .pt(px(14.))
-                        .child(
-                            crate::ui::dialog::field(
-                                Input::new(&picker.query)
-                                    .prefix(Icon::new(IconName::Search).text_color(muted))
-                                    .cleanable(true),
-                                cx,
-                            )
-                            .h(px(crate::ui::dialog::FIELD_H)),
-                        ),
-                )
-                .child(div().px(px(LIST_PAD)).py(px(LIST_PAD)).child(
-                    List::new(&picker.list).max_h(px(ROW_H * LIST_MAX_ROWS as f32 + LIST_PAD * 2.)),
-                ))
-                .child(
-                    crate::ui::dialog::footer(cx)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .items_center()
-                                .gap(px(6.))
-                                .text_size(rems(META))
-                                .text_color(muted)
-                                .child(crate::ui::dialog::chord(
-                                    crate::ui::keymap::key_tokens("enter"),
-                                    cx,
-                                ))
-                                .child(t(L10nKey::WorktreePickerTitle)),
-                        )
-                        .child(crate::ui::dialog::button(
-                            "worktree-picker-remove",
-                            t(L10nKey::WorktreePickerRemove),
-                            crate::ui::dialog::Tone::Secondary,
-                            true,
-                            rungs,
-                            cx,
-                            cx.listener(|this, _, window, cx| {
-                                this.worktree_picker_remove_selected(window, cx)
-                            }),
-                        ))
-                        .child(crate::ui::dialog::button(
-                            "worktree-picker-new",
-                            t(L10nKey::CmdNewWorktreeTab),
-                            crate::ui::dialog::Tone::Secondary,
-                            true,
-                            rungs,
-                            cx,
-                            cx.listener(|this, _, window, cx| {
-                                this.worktree_picker_create(window, cx)
-                            }),
-                        )),
-                )
-                .into_any_element()
-        };
+        let removal = picker.removal.as_ref()?;
+        let card = self
+            .render_worktree_removal(picker, removal, window, cx)
+            .into_any_element();
 
         Some(
             div()
                 .absolute()
                 .inset_0()
                 .bg(lyrel_ui_base::presets::scrim_fill(cx))
-                .on_key_down(
-                    cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                        if ev.keystroke.key == "escape" {
-                            // Escape backs out one level: the removal dialog
-                            // first, then the picker itself.
-                            if this
-                                .worktree_picker
-                                .as_ref()
-                                .is_some_and(|picker| picker.removal.is_some())
-                            {
-                                this.cancel_worktree_removal(window, cx);
-                            } else {
-                                this.cancel_worktree_picker(window, cx);
-                            }
-                        }
-                    }),
-                )
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.cancel_worktree_removal(window, cx);
+                    }
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                        // A dismissing press is spent on the dismissal, the
-                        // switcher's rule — it must not carry on down to the
-                        // entrance beneath and reopen the picker.
+                    cx.listener(|this, _, window, cx| {
+                        // The destructive confirmation is still modal.
                         cx.stop_propagation();
-                        this.cancel_worktree_picker(window, cx);
+                        this.cancel_worktree_removal(window, cx);
                     }),
                 )
                 .flex()
@@ -1296,7 +1464,7 @@ impl LyrelApp {
                 Some(block) => (Self::worktree_pick_block_text(block), false),
             },
         };
-        crate::ui::dialog::card("worktree-removal-card", title, CARD_W, cx)
+        crate::ui::dialog::card("worktree-removal-card", title, REMOVAL_CARD_W, cx)
             .test_support()
             .child(crate::ui::dialog::header(title, cx))
             .child(
@@ -1469,6 +1637,7 @@ mod tests {
     fn open_picker(vcx: &mut VisualTestContext) {
         settle(vcx);
         vcx.update(|window, cx| window.click("status-git-branch", cx));
+        crate::ui::status_bar::choose_status_worktree(vcx);
         wait_for(vcx, "both checkout rows", |vcx| row_labels(vcx).len() == 2);
     }
 
@@ -1614,7 +1783,12 @@ mod tests {
         let rows = row_labels(&mut vcx);
         assert_eq!(rows.len(), 2, "main + linked checkout are listed");
         vcx.update(|window, _| {
-            assert!(window.find("worktree-picker-card").visible());
+            let card = window.find("worktree-picker-card");
+            let trigger = window.find("status-git-branch").bounds();
+            assert!(card.visible());
+            let bounds = card.bounds();
+            assert!((px(0.)..=px(8.)).contains(&(trigger.top() - bounds.bottom())));
+            assert!((bounds.left() - trigger.left()).abs() <= px(1.));
             assert!(
                 window
                     .find(("worktree-row", 0u64))
@@ -1642,6 +1816,7 @@ mod tests {
         vcx.simulate_keystrokes("escape");
         settle(&mut vcx);
         assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_none()));
+        vcx.update(|window, _| assert_eq!(window.find("status-git-branch").focused(), Some(true)));
     }
 
     #[gpui_kit::test]
@@ -2321,6 +2496,7 @@ mod tests {
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("status-git-branch", cx));
+        crate::ui::status_bar::choose_status_worktree(&mut vcx);
         wait_for(&mut vcx, "all four checkout rows", |vcx| {
             row_labels(vcx).len() == 4
         });
@@ -2363,6 +2539,7 @@ mod tests {
         // leaves the first reference intact.
         settle(&mut vcx);
         vcx.update(|window, cx| window.click("status-git-branch", cx));
+        crate::ui::status_bar::choose_status_worktree(&mut vcx);
         wait_for(&mut vcx, "all three remaining checkout rows", |vcx| {
             row_labels(vcx).len() == 3
         });

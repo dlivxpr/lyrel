@@ -248,7 +248,7 @@ impl Catalog {
 ///
 /// A session is titled with the first thing someone typed to an agent, and
 /// people start those with the words the commands are named after:
-/// `Worktree cleanup` took the prefix bonus from `New Worktree Tab…`, so
+/// `Worktree cleanup` took the prefix bonus from `New Worktree`, so
 /// `worktree` then Return resumed an agent instead of opening the dialog —
 /// the heaviest thing on the page picked by a two-word guess. A session
 /// still leads when it is plainly the better answer; the Sessions tab itself
@@ -1010,7 +1010,7 @@ mod tests {
     fn a_session_named_like_a_command_does_not_take_return_from_it(cx: &mut TestAppContext) {
         with_config(cx);
         let mut catalog = Catalog::new(
-            vec![Item::new("New Worktree Tab…", CommandKind::NewWorktreeTab)],
+            vec![Item::new("New Worktree", CommandKind::NewWorktreeTab)],
             Vec::new(),
             Vec::new(),
         );

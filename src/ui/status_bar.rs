@@ -7,8 +7,25 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, 
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems};
 
 use crate::ui::app::LyrelApp;
+use crate::ui::scm::state::RepoKey;
 use lyrel_ui_base::actions::{OpenSettings, ToggleSwitcher};
 use lyrel_ui_base::i18n::{L10nKey, t};
+
+mod checkout_menu;
+
+#[cfg(test)]
+pub(super) fn choose_status_worktree(cx: &mut gpui_kit::VisualTestContext) {
+    use gpui_kit::MouseButton;
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let item = window.find_by_label(t(L10nKey::StatusCheckoutChooseWorktree));
+        let position = item.bounds().center();
+        window.pointer_down(position, MouseButton::Left, cx);
+        window.pointer_up(position, MouseButton::Left, cx);
+    });
+}
 
 pub(crate) struct Clock {
     text: SharedString,
@@ -187,7 +204,13 @@ impl LyrelApp {
             let pane = leaf.read(cx);
             let cwd = pane.git_status_cwd()?;
             let root = lyrel_ui_base::scm_snapshot::repo_root_for(cx, pane.host_id(), cwd)?;
-            Some((root, pane.git_status(cx)?))
+            Some((
+                RepoKey {
+                    host: pane.host_id(),
+                    root,
+                },
+                pane.git_status(cx)?,
+            ))
         });
         let path = path.filter(|_| document || checkout.is_none());
         let foreground = cx.theme().foreground;
@@ -253,12 +276,14 @@ impl LyrelApp {
                         }),
                 )
             })
-            .when_some(checkout, |row, (root, git)| {
+            .when_some(checkout, |row, (repo, git)| {
+                let root = &repo.root;
                 let name = root
                     .file_name()
                     .unwrap_or(root.as_os_str())
                     .to_string_lossy();
                 let label = format!("{name} / {}", git.branch);
+                let branch: gpui_kit::SharedString = git.branch.into();
                 let tooltip = format!(
                     "{}\n{label}\n{}",
                     t(L10nKey::StatusGitWorktree),
@@ -280,12 +305,15 @@ impl LyrelApp {
                             .text_color(foreground)
                             .child(div().min_w_0().truncate().child(name.into_owned()))
                             .child(div().flex_none().text_color(muted).child("/"))
-                            .child(div().min_w_0().truncate().child(git.branch)),
-                    )
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_worktree_picker(window, cx)),
+                            .child(div().min_w_0().truncate().child(branch.clone())),
                     );
-                let row = row.child(checkout_button);
+                let row = row.child(self.status_checkout_trigger(
+                    checkout_button,
+                    repo,
+                    branch,
+                    window,
+                    cx,
+                ));
                 if git.added == 0 && git.removed == 0 {
                     return row;
                 }
@@ -815,8 +843,11 @@ mod tests {
             );
         });
 
-        // The branch opens the shared picker instead.
+        // The branch control opens the checkout menu, not the picker yet.
         vcx.update(|window, cx| window.click("status-git-branch", cx));
+        settle(&mut vcx);
+        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_none()));
+        super::choose_status_worktree(&mut vcx);
         settle(&mut vcx);
         assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_some()));
     }

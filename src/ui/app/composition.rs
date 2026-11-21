@@ -488,7 +488,10 @@ impl LyrelApp {
             cx.set_active_drag_cursor_style(held, window);
         }
         let detach_caret = self.detach_caret(window, cx);
+        self.begin_worktree_picker_frame(window, cx);
         let main_layout = self.render_work_area(window, cx);
+        let status_bar = self.render_status_bar(window, cx);
+        self.finish_worktree_picker_frame(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);
@@ -538,7 +541,7 @@ impl LyrelApp {
                         this.child(el)
                     })
                     .when_some(
-                        self.render_worktree_picker_overlay(window, cx),
+                        self.render_worktree_removal_overlay(window, cx),
                         |this, el| this.child(el),
                     )
                     .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
@@ -547,7 +550,7 @@ impl LyrelApp {
                     .children(self.render_switcher(window, cx))
                     .when_some(self.search.view(), |this, search| this.child(search)),
             )
-            .child(self.render_status_bar(window, cx));
+            .child(status_bar);
         let root = Self::with_editor_text_commands(root, cx);
 
         if let Some(start) = prof {

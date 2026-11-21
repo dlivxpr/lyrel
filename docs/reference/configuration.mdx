@@ -108,7 +108,7 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | 键 | 类型 | 默认值 | |
 |---|---|---|---|
 | `shell` | object | — | `{"program": "fish", "args": ["-l"]}`。未设置时使用平台默认值。填写的 `args` 会原样用于启动，同时会关闭该 shell 的 [shell 集成](/reference/shell-integration)——若要保留集成，请省略此字段。 |
-| `custom_shells` | array | `[]` | 新建标签页菜单中的额外条目：`[{"label": "Ubuntu", "program": "wsl.exe", "args": ["-d", "Ubuntu"]}]`。严格按照配置启动，列在检测到的 shell 之后——在打开该列表前，它们位于菜单的**其他 Shell…** 列表中；在“全局搜索”的“终端”标签页中，显示为 *Shell：* 后接其标签。为条目指定参数后，lyrel 也会跳过其 [shell 集成](/reference/shell-integration)，因此它不会有提示符标记、工作目录跟踪或命令完成通知；如果条目没有参数，且 shell 能被 lyrel 识别，则会像旁边自动检测到的条目一样启用集成。缺少 `program` 的条目会被跳过；缺少 `label` 时则以程序名命名。 |
+| `custom_shells` | array | `[]` | 新建标签页菜单中的额外条目：`[{"label": "Ubuntu", "program": "wsl.exe", "args": ["-d", "Ubuntu"]}]`。严格按照配置启动，列在检测到的 shell 之后——在打开该列表前，它们位于菜单的**其他 Shell** 列表中；在“全局搜索”的“终端”标签页中，显示为 *Shell：* 后接其标签。为条目指定参数后，lyrel 也会跳过其 [shell 集成](/reference/shell-integration)，因此它不会有提示符标记、工作目录跟踪或命令完成通知；如果条目没有参数，且 shell 能被 lyrel 识别，则会像旁边自动检测到的条目一样启用集成。缺少 `program` 的条目会被跳过；缺少 `label` 时则以程序名命名。 |
 | `working_directory` | object | `{"strategy":"inherit"}` | `strategy` 为 `inherit`、`home` 或 `custom`；设为 `custom` 时使用 `path`。 |
 | `env` | object | `{}` | 为每个窗格添加的环境变量。 |
 | `scrollback_limit` | number | `10000` | 每个窗格的回滚行数（100–100,000）。仅对新窗格生效。 |

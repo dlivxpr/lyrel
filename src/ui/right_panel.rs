@@ -1365,9 +1365,8 @@ impl LyrelApp {
         (backing, handle)
     }
 
-    /// A sub-view's action band beneath the Side Panel header. Only the SFTP
-    /// browser supplies trailing controls; tool names and the Changes count
-    /// belong to the header, not a second tab row.
+    /// A sub-view's action band beneath the Side Panel header. Tool names
+    /// and the Changes count belong to the header, not a second tab row.
     pub(crate) fn panel_title(
         &self,
         _text: &str,

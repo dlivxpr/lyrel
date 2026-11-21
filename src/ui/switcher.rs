@@ -3722,18 +3722,18 @@ mod tests {
             host_form_label(&RemoteTarget::Profile {
                 id: uuid::Uuid::new_v4()
             }),
-            Some("Edit Host…")
+            Some(t(L10nKey::SwitcherEditHost))
         );
         assert_eq!(
             host_form_label(&RemoteTarget::Alias {
                 alias: "prod".into()
             }),
-            Some("Save as SSH Host…"),
+            Some(t(L10nKey::SwitcherSaveAsHost)),
             "an alias lives in ~/.ssh/config, which this form does not write"
         );
         assert_eq!(
             host_form_label(&RemoteTarget::direct("me", "10.0.0.5", 22)),
-            Some("Save as SSH Host…")
+            Some(t(L10nKey::SwitcherSaveAsHost))
         );
         assert_eq!(
             host_form_label(&RemoteTarget::Wsl {

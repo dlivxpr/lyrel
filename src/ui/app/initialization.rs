@@ -377,6 +377,8 @@ impl LyrelApp {
             renaming: None,
             worktree_prompt: None,
             worktree_picker: None,
+            status_checkout_focus: cx.focus_handle().tab_stop(true),
+            changes_worktree_focus: cx.focus_handle().tab_stop(true),
             maximized: None,
             mod_hint_badges: false,
             mod_hint_fade_generation: None,

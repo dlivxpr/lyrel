@@ -18,7 +18,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, Context, Focusable as _, SharedString, TestSupportExt as _, Window, div,
-    prelude::*, px, relative, rems,
+    prelude::*, px, rems,
 };
 
 use lyrel_core::core::git::diff::MAX_RENDERED_FILES;
@@ -39,6 +39,7 @@ use crate::ui::scm::state::{BranchInput, RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm::tree::{TreeRow, normalize_query, path_matches, tree_rows};
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
+use crate::ui::worktree_picker::WorktreePickerEntrance;
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 use lyrel_ui_base::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
@@ -235,8 +236,7 @@ impl LyrelApp {
 
         let count = (status.total_entries > 0).then(|| status.total_entries.to_string());
         let title = self.panel_title(t(L10nKey::PanelScmTitle), count, None, window, cx);
-
-        let branch = self.scm_branch_row(&repo, &status, cx);
+        let branch = self.scm_branch_row(&repo, &status, window, cx);
         let naming = self.scm_new_branch_row(&repo, cx);
         let switching = self.scm_checkout_branch_row(&repo, cx);
         let commit = self.scm_commit_box(&repo, &status, window, cx);
@@ -289,6 +289,7 @@ impl LyrelApp {
         &mut self,
         repo: &RepoKey,
         status: &WorkingTreeStatus,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.scm.load_branches(repo, cx);
@@ -296,6 +297,26 @@ impl LyrelApp {
         let theme = cx.theme();
         let (warning, muted, fg) = (theme.warning, theme.muted_foreground, theme.foreground);
         let detached = matches!(status.head, HeadState::Detached { .. });
+        let branch: SharedString = head_label(&status.head).into();
+        let branch_font = gpui_kit::Font {
+            family: if detached {
+                mono.clone()
+            } else {
+                theme.font_family.clone()
+            },
+            weight: gpui_kit::FontWeight::MEDIUM,
+            ..Default::default()
+        };
+        let rem = window.rem_size().as_f32();
+        // Two 0.75rem icons, two 0.25rem gaps, and 0.25rem padding per side.
+        let branch_label_width = crate::ui::tab_strip::measure_text(
+            window.text_system(),
+            &branch_font,
+            rem * 0.75,
+            &branch,
+        );
+        let branch_width = px((branch_label_width.ceil() + rem * 2.5).min(rem * 5.5));
+        let worktrees = t(L10nKey::ScmWorktrees);
         // The same helper `scm_push`'s guard asks, so the tile and the toast
         // cannot answer differently about the same HEAD.
         let unpushable = pushable_branch(&status.head).err();
@@ -343,123 +364,74 @@ impl LyrelApp {
             .flex_none()
             .items_center()
             .gap(px(6.))
-            // Taller than a file row, and what sets it is the `TILE_SIZE_SM`
-            // sync tile at the end plus 2px of air. The branch trigger beside
-            // it is the same 24, so the row has one interior height and the
-            // type sits inside it rather than setting it.
+            // The compact triggers and sync button fit on one line.
             .min_h(rems(28. / 16.))
             .mt(px(PINNED_TOP))
-            .pl(px(PINNED_INSET + ROW_INSET))
+            .pl(px(PINNED_INSET))
             .pr(px(PINNED_INSET))
             .child(
-                Icon::empty()
-                    .path("icons/git-branch.svg")
-                    .xsmall()
-                    .text_color(muted),
+                div()
+                    .w(branch_width)
+                    .min_w(rems(2.5))
+                    .flex_shrink_1()
+                    .child(
+                        Button::new("scm-branch")
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(Icon::empty().path("icons/git-branch.svg").text_color(muted))
+                            .accessibility_label(branch.clone())
+                            .tooltip(branch.clone())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(branch_font.weight)
+                                    .font_family(branch_font.family)
+                                    .child(branch),
+                            )
+                            .dropdown_caret(true)
+                            .w_full()
+                            .h_6()
+                            .px_1()
+                            .rounded(gpui_kit::component::button::ButtonRounded::Small)
+                            .text_color(fg)
+                            .dropdown_menu_with_anchor(
+                                gpui_kit::Anchor::TopLeft,
+                                self.scm_branch_menu(repo, status, cx),
+                            ),
+                    ),
             )
-            // The trigger is a `Button` because that is the one element the
-            // dropdown trait is implemented for. `dropdown_caret` turns its
-            // label row into `justify_between`, which is what puts the name on
-            // the left and the chevron against the notes.
-            //
-            // The branch is the most important word on the row, and it earns
-            // that by being in full-strength ink — not by being set larger
-            // than the file names underneath it.
-            //
-            // `.small()` is how a `Button` is told to use `TEXT`; `.xsmall()`
-            // is `META`, which is a step *under* the file names and would make
-            // the branch quieter than the paths it scopes. Sans at `TEXT`
-            // beside mono at `TEXT_MONO` is the ramp's own pairing, so the two
-            // read as one size — which is the rule this comment is stating.
-            // The height is spelled out because `.small()` also carries a 24px
-            // box and the row's own air is budgeted below.
-            // The wrapper is what carries `flex_1`, not the button.
-            // `dropdown_menu_with_anchor` hands the button to a `Popover`,
-            // which wraps it in a plain `div` of its own and drops the
-            // trigger's style on the floor — so `flex_1` set on the button
-            // lands *inside* a box that still measures its own content and
-            // refuses to shrink. At the panel's 216px floor a 24-character
-            // branch name is wider than the row, and what got pushed off the
-            // end was the sync tile: gone entirely, with no way to reach it.
             .child(
-                div().flex_1().min_w(rems(3.)).ml(px(-6.)).child(
-                    Button::new("scm-branch")
+                self.worktree_picker_trigger(
+                    WorktreePickerEntrance::Changes,
+                    Button::new("scm-worktree")
                         .ghost()
-                        .small()
+                        .xsmall()
+                        .compact()
+                        .icon(Icon::empty().path("icons/folder.svg"))
+                        .label(worktrees)
+                        .tooltip(worktrees)
                         .dropdown_caret(true)
-                        // A child rather than `.label`, because a label is
-                        // laid out `flex_none` and cannot be told to
-                        // truncate. This is the cut that knows the real
-                        // width, and it is the only cut here — an
-                        // `elide_middle` character budget on top of it put
-                        // two ellipses in a row (`fix/new-tab-……`) and threw
-                        // away the tail it was there to keep.
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .line_height(relative(1.))
-                                .truncate()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                .child(head_label(&status.head)),
-                        )
                         .w_full()
-                        .h(rems(24. / 16.))
-                        // The glyph's gap is the row's 6px. A small button's own
-                        // padding stacked another 10 on it and set the name
-                        // off the text column the file names below keep. It
-                        // keeps 4 so the hover fill clears the text, and the
-                        // wrapper takes 6 back, which lands the name on the
-                        // file names' column.
-                        .pl(px(4.))
-                        .rounded(px(5.))
-                        .text_color(fg)
-                        .when(detached, |s| s.font_family(mono.clone()))
-                        .dropdown_menu_with_anchor(
-                            gpui_kit::Anchor::TopLeft,
-                            self.scm_branch_menu(repo, status, cx),
-                        ),
-                ),
-            )
-            // One box for every note and chip, and it is allowed to lose.
-            // Each of them is `flex_none` on its own, so a detached HEAD
-            // mid-rebase used to add up past the row and shove the sync tile
-            // out of the panel — the same disappearance the branch name caused
-            // above. The order of who gives way is now spelled out: the branch
-            // name first (`flex_1`), this group second, and the tile never,
-            // because a control you cannot reach is worse than a badge you
-            // cannot finish reading.
-            //
-            // The box only exists when it holds something. An empty one still
-            // counts as a flex item, and the row's `gap` would spend 6px on
-            // either side of nothing — pushing the caret away from the tile on
-            // the quiet branch that is most of what anyone looks at.
-            .when(!notes.is_empty(), |row| {
-                row.child(
-                    h_flex()
-                        .gap(px(6.))
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .children(notes),
-                )
-            })
-            // The worktree entry: the same searchable picker the status bar's
-            // Git indicator opens (#351). Branch work stays on this row's
-            // menu and the sync tile; switching the checkout is navigation,
-            // not a branch operation, so it gets its own tile beside sync.
-            .child(
-                crate::ui::window_chrome::chrome_tile_sized(
-                    Button::new("scm-worktree").icon(Icon::empty().path("icons/folder.svg")),
-                    BRANCH_TILE,
-                    BRANCH_TILE_GLYPH,
-                    false,
+                        .h_6()
+                        .px_1(),
+                    window,
                     cx,
                 )
-                .rounded(px(6.))
-                .tooltip(t(L10nKey::WorktreePickerTitle))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_worktree_picker(window, cx);
-                })),
+                .min_w(rems(2.5))
+                .flex_shrink_1(),
+            )
+            // Status chips use the remaining space, not the controls' budget.
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .justify_end()
+                    .gap_1()
+                    .overflow_hidden()
+                    .children(notes),
             )
             .child(
                 crate::ui::window_chrome::chrome_tile_sized(
@@ -474,6 +446,7 @@ impl LyrelApp {
                     cx,
                 )
                 .rounded(px(6.))
+                .flex_none()
                 // With no branch to move the tile could only ever lose (#545):
                 // upstream is None at a detached or unborn HEAD by definition,
                 // so sync degenerates into scm_push, which has nothing to
