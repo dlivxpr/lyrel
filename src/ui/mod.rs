@@ -66,6 +66,7 @@ pub(crate) mod tab;
 pub mod tab_sidebar;
 pub mod tab_strip;
 pub mod theme;
+pub(crate) mod theme_transition;
 pub mod tray;
 pub mod tree_sync;
 mod window_chrome;
