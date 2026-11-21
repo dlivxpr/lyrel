@@ -212,6 +212,31 @@ impl WorkspaceStore {
         }
     }
 
+    /// Persist `layout` as workspace `id`'s right-panel tool layout (#348).
+    /// Every layout mutation goes through here, so a restart finds the last
+    /// written state — an emptied layout included, because `last_used` is
+    /// what an emptied panel resumes. The store entry exists because opening
+    /// the window claimed the workspace first; an unknown id is left alone
+    /// rather than invented. Writes are change-gated: render-time folds must
+    /// not rewrite the file on every frame.
+    pub fn record_tool_layout(
+        cx: &mut gpui_kit::App,
+        id: WorkspaceId,
+        layout: &lyrel_protocol::core::session::ToolLayoutState,
+    ) {
+        let Some(store) = Self::try_store(cx) else {
+            return;
+        };
+        let Some(view) = store.views.get_mut(id) else {
+            return;
+        };
+        if view.tool_layout.as_ref() == Some(layout) {
+            return;
+        }
+        view.tool_layout = Some(layout.clone());
+        store.views.save();
+    }
+
     pub fn host_of(cx: &gpui_kit::App, id: WorkspaceId) -> HostId {
         host_for(Self::all(cx), id)
     }
@@ -342,6 +367,11 @@ pub fn crosses_machines(previous: HostId, current: HostId) -> bool {
 mod tests {
     use super::*;
 
+    /// Every test that lets the store touch `views.json` takes this lock:
+    /// they share the per-process scratch dir, and the default harness runs
+    /// tests on parallel threads.
+    static VIEWS_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_window_binds_to_exactly_one_machine() {
         let build = RemoteTarget::Alias {
@@ -382,6 +412,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn restore_one_keeps_one_window_and_reports_the_rest(cx: &mut gpui_kit::TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
         // `restore_one` saves, and a test has no business writing the real views.
         lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
@@ -416,6 +447,7 @@ mod tests {
     fn claiming_a_workspace_the_store_never_saw_keeps_the_id_it_was_given(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
         // `claim` saves, and a test has no business writing the real views.
         lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
@@ -447,6 +479,7 @@ mod tests {
     fn claim_remote_remembers_the_route_and_refreshes_it_while_the_profile_lives(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
         // #485: the snapshot is written at creation, refreshed on every
         // re-open while the profile still exists, and — once the profile is
         // gone — kept as the last name the entry has.
@@ -526,6 +559,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn connect_time_sync_mirrors_the_machines_listing(cx: &mut gpui_kit::TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
         // `sync_remote` saves; a test has no business writing the real views.
         lyrel_protocol::core::config::set_config_dir(
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
@@ -593,5 +627,63 @@ mod tests {
             );
             assert_eq!(view.last_active, 50, "the clock is now this client's own");
         });
+    }
+
+    #[gpui_kit::test]
+    fn record_tool_layout_persists_per_workspace_and_change_gates_the_file(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        // `record_tool_layout` saves, and a test has no business writing the
+        // real views.
+        lyrel_protocol::core::config::set_config_dir(
+            std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
+        );
+        use lyrel_protocol::core::config::RightPanelTab::{Files, Info, Scm};
+        let layout = lyrel_protocol::core::session::ToolLayoutState {
+            version: lyrel_protocol::core::session::ToolLayoutState::CURRENT_VERSION,
+            order: vec![Info, Files, Scm],
+            active: Files,
+            last_used: Scm,
+            open: true,
+        };
+        let (ws, changed) = cx.update(|cx| {
+            WorkspaceStore::install_for_test(cx, WindowViews::default());
+            let ws = WorkspaceStore::claim(cx, None);
+
+            WorkspaceStore::record_tool_layout(cx, ws, &layout);
+            assert_eq!(
+                WorkspaceStore::all(cx)
+                    .get(ws)
+                    .and_then(|view| view.tool_layout.clone()),
+                Some(layout.clone()),
+                "the layout is written on its own workspace's record"
+            );
+
+            // A workspace the store never saw is not invented.
+            let stranger = WorkspaceId::new();
+            WorkspaceStore::record_tool_layout(cx, stranger, &layout);
+            assert!(WorkspaceStore::all(cx).get(stranger).is_none());
+
+            let mut changed = layout.clone();
+            changed.open = false;
+            (ws, changed)
+        });
+
+        // The record survives the relaunch a load stands in for.
+        let loaded = WindowViews::load().expect("the store file was written");
+        assert_eq!(
+            loaded.get(ws).and_then(|view| view.tool_layout.clone()),
+            Some(layout.clone())
+        );
+
+        // An unchanged layout does not rewrite the file; a changed one does.
+        let path =
+            lyrel_protocol::core::config::config_path("views.json").expect("a pinned test dir");
+        std::fs::remove_file(&path).unwrap();
+        cx.update(|cx| WorkspaceStore::record_tool_layout(cx, ws, &layout));
+        assert!(!path.exists(), "writing the same layout again is a no-op");
+        cx.update(|cx| WorkspaceStore::record_tool_layout(cx, ws, &changed));
+        assert!(path.exists(), "a changed layout writes again");
     }
 }

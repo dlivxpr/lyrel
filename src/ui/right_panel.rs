@@ -388,6 +388,32 @@ impl Default for ToolLayout {
 }
 
 impl ToolLayout {
+    /// The Workspace Store record written for this layout (#348): versioned,
+    /// so a future shape can migrate or be dropped instead of misread. Only
+    /// the layout goes here — tool search text, filters, expansion and
+    /// drafts stay in memory, the way they always have.
+    fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
+        lyrel_core::core::session::ToolLayoutState {
+            version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
+            order: self.order.clone(),
+            active: self.active,
+            last_used: self.last_used,
+            open: self.open,
+        }
+    }
+
+    /// The layout a stored record restores. An emptied `order` is kept as
+    /// written — `last_used` is what an emptied panel resumes (#348), it is
+    /// not replaced by the default tab set.
+    fn from_state(state: &lyrel_core::core::session::ToolLayoutState) -> Self {
+        Self {
+            order: state.order.clone(),
+            active: state.active,
+            last_used: state.last_used,
+            open: state.open,
+        }
+    }
+
     /// Show `tab`: one instance per workspace, so an already-open tool is
     /// activated in place and a new one takes the trailing slot. Showing a
     /// tool always expands the panel — choosing it from `+`, its tab, or
@@ -683,15 +709,53 @@ impl LyrelApp {
             .unwrap_or_default()
     }
 
+    /// The tool layout the Workspace Store holds for workspace `id` — the
+    /// persisted choice where one was written, otherwise the
+    /// fresh-workspace default: Info only, behind a collapsed panel,
+    /// whatever the old global config selection says (#345). A record newer
+    /// than this build reads as absent rather than misread (#348).
+    pub(crate) fn persisted_tool_layout(
+        id: lyrel_ui_base::session::WorkspaceId,
+        cx: &gpui_kit::App,
+    ) -> ToolLayout {
+        lyrel_ui_base::session::WorkspaceStore::all(cx)
+            .get(id)
+            .and_then(|view| view.tool_layout.as_ref())
+            .filter(|state| state.readable())
+            .map(ToolLayout::from_state)
+            .unwrap_or_default()
+    }
+
+    /// Take up workspace `id`'s tool layout — on first open and on every
+    /// switch (#348). The mirror fields the panel code reads and the
+    /// per-workspace map the tool host renders from are both seeded from the
+    /// persisted record, so the arriving workspace neither inherits the
+    /// departing one's panel nor folds it into its own layout.
+    pub(crate) fn adopt_tool_layout(
+        &mut self,
+        id: lyrel_ui_base::session::WorkspaceId,
+        cx: &gpui_kit::App,
+    ) {
+        let layout = Self::persisted_tool_layout(id, cx);
+        self.right_panel.tool_layouts.insert(id, layout.clone());
+        self.right_panel_visible = layout.open;
+        self.right_panel_tab = layout.active;
+    }
+
     /// Write the layout back: the map, the live mirror fields the panel code
-    /// reads, and the global config, which keeps carrying the choice for an
-    /// older build until per-workspace persistence lands (#348).
+    /// reads, the Workspace Store record a restart restores (#348), and the
+    /// global config, which keeps carrying the choice for an older build.
     fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
         self.right_panel
             .tool_layouts
             .insert(self.workspace, layout.clone());
         self.right_panel_visible = layout.open;
         self.right_panel_tab = layout.active;
+        lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
+            cx,
+            self.workspace,
+            &layout.to_state(),
+        );
         self.update_config(cx, |cfg| {
             cfg.right_panel_tab = layout.active;
             cfg.right_panel_visible = layout.open;
@@ -3017,7 +3081,7 @@ mod persistence_tests {
     use gpui_kit::{TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm};
     use lyrel_ui_base::actions::{
-        ShowRightPanelChanges, ShowRightPanelFiles, ShowRightPanelGitHub, ToggleRightPanel,
+        ShowRightPanelChanges, ShowRightPanelFiles, ShowRightPanelGitHub,
     };
     use lyrel_ui_base::config::Config;
     use lyrel_ui_base::session::{Session, WorkspaceId, WorkspaceStore};
@@ -3070,6 +3134,22 @@ mod persistence_tests {
         assert_eq!(written_alpha.active, Files);
         assert_eq!(written_alpha.last_used, Files);
         assert!(!written_alpha.open, "alpha's panel was left collapsed");
+        assert_eq!(
+            cx.update(|cx| {
+                WorkspaceStore::all(cx)
+                    .get(alpha)
+                    .and_then(|view| view.tool_layout.clone())
+            }),
+            Some(lyrel_core::core::session::ToolLayoutState {
+                version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
+                order: written_alpha.order.clone(),
+                active: written_alpha.active,
+                last_used: written_alpha.last_used,
+                open: written_alpha.open,
+            }),
+            "the store record is exactly the layout — search text, filters, \
+             expansion and drafts stay in memory"
+        );
 
         // Switching in place takes up the other workspace's layout: beta has
         // never been given one, so it starts from Info, collapsed — alpha's

@@ -722,6 +722,7 @@ impl LyrelApp {
         }
         let previous_host = self.spawn_host(cx);
         self.workspace = id;
+        self.adopt_tool_layout(id, cx);
         self.rebind_host(previous_host, cx);
         self.refresh_shells(cx);
         let font_size = self.font_size;
@@ -5373,8 +5374,8 @@ pub(crate) mod test_window {
     /// The production workbench on an already-claimed workspace — what a
     /// window restored at launch gets, and what the tool-layout persistence
     /// tests (#348) reopen at their simulated relaunch. Callers that simulate
-    /// the relaunch itself use [`test_window::open_window_on`] so the rest of
-    /// the app state — the config above all — survives the "restart".
+    /// the relaunch itself use [`open_window_on`] so the rest of the app
+    /// state — the config above all — survives the "restart".
     pub(crate) fn harness_on_workspace(
         cx: &mut TestAppContext,
         workspace: lyrel_ui_base::session::WorkspaceId,
