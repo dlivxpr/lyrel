@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
-use crate::daemon::protocol::{DaemonMsg, PaneContext, PaneProcs, ProcEntry, RemoteContext, RemoteKind};
+use crate::daemon::protocol::{
+    DaemonMsg, PaneContext, PaneProcs, ProcEntry, RemoteContext, RemoteKind,
+};
 use crate::ui::app::test_window;
 use lyrel_core::core::config::RightPanelTab;
 use lyrel_ui_base::host_ops::{Entry, Host, HostId, Meta, Output, SearchHit, WatchSub};
@@ -60,7 +62,8 @@ impl Host for MonitorHost {
         max_dirs: usize,
         show_hidden: bool,
     ) -> std::io::Result<Vec<SearchHit>> {
-        self.inner.search(roots, query, limit, max_dirs, show_hidden)
+        self.inner
+            .search(roots, query, limit, max_dirs, show_hidden)
     }
     fn search_content(
         &self,
@@ -231,6 +234,7 @@ fn monitor_opens_folded_and_info_keeps_session_and_ports(cx: &mut TestAppContext
     fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     install_monitor_host(&app, &mut vcx, &fixture);
+    app.update_in(&mut vcx, |app, _, _| app.right_panel_width.set(276.));
     open_monitor(&app, &mut vcx);
 
     let root_id = row_id(1, 100, 1000);
@@ -244,6 +248,8 @@ fn monitor_opens_folded_and_info_keeps_session_and_ports(cx: &mut TestAppContext
         assert_eq!(root.expanded(), Some(false));
         let count_id = format!("{root_id}-count");
         assert_eq!(window.find(count_id.clone()).label(), Some("3"));
+        let name = window.find(format!("{root_id}-name"));
+        assert!(name.bounds().size.width >= gpui_kit::px(36.));
         assert!(window.try_find(child_id.clone()).is_none());
     });
 
@@ -310,10 +316,7 @@ fn expanding_filtering_and_sorting_drive_the_tree(cx: &mut TestAppContext) {
     });
     repoll(&mut vcx);
     app.update_in(&mut vcx, |app, _window, _cx| {
-        assert_eq!(
-            app.monitor.sort,
-            super::panel_monitor::MonitorSort::Cpu
-        );
+        assert_eq!(app.monitor.sort, super::panel_monitor::MonitorSort::Cpu);
     });
 }
 

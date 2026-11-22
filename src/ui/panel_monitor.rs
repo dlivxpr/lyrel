@@ -11,13 +11,11 @@ use std::collections::HashSet;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
-use gpui_kit::{
-    AnyElement, Context, MouseButton, Subscription, Window, div, prelude::*, px, rems,
-};
+use gpui_kit::{AnyElement, Context, MouseButton, Subscription, Window, div, prelude::*, px, rems};
 
 use crate::daemon::protocol::{PaneContext, PaneProcs, ProcEntry};
 use crate::ui::app::LyrelApp;
-use crate::ui::proc_usage::{CPU_W, MEM_W, CpuTracker};
+use crate::ui::proc_usage::{CPU_W, CpuTracker, MEM_W};
 use crate::ui::right_panel::{
     HEADING, META, PROC_INDENT, PROC_ROW_H, ROW_FILL_RADIUS, ROW_INSET, SECTION_GAP, TEXT,
     TEXT_INSET,
@@ -222,7 +220,9 @@ fn sort_tree(nodes: &mut [ProcNode], sort: MonitorSort, cpu: &CpuTracker) {
             (None, Some(_)) => Ordering::Greater,
         }
     }
-    nodes.sort_by(|a, b| cmp_desc(metric(a, sort, cpu), metric(b, sort, cpu)).then(a.ord.cmp(&b.ord)));
+    nodes.sort_by(|a, b| {
+        cmp_desc(metric(a, sort, cpu), metric(b, sort, cpu)).then(a.ord.cmp(&b.ord))
+    });
 }
 
 /// Whether a row matches the filter: its name contains the text, or the
@@ -235,8 +235,7 @@ fn matches_filter(entry: &ProcEntry, filter: &str) -> bool {
     if entry.name.to_lowercase().contains(&filter) {
         return true;
     }
-    filter.chars().all(|c| c.is_ascii_digit())
-        && entry.pid.to_string().starts_with(&filter)
+    filter.chars().all(|c| c.is_ascii_digit()) && entry.pid.to_string().starts_with(&filter)
 }
 
 /// A row the tree renders this frame: the node, and — when the row hides a
@@ -265,15 +264,9 @@ fn visible_rows<'a>(
         ) {
             for node in nodes {
                 if node.children.is_empty() {
-                    out.push(VisibleRow {
-                        node,
-                        folded: None,
-                    });
+                    out.push(VisibleRow { node, folded: None });
                 } else if expanded.contains(&node.key) {
-                    out.push(VisibleRow {
-                        node,
-                        folded: None,
-                    });
+                    out.push(VisibleRow { node, folded: None });
                     walk(&node.children, expanded, out);
                 } else {
                     out.push(VisibleRow {
@@ -296,10 +289,7 @@ fn visible_rows<'a>(
             let mut sub = Vec::new();
             let child_hit = walk_filtered(&node.children, filter, &mut sub);
             if matches_filter(&node.entry, filter) || child_hit {
-                out.push(VisibleRow {
-                    node,
-                    folded: None,
-                });
+                out.push(VisibleRow { node, folded: None });
                 out.extend(sub);
                 any = true;
             }
@@ -461,10 +451,25 @@ impl LyrelApp {
                                 cx,
                             ));
                         } else {
+                            let name_width = self.right_panel_px(window, cx)
+                                - 2. * TEXT_INSET
+                                - PID_W
+                                - CPU_W
+                                - MEM_W
+                                - CHEVRON_SLOT
+                                - 5. * CELL_GAP;
+                            let wide_label = window.rem_size().as_f32() * 10.;
                             for row in rows {
-                                list = list.child(
-                                    self.monitor_row(pane_id, row, mono.clone(), cx),
-                                );
+                                let compact_count = name_width
+                                    - f32::from(row.node.entry.depth) * PROC_INDENT
+                                    < wide_label;
+                                list = list.child(self.monitor_row(
+                                    pane_id,
+                                    row,
+                                    mono.clone(),
+                                    compact_count,
+                                    cx,
+                                ));
                             }
                         }
                         list.into_any_element()
@@ -499,11 +504,7 @@ impl LyrelApp {
 
     /// The marker over a partial or missing process answer, kept outside the
     /// scrolling list so it cannot scroll out of sight.
-    fn monitor_source_note(
-        &self,
-        source: ProcSource,
-        muted: gpui_kit::Hsla,
-    ) -> Option<AnyElement> {
+    fn monitor_source_note(&self, source: ProcSource, muted: gpui_kit::Hsla) -> Option<AnyElement> {
         let (text, hint) = match source {
             ProcSource::Verified => return None,
             ProcSource::Heuristic => (
@@ -550,11 +551,16 @@ impl LyrelApp {
         };
         h_flex()
             .pl(px(TEXT_INSET + CHEVRON_SLOT + CHEVRON_GAP))
-            .pr(px(ROW_INSET))
+            .pr(px(TEXT_INSET))
             .pb(px(4.))
             .items_center()
             .gap(px(CELL_GAP))
-            .child(div().flex_1().min_w_0().child(heading(t(L10nKey::MonitorColName).into())))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(heading(t(L10nKey::MonitorColName).into())),
+            )
             .child(
                 div()
                     .w(px(PID_W))
@@ -563,7 +569,13 @@ impl LyrelApp {
                     .justify_end()
                     .child(heading(t(L10nKey::MonitorColPid).into())),
             )
-            .child(self.monitor_sort_header(MonitorSort::Cpu, t(L10nKey::MonitorColCpu), sort, muted, cx))
+            .child(self.monitor_sort_header(
+                MonitorSort::Cpu,
+                t(L10nKey::MonitorColCpu),
+                sort,
+                muted,
+                cx,
+            ))
             .child(self.monitor_sort_header(
                 MonitorSort::Memory,
                 t(L10nKey::MonitorColMemory),
@@ -620,6 +632,7 @@ impl LyrelApp {
         pane_id: u64,
         row: VisibleRow,
         mono: gpui_kit::SharedString,
+        compact_count: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entry = &row.node.entry;
@@ -673,15 +686,23 @@ impl LyrelApp {
                     .test_support()
                     .flex_none()
                     .w(px(CHEVRON_SLOT))
+                    .h_full()
                     .flex()
+                    .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .when(has_children, |c| c.cursor_pointer())
                     .children(chevron)
                     .when(has_children, |c| {
-                        c.on_click(cx.listener(move |this, _, _, cx| {
-                            this.monitor.toggle(key);
-                            cx.notify();
-                        }))
+                        c.role(gpui_kit::Role::Button)
+                            .aria_label(t(if expanded {
+                                L10nKey::MonitorCollapse
+                            } else {
+                                L10nKey::MonitorExpand
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.monitor.toggle(key);
+                                cx.notify();
+                            }))
                     }),
             )
             .child(
@@ -702,18 +723,28 @@ impl LyrelApp {
                     .child(entry.name.clone()),
             )
             .when_some(row.folded, |this, count| {
+                let count = count.to_string();
+                let label = t_fmt(L10nKey::MonitorChildCount, &[("count", &count)]);
+                let value = if compact_count {
+                    count.clone()
+                } else {
+                    label.clone()
+                };
                 this.child(
                     div()
                         .id(format!("{id}-count"))
-                        .aria_label(gpui_kit::SharedString::from(count.to_string()))
+                        .aria_label(gpui_kit::SharedString::from(count))
                         .test_support()
                         .flex_none()
                         .text_size(rems(META))
                         .text_color(muted)
-                        .child(t_fmt(
-                            L10nKey::MonitorChildCount,
-                            &[("count", count.to_string().as_str())],
-                        )),
+                        .child(value)
+                        .when(compact_count, |badge| {
+                            badge.tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                    .build(window, cx)
+                            })
+                        }),
                 )
             })
             .child(
@@ -748,7 +779,14 @@ mod tests {
     /// the rows. `bash` is the shell root with two children, one of them a
     /// grandparent.
     fn walk() -> Vec<ProcEntry> {
-        fn entry(pid: u32, name: &str, depth: u8, started: u64, rss: u64, cpu_ns: u64) -> ProcEntry {
+        fn entry(
+            pid: u32,
+            name: &str,
+            depth: u8,
+            started: u64,
+            rss: u64,
+            cpu_ns: u64,
+        ) -> ProcEntry {
             ProcEntry {
                 pid,
                 name: name.into(),
@@ -787,7 +825,11 @@ mod tests {
     fn the_root_starts_folded_with_its_descendant_count() {
         let tree = build_tree(&walk());
         let rows = visible_rows(&tree, &HashSet::new(), "");
-        assert_eq!(rows.len(), 1, "the folded shell root is the whole first paint");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the folded shell root is the whole first paint"
+        );
         assert_eq!(rows[0].node.entry.pid, 10);
         assert_eq!(rows[0].folded, Some(3), "three descendants hide under it");
     }
@@ -800,10 +842,17 @@ mod tests {
         expanded.insert(root_key);
         let rows = visible_rows(&tree, &expanded, "");
         assert_eq!(keys(&rows), [10, 11, 13]);
-        assert!(rows.iter().all(|r| r.folded.is_none() || r.node.entry.pid == 11));
+        assert!(
+            rows.iter()
+                .all(|r| r.folded.is_none() || r.node.entry.pid == 11)
+        );
         assert_eq!(rows[1].folded, Some(1), "make still folds cc");
         expanded.remove(&root_key);
-        assert_eq!(visible_rows(&tree, &expanded, "").len(), 1, "refold restores");
+        assert_eq!(
+            visible_rows(&tree, &expanded, "").len(),
+            1,
+            "refold restores"
+        );
     }
 
     #[test]
@@ -839,16 +888,15 @@ mod tests {
         }
         let mut second = first.clone();
         for (pid, delta) in deltas_ns {
-            second
-                .iter_mut()
-                .find(|e| e.pid == *pid)
-                .unwrap()
-                .cpu_ns = Some(*delta);
+            second.iter_mut().find(|e| e.pid == *pid).unwrap().cpu_ns = Some(*delta);
         }
         let mut cpu = CpuTracker::default();
         cpu.sample(&first, t0);
         cpu.sample(&second, t0 + std::time::Duration::from_secs(1));
-        assert!(cpu.percent(11).is_some(), "the fixture must yield percentages");
+        assert!(
+            cpu.percent(11).is_some(),
+            "the fixture must yield percentages"
+        );
         cpu
     }
 
@@ -856,7 +904,11 @@ mod tests {
     fn sorting_reorders_siblings_only() {
         // node gains more CPU than make, so the two children swap; cc, the
         // grandchild, stays under make no matter how its generation sorts.
-        let cpu = tracker(&[(11, 3_000_000_000), (12, 9_000_000_000), (13, 5_000_000_000)]);
+        let cpu = tracker(&[
+            (11, 3_000_000_000),
+            (12, 9_000_000_000),
+            (13, 5_000_000_000),
+        ]);
         let mut sorted = build_tree(&walk());
         sort_tree(&mut sorted, MonitorSort::Cpu, &cpu);
         let children: Vec<u32> = sorted[0].children.iter().map(|n| n.entry.pid).collect();
@@ -872,7 +924,11 @@ mod tests {
         let mut expanded = HashSet::new();
         expanded.insert(root_key);
         let rows = visible_rows(&sorted, &expanded, "");
-        assert_eq!(keys(&rows), [10, 13, 11], "both children visible, make folded over cc");
+        assert_eq!(
+            keys(&rows),
+            [10, 13, 11],
+            "both children visible, make folded over cc"
+        );
         assert_eq!(rows[2].folded, Some(1));
     }
 
@@ -883,7 +939,11 @@ mod tests {
         let mut tree = build_tree(&walk);
         sort_tree(&mut tree, MonitorSort::Memory, &CpuTracker::default());
         let children: Vec<u32> = tree[0].children.iter().map(|n| n.entry.pid).collect();
-        assert_eq!(children, [13, 11], "node 90 MB before make with no reported rss");
+        assert_eq!(
+            children,
+            [13, 11],
+            "node 90 MB before make with no reported rss"
+        );
     }
 
     #[test]
