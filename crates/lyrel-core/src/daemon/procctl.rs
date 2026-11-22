@@ -146,13 +146,18 @@ pub(crate) fn plan(
 /// ceiling, not a floor.
 pub(crate) fn execute(shell_pid: u32, scope: &[ProcIdentity]) -> Vec<EndProcessOutcome> {
     let deadline = Instant::now() + EXEC_BUDGET;
-    let mut signaled: Vec<(ProcIdentity, bind::Bound, String)> = Vec::new();
+    let mut signaled = Vec::new();
     let mut outcomes: Vec<EndProcessOutcome> = Vec::with_capacity(scope.len());
     for id in scope {
         match verify(shell_pid, id) {
             Ok((bound, name)) => {
                 bound.signal();
-                signaled.push((*id, bound, name));
+                signaled.push((outcomes.len(), bound));
+                outcomes.push(EndProcessOutcome {
+                    pid: id.pid,
+                    name,
+                    state: EndProcessState::Failed,
+                });
             }
             Err(refusal) => outcomes.push(EndProcessOutcome {
                 pid: id.pid,
@@ -164,17 +169,12 @@ pub(crate) fn execute(shell_pid: u32, scope: &[ProcIdentity]) -> Vec<EndProcessO
             }),
         }
     }
-    outcomes.extend(signaled.into_iter().map(|(id, bound, name)| {
+    for (index, bound) in signaled {
         let left = deadline.saturating_duration_since(Instant::now());
-        EndProcessOutcome {
-            pid: id.pid,
-            name,
-            state: match bound.wait_gone(left) {
-                true => EndProcessState::Ended,
-                false => EndProcessState::Failed,
-            },
+        if bound.wait_gone(left) {
+            outcomes[index].state = EndProcessState::Ended;
         }
-    }));
+    }
     outcomes
 }
 

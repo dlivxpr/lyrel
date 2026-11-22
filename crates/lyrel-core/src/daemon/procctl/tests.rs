@@ -362,8 +362,8 @@ fn a_scope_is_a_ceiling_reexecution_reports_instead_of_expanding() {
         })
         .collect();
     // End one child directly, the way a user ending a single row would.
-    let first = scope[0];
-    let single = execute(shell_pid(), std::slice::from_ref(&first));
+    let removed = scope[1];
+    let single = execute(shell_pid(), std::slice::from_ref(&removed));
     assert_eq!(single[0].state, EndProcessState::Ended);
 
     // Re-executing the confirmed scope afterwards must not re-signal the
@@ -375,8 +375,8 @@ fn a_scope_is_a_ceiling_reexecution_reports_instead_of_expanding() {
         scope.len(),
         "one outcome per confirmed identity"
     );
-    assert_eq!(outcomes[0].state, EndProcessState::Exited);
-    assert_eq!(outcomes[1].state, EndProcessState::Ended);
+    assert_eq!(outcomes[0].state, EndProcessState::Ended);
+    assert_eq!(outcomes[1].state, EndProcessState::Exited);
     assert_eq!(outcomes[2].state, EndProcessState::Ended);
     tree.shell.wait().expect("the ended shell reaps");
 }

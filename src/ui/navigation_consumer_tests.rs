@@ -215,6 +215,11 @@ fn settings_navigation_is_vertical_manual_and_restores_page_focus(cx: &mut TestA
                 Some(true)
             );
             window.press("down", cx);
+            assert_eq!(
+                window.find("settings-nav-settings:toolbar").focused(),
+                Some(true)
+            );
+            window.press("down", cx);
             window.press("space", cx);
         });
         settle(&mut vcx);

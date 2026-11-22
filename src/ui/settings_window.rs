@@ -29,7 +29,7 @@ pub(crate) struct SettingsContext {
     pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
     /// The host of the workspace that opened this settings window — the
     /// Sessions page's initial host.
-    pub active_host: Rc<dyn Fn(&App) -> lyrel_ui_base::host_ops::HostId>,
+    pub active_host: lyrel_ui_base::host_ops::HostId,
     /// The agent sessions that workspace currently has open, by the same
     /// identity the session listings use — what marks a listed session
     /// "running" in the Sessions page's batch summary.
@@ -66,8 +66,8 @@ pub(crate) enum SettingsEvent {
     /// the Session History tool rebind/rescan on its next sync.
     SessionsDeleted {
         host: lyrel_ui_base::host_ops::HostId,
-        agent: crate::core::cli_agent::CLIAgent,
-        ids: Vec<String>,
+        /// 已删除的原生 ID，按精确存储键分组。
+        removed: Vec<(String, Vec<String>)>,
     },
     /// Repaint theme and menus for the current in-memory `Config`. The theme
     /// picker and theme editor pass `persist: false` for live previews, which

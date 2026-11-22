@@ -926,6 +926,7 @@ impl SettingsWindow {
         if !flow.can_confirm() {
             return;
         }
+        let mut stores = Vec::new();
         let mut execute_groups: Vec<SessionBatchExecuteGroup> = Vec::new();
         for (ix, group) in flow.groups.iter().enumerate() {
             let confirmations: Vec<SessionBatchConfirmation> = flow
@@ -943,6 +944,8 @@ impl SettingsWindow {
                 })
                 .collect();
             if !confirmations.is_empty() {
+                let source = flow.rows.iter().find(|row| row.group == Some(ix)).unwrap();
+                stores.push(session_history::store_group_key(&source.identity));
                 execute_groups.push(SessionBatchExecuteGroup {
                     cwd: group.cwd.clone(),
                     launch_argv: group.launch_argv.clone(),
@@ -976,13 +979,15 @@ impl SettingsWindow {
             owner,
             cx,
             move |host| host.session_batch(&request),
-            |this, reply, cx| this.session_delete_execute_landed(reply, cx),
+            move |this, reply, cx| this.session_delete_execute_landed(host, stores, reply, cx),
         );
     }
 
     /// Execute 落地：整组结果进结果页；硬错误转 Failed，清单仍可关闭。
     fn session_delete_execute_landed(
         &mut self,
+        host: HostId,
+        stores: Vec<String>,
         reply: Result<
             SessionBatchReply,
             lyrel_core::host::session_operations::SessionOperationError,
@@ -997,7 +1002,26 @@ impl SettingsWindow {
         };
         match reply {
             Ok(SessionBatchReply::Execute(result)) => {
+                let removed: Vec<_> = stores
+                    .into_iter()
+                    .zip(&result.groups)
+                    .filter_map(|(store, group)| {
+                        let ids: Vec<_> = group
+                            .items
+                            .iter()
+                            .filter(|item| item.status == SessionBatchStatus::Deleted)
+                            .flat_map(|item| item.delete_ids.iter().cloned())
+                            .collect();
+                        (!ids.is_empty()).then_some((store, ids))
+                    })
+                    .collect();
                 flow.phase = SessionDeletePhase::Done(result);
+                if !removed.is_empty() {
+                    cx.emit(crate::ui::settings_window::SettingsEvent::SessionsDeleted {
+                        host,
+                        removed,
+                    });
+                }
             }
             Ok(_) => {
                 flow.phase = SessionDeletePhase::Failed("unexpected batch reply".into());
@@ -1009,36 +1033,19 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    /// 收尾：清掉选择与删除流，强制本页重扫，并把实际删掉的 id 交给
-    /// 工作区刷新共享缓存与 Session History 工具。
+    /// 清掉选择与删除流并重新扫描设置页。
     fn finish_session_delete(&mut self, cx: &mut Context<Self>) {
         let Some(settings) = self.active_settings_mut() else {
             return;
         };
-        let host = settings.sessions.host;
-        let Some(flow) = settings.sessions.delete.take() else {
+        if settings.sessions.delete.take().is_none() {
             return;
-        };
-        let deleted: Vec<String> = match &flow.phase {
-            SessionDeletePhase::Done(result) => result
-                .deleted_ids()
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            _ => Vec::new(),
         };
         let state = &mut settings.sessions;
         state.selected.clear();
         state.bound = None;
         state.scanning = false;
         state.landed = false;
-        if !deleted.is_empty() {
-            cx.emit(crate::ui::settings_window::SettingsEvent::SessionsDeleted {
-                host,
-                agent: CLIAgent::Hermes,
-                ids: deleted,
-            });
-        }
         cx.notify();
     }
 

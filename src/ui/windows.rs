@@ -152,6 +152,19 @@ impl WindowRegistry {
         }
     }
 
+    pub(crate) fn refresh_session_history(host: lyrel_ui_base::host_ops::HostId, cx: &mut App) {
+        Self::sweep(cx);
+        let apps: Vec<_> = cx
+            .global::<Self>()
+            .windows
+            .iter()
+            .map(|entry| entry.app.clone())
+            .collect();
+        for app in apps {
+            let _ = app.update(cx, |app, cx| app.note_sessions_deleted(host, cx));
+        }
+    }
+
     pub(crate) fn register(
         cx: &mut App,
         workspace: WorkspaceId,

@@ -14,7 +14,6 @@ impl LyrelApp {
         let shells = cx.weak_entity();
         let profiles = shells.clone();
         let sources = shells.clone();
-        let active_host = shells.clone();
         let live_sessions = shells.clone();
         let session_scan = shells.clone();
         // Production hands the real keychain to the settings pages; GUI tests
@@ -75,12 +74,7 @@ impl LyrelApp {
                     .map(|app| app.read(cx).settings_session_sources(host, cx))
                     .unwrap_or_default()
             }),
-            active_host: Rc::new(move |cx| {
-                active_host
-                    .upgrade()
-                    .map(|app| app.read(cx).spawn_host(cx))
-                    .unwrap_or(HostId::LOCAL)
-            }),
+            active_host: self.spawn_host(cx),
             live_sessions: Rc::new(move |cx| {
                 live_sessions
                     .upgrade()
@@ -283,12 +277,12 @@ impl LyrelApp {
                         );
                     }
                     SettingsEvent::RebindKeymap => crate::ui::keymap::rebind(cx),
-                    SettingsEvent::SessionsDeleted { host, agent, ids } => {
+                    SettingsEvent::SessionsDeleted { host, removed } => {
                         let host = *host;
-                        let agent = *agent;
-                        let ids = ids.clone();
-                        cx.defer_in(window, move |this, _window, cx| {
-                            this.note_sessions_deleted(host, agent, &ids, cx);
+                        let removed = removed.clone();
+                        cx.defer(move |cx| {
+                            crate::ui::session_history::forget_sessions(host, &removed);
+                            crate::ui::windows::WindowRegistry::refresh_session_history(host, cx);
                         });
                     }
                     SettingsEvent::ApplyTheme {

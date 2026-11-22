@@ -437,19 +437,23 @@ fn batch_execute_mapping_turns_guards_and_drift_into_skipped_rows() {
 #[test]
 #[ignore = "requires a disposable managed Hermes installation and LYREL_TEST_HERMES"]
 fn native_hermes_batch_deletes_only_confirmed_delegate_scope() {
-    let launcher = PathBuf::from(std::env::var_os("LYREL_TEST_HERMES").unwrap())
-        .canonicalize()
-        .unwrap();
+    let launcher = PathBuf::from(std::env::var_os("LYREL_TEST_HERMES").unwrap());
+    assert!(launcher.is_absolute());
     let installation = launcher.parent().unwrap().parent().unwrap();
+    let canonical = installation.canonicalize().unwrap();
     assert!(
-        installation
+        canonical
             .file_name()
             .unwrap()
             .to_string_lossy()
             .starts_with("lyrel-363-hermes-")
     );
-    assert!(installation.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(canonical.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(launcher.canonicalize().unwrap().starts_with(&canonical));
     let storage = installation.join("home");
+    assert_eq!(storage.canonicalize().unwrap(), canonical.join("home"));
+    // Windows canonicalize adds a verbatim prefix for validation. Keep the
+    // launcher's original spelling for Hermes, which compares PM paths.
     let cwd = tempfile::tempdir().unwrap();
     let mut scope = SessionScope::default();
     scope
@@ -485,36 +489,52 @@ root, child, branch = request['ids']
 store = Path(os.environ['HERMES_HOME']).resolve(strict=True)
 assert get_hermes_home().resolve() == store
 with SessionDB(db_path=store / 'state.db') as db:
-    if request['seed']:
+    action = request['action']
+    if action == 'seed':
         db.create_session(root, 'cli', cwd=os.getcwd())
         db.create_session(child, 'subagent', cwd=os.getcwd(), parent_session_id=root, model_config={'_delegate_from': root})
         db.create_session(branch, 'cli', cwd=os.getcwd(), parent_session_id=root, model_config={'_branched_from': root})
         (store / 'sessions').mkdir(exist_ok=True)
         for session in (root, child, branch):
             (store / 'sessions' / (session + '.jsonl')).write_text('disposable session\n')
+    if action == 'lock':
+        assert db.try_acquire_session_turn_lease(child, root, ttl_seconds=180)
+    elif action == 'unlock':
+        db.release_session_turn_lease(child, root)
     print(json.dumps([db.get_session(s) is not None for s in (root, child, branch)]))
 "#;
     let mut fixture_argv = runtime.clone();
     fixture_argv[3] = format!("{prefix}exec({})", serde_json::to_string(script).unwrap());
-    let inspect = |seed| {
-        let payload = serde_json::json!({"seed": seed, "ids": [&id, &child, &branch]});
+    let inspect = |action| {
+        let payload = serde_json::json!({"action": action, "ids": [&id, &child, &branch]});
         serde_json::from_str::<[bool; 3]>(
             &adapter_line(&fixture_argv, &scope, &cwd, &payload).unwrap(),
         )
         .unwrap()
     };
-    assert_eq!(inspect(true), [true, true, true]);
+    assert_eq!(inspect("seed"), [true, true, true]);
     let host = crate::host::local::LocalHost::new();
-    let prepared = host
-        .session_batch(&batch::SessionBatchRequest::Prepare(Box::new(
-            batch::SessionBatchPrepare {
-                expected_host: 0,
-                agent: CLIAgent::Hermes,
-                groups: vec![prepare.clone()],
-            },
-        )))
-        .unwrap();
-    let plan = &prepared.group_results()[0].items[0];
+    let plan = || {
+        let reply = host
+            .session_batch(&batch::SessionBatchRequest::Prepare(Box::new(
+                batch::SessionBatchPrepare {
+                    expected_host: 0,
+                    agent: CLIAgent::Hermes,
+                    groups: vec![prepare.clone()],
+                },
+            )))
+            .unwrap();
+        reply.group_results()[0].items[0].clone()
+    };
+    assert_eq!(inspect("lock"), [true, true, true]);
+    let guarded = plan();
+    assert_eq!(guarded.status, batch::SessionBatchStatus::Ineligible);
+    assert_eq!(
+        guarded.reason.unwrap().kind,
+        batch::SessionBatchReasonKind::Active
+    );
+    assert_eq!(inspect("unlock"), [true, true, true]);
+    let plan = plan();
     assert_eq!(plan.status, batch::SessionBatchStatus::Eligible, "{plan:?}");
     assert_eq!(plan.delete_ids, [id.clone(), child.clone()]);
     let execute = |expected_delete_ids| {
@@ -540,11 +560,19 @@ with SessionDB(db_path=store / 'state.db') as db:
         stale.group_results()[0].items[0].status,
         batch::SessionBatchStatus::Skipped
     );
-    assert_eq!(inspect(false), [true, true, true]);
+    assert_eq!(inspect("lock"), [true, true, true]);
+    let drifted = execute(plan.delete_ids.clone());
+    let item = &drifted.group_results()[0].items[0];
+    assert_eq!(item.status, batch::SessionBatchStatus::Skipped);
+    assert_eq!(
+        item.reason.as_ref().unwrap().kind,
+        batch::SessionBatchReasonKind::Active
+    );
+    assert_eq!(inspect("unlock"), [true, true, true]);
     let removed = execute(plan.delete_ids.clone());
     let item = &removed.group_results()[0].items[0];
     assert_eq!(item.status, batch::SessionBatchStatus::Deleted, "{item:?}");
-    assert_eq!(inspect(false), [false, false, true]);
+    assert_eq!(inspect("read"), [false, false, true]);
     assert!(
         !storage
             .join("sessions")

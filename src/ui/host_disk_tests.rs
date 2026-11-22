@@ -155,6 +155,32 @@ fn disk_tile_shows_the_completed_scan_of_the_context_directory(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn disk_scan_recovers_for_the_same_directory_after_connection_loss(cx: &mut TestAppContext) {
+    let first = HostServer::new();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, first.client.clone()));
+    let dir = tempfile::tempdir().unwrap();
+    plant_cwd(&app, &mut vcx, dir.path());
+    open_monitor(&app, &mut vcx);
+    wait_value(
+        &mut vcx,
+        |v| v.as_deref().is_some_and(|s| s.starts_with("0 /")),
+        "empty directory",
+    );
+
+    drop(first);
+    wait_value(&mut vcx, |v| v.as_deref() == Some("—"), "disconnected");
+    sized_file(dir.path(), "new.bin", 600_000_000);
+    let second = HostServer::new();
+    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, second.client.clone()));
+    wait_value(
+        &mut vcx,
+        |v| v.as_deref().is_some_and(|s| s.starts_with("0.6 /")),
+        "reconnected directory",
+    );
+}
+
+#[gpui_kit::test]
 fn a_directory_change_rescans_and_never_polls_on_the_metrics_cadence(cx: &mut TestAppContext) {
     let server = HostServer::new();
     // Two tabs, one pane each: switching the active tab moves the context

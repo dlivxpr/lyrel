@@ -88,7 +88,7 @@ impl SettingsWindow {
 
         let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
-        let sessions = sessions::SessionsState::new(window, cx, (self.workspace.active_host)(cx));
+        let sessions = sessions::SessionsState::new(window, cx, self.workspace.active_host);
         for input in [
             sessions.search.clone(),
             sessions.start.clone(),

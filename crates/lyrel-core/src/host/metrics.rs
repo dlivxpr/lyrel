@@ -91,6 +91,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
             // A missing GPU reading downgrades only the GPU slot; the CPU
             // and RAM numbers above stay on screen.
             let sample = match sampler.gpu.sample() {
+                #[cfg(windows)]
                 gpu::GpuReading::Busy(percent) => sample.with_gpu(percent),
                 gpu::GpuReading::Unavailable(reason) => sample.with_gpu_unavailable(reason),
             };

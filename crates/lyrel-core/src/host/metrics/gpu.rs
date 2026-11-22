@@ -13,13 +13,13 @@
 //! Engine instances appear and vanish with the processes using them, so an
 //! idle GPU reads as zero rather than as an error.
 //!
-//! The per-process rows behind that fold are exposed for the Lyrel
-//! per-process detail (#378) without wiring an application consumer yet.
+//! Lyrel's per-process detail (#378) uses those same counters.
 
 /// The GPU part of one whole-host sample: a busiest-engine utilization
 /// percentage, or the reason the platform could not supply one.
 #[derive(Debug)]
 pub(crate) enum GpuReading {
+    #[cfg(windows)]
     Busy(f32),
     Unavailable(String),
 }

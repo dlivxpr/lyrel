@@ -958,6 +958,7 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
         }
     });
 
+    let (events, _subscription) = crate::ui::settings::test_window::record_events(&settings, cx);
     // 同意清单：两项都勾选才能确认。execute 的回复先入队，确认即消费。
     settings.update_in(&mut vcx, |settings, _, cx| {
         settings.confirm_session_delete(cx);
@@ -1095,8 +1096,7 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
         assert_eq!(result.deleted_ids(), ["a", "a.child"]);
     });
 
-    // 收尾：勾选清空、本页重扫挂起、删除事件交给工作区刷新历史视图。
-    let (events, _subscription) = crate::ui::settings::test_window::record_events(&settings, cx);
+    // 收尾清空勾选并触发设置页重扫。
     settings.update_in(&mut vcx, |settings, _, cx| {
         settings.finish_session_delete(cx);
         let state = &settings.active_settings().unwrap().sessions;
@@ -1110,8 +1110,8 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
     vcx.run_until_parked();
     let events = events.borrow();
     let deleted_event = events.iter().find_map(|event| match event {
-        crate::ui::settings_window::SettingsEvent::SessionsDeleted { host, agent, ids } => {
-            Some((*host, *agent, ids.clone()))
+        crate::ui::settings_window::SettingsEvent::SessionsDeleted { host, removed } => {
+            Some((*host, removed.clone()))
         }
         _ => None,
     });
@@ -1119,9 +1119,25 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
         deleted_event,
         Some((
             HostId::LOCAL,
-            CLIAgent::Hermes,
-            vec!["a".into(), "a.child".into()]
+            vec![(
+                session_history::store_group_key(&SessionIdentity::of(HostId::LOCAL, &listed_a)),
+                vec!["a".into(), "a.child".into()],
+            )]
         )),
         "the workspace learns which native ids actually went away"
     );
+}
+
+#[test]
+fn removing_a_session_cache_entry_preserves_the_same_id_in_another_store() {
+    let host = HostId(u64::MAX - 1);
+    let removed = hermes_session("same", "/store/one", "/w");
+    let unrelated = hermes_session("same", "/store/two", "/w");
+    let store = session_history::store_group_key(&SessionIdentity::of(host, &removed));
+    session_history::remember_sessions(host, vec![removed, unrelated.clone()]);
+    session_history::forget_sessions(host, &[(store, vec!["same".into()])]);
+    let found = session_history::cached_sessions(host);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].scope, unrelated.scope);
+    session_history::remember_sessions(host, Vec::new());
 }

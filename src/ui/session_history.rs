@@ -858,20 +858,21 @@ pub(crate) fn remember_sessions(host: HostId, found: Vec<PastSession>) {
         .insert(host, found);
 }
 
-/// Drop the just-deleted ids from the shared unscoped cache so Search
-/// Everywhere's placeholder never keeps offering a removed record between
-/// the deletion and the next full scan. Ids match per agent: two providers
-/// can reuse one id for unrelated sessions, and the cache must not drop the
-/// unrelated one.
-pub(crate) fn forget_sessions(host: HostId, agent: CLIAgent, ids: &[String]) {
-    if ids.is_empty() {
-        return;
-    }
+/// Remove only the confirmed store's records from the shared placeholder.
+pub(crate) fn forget_sessions(host: HostId, removed: &[(String, Vec<String>)]) {
     let mut cache = LAST_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(found) = cache.get_mut(&host) else {
         return;
     };
-    found.retain(|session| session.agent != agent || !ids.iter().any(|id| *id == session.id));
+    found.retain(|session| {
+        if !removed.iter().any(|(_, ids)| ids.contains(&session.id)) {
+            return true;
+        }
+        let store = store_group_key(&SessionIdentity::of(host, session));
+        !removed
+            .iter()
+            .any(|(key, ids)| *key == store && ids.contains(&session.id))
+    });
 }
 
 /// Which directory the tool lists: following the context pane, or pinned to
@@ -1125,22 +1126,12 @@ impl LyrelApp {
         );
     }
 
-    /// A verified native batch delete landed (from Sessions settings): the
-    /// shared placeholder cache drops the removed ids at once, and this
-    /// tool's next sync rebinds and rescans its directory even though the
-    /// context never moved.
-    pub(crate) fn note_sessions_deleted(
-        &mut self,
-        host: HostId,
-        agent: CLIAgent,
-        ids: &[String],
-        cx: &mut Context<Self>,
-    ) {
-        forget_sessions(host, agent, ids);
+    /// Rebind the Session History scan after a native deletion on its host.
+    pub(crate) fn note_sessions_deleted(&mut self, host: HostId, cx: &mut Context<Self>) {
         if self.session_history.bound.host == host {
             self.session_history.deletions += 1;
+            cx.notify();
         }
-        cx.notify();
     }
 
     /// The native portion landed: it paints at once — the panel stays

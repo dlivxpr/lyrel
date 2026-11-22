@@ -207,9 +207,10 @@ def main():
     except Exception as error:
         refuse("native home resolution failed: %s" % error)
         return
-    if not callable(getattr(SessionDB, "get_session_delete_targets", None)):
-        refuse("installed Hermes lacks SessionDB.get_session_delete_targets")
-        return
+    for name in ("get_session_delete_targets", "_guarded_ids", "_execute_write"):
+        if not callable(getattr(SessionDB, name, None)):
+            refuse("installed Hermes lacks SessionDB.%s" % name)
+            return
     signature = inspect.signature(SessionDB.delete_session).parameters
     for name in ("expected_delete_ids", "exclude_active_write_guards"):
         if name not in signature:
@@ -229,7 +230,7 @@ def main():
         for root in roots:
             try:
                 if mode == "plan":
-                    results.append(plan_one(db, root))
+                    results.append(prepare_one(db, root))
                 elif mode == "delete":
                     results.append(delete_one(db, sessions_dir, root, expected.get(root)))
                 else:
@@ -250,6 +251,29 @@ def plan_one(db, root):
     if row.get("archived"):
         return {"id": root, "status": "stale", "message": "stored session is archived"}
     return {"id": root, "status": "eligible", "delete_ids": list(targets)}
+
+
+class GuardPreview(Exception):
+    pass
+
+
+def prepare_one(db, root):
+    plan = plan_one(db, root)
+    if plan["status"] != "eligible":
+        return plan
+
+    def inspect_guards(conn):
+        # The native check can reclaim expired leases. Raising causes the
+        # native transaction wrapper to roll back all preview-time writes.
+        raise GuardPreview(bool(db._guarded_ids(conn, plan["delete_ids"])))
+
+    try:
+        db._execute_write(inspect_guards)
+    except GuardPreview as preview:
+        if preview.args[0]:
+            return {"id": root, "status": "guarded", "message": "session or delegate has an active turn lease or compression lock"}
+        return plan
+    raise RuntimeError("Hermes did not report the native write guards")
 
 
 def delete_one(db, sessions_dir, root, expected):
@@ -656,6 +680,16 @@ fn plan_result(
                     .unwrap_or_default();
                 batch::SessionBatchItem::eligible(id.clone(), delete_ids)
             }
+            Some(answer) if answer["status"] == "guarded" => batch::SessionBatchItem::refused(
+                id.clone(),
+                batch::SessionBatchStatus::Ineligible,
+                batch::SessionBatchReason::new(
+                    batch::SessionBatchReasonKind::Active,
+                    answer["message"]
+                        .as_str()
+                        .unwrap_or("a writer lease holds this session"),
+                ),
+            ),
             Some(answer) if answer["status"] == "stale" => batch::SessionBatchItem::refused(
                 id.clone(),
                 batch::SessionBatchStatus::Ineligible,

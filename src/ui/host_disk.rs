@@ -62,63 +62,79 @@ impl Global for DiskViews {}
 pub(crate) struct HostDiskView {
     host: HostId,
     dir: String,
+    source: Option<MetricsSource>,
     state: DiskViewState,
 }
 
 impl HostDiskView {
-    /// The scan view for one exact pair, created on first demand. Retrying a
-    /// route-missing state is the caller's job (see [`LyrelApp::sync_host_disk`]):
-    /// this only ever starts one scan per entity.
-    fn acquire(host: HostId, dir: String, cx: &mut App) -> Entity<Self> {
+    /// Share one scan for the exact directory and live control connection.
+    /// A replacement connection gets a fresh view even if the old one is held.
+    fn acquire(
+        host: HostId,
+        dir: String,
+        source: Option<MetricsSource>,
+        cx: &mut App,
+    ) -> Entity<Self> {
         if let Some(view) = cx
             .default_global::<DiskViews>()
             .0
             .get(&(host, dir.clone()))
             .and_then(WeakEntity::upgrade)
+            .filter(|view| view.read(cx).matches_source(source.as_ref()))
         {
             return view;
         }
-        let view = cx.new(|cx| Self::new(host, dir.clone(), cx));
+        let view = cx.new(|cx| Self::new(host, dir.clone(), source, cx));
         let views = &mut cx.default_global::<DiskViews>().0;
         views.retain(|_, view| view.upgrade().is_some());
         views.insert((host, dir), view.downgrade());
         view
     }
 
-    fn new(host: HostId, dir: String, cx: &mut Context<Self>) -> Self {
+    fn matches_source(&self, source: Option<&MetricsSource>) -> bool {
+        match (&self.source, source) {
+            (Some(previous), Some(current)) => previous.same_connection(current),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn new(
+        host: HostId,
+        dir: String,
+        source: Option<MetricsSource>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let Some(connection) = source.clone() else {
+            return Self {
+                host,
+                dir,
+                source,
+                state: missing_disk_source(host, cx),
+            };
+        };
         let task_host = host;
         let task_dir = dir.clone();
         cx.spawn(async move |this, cx| {
-            let state = match cx.update(|cx| MetricsSource::get(task_host, cx)) {
-                Some(source) => {
-                    let query = source.clone();
-                    let requested = task_dir.clone();
-                    let Some(result) =
-                        lyrel_ui_base::host_ops::off_thread(move || query.disk_usage(&requested))
-                            .await
-                    else {
-                        return;
-                    };
-                    cx.update(|cx| disk_response_state(&source, task_host, &task_dir, result, cx))
-                }
-                None => cx.update(|cx| missing_disk_source(task_host, cx)),
-            };
-            if this
-                .update(cx, |view, cx| {
-                    view.state = state;
-                    cx.notify();
-                })
-                .is_err()
-            {
+            let query = connection.clone();
+            let requested = task_dir.clone();
+            let Some(result) =
+                lyrel_ui_base::host_ops::off_thread(move || query.disk_usage(&requested)).await
+            else {
                 return;
-            }
-            // One scan per view: no timer, no poll. The next scan of this
-            // directory belongs to the next view.
+            };
+            let state =
+                cx.update(|cx| disk_response_state(&connection, task_host, &task_dir, result, cx));
+            let _ = this.update(cx, |view, cx| {
+                view.state = state;
+                cx.notify();
+            });
         })
         .detach();
         Self {
             host,
             dir,
+            source,
             state: DiskViewState::Scanning,
         }
     }
@@ -127,6 +143,9 @@ impl HostDiskView {
     /// completed scan is only trustworthy while its exact source is still
     /// connected for the same daemon instance.
     fn effective_state(&self, cx: &mut App) -> DiskViewState {
+        if self.source.is_none() {
+            return missing_disk_source(self.host, cx);
+        }
         match &self.state {
             DiskViewState::Ready(usage) => match MetricsSource::get(self.host, cx) {
                 Some(source) if source.is_connected() && source.instance() == usage.instance() => {
@@ -181,7 +200,8 @@ fn disk_response_state(
                 WireDiskState::Unavailable(reason) => DiskViewState::Failed(reason.clone()),
             }
         }
-        Ok(_) => DiskViewState::Scanning,
+        Ok(_) if !source.same_connection(&current) => DiskViewState::Scanning,
+        Ok(_) => DiskViewState::Failed("Directory scan returned a different daemon or path".into()),
         // An old connection's error says nothing about its replacement.
         Err(_) if !source.same_connection(&current) => DiskViewState::Scanning,
         Err(error) if error.kind() == std::io::ErrorKind::Unsupported => DiskViewState::Unsupported,
@@ -344,25 +364,18 @@ impl LyrelApp {
         } else {
             None
         };
-        let current = self.disk_view.take();
-        self.disk_view = match (target, current) {
-            (Some((host, dir)), Some(view)) => {
-                let same = view.read(cx).host == host && view.read(cx).dir == dir;
-                let retryable = matches!(
-                    view.read(cx).state,
-                    DiskViewState::Disconnected
-                        | DiskViewState::Connecting
-                        | DiskViewState::Reconnecting
-                ) && MetricsSource::get(host, cx).is_some();
-                if same && !retryable {
-                    Some(view)
-                } else {
-                    Some(HostDiskView::acquire(host, dir, cx))
-                }
-            }
-            (Some((host, dir)), None) => Some(HostDiskView::acquire(host, dir, cx)),
-            (None, _) => None,
+        let Some((host, dir)) = target else {
+            self.disk_view = None;
+            return;
         };
+        let source = MetricsSource::get(host, cx).filter(MetricsSource::is_connected);
+        if self.disk_view.as_ref().is_some_and(|view| {
+            let view = view.read(cx);
+            view.host == host && view.dir == dir && view.matches_source(source.as_ref())
+        }) {
+            return;
+        }
+        self.disk_view = Some(HostDiskView::acquire(host, dir, source, cx));
     }
 
     /// The disk tile's reading for this frame: the view bound to the context
