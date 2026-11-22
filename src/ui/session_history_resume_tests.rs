@@ -593,7 +593,14 @@ fn resume_waits_for_a_slow_new_shell_prompt(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert!(inputs_now(&mut stream).is_empty());
 
-    report_prompt(&mut stream, &view, &mut vcx, true);
+    let elsewhere = tempfile::tempdir().unwrap();
+    make_idle_context(&app, &mut vcx, &mut stream, elsewhere.path());
+    poll(&view, &mut vcx);
+    vcx.executor().advance_clock(Duration::from_millis(100));
+    vcx.run_until_parked();
+    assert!(inputs_now(&mut stream).is_empty());
+
+    make_idle_context(&app, &mut vcx, &mut stream, cwd.path());
     poll(&view, &mut vcx);
     vcx.executor().advance_clock(Duration::from_millis(100));
     vcx.run_until_parked();

@@ -289,6 +289,12 @@ pub(crate) struct ResumeSessionRequest {
     pub(crate) fork: bool,
 }
 
+#[derive(Clone, Copy)]
+enum SessionPlacement {
+    NewTab,
+    History,
+}
+
 /// Exact identity match between an open pane and a saved session row: the
 /// pane's own host, the same agent, the same native session id, and the same
 /// durable storage scope (the volatile OpenCode bridge/server selectors
@@ -321,6 +327,22 @@ fn pane_matches_history_session(
         return live_file == saved_file;
     }
     durable_scope(live) == durable_scope(saved)
+}
+
+fn history_destination_ready(
+    view: &lyrel_terminal::view::TerminalView,
+    prepared: &lyrel_core::host::session_operations::PreparedSession,
+    cx: &App,
+) -> bool {
+    if view.host_id().0 != prepared.host_id || !view.idle_shell_ready_for_reuse() {
+        return false;
+    }
+    view.host_cwd().is_some_and(|cwd| {
+        let separator = view
+            .host(cx)
+            .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
+        crate::core::agent_history::directory_matches_with(&cwd, &prepared.cwd, separator)
+    })
 }
 
 impl LyrelApp {
@@ -471,37 +493,12 @@ impl LyrelApp {
             launch_argv,
             scope,
         };
-        let source = host.clone();
-        lyrel_ui_base::host_ops::HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |host| host.session_operation(&request),
-            move |app, result, window, cx| match result {
-                Ok(prepared) => {
-                    let current = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id);
-                    if app.spawn_host(cx) != host_id
-                        || !current.is_some_and(|host| std::sync::Arc::ptr_eq(&host, &source))
-                        || !source.is_connected()
-                    {
-                        app.notify_session_operation_error(
-                            prepared.opening_failed(
-                                "the selected session's host changed while preparing it",
-                            ),
-                            window,
-                            cx,
-                        );
-                        return;
-                    }
-                    if fork {
-                        app.open_prepared_session(prepared, window, cx)
-                    } else {
-                        app.open_history_resumed_session(prepared, window, cx)
-                    }
-                }
-                Err(error) => app.notify_session_operation_error(error, window, cx),
-            },
-        );
+        let placement = if fork {
+            SessionPlacement::NewTab
+        } else {
+            SessionPlacement::History
+        };
+        self.prepare_session_launch(host, request, placement, window, cx);
     }
 
     pub(crate) fn open_prepared_session(
@@ -651,18 +648,20 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         if self.spawn_host(cx).0 != prepared.host_id {
-            self.notify_session_operation_error(
+            self.notify_session_error(
                 prepared.opening_failed("the selected workspace moved to another host"),
+                SessionPlacement::History,
                 window,
                 cx,
             );
             return;
         }
         let Some(command) = prepared.command.clone() else {
-            self.notify_session_operation_error(
+            self.notify_session_error(
                 prepared.opening_failed(
                     "the session exists but its launch context could not be prepared",
                 ),
+                SessionPlacement::History,
                 window,
                 cx,
             );
@@ -689,8 +688,9 @@ impl LyrelApp {
             window,
             cx,
         ) else {
-            self.notify_session_operation_error(
+            self.notify_session_error(
                 prepared.opening_failed("the restored session's new pane could not be opened"),
+                SessionPlacement::History,
                 window,
                 cx,
             );
@@ -728,11 +728,7 @@ impl LyrelApp {
         cx: &App,
     ) -> Option<gpui_kit::Entity<lyrel_terminal::view::TerminalView>> {
         let pane = self.context_pane(window, cx)?;
-        let view = pane.read(cx);
-        (view.host_id().0 == prepared.host_id
-            && view.host_cwd().as_deref() == Some(prepared.cwd.as_path())
-            && view.idle_shell_ready_for_reuse())
-        .then(|| pane.clone())
+        history_destination_ready(pane.read(cx), prepared, cx).then_some(pane)
     }
 
     /// The history-safe counterpart to `run_prepared_when_ready`. That route
@@ -749,10 +745,11 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some(command) = prepared.command.clone() else {
-            self.notify_session_operation_error(
+            self.notify_session_error(
                 prepared.opening_failed(
                     "the session exists but its launch context could not be prepared",
                 ),
+                SessionPlacement::History,
                 window,
                 cx,
             );
@@ -765,7 +762,7 @@ impl LyrelApp {
                     let executor = cx.background_executor().clone();
                     let deadline = executor.now() + HISTORY_PROMPT_WAIT;
                     loop {
-                        match view.read_with(cx, |view, _| view.idle_shell_ready_for_reuse()) {
+                        match view.read_with(cx, |view, cx| history_destination_ready(view, &prepared, cx)) {
                             // The pane is gone — closed under the wait; there
                             // is nothing left to type into, and no error to
                             // surface for a pane the user took away.
@@ -775,10 +772,11 @@ impl LyrelApp {
                         }
                         if executor.now() >= deadline {
                             let _ = this.update_in(cx, |app, window, cx| {
-                                app.notify_session_operation_error(
+                                app.notify_session_error(
                                     prepared.opening_failed(
-                                        "the restored session's pane never reached an idle prompt",
+                                        "the restored session's pane never reported an idle prompt in its source directory",
                                     ),
+                                    SessionPlacement::History,
                                     window,
                                     cx,
                                 );
@@ -806,13 +804,23 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.notify_session_error(error, SessionPlacement::NewTab, window, cx);
+    }
+
+    fn notify_session_error(
+        &mut self,
+        error: lyrel_core::host::session_operations::SessionOperationError,
+        placement: SessionPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use crate::ui::notification_history::Notification;
         let mut note = Notification::error(error.to_string()).autohide(false);
         if let Some(prepared) = error.retained {
             note = note
                 .title(lyrel_ui_base::i18n::t(L10nKey::TryAgain))
                 .on_click(cx.listener(move |app, _, window, cx| {
-                    app.retry_prepared_session((*prepared).clone(), window, cx);
+                    app.retry_prepared_session((*prepared).clone(), placement, window, cx);
                 }));
         }
         window.notify_app(note, cx);
@@ -821,6 +829,7 @@ impl LyrelApp {
     fn retry_prepared_session(
         &mut self,
         prepared: lyrel_core::host::session_operations::PreparedSession,
+        placement: SessionPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -828,10 +837,8 @@ impl LyrelApp {
         let Some(target_id) = prepared.target_id else {
             return;
         };
-        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(
-            cx,
-            lyrel_ui_base::host_ops::HostId(prepared.host_id),
-        ) else {
+        let host_id = lyrel_ui_base::host_ops::HostId(prepared.host_id);
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
             window.notify_app(
                 lyrel_ui_base::i18n::t(L10nKey::RemoteNoticeDisconnected),
                 cx,
@@ -849,14 +856,68 @@ impl LyrelApp {
             launch_argv: prepared.launch_argv,
             scope,
         };
+        self.prepare_session_launch(host, request, placement, window, cx);
+    }
+
+    fn prepare_session_launch(
+        &mut self,
+        host: lyrel_core::host::SharedHost,
+        request: lyrel_core::host::session_operations::SessionOperation,
+        placement: SessionPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host_id = lyrel_ui_base::host_ops::HostId(request.expected_host);
+        let resume = matches!(placement, SessionPlacement::History).then(|| ResumeSessionRequest {
+            agent: request.agent,
+            session_id: request.source_id.clone(),
+            cwd: None,
+            host_id,
+            scope: Some(request.scope.clone()),
+            fork: false,
+        });
+        if resume
+            .as_ref()
+            .is_some_and(|resume| self.focus_history_session(resume, window, cx))
+        {
+            return;
+        }
+        let source = host.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
             move |host| host.session_operation(&request),
-            |app, result, window, cx| match result {
-                Ok(prepared) => app.open_prepared_session(prepared, window, cx),
-                Err(error) => app.notify_session_operation_error(error, window, cx),
+            move |app, result, window, cx| match result {
+                Ok(prepared) => {
+                    let current = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id);
+                    if app.spawn_host(cx) != host_id
+                        || !current.is_some_and(|host| std::sync::Arc::ptr_eq(&host, &source))
+                        || !source.is_connected()
+                    {
+                        app.notify_session_error(
+                            prepared.opening_failed(
+                                "the selected session's host changed while preparing it",
+                            ),
+                            placement,
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    match placement {
+                        SessionPlacement::NewTab => app.open_prepared_session(prepared, window, cx),
+                        SessionPlacement::History => {
+                            if !resume
+                                .as_ref()
+                                .is_some_and(|resume| app.focus_history_session(resume, window, cx))
+                            {
+                                app.open_history_resumed_session(prepared, window, cx);
+                            }
+                        }
+                    }
+                }
+                Err(error) => app.notify_session_error(error, placement, window, cx),
             },
         );
     }
