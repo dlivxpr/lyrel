@@ -123,6 +123,45 @@ mod platform {
             let _ = self.release();
         }
     }
+
+    #[test]
+    fn macos_hold_is_an_idle_system_assertion_and_is_removed_on_release() {
+        use core_foundation::base::CFType;
+        use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+        use core_foundation::number::CFNumber;
+
+        #[link(name = "IOKit", kind = "framework")]
+        unsafe extern "C" {
+            fn IOPMAssertionCopyProperties(assertion_id: u32) -> CFDictionaryRef;
+        }
+
+        let mut hold = super::SleepHold::acquire("Lyrel idle sleep test").expect("acquire");
+        let id = hold.inner.assertion_id;
+        let properties = || {
+            // SAFETY: IOKit accepts an assertion ID and returns either null
+            // or a retained dictionary owned by the caller.
+            let result = unsafe { IOPMAssertionCopyProperties(id) };
+            (!result.is_null()).then(|| unsafe {
+                CFDictionary::<CFString, CFType>::wrap_under_create_rule(result)
+            })
+        };
+        let info = properties().expect("the system reports an active assertion");
+        assert_eq!(
+            info.get(&CFString::new("AssertType"))
+                .downcast::<CFString>()
+                .expect("assertion type")
+                .to_string(),
+            "PreventUserIdleSystemSleep"
+        );
+        assert_eq!(
+            info.get(&CFString::new("AssertLevel"))
+                .downcast::<CFNumber>()
+                .and_then(|level| level.to_i32()),
+            Some(255)
+        );
+        hold.release().expect("release");
+        assert!(properties().is_none(), "the system retains no assertion");
+    }
 }
 
 #[cfg(windows)]
