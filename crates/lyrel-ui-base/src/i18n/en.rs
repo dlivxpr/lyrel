@@ -658,6 +658,26 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CloseTabsBody => "The shells in them end too.",
         L10nKey::Keep => "Keep",
         L10nKey::SettingsNavAppearance => "Appearance",
+        L10nKey::SettingsNavToolbar => "Toolbar",
+        L10nKey::ToolbarTitleBar => "Title bar",
+        L10nKey::ToolbarStatusBar => "Status bar",
+        L10nKey::ToolbarCpu => "CPU utilization",
+        L10nKey::ToolbarRam => "RAM usage",
+        L10nKey::ToolbarGpu => "GPU utilization",
+        L10nKey::ToolbarSettingsEntry => "Settings button",
+        L10nKey::ToolbarHost => "Host",
+        L10nKey::ToolbarPath => "Path",
+        L10nKey::ToolbarGit => "Git branch and change counts",
+        L10nKey::ToolbarRunning => "Running status",
+        L10nKey::ToolbarCaffeineDescription => {
+            "Hiding this control stops keeping the computer awake."
+        }
+        L10nKey::ToolbarClock => "Clock",
+        L10nKey::ToolbarNotifications => "Notifications",
+        L10nKey::ToolbarKeywords => {
+            "title bar status bar visibility CPU RAM GPU host path Git caffeine clock notifications"
+        }
+        L10nKey::ToolbarOpen => "Open toolbar settings",
         L10nKey::SettingsNavTerminal => "Terminal",
         L10nKey::SettingsNavInput => "Keyboard & Mouse",
         L10nKey::SettingsNavSsh => "SSH",

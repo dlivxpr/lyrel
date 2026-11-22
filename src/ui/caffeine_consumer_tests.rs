@@ -418,7 +418,7 @@ fn closing_the_agents_window_releases_automatic_mode(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn reset_releases_and_returns_to_off_for_the_toolbar_contract(cx: &mut TestAppContext) {
+fn hiding_caffeine_in_settings_releases_the_hold_and_restores_off(cx: &mut TestAppContext) {
     set_locale("en");
     let (app, mut vcx, _stream) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| WindowRegistry::init(cx));
@@ -430,14 +430,28 @@ fn reset_releases_and_returns_to_off_for_the_toolbar_contract(cx: &mut TestAppCo
         (CaffeineMode::AlwaysOn, true, None)
     );
 
-    // #380's contract: hiding the component stops its effect…
-    vcx.update(|_, cx| CaffeineState::reset(cx));
+    vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(900.)));
+    let toggle = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
+        app.update_in(vcx, |app, window, cx| {
+            app.open_settings_section(crate::ui::settings::SettingsSection::Toolbar, window, cx);
+        });
+        settle(vcx);
+        vcx.update(|window, cx| window.click("toolbar-caffeine", cx));
+        settle(vcx);
+        let settings = app.read_with(vcx, |app, _| app.settings.clone().unwrap());
+        settings.update_in(vcx, |settings, window, cx| {
+            settings.close_settings(window, cx)
+        });
+        settle(vcx);
+    };
+    toggle(&app, &mut vcx);
+    vcx.update(|window, _| assert!(window.try_find("status-caffeine").is_none()));
     assert_eq!(
         caffeine_truth(&mut vcx),
         (CaffeineMode::Off, false, None),
-        "reset releases the request and returns the mode to Off"
+        "hiding the cup releases the request and returns the mode to Off"
     );
-    // …and showing it again presents that Off state.
+    toggle(&app, &mut vcx);
     open_menu(&mut vcx);
     assert_eq!(
         menu_checked(&mut vcx, t(L10nKey::StatusCaffeineModeOff)),

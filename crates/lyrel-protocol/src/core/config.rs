@@ -180,6 +180,42 @@ pub enum KeybindingOverride {
     Exact(Vec<String>),
 }
 
+/// Visibility of the title-bar and status-bar components on this desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct ToolbarVisibility {
+    pub cpu: bool,
+    pub ram: bool,
+    pub gpu: bool,
+    pub settings: bool,
+    pub host: bool,
+    pub path: bool,
+    pub git: bool,
+    pub running: bool,
+    pub caffeine: bool,
+    pub clock: bool,
+    pub notifications: bool,
+}
+
+impl Default for ToolbarVisibility {
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            ram: true,
+            gpu: true,
+            settings: true,
+            host: true,
+            path: true,
+            git: true,
+            running: true,
+            caffeine: true,
+            clock: true,
+            notifications: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -371,6 +407,7 @@ pub struct Config {
     pub confirm_close: ConfirmClose,
     #[serde(default = "default_true")]
     pub show_tray_icon: bool,
+    pub toolbar: ToolbarVisibility,
     #[serde(default, deserialize_with = "de_lenient")]
     pub bell: BellMode,
     /// Whether lyrel edits the shell prompt itself. On by default: the inline
@@ -865,6 +902,7 @@ impl Default for Config {
             restore_session: true,
             confirm_close: ConfirmClose::WhenBusy,
             show_tray_icon: true,
+            toolbar: ToolbarVisibility::default(),
             bell: BellMode::Visual,
             prompt_editor: true,
             tab_completion: true,

@@ -15,7 +15,7 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::{h_flex, tooltip::Tooltip, v_flex};
 use gpui_kit::{
-    App, AnyElement, Context, Entity, Global, IntoElement, Render, WeakEntity, Window, div, fill,
+    AnyElement, App, Context, Entity, Global, IntoElement, Render, WeakEntity, Window, div, fill,
     prelude::*, px, rems,
 };
 use lyrel_core::host::{
@@ -28,6 +28,7 @@ use crate::ui::app::LyrelApp;
 use crate::ui::desktop_lookups::HostLinks;
 use crate::ui::local_link::{LocalLink, LocalLinkStatus};
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
+use lyrel_ui_base::config::Config;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 /// How often the sampler asks its host for a reading while something shows it.
@@ -249,10 +250,9 @@ impl SampleHistory {
             sample,
         });
         while let Some(front) = self.arrivals.front() {
-            let span = self
-                .arrivals
-                .back()
-                .map_or(0, |back| back.arrived_millis.saturating_sub(front.arrived_millis));
+            let span = self.arrivals.back().map_or(0, |back| {
+                back.arrived_millis.saturating_sub(front.arrived_millis)
+            });
             if span > HISTORY_SPAN_MILLIS {
                 self.arrivals.pop_front();
             } else {
@@ -405,7 +405,11 @@ impl HostMetricsView {
 
     /// Chart slots for `range`. Healthy samplers anchor at the newest
     /// arrival; a disconnected one anchors at now so the blank tail shows.
-    fn trend(history: Option<&SampleHistory>, state: &State, range: MetricsRange) -> Vec<Option<TrendBucket>> {
+    fn trend(
+        history: Option<&SampleHistory>,
+        state: &State,
+        range: MetricsRange,
+    ) -> Vec<Option<TrendBucket>> {
         let anchor = match state {
             State::Ready(_) => history
                 .and_then(SampleHistory::latest)
@@ -643,8 +647,7 @@ fn trend_chart(
                     let bar_w = (slot * 0.6).max(1.);
                     for (ix, bucket) in buckets.iter().enumerate() {
                         let Some(bucket) = bucket else { continue };
-                        let bar_h =
-                            ((value(bucket).clamp(0., 100.) / 100.) * height_px).max(1.);
+                        let bar_h = ((value(bucket).clamp(0., 100.) / 100.) * height_px).max(1.);
                         window.paint_quad(fill(
                             gpui_kit::Bounds {
                                 origin: gpui_kit::point(
@@ -784,7 +787,14 @@ fn monitor_tile(
                 .child(gpui_kit::SharedString::from(value)),
         )
         .when(readout.ready(), |tile| {
-            tile.child(trend_chart(format!("{id}-chart"), buckets, series, color, 108., 24.))
+            tile.child(trend_chart(
+                format!("{id}-chart"),
+                buckets,
+                series,
+                color,
+                108.,
+                24.,
+            ))
         })
         .into_any_element()
 }
@@ -793,15 +803,17 @@ impl LyrelApp {
     /// The host whose metrics this window shows: the context pane's host,
     /// falling back to the workspace host before any pane exists.
     pub(crate) fn metric_host(&self, window: &Window, cx: &App) -> HostId {
-        self.context_pane(window, cx).map_or_else(
-            || self.spawn_host(cx),
-            |leaf| leaf.read(cx).host_id(),
-        )
+        self.context_pane(window, cx)
+            .map_or_else(|| self.spawn_host(cx), |leaf| leaf.read(cx).host_id())
     }
 
     /// Whether the title-bar strip shows at all this frame. The strip and
     /// the sync share this one predicate, so demand and paint never disagree.
     fn titlebar_metrics_visible(&self, window: &Window, cx: &Context<Self>) -> bool {
+        let toolbar = cx.global::<Config>().toolbar;
+        if !toolbar.cpu && !toolbar.ram {
+            return false;
+        }
         if self.status_document_context(window, cx).is_some() {
             return false;
         }
@@ -817,7 +829,10 @@ impl LyrelApp {
     pub(crate) fn sync_host_metrics(&mut self, window: &Window, cx: &mut Context<Self>) {
         let host = self.metric_host(window, cx);
         let monitor_shown = self.right_panel_visible
-            && matches!(self.right_panel_tab, lyrel_core::core::config::RightPanelTab::Monitor)
+            && matches!(
+                self.right_panel_tab,
+                lyrel_core::core::config::RightPanelTab::Monitor
+            )
             && self.right_panel.procs_pane.is_some();
         let want = self.titlebar_metrics_visible(window, cx) || monitor_shown;
         let current = self.metric_view.take();
@@ -849,7 +864,10 @@ impl LyrelApp {
             None => missing_source(host, cx),
         };
         let history = cx.default_global::<MetricsHistories>().0.get(&host);
-        (readout(&state), HostMetricsView::trend(history, &state, range))
+        (
+            readout(&state),
+            HostMetricsView::trend(history, &state, range),
+        )
     }
 
     /// The title-bar strip, or `None` where it must not appear. Narrow
@@ -863,10 +881,11 @@ impl LyrelApp {
         if !self.titlebar_metrics_visible(window, cx) {
             return None;
         }
+        let toolbar = cx.global::<Config>().toolbar;
         let host = self.metric_host(window, cx);
         let scale = window.rem_size().as_f32() / 16.;
         let chart = window.viewport_size().width.as_f32() >= TITLEBAR_CHART_MIN_WIDTH * scale;
-        let (readout, buckets) = self.metric_presentation(host, MetricsRange::TwoMinutes, cx);
+        let (readout, mut buckets) = self.metric_presentation(host, MetricsRange::TwoMinutes, cx);
         let theme = cx.theme();
         let cpu_color = theme.accent;
         let memory_color = theme.success;
@@ -878,33 +897,42 @@ impl LyrelApp {
             .items_center()
             .gap(gap)
             .pr(gap)
-            .child(titlebar_metric(
-                "titlebar-metric-cpu",
-                "CPU",
-                &readout,
-                buckets.clone(),
-                TrendSeries::Cpu,
-                cpu_color,
-                chart,
-                cx,
-            ))
-            .child(titlebar_metric(
-                "titlebar-metric-ram",
-                t(L10nKey::HostMetricsRam),
-                &readout,
-                buckets,
-                TrendSeries::Memory,
-                memory_color,
-                chart,
-                cx,
-            ))
+            .when(toolbar.cpu, |strip| {
+                strip.child(titlebar_metric(
+                    "titlebar-metric-cpu",
+                    "CPU",
+                    &readout,
+                    if toolbar.ram {
+                        buckets.clone()
+                    } else {
+                        std::mem::take(&mut buckets)
+                    },
+                    TrendSeries::Cpu,
+                    cpu_color,
+                    chart,
+                    cx,
+                ))
+            })
+            .when(toolbar.ram, |strip| {
+                strip.child(titlebar_metric(
+                    "titlebar-metric-ram",
+                    t(L10nKey::HostMetricsRam),
+                    &readout,
+                    buckets,
+                    TrendSeries::Memory,
+                    memory_color,
+                    chart,
+                    cx,
+                ))
+            })
             .into_any_element();
         let tile_w = if chart {
             TITLEBAR_TILE_FULL_W
         } else {
             TITLEBAR_TILE_COMPACT_W
         };
-        Some((strip, tile_w * 2. + TITLEBAR_TILE_GAP * 2.))
+        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram);
+        Some((strip, (tile_w + TITLEBAR_TILE_GAP) * f32::from(count)))
     }
 
     /// The Activity Monitor's resource section: the shared trend-range

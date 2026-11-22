@@ -141,6 +141,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn render_status_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let toolbar = cx.global::<lyrel_ui_base::config::Config>().toolbar;
         let document_context = self.status_document_context(window, cx);
         let document = document_context.is_some();
         let location = match document_context {
@@ -212,7 +213,8 @@ impl LyrelApp {
                 pane.git_status(cx)?,
             ))
         });
-        let path = path.filter(|_| document || checkout.is_none());
+        let checkout = checkout.filter(|_| toolbar.git);
+        let path = path.filter(|_| toolbar.path && (document || checkout.is_none()));
         let foreground = cx.theme().foreground;
         let divider = cx.theme().border;
         let muted = cx.theme().muted_foreground;
@@ -225,7 +227,7 @@ impl LyrelApp {
                 .h(rems(0.85))
                 .bg(divider)
         };
-        let program = (!document)
+        let program = (toolbar.running && !document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
                     leaf.read(cx).with_program_status(|status| {
@@ -240,19 +242,23 @@ impl LyrelApp {
             .flex_1()
             .min_w_0()
             .gap_1()
-            .child(
-                Button::new("status-host")
-                    .ghost()
-                    .xsmall()
-                    // Button defaults to shrink=0; instance styles are applied
-                    // last, and its native label already owns ellipsis.
-                    .flex_shrink_1()
-                    .min_w(rems(1.5))
-                    .max_w(rems(10.))
-                    .label(host.clone())
-                    .tooltip(host)
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSwitcher), cx)),
-            )
+            .when(toolbar.host, |row| {
+                row.child(
+                    Button::new("status-host")
+                        .ghost()
+                        .xsmall()
+                        // Button defaults to shrink=0; instance styles are applied
+                        // last, and its native label already owns ellipsis.
+                        .flex_shrink_1()
+                        .min_w(rems(1.5))
+                        .max_w(rems(10.))
+                        .label(host.clone())
+                        .tooltip(host)
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ToggleSwitcher), cx)
+                        }),
+                )
+            })
             .when_some(path, |row, path| {
                 let copied = path.clone();
                 row.child(
@@ -357,15 +363,19 @@ impl LyrelApp {
             .bg(crate::ui::theme::workspace_surface_color(cx))
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child(
-                Button::new("status-settings")
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/settings/general.svg"))
-                    .accessibility_label(t(L10nKey::CmdSettings))
-                    .tooltip(t(L10nKey::CmdSettings))
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
-            )
+            .when(toolbar.settings, |row| {
+                row.child(
+                    Button::new("status-settings")
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::empty().path("icons/settings/general.svg"))
+                        .accessibility_label(t(L10nKey::CmdSettings))
+                        .tooltip(t(L10nKey::CmdSettings))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(OpenSettings), cx)
+                        }),
+                )
+            })
             .child(context)
             .children(program)
             // Document state lives in the editor panel's own bottom bar now;
@@ -375,9 +385,13 @@ impl LyrelApp {
                 h_flex()
                     .flex_none()
                     .gap_1()
-                    .child(self.render_caffeine(window, cx))
-                    .child(self.status_clock.clone())
-                    .child(self.notification_bell.clone()),
+                    .when(toolbar.caffeine, |row| {
+                        row.child(self.render_caffeine(window, cx))
+                    })
+                    .when(toolbar.clock, |row| row.child(self.status_clock.clone()))
+                    .when(toolbar.notifications, |row| {
+                        row.child(self.notification_bell.clone())
+                    }),
             )
             .into_any_element()
     }

@@ -78,7 +78,10 @@ fn history_aggregates_peaks_per_slot_and_leaves_unsampled_slots_blank() {
     // slot keep the peak, and a slot nobody reached stays blank.
     history.push(sample_at(0, 5., 8, 16), "instance-a");
     history.push(sample_at(0, 95., 8, 16), "instance-a");
-    let anchor = history.latest().map(|arrival| arrival.arrived_millis).unwrap();
+    let anchor = history
+        .latest()
+        .map(|arrival| arrival.arrived_millis)
+        .unwrap();
     let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
     assert_eq!(buckets.len(), BUCKET_COUNT);
     // The readings are the freshest thing in the window, so they occupy the
@@ -177,9 +180,7 @@ pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: i18n::L10n
 }
 
 #[gpui_kit::test]
-fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(
-    cx: &mut TestAppContext,
-) {
+fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut TestAppContext) {
     let server = HostServer::new();
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
     vcx.update(|window, cx| {
@@ -193,11 +194,10 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(
         LocalLink::install_client_for_test(cx, server.client.clone());
     });
     wait_sample(&mut vcx, true);
-    let hostname = std::thread::spawn(move || {
-        server.client.host_metrics().unwrap().hostname().to_owned()
-    })
-    .join()
-    .unwrap();
+    let hostname =
+        std::thread::spawn(move || server.client.host_metrics().unwrap().hostname().to_owned())
+            .join()
+            .unwrap();
 
     // Both metrics render with the host's own reading in their detail.
     vcx.update(|window, _| {
@@ -352,7 +352,11 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
     });
     wait_sample(&mut vcx, true);
 
-    for (width, charts, strip) in [(1440., true, true), (720., false, true), (500., false, false)] {
+    for (width, charts, strip) in [
+        (1440., true, true),
+        (720., false, true),
+        (500., false, false),
+    ] {
         vcx.simulate_resize(size(px(width), px(720.)));
         settle(&mut vcx);
         vcx.update(|window, _| {
@@ -401,11 +405,9 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     });
     wait_sample(&mut vcx, true);
     let client = server.client.clone();
-    let hostname = std::thread::spawn(move || {
-        client.host_metrics().unwrap().hostname().to_owned()
-    })
-    .join()
-    .unwrap();
+    let hostname = std::thread::spawn(move || client.host_metrics().unwrap().hostname().to_owned())
+        .join()
+        .unwrap();
     vcx.dispatch_action(SelectNextTab);
     settle(&mut vcx);
     assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);

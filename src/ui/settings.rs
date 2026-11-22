@@ -44,6 +44,7 @@ pub(crate) mod skills;
 mod ssh;
 mod state;
 pub(crate) mod statistics;
+mod toolbar;
 pub(crate) mod usage;
 
 #[cfg(test)]
@@ -227,6 +228,7 @@ fn window_overrides_active(config: &Config, backdrop_is_local: bool) -> bool {
 pub(crate) enum SettingsSection {
     General,
     Appearance,
+    Toolbar,
     Terminal,
     KeyboardMouse,
     Ssh,
@@ -240,9 +242,10 @@ pub(crate) enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 11] = [
+    pub(crate) const ALL: [SettingsSection; 12] = [
         SettingsSection::General,
         SettingsSection::Appearance,
+        SettingsSection::Toolbar,
         SettingsSection::Terminal,
         SettingsSection::KeyboardMouse,
         SettingsSection::Ssh,
@@ -265,6 +268,7 @@ impl SettingsSection {
         match self {
             Self::General => L10nKey::SettingsNavGeneral,
             Self::Appearance => L10nKey::SettingsNavAppearance,
+            Self::Toolbar => L10nKey::SettingsNavToolbar,
             Self::Terminal => L10nKey::SettingsNavTerminal,
             Self::KeyboardMouse => L10nKey::SettingsNavInput,
             Self::Ssh => L10nKey::SettingsNavSsh,
@@ -282,6 +286,7 @@ impl SettingsSection {
         match self {
             Self::General => "icons/settings/general.svg",
             Self::Appearance => "icons/settings/appearance.svg",
+            Self::Toolbar => "icons/panel-left.svg",
             Self::Terminal => "icons/settings/terminal.svg",
             Self::KeyboardMouse | Self::Keybindings => "icons/settings/keyboard.svg",
             Self::Ssh => "icons/settings/ssh.svg",
@@ -298,6 +303,7 @@ impl SettingsSection {
         match self {
             SettingsSection::General => "settings:general",
             SettingsSection::Appearance => "settings:appearance",
+            SettingsSection::Toolbar => "settings:toolbar",
             SettingsSection::Terminal => "settings:terminal",
             SettingsSection::KeyboardMouse => "settings:keyboard-mouse",
             SettingsSection::Ssh => "settings:ssh",

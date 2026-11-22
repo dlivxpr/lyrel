@@ -780,6 +780,7 @@ impl SettingsWindow {
             let content = match section {
                 SettingsSection::General => self.render_settings_general(cx),
                 SettingsSection::Appearance => self.render_settings_appearance(cx),
+                SettingsSection::Toolbar => self.render_settings_toolbar(cx),
                 SettingsSection::Terminal => self.render_settings_terminal(cx),
                 SettingsSection::KeyboardMouse => self.render_settings_input(cx),
                 SettingsSection::Ssh => self.render_settings_ssh(cx),
@@ -1488,6 +1489,22 @@ impl SettingsWindow {
                     self.settings_row(
                         t(L10nKey::StatisticsTitle),
                         t(L10nKey::StatisticsScope),
+                        control.into_any_element(),
+                        cx,
+                    );
+                }
+                SettingsSection::Toolbar => {
+                    let control = self.settings_button(
+                        "toolbar-search-open",
+                        t(L10nKey::ToolbarOpen),
+                        cx,
+                        |this, window, cx| {
+                            this.navigate_settings(SettingsSection::Toolbar, None, window, cx);
+                        },
+                    );
+                    self.settings_row(
+                        t(L10nKey::SettingsNavToolbar),
+                        "",
                         control.into_any_element(),
                         cx,
                     );

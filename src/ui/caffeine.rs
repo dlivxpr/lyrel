@@ -110,12 +110,9 @@ impl CaffeineState {
 
     /// The #380 contract: hiding the Caffeine component stops its effect —
     /// release the request and return to Off. Re-showing renders this Off.
-    /// No production caller until the Toolbar settings page lands (#380);
-    /// the consumer tests hold the contract until then.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn reset(cx: &mut App) {
         cx.global_mut::<Self>().mode = CaffeineMode::Off;
-        Self::release_hold(cx);
+        Self::refresh(cx);
     }
 
     /// App exit: the power request's lifetime ends with the desktop. The mode
