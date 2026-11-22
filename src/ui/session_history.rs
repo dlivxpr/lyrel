@@ -3107,11 +3107,9 @@ mod tests {
             alias: "session-history-fixture".into(),
         };
         let fixture = Arc::new(Mutex::new(SessionFixture::production_like()));
+        let host = fixture_host_with(target.host_id(), &fixture);
         vcx.update(|_, cx| {
-            lyrel_ui_base::host_registry::HostRegistry::insert(
-                cx,
-                fixture_host_with(target.host_id(), &fixture),
-            );
+            lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
         });
         app.update_in(&mut vcx, |app, window, cx| {
             let leaf = app.tabs[0]
@@ -3158,7 +3156,10 @@ mod tests {
 
         // First paint: the native portion landed while the service source
         // sits parked behind the closed gate.
-        settle(&mut vcx);
+        wait_for_history(&mut vcx, |vcx| {
+            let started = fixture.lock().unwrap().service_calls >= 1;
+            started && app.update_in(vcx, |app, _, _| app.session_history.landed)
+        });
         assert!(
             app.update_in(&mut vcx, |app, _window, _cx| app.session_history.scanning),
             "the service portion is still pending"
@@ -3211,7 +3212,10 @@ mod tests {
             }),
             "the scope change takes the old generation's rows down before anything lands"
         );
-        settle(&mut vcx);
+        wait_for_history(&mut vcx, |vcx| {
+            let started = fixture.lock().unwrap().service_calls >= 2;
+            started && app.update_in(vcx, |app, _, _| app.session_history.landed)
+        });
         assert!(
             app.update_in(&mut vcx, |app, _window, _cx| app.session_history.scanning),
             "the current scope's service portion is still pending behind the gate"
@@ -3242,8 +3246,12 @@ mod tests {
         // Both service answers land: the second scan's rows merge, and the
         // first scan's marker error arrives late enough that its landing
         // must retire on the generation fence — the marker may not paint.
-        fixture_wait_for_calls(&fixture, 2);
-        settle(&mut vcx);
+        fixture.lock().unwrap().service_released = true;
+        host.service_release.notify_all();
+        wait_for_history(&mut vcx, |vcx| {
+            let answered = fixture.lock().unwrap().completed_calls >= 2;
+            answered && app.update_in(vcx, |app, _, _| !app.session_history.scanning)
+        });
         let (scanning, selected, errors) = app.update_in(&mut vcx, |app, _window, _cx| {
             (
                 app.session_history.scanning,
@@ -3444,30 +3452,24 @@ mod tests {
             id,
             inner: lyrel_core::host::local::shared(),
             fixture: fixture.clone(),
+            service_release: std::sync::Condvar::new(),
         })
     }
 
-    /// The slow-source fixture: the native stores answer immediately, every
-    /// OpenCode service call sleeps before answering (the production Windows
-    /// stall, minus the two minutes) — the first call with the marker error,
-    /// the later calls with the service rows — and Hermes fails at once like
-    /// an uninstalled provider.
+    /// Native stores answer immediately. The test releases the OpenCode
+    /// calls once it has observed the pending states for both directories.
+    /// The first answer carries a stale marker and Hermes fails immediately.
     struct SessionFixture {
         native: Vec<PastSession>,
         opencode: Vec<PastSession>,
         stale_marker: Option<String>,
-        /// How long a service answer takes. Generous windows: the
-        /// assertions between a scan and its service landing run in
-        /// milliseconds.
-        delay: std::time::Duration,
+        service_released: bool,
         service_calls: usize,
         completed_calls: usize,
         native_calls: usize,
     }
 
     impl SessionFixture {
-        const DELAY: std::time::Duration = std::time::Duration::from_secs(2);
-
         fn production_like() -> Self {
             Self {
                 native: vec![
@@ -3480,7 +3482,7 @@ mod tests {
                     session_row("oc-service", CLIAgent::OpenCode, "/other", 250),
                 ],
                 stale_marker: Some("stale-generation marker".into()),
-                delay: Self::DELAY,
+                service_released: false,
                 service_calls: 0,
                 completed_calls: 0,
                 native_calls: 0,
@@ -3501,7 +3503,7 @@ mod tests {
                     session_row("oc-elsewhere", CLIAgent::OpenCode, "/elsewhere", 300),
                 ],
                 stale_marker: None,
-                delay: std::time::Duration::ZERO,
+                service_released: true,
                 service_calls: 0,
                 completed_calls: 0,
                 native_calls: 0,
@@ -3509,18 +3511,20 @@ mod tests {
         }
     }
 
-    /// Wait until enough fixture service calls answered, so the superseded
-    /// landing's marker had its chance to paint (a fenced one never does).
-    /// The lock is taken per poll: a panic here must not poison the mutex
-    /// the parked service threads are about to take.
-    fn fixture_wait_for_calls(fixture: &Mutex<SessionFixture>, want: usize) {
-        for _ in 0..600 {
-            if fixture.lock().unwrap().completed_calls >= want {
+    fn wait_for_history(
+        vcx: &mut gpui_kit::VisualTestContext,
+        mut ready: impl FnMut(&mut gpui_kit::VisualTestContext) -> bool,
+    ) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            settle(vcx);
+            if ready(vcx) {
                 return;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(Instant::now() < deadline, "session history did not settle");
+            std::thread::sleep(Duration::from_millis(5));
         }
-        panic!("the fixture service calls never completed");
     }
 
     fn session_row(id: &str, agent: CLIAgent, cwd: &str, updated: u64) -> PastSession {
@@ -3539,6 +3543,7 @@ mod tests {
         id: HostId,
         inner: SharedHost,
         fixture: Arc<Mutex<SessionFixture>>,
+        service_release: std::sync::Condvar,
     }
 
     impl Host for GatedSessionHost {
@@ -3633,20 +3638,20 @@ mod tests {
             &self,
             _request: &SessionOperation,
         ) -> Result<Vec<PastSession>, SessionOperationError> {
-            let (first, rows, marker, delay) = {
-                let mut fixture = self.fixture.lock().unwrap();
-                let first = fixture.service_calls == 0;
-                fixture.service_calls += 1;
-                (
-                    first,
-                    fixture.opencode.clone(),
-                    fixture.stale_marker.clone(),
-                    fixture.delay,
-                )
-            };
-            // The production stall: the service answer waits, and the scope
-            // may move on underneath the wait.
-            std::thread::sleep(delay);
+            let mut fixture = self.fixture.lock().unwrap();
+            let first = fixture.service_calls == 0;
+            fixture.service_calls += 1;
+            let (mut fixture, timeout) = self
+                .service_release
+                .wait_timeout_while(fixture, std::time::Duration::from_secs(15), |state| {
+                    !state.service_released
+                })
+                .unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "the test did not release the service answers"
+            );
+            let marker = fixture.stale_marker.clone();
             let outcome = match (first, marker) {
                 (true, Some(marker)) => Err(SessionOperationError {
                     // The first call belongs to the first scan: answer with
@@ -3656,9 +3661,8 @@ mod tests {
                     message: marker.into(),
                     retained: None,
                 }),
-                _ => Ok(rows),
+                _ => Ok(fixture.opencode.clone()),
             };
-            let mut fixture = self.fixture.lock().unwrap();
             fixture.completed_calls += 1;
             outcome
         }
