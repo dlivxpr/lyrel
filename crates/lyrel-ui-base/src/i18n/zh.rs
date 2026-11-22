@@ -2388,11 +2388,18 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::MonitorEndRefused => "无法确认该进程：{reason}",
         L10nKey::MonitorEndIncomplete => "进程树过大，无法在此确认完整范围，因此未结束任何进程。",
-        L10nKey::MonitorEndReport => "已结束 {summary}。",
-        L10nKey::MonitorEndReportPartial => "已结束 {summary}。\n已拒绝：{details}",
+        L10nKey::MonitorEndReport => "已结束 {count} 个进程。",
+        L10nKey::MonitorEndReportPartial => "已结束 {count} 个进程。\n{details}",
         L10nKey::MonitorEndUnsupported => {
             "应答此窗格的 daemon 版本过旧，无法结束进程。请更新后重试。"
         }
+        L10nKey::MonitorEndOwnerChanged => "窗格或其主机连接已变化，未向任何进程发送信号。",
+        L10nKey::MonitorEndOutcomeUnknown => "daemon 未返回结果。请刷新进程列表后再试。",
+        L10nKey::MonitorEndAlreadyExited => "进程已退出",
+        L10nKey::MonitorEndStale => "进程身份已变化",
+        L10nKey::MonitorEndNotOwned => "已不属于此窗格",
+        L10nKey::MonitorEndUnverifiable => "无法核验进程身份",
+        L10nKey::MonitorEndFailed => "无法确认进程已结束",
         L10nKey::MonitorResourcesTitle => "资源趋势",
         L10nKey::MonitorRangeTwoMinutes => "2 分钟",
         L10nKey::MonitorRangeQuarterHour => "15 分钟",

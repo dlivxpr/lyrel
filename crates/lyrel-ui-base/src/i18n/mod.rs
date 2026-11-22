@@ -2044,6 +2044,13 @@ l10n_keys! {
     MonitorEndReport,
     MonitorEndReportPartial,
     MonitorEndUnsupported,
+    MonitorEndOwnerChanged,
+    MonitorEndOutcomeUnknown,
+    MonitorEndAlreadyExited,
+    MonitorEndStale,
+    MonitorEndNotOwned,
+    MonitorEndUnverifiable,
+    MonitorEndFailed,
     // The resource-trend section above the process tree: its heading and the
     // approved trend windows.
     MonitorResourcesTitle,

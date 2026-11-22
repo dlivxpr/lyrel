@@ -2652,11 +2652,22 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorEndIncomplete => {
             "The process tree is too large to confirm its full scope here, so nothing was ended."
         }
-        L10nKey::MonitorEndReport => "Ended {summary}.",
-        L10nKey::MonitorEndReportPartial => "Ended {summary}.\nRefused: {details}",
+        L10nKey::MonitorEndReport => "Ended {count} processes.",
+        L10nKey::MonitorEndReportPartial => "Ended {count} processes.\n{details}",
         L10nKey::MonitorEndUnsupported => {
             "The daemon answering this pane is too old to end processes. Update it and try again."
         }
+        L10nKey::MonitorEndOwnerChanged => {
+            "The pane or its host connection changed. No processes were signaled."
+        }
+        L10nKey::MonitorEndOutcomeUnknown => {
+            "The daemon did not report a result. Refresh the process list before trying again."
+        }
+        L10nKey::MonitorEndAlreadyExited => "Already exited",
+        L10nKey::MonitorEndStale => "Process identity changed",
+        L10nKey::MonitorEndNotOwned => "No longer belongs to the pane",
+        L10nKey::MonitorEndUnverifiable => "Process identity could not be verified",
+        L10nKey::MonitorEndFailed => "Termination could not be confirmed",
         L10nKey::MonitorResourcesTitle => "Resource trends",
         L10nKey::MonitorRangeTwoMinutes => "2 min",
         L10nKey::MonitorRangeQuarterHour => "15 min",

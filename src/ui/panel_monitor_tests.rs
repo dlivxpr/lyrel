@@ -902,3 +902,37 @@ fn two_panes_sharing_a_directory_scope_the_request_to_the_context_pane(cx: &mut 
         )],
     );
 }
+
+#[gpui_kit::test]
+fn process_confirmation_cannot_move_to_a_replacement_host(cx: &mut TestAppContext) {
+    let original = Fixture::default();
+    original.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *original.plan_answer.lock().unwrap() = Some(Some(Ok(make_plan())));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &original);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert!(vcx.has_pending_prompt());
+
+    let replacement = Fixture::default();
+    replacement
+        .procs
+        .lock()
+        .unwrap()
+        .insert(1, Some(tree_one()));
+    install_monitor_host(&app, &mut vcx, &replacement);
+    settle(&mut vcx);
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+
+    assert!(original.executed.lock().unwrap().is_empty());
+    assert!(replacement.executed.lock().unwrap().is_empty());
+}

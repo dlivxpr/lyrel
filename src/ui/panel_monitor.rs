@@ -7,13 +7,14 @@
 //! keyed by process identity, never by list position.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, MouseButton, Subscription, Window, div, prelude::*, px, rems};
 
-use crate::daemon::control::{ControlRequest, feature};
+use crate::daemon::control::{ControlClient, ControlRequest, feature};
 use crate::daemon::protocol::{PaneContext, PaneProcs, ProcEntry, ProcIdentity};
 use crate::ui::app::LyrelApp;
 use crate::ui::proc_usage::{CPU_W, CpuTracker, MEM_W};
@@ -22,9 +23,35 @@ use crate::ui::right_panel::{
     TEXT_INSET,
 };
 use crate::ui::window_chrome::CONTENT_INSET;
+use lyrel_ui_base::host_ops::SharedHost;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use lyrel_ui_base::scrollbar::with_vertical_scrollbar;
 use lyrel_ui_base::session::WorkspaceStore;
+
+struct ProcessControlTarget {
+    pane: u64,
+    generation: u64,
+    host: Option<SharedHost>,
+    local_client: Option<Arc<ControlClient>>,
+}
+
+impl ProcessControlTarget {
+    fn is_current(&self, app: &LyrelApp, window: &Window, cx: &mut gpui_kit::App) -> bool {
+        let Some(active) = app.pane_forward_ctx(window, cx) else {
+            return false;
+        };
+        self.generation == app.right_panel.procs_gen
+            && active.pane_id == self.pane
+            && match (&self.host, active.host) {
+                (Some(planned), Some(current)) => Arc::ptr_eq(planned, &current),
+                (None, None) => self.local_client.as_ref().is_some_and(|planned| {
+                    crate::ui::local_link::LocalLink::client(cx)
+                        .is_some_and(|current| Arc::ptr_eq(planned, &current))
+                }),
+                _ => false,
+            }
+    }
+}
 
 /// The trustworthy identity of one process row across snapshots.
 ///
@@ -731,11 +758,17 @@ impl LyrelApp {
         };
         let pid = target.pid;
         let started = target.started;
-        let host = self.right_panel.procs_host.clone();
-        let client = crate::ui::local_link::LocalLink::client(cx);
+        let owner = ProcessControlTarget {
+            pane: pane_id,
+            generation: self.right_panel.procs_gen,
+            host: self.right_panel.procs_host.clone(),
+            local_client: crate::ui::local_link::LocalLink::client(cx),
+        };
+        let host = owner.host.clone();
+        let client = owner.local_client.clone();
         let local_supported =
             crate::ui::local_link::LocalLink::supports(cx, feature::PANE_END_PROCESS);
-        let name = target.name.clone();
+        let name = target.name;
         cx.spawn_in(window, async move |this, cx| {
             let plan = cx
                 .background_executor()
@@ -760,14 +793,15 @@ impl LyrelApp {
                     cx,
                 ),
                 Some(Ok(plan)) => {
-                    this.monitor_confirm_end(pane_id, name, pid, plan, tree, window, cx)
+                    if owner.is_current(this, window, cx) {
+                        this.monitor_confirm_end(owner, name, pid, plan, tree, window, cx);
+                    }
                 }
             });
         })
         .detach();
     }
 
-    /// The plan landed and names a complete scope: show the target and the
     /// The plan landed: show the target and — for the tree action — the
     /// extent, and only on the user's confirmation send the execute request
     /// carrying the plan's exact identities. The single action covers only
@@ -775,10 +809,10 @@ impl LyrelApp {
     /// incomplete, as long as the daemon could stamp the target itself; the
     /// tree action names every process it will cover, so an incomplete walk
     /// — or any row the daemon could not stamp — refuses it rather than
-    /// approximates the extent.
+    /// guesses at the extent.
     fn monitor_confirm_end(
         &mut self,
-        pane_id: u64,
+        owner: ProcessControlTarget,
         name: String,
         pid: u32,
         plan: crate::daemon::protocol::EndProcessPlan,
@@ -860,25 +894,51 @@ impl LyrelApp {
                 started: target_started,
             }],
         };
-        let host = self.right_panel.procs_host.clone();
-        let client = crate::ui::local_link::LocalLink::client(cx);
         let local_supported =
             crate::ui::local_link::LocalLink::supports(cx, feature::PANE_END_PROCESS);
         cx.spawn_in(window, async move |this, cx| {
             if !matches!(answer.await, Ok(0)) {
                 return;
             }
+            let current = this.update_in(cx, |this, window, cx| {
+                if owner.is_current(this, window, cx) {
+                    return true;
+                }
+                this.monitor_notify(
+                    lyrel_ui_base::notification_history::Notification::warning(t(
+                        L10nKey::MonitorEndOwnerChanged,
+                    )),
+                    window,
+                    cx,
+                );
+                false
+            });
+            if !matches!(current, Ok(true)) {
+                return;
+            }
             let outcomes = cx
                 .background_executor()
-                .spawn(
-                    async move { monitor_execute(&host, client, local_supported, pane_id, scope) },
-                )
+                .spawn(async move {
+                    monitor_execute(
+                        &owner.host,
+                        owner.local_client,
+                        local_supported,
+                        owner.pane,
+                        scope,
+                    )
+                })
                 .await;
-            let Some(outcomes) = outcomes else {
-                return;
-            };
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.monitor_report_end(outcomes, window, cx);
+            let _ = this.update_in(cx, |this, window, cx| match outcomes {
+                Some(outcomes) if !outcomes.is_empty() => {
+                    this.monitor_report_end(outcomes, window, cx)
+                }
+                _ => this.monitor_notify(
+                    lyrel_ui_base::notification_history::Notification::error(t(
+                        L10nKey::MonitorEndOutcomeUnknown,
+                    )),
+                    window,
+                    cx,
+                ),
             });
         })
         .detach();
@@ -893,36 +953,39 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         use crate::daemon::protocol::EndProcessState as State;
-        let ended = outcomes
-            .iter()
-            .filter(|o| matches!(o.state, State::Ended | State::Exited))
-            .count();
-        let refused: Vec<String> = outcomes
-            .iter()
-            .filter(|o| {
-                matches!(
-                    o.state,
-                    State::Stale | State::NotOwned | State::Unverifiable | State::Failed
-                )
-            })
-            .map(|o| format!("{} ({})", o.name, o.pid))
-            .collect();
-        let summary = format!("{ended} of {}", outcomes.len());
-        let notification = match refused.is_empty() {
-            true => lyrel_ui_base::notification_history::Notification::info(t_fmt(
-                L10nKey::MonitorEndReport,
-                &[("summary", summary.as_str())],
-            )),
-            false => {
-                let details = refused.join(", ");
-                let level = match ended {
-                    0 => lyrel_ui_base::notification_history::Notification::error,
-                    _ => lyrel_ui_base::notification_history::Notification::warning,
-                };
-                level(t_fmt(
-                    L10nKey::MonitorEndReportPartial,
-                    &[("summary", summary.as_str()), ("details", details.as_str())],
-                ))
+        use lyrel_ui_base::notification_history::Notification;
+        use std::fmt::Write as _;
+
+        let mut ended = 0;
+        let mut refused = false;
+        let mut details = String::new();
+        for outcome in outcomes {
+            let label = match outcome.state {
+                State::Ended => {
+                    ended += 1;
+                    continue;
+                }
+                State::Exited => L10nKey::MonitorEndAlreadyExited,
+                State::Stale => L10nKey::MonitorEndStale,
+                State::NotOwned => L10nKey::MonitorEndNotOwned,
+                State::Unverifiable => L10nKey::MonitorEndUnverifiable,
+                State::Failed => L10nKey::MonitorEndFailed,
+            };
+            refused |= outcome.state != State::Exited;
+            let _ = writeln!(details, "{} ({}) — {}", outcome.name, outcome.pid, t(label));
+        }
+        let count = ended.to_string();
+        let notification = if details.is_empty() {
+            Notification::info(t_fmt(L10nKey::MonitorEndReport, &[("count", &count)]))
+        } else {
+            let summary = t_fmt(
+                L10nKey::MonitorEndReportPartial,
+                &[("count", &count), ("details", details.trim_end())],
+            );
+            match (refused, ended) {
+                (true, 0) => Notification::error(summary),
+                (true, _) => Notification::warning(summary),
+                (false, _) => Notification::info(summary),
             }
         };
         self.monitor_notify(notification, window, cx);
@@ -1253,21 +1316,15 @@ fn monitor_execute(
     }
 }
 
-/// The one-line list of what a tree action covers, capped for the dialog:
-/// the first few `name (pid)` pairs, then how many more there are. The full
-/// list is what the daemon verified; the dialog only has room for a taste.
+/// All identities the native confirmation includes. The prompt scrolls its body.
 fn monitor_scope_line(targets: &[crate::daemon::protocol::EndProcessTarget]) -> String {
-    const SHOWN: usize = 4;
-    let mut line = targets
-        .iter()
-        .take(SHOWN)
-        .map(|target| format!("{} ({})", target.name, target.pid))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if targets.len() > SHOWN {
-        line.push_str(&format!(", +{}", targets.len() - SHOWN));
+    use std::fmt::Write as _;
+
+    let mut lines = String::new();
+    for target in targets {
+        let _ = writeln!(lines, "{} ({})", target.name, target.pid);
     }
-    line
+    lines
 }
 
 #[cfg(test)]
