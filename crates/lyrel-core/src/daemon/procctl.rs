@@ -117,22 +117,36 @@ pub(crate) fn plan(
     if target.started() != Some(started) {
         return Err(PlanRefusal::Stale);
     }
-    if !crate::daemon::procinfo::descends_from(pid, shell_pid) {
+    #[cfg(windows)]
+    let table = crate::daemon::winproc::checked_snapshot().ok_or(PlanRefusal::Unverifiable)?;
+    #[cfg(windows)]
+    let owned = |pid, started| windows_owns(&table, shell_pid, pid, started, process_started);
+    #[cfg(not(windows))]
+    let owned = |pid, _| crate::daemon::procinfo::descends_from(pid, shell_pid);
+    if !owned(pid, started) {
         return Err(PlanRefusal::NotOwned);
     }
     let (members, complete) = crate::daemon::procinfo::complete_subtree(pid);
+    #[cfg(windows)]
+    let mut complete = complete;
     let targets = members
         .into_iter()
-        .map(|(member, name)| EndProcessTarget {
-            pid: member,
-            name,
-            // The identity each row carries into the confirmation. Rows the
-            // daemon cannot stamp are shown but can never be confirmed.
-            started: if member == pid {
+        .filter_map(|(member, name)| {
+            let member_started = if member == pid {
                 Some(started)
             } else {
                 crate::daemon::procstat::read(member).started
-            },
+            };
+            #[cfg(windows)]
+            if !member_started.is_some_and(|stamp| owned(member, stamp)) {
+                complete = false;
+                return None;
+            }
+            Some(EndProcessTarget {
+                pid: member,
+                name,
+                started: member_started,
+            })
         })
         .collect();
     Ok(EndProcessPlan { targets, complete })
@@ -197,10 +211,54 @@ fn verify(shell_pid: u32, id: &ProcIdentity) -> Result<(bind::Bound, String), Si
         return Err(SignalRefusal::Stale);
     }
     let name = live_name(id.pid);
-    if !crate::daemon::procinfo::descends_from(id.pid, shell_pid) {
+    #[cfg(windows)]
+    let owned = crate::daemon::winproc::checked_snapshot()
+        .ok_or(SignalRefusal::Unverifiable)
+        .map(|table| windows_owns(&table, shell_pid, id.pid, started, process_started))?;
+    #[cfg(not(windows))]
+    let owned = crate::daemon::procinfo::descends_from(id.pid, shell_pid);
+    if !owned {
         return Err(SignalRefusal::NotOwned);
     }
     Ok((bound, name))
+}
+
+#[cfg(windows)]
+fn process_started(pid: u32) -> Option<u64> {
+    crate::daemon::procstat::read(pid).started
+}
+
+/// Windows keeps the creator's numeric PID after it exits. A current
+/// process born after the child can never be that creator.
+#[cfg(windows)]
+fn windows_owns(
+    table: &[crate::daemon::winproc::Proc],
+    root: u32,
+    mut child: u32,
+    mut child_started: u64,
+    mut started: impl FnMut(u32) -> Option<u64>,
+) -> bool {
+    for _ in 0..64 {
+        let Some(row) = table.iter().find(|row| row.pid == child) else {
+            return false;
+        };
+        if child == root {
+            return true;
+        }
+        let parent = row.parent;
+        if parent <= 1 || parent == child {
+            return false;
+        }
+        let Some(parent_started) = started(parent) else {
+            return false;
+        };
+        if parent_started > child_started {
+            return false;
+        }
+        child = parent;
+        child_started = parent_started;
+    }
+    false
 }
 
 /// The name the pid names right now, or an empty string when it names

@@ -8,6 +8,10 @@
 //! registry does.
 
 use super::*;
+use std::io::{Read as _, Write as _};
+#[cfg(any(windows, target_os = "linux"))]
+use std::net::TcpListener;
+use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Command};
 use std::time::Duration;
 #[cfg(any(windows, target_os = "linux"))]
@@ -17,6 +21,42 @@ use std::time::Instant;
 /// then sleeps; `sleep` just sleeps.
 const ROLE: &str = "LYREL_PROCCTL_FIXTURE";
 const SLEEPERS: &str = "LYREL_PROCCTL_SLEEPERS";
+const LIFETIME: &str = "LYREL_PROCCTL_LIFETIME";
+
+#[cfg(windows)]
+#[test]
+fn a_reused_parent_pid_does_not_own_the_older_child() {
+    use crate::daemon::winproc::Proc;
+
+    let shell = Proc {
+        pid: 23,
+        parent: 1,
+        name: "shell".into(),
+    };
+    let worker = Proc {
+        pid: 24,
+        parent: 23,
+        name: "worker".into(),
+    };
+    let helper = Proc {
+        pid: 25,
+        parent: 24,
+        name: "helper".into(),
+    };
+    let table = [shell, worker, helper];
+
+    let started = |pid| match pid {
+        23 => Some(20),
+        24 => Some(10),
+        _ => None,
+    };
+    assert!(!windows_owns(&table, 23, 25, 15, started));
+    assert!(windows_owns(&table, 23, 25, 15, |pid| if pid == 23 {
+        Some(5)
+    } else {
+        started(pid)
+    }));
+}
 
 /// When re-run as a fixture child, live in that role and never return.
 fn fixture_role() -> bool {
@@ -29,16 +69,41 @@ fn fixture_role() -> bool {
             .and_then(|n| n.parse::<usize>().ok())
             .unwrap_or(0);
         for _ in 0..sleepers {
-            let _ = fixture_child("sleep", 0);
+            let _ = fixture_child("sleep", 0, fixture_lifetime());
         }
+    }
+    if role == "sleep"
+        && let Some(address) = fixture_lifetime()
+    {
+        // The connection keeps this sleeper alive even when the test ends
+        // its immediate parent. An unwind or process exit closes the other
+        // end, including when setup failed before accept.
+        if let Ok(mut connection) = TcpStream::connect_timeout(&address, Duration::from_secs(5))
+            && connection
+                .write_all(&std::process::id().to_le_bytes())
+                .is_ok()
+        {
+            let _ = connection.read(&mut [0]);
+        }
+        std::process::exit(0);
     }
     loop {
         std::thread::sleep(Duration::from_secs(3600));
     }
 }
 
-fn fixture_child(role: &str, sleepers: usize) -> Child {
-    Command::new(std::env::current_exe().expect("the test binary"))
+fn fixture_lifetime() -> Option<SocketAddr> {
+    std::env::var(LIFETIME)
+        .ok()
+        .map(|value| value.parse().unwrap())
+}
+
+fn fixture_child(role: &str, sleepers: usize, lifetime: Option<SocketAddr>) -> Child {
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    if let Some(lifetime) = lifetime {
+        command.env(LIFETIME, lifetime.to_string());
+    }
+    command
         .arg("--exact")
         .arg(
             std::thread::current()
@@ -84,34 +149,40 @@ fn alive(pid: u32) -> bool {
 struct Tree {
     shell: Child,
     children: Vec<u32>,
+    lifetimes: Vec<(TcpStream, bind::Bound)>,
 }
 
 #[cfg(any(windows, target_os = "linux"))]
 impl Tree {
     fn spawn(sleepers: usize) -> Self {
-        let shell = fixture_child("shell", sleepers);
-        // The shell spawns its sleepers before entering its own sleep loop,
-        // but "before" is only eventual across process scheduling: wait until
-        // the table actually shows them, or a slow machine flakes the plan.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut tree = Self {
+            shell: fixture_child("shell", sleepers, Some(listener.local_addr().unwrap())),
+            children: Vec::with_capacity(sleepers),
+            lifetimes: Vec::with_capacity(sleepers),
+        };
         let deadline = Instant::now() + Duration::from_secs(10);
-        let shell_pid = shell.id();
-        loop {
-            let (members, _) = crate::daemon::procinfo::complete_subtree(shell_pid);
-            let children: Vec<u32> = members
-                .iter()
-                .map(|(pid, _)| *pid)
-                .filter(|pid| *pid != shell_pid)
-                .collect();
-            if children.len() >= sleepers || Instant::now() >= deadline {
-                assert_eq!(
-                    children.len(),
-                    sleepers,
-                    "the fixture shell must own its sleepers before the test starts"
-                );
-                return Tree { shell, children };
+        while tree.children.len() < sleepers {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "fixture sleepers did not register");
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_read_timeout(Some(remaining)).unwrap();
+                    let mut bytes = [0; 4];
+                    stream.read_exact(&mut bytes).unwrap();
+                    let pid = u32::from_le_bytes(bytes);
+                    let bound = bind::Bound::open(pid).expect("the registered sleeper is live");
+                    tree.children.push(pid);
+                    tree.lifetimes.push((stream, bound));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("cannot accept a fixture sleeper: {error}"),
             }
-            std::thread::sleep(Duration::from_millis(50));
         }
+        tree
     }
 
     fn shell_pid(&self) -> u32 {
@@ -145,23 +216,14 @@ impl Tree {
 #[cfg(any(windows, target_os = "linux"))]
 impl Drop for Tree {
     fn drop(&mut self) {
-        // The fixture children are disposable, not daemon-owned: if a test
-        // did not already end them, end them here so nothing leaks into the
-        // rest of the run. Parent-first would orphan on unix, so take the
-        // children first. Cleanup is best-effort on purpose: a Drop that
-        // panicked would abort the whole test process and hide the real
-        // failure.
-        for &pid in &self.children {
-            if alive(pid) {
-                let id = identity_of(pid);
-                execute(shell_pid(), std::slice::from_ref(&id));
-            }
-        }
-        if alive(self.shell.id()) {
-            let id = identity_of(self.shell.id());
-            execute(shell_pid(), std::slice::from_ref(&id));
-        }
+        // Cleanup uses only handles held by the test, including sleepers
+        // orphaned by the single-process termination case.
+        let _ = self.shell.kill();
         let _ = self.shell.wait();
+        for (stream, bound) in self.lifetimes.drain(..) {
+            drop(stream);
+            let _ = bound.wait_gone(Duration::from_secs(2));
+        }
     }
 }
 
@@ -226,7 +288,7 @@ fn plan_refuses_a_process_that_already_exited() {
     if fixture_role() {
         return;
     }
-    let mut child = fixture_child("sleep", 0);
+    let mut child = fixture_child("sleep", 0, None);
     let pid = child.id();
     let started = identity_of(pid).started;
     child.kill().expect("kill the fixture child");
@@ -415,7 +477,7 @@ fn platforms_without_an_atomic_bind_fail_closed() {
     if fixture_role() {
         return;
     }
-    let mut child = fixture_child("sleep", 0);
+    let mut child = fixture_child("sleep", 0, None);
     let identity = identity_of(child.id());
     let plan_result = plan(shell_pid(), identity.pid, identity.started);
     let outcomes = execute(shell_pid(), std::slice::from_ref(&identity));
