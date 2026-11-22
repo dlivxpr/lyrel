@@ -395,6 +395,10 @@ pub struct LyrelApp {
     /// The shared host-metrics sampler this window demands; held only while
     /// the title bar or the monitor shows its host (#373).
     pub(crate) metric_view: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
+    /// The Lyrel component-usage sampler the monitor's resource section
+    /// demands; held only while that section is on screen (#377). The title
+    /// bar never holds it, so it never pays for process sampling.
+    pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,

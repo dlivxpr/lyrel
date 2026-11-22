@@ -10,6 +10,7 @@ pub mod content_search;
 mod file_version;
 pub mod local;
 pub mod metrics;
+pub mod lyrel_usage;
 pub mod read;
 mod read_lease;
 pub mod session_operations;
@@ -335,6 +336,27 @@ pub trait Host: Send + Sync + 'static {
             io::ErrorKind::Unsupported,
             "host metrics are unavailable on this transport",
         ))
+    }
+
+    /// Lyrel's own component usage for this host's daemon process, stamped
+    /// with the daemon instance. Appended to the [`Host::host_metrics`]
+    /// answer on the wire; hosts that cannot attribute it say so here. The
+    /// desktop application samples itself client-side and never crosses this
+    /// seam.
+    fn lyrel_usage(&self) -> io::Result<lyrel_usage::LyrelUsage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Lyrel usage is unavailable on this transport",
+        ))
+    }
+
+    /// Whether [`Host::lyrel_usage`] is actually backed by a sampler, so a
+    /// server can advertise the capability without sampling to learn it.
+    /// Asking a host that answers `false` still fails closed with
+    /// `Unsupported`.
+    fn has_lyrel_usage(&self) -> bool {
+        false
     }
 
     /// How far away this host is: the round trip to it, measured now.

@@ -440,6 +440,9 @@ impl LyrelApp {
         self.sync_session_history(window, cx);
         // Keeps one shared sampler alive for the title bar and the monitor.
         self.sync_host_metrics(window, cx);
+        // Keeps the Lyrel component-usage sampler alive only while the
+        // monitor's resource section is on screen.
+        self.sync_lyrel_usage(window, cx);
         let lifted = crate::ui::pane_drag::lifted(&self.pane_drag).is_some();
         if (!window.is_window_active()
             || (lifted && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none())))

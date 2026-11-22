@@ -25,6 +25,7 @@ pub(crate) mod host_metrics;
 pub(crate) mod ime;
 pub mod keymap;
 pub mod local_link;
+pub(crate) mod lyrel_usage;
 pub mod machine_mirror;
 pub(crate) mod motion;
 #[cfg(test)]

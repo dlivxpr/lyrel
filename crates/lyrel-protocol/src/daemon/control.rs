@@ -177,6 +177,11 @@ pub mod feature {
     /// nothing, and the caller sees `Unsupported` rather than an empty schema.
     pub const SQLITE_BROWSE: &str = "sqlite-browse-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
+    /// The peer's `HostMetrics` answer may carry `lyrel_usage`: its own
+    /// daemon process stamped with the control instance. Appended as an
+    /// ignorable field on control v19, so a peer without the name simply
+    /// answers without the field and a client without it drops it on decode.
+    pub const LYREL_USAGE: &str = "lyrel-usage-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that

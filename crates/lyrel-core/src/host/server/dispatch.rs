@@ -129,7 +129,17 @@ fn run_request(
 
     Ok(match req {
         ControlRequest::Ping => (ReplyOk::Pong, Vec::new()),
-        ControlRequest::HostMetrics => (ReplyOk::HostMetrics(h.host_metrics()?), Vec::new()),
+        ControlRequest::HostMetrics => {
+            let mut metrics = h.host_metrics()?;
+            // Lyrel's own usage rides the same answer as an ignorable field
+            // (#377): a host that cannot attribute it leaves it absent, and a
+            // client that never heard of it drops it on decode. The reading
+            // is sampled on demand, sharing the request's cadence.
+            if let Ok(usage) = h.lyrel_usage() {
+                metrics.set_lyrel_usage(Some(usage));
+            }
+            (ReplyOk::HostMetrics(metrics), Vec::new())
+        }
 
         ControlRequest::ReadDir { dir, root } => {
             let root = root.map(|r| p(&r));

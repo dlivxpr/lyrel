@@ -48,6 +48,9 @@ pub(super) fn handshake<R: Read>(
     if host.id().is_local() {
         features.push(feature::HOST_METRICS.to_string());
     }
+    if host.has_lyrel_usage() {
+        features.push(feature::LYREL_USAGE.to_string());
+    }
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
     }

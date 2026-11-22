@@ -2058,6 +2058,20 @@ l10n_keys! {
     MonitorRangeTwoMinutes,
     MonitorRangeQuarterHour,
     MonitorRangeHour,
+    // The Lyrel component-usage row under the resource tiles (#377): the
+    // collapsed local summary and the per-component rows grouped by host.
+    LyrelUsageLocal,
+    LyrelUsageRemote,
+    LyrelUsageDesktop,
+    LyrelUsageDaemon,
+    LyrelUsageServer,
+    LyrelUsageIncludesRemote,
+    LyrelUsageExpand,
+    LyrelUsageCollapse,
+    LyrelUsageWaiting,
+    LyrelUsageUnavailable,
+    LyrelUsageSample,
+    LyrelUsageComponent,
     // The title-bar `+` that offers every tool.
     ToolHostAdd,
     // A tool tab's close button; `{tool}` is the tool's visible name.

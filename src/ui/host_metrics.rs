@@ -1127,6 +1127,9 @@ impl LyrelApp {
             .flex_none()
             .child(heading)
             .child(tiles)
+            // #377: the collapsed Lyrel summary and its expanded per-component
+            // rows; everything it needs lives in `ui::lyrel_usage`.
+            .child(self.render_lyrel_usage(cx))
             .into_any_element()
     }
 }

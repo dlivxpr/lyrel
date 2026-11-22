@@ -14,6 +14,11 @@ pub struct HostMetrics {
     hostname: String,
     instance: String,
     state: MetricsState,
+    /// Lyrel's own component usage, appended as an ignorable field (#377):
+    /// absent from a peer that predates the feature, `None` from one that
+    /// cannot attribute it. Never required to read the whole-host values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lyrel_usage: Option<super::lyrel_usage::LyrelUsage>,
 }
 
 impl HostMetrics {
@@ -29,6 +34,7 @@ impl HostMetrics {
             hostname: hostname.into(),
             instance: instance.into(),
             state,
+            lyrel_usage: None,
         }
     }
 
@@ -41,6 +47,17 @@ impl HostMetrics {
     }
     pub fn state(&self) -> &MetricsState {
         &self.state
+    }
+
+    /// Lyrel's own usage riding this answer, when the peer sampled it.
+    pub fn lyrel_usage(&self) -> Option<&super::lyrel_usage::LyrelUsage> {
+        self.lyrel_usage.as_ref()
+    }
+
+    /// Attach (or clear) the Lyrel usage without touching the whole-host
+    /// reading or the host/instance stamps.
+    pub fn set_lyrel_usage(&mut self, lyrel_usage: Option<super::lyrel_usage::LyrelUsage>) {
+        self.lyrel_usage = lyrel_usage;
     }
 
     /// Replace the reading without changing its host or server instance stamp.
