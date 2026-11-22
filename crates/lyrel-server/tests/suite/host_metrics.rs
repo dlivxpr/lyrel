@@ -284,13 +284,25 @@ fn real_interface_traffic_appears_in_the_transmit_series() -> io::Result<()> {
         }
     };
 
-    // The control link rides stdio. Find a counted interface that can
-    // actually send a link-local multicast datagram: an operational
-    // interface may still have no route to the multicast destination.
+    #[cfg(target_os = "macos")]
+    let fixture = std::env::var("LYREL_TEST_FETH_INTERFACE").ok();
+    #[cfg(not(target_os = "macos"))]
+    let fixture: Option<String> = None;
+    // The stdio control link generates no counted traffic. Select the
+    // isolated virtual link on hosted macOS, or probe multicast elsewhere.
     let interfaces = sysinfo::Networks::new_with_refreshed_list().unwrap();
     let mut addresses = interfaces
-        .values()
-        .filter(|interface| interface.operational_state() == sysinfo::InterfaceOperationalState::Up)
+        .iter()
+        .filter(|(name, _)| {
+            fixture
+                .as_ref()
+                .is_none_or(|expected| *name == expected.as_str())
+        })
+        .map(|(_, interface)| interface)
+        .filter(|interface| {
+            fixture.is_some()
+                || interface.operational_state() == sysinfo::InterfaceOperationalState::Up
+        })
         .flat_map(|interface| interface.ip_networks())
         .filter_map(|network| match network.addr {
             std::net::IpAddr::V4(addr) if !addr.is_loopback() => Some(addr),
@@ -298,14 +310,23 @@ fn real_interface_traffic_appears_in_the_transmit_series() -> io::Result<()> {
         });
     // Stay below macOS's UDP send limit and avoid IP fragmentation.
     let payload = [0x5A_u8; 1200];
-    let target = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(239, 255, 0, 1), 49_745);
+    let target = if fixture.is_some() {
+        std::net::Ipv4Addr::new(198, 19, 255, 255)
+    } else {
+        std::net::Ipv4Addr::new(239, 255, 0, 1)
+    };
+    let target = std::net::SocketAddrV4::new(target, 49_745);
     let mut failures = Vec::new();
     let sender = addresses
         .find_map(|addr| {
             let probe = || -> io::Result<std::net::UdpSocket> {
                 let socket = socket2::Socket::from(std::net::UdpSocket::bind((addr, 0))?);
-                socket.set_multicast_if_v4(&addr)?;
-                socket.set_multicast_ttl_v4(1)?;
+                if fixture.is_some() {
+                    socket.set_broadcast(true)?;
+                } else {
+                    socket.set_multicast_if_v4(&addr)?;
+                    socket.set_multicast_ttl_v4(1)?;
+                }
                 let socket = std::net::UdpSocket::from(socket);
                 socket.send_to(&payload, target)?;
                 Ok(socket)
@@ -345,7 +366,7 @@ fn real_interface_traffic_appears_in_the_transmit_series() -> io::Result<()> {
     );
     assert!(
         peak_tx >= idle_tx + 512_000.,
-        "a ~{sent}-byte multicast burst must lift the transmit rate well above the idle {idle_tx} B/s (peak {peak_tx} B/s)"
+        "a ~{sent}-byte burst must lift the transmit rate well above the idle {idle_tx} B/s (peak {peak_tx} B/s)"
     );
     Ok(())
 }

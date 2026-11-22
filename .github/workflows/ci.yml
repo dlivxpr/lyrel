@@ -325,7 +325,32 @@ jobs:
       - name: Test desktop library and headless
         if: ${{ !cancelled() && runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true' && steps.graphics_fixture_build.outcome == 'success' }}
         timeout-minutes: 25
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} nextest run --locked --workspace --lib --bins --tests --features native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_command=(cargo)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            test_command=(pwsh -NoProfile -File scripts/cargo-windows.ps1)
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            # The hosted macOS NIC can lack multicast routing. Use an isolated
+            # virtual Ethernet link whose frames still enter the OS counters.
+            tx=""
+            rx=""
+            cleanup_network_fixture() {
+              local failed=0
+              if [[ -n "$rx" ]]; then sudo /sbin/ifconfig "$rx" destroy || failed=1; fi
+              if [[ -n "$tx" ]]; then sudo /sbin/ifconfig "$tx" destroy || failed=1; fi
+              return "$failed"
+            }
+            trap cleanup_network_fixture EXIT
+            tx="$(sudo /sbin/ifconfig feth create)"
+            rx="$(sudo /sbin/ifconfig feth create)"
+            sudo /sbin/ifconfig "$tx" peer "$rx"
+            sudo /sbin/ifconfig "$rx" up
+            sudo /sbin/ifconfig "$tx" inet 198.19.255.253 netmask 255.255.255.252 broadcast 198.19.255.255 up
+            export LYREL_TEST_FETH_INTERFACE="$tx"
+          fi
+          "${test_command[@]}" nextest run --locked --workspace --lib --bins --tests --features native-markdown-tests,test-support --target ${{ matrix.target }} --profile ci --no-tests=fail -E 'not binary(native_markdown) and not binary(native_terminal) and not binary(cli_e2e)'
 
       # nextest 不跑 doctest；单独保留，避免文档示例随迁移悄悄变成 0 用例。
       - name: Test desktop doctests
