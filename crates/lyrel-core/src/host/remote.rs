@@ -2283,12 +2283,12 @@ mod tests {
         };
         let reply = session.clone();
         let (host, seen) = host_with_peer('/', move |req| match req {
-            ControlRequest::AgentSessions { directory: Some(directory) } if directory == "/home/me/repo" => {
-                Some((
-                    ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
-                    vec![],
-                ))
-            }
+            ControlRequest::AgentSessions {
+                directory: Some(directory),
+            } if directory == "/home/me/repo" => Some((
+                ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
+                vec![],
+            )),
             other => panic!("unexpected request {other:?}"),
         });
 
@@ -2305,10 +2305,9 @@ mod tests {
 
         // No directory: the unscoped request is what an unscoped consumer sends.
         let (host, seen) = host_with_peer('/', |req| match req {
-            ControlRequest::AgentSessions { directory: None } => Some((
-                ControlReply::Ok(ReplyOk::AgentSessions(Vec::new())),
-                vec![],
-            )),
+            ControlRequest::AgentSessions { directory: None } => {
+                Some((ControlReply::Ok(ReplyOk::AgentSessions(Vec::new())), vec![]))
+            }
             other => panic!("unexpected request {other:?}"),
         });
         assert!(host.agent_sessions(None).unwrap().is_empty());

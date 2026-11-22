@@ -608,10 +608,7 @@ impl Host for LocalHost {
         Ok(crate::host::local_agent_environment())
     }
 
-    fn agent_sessions(
-        &self,
-        directory: Option<&Path>,
-    ) -> io::Result<Vec<PastSession>> {
+    fn agent_sessions(&self, directory: Option<&Path>) -> io::Result<Vec<PastSession>> {
         guard_off_ui();
         Ok(crate::core::agent_history::scan(
             &(self.history_roots)()?,

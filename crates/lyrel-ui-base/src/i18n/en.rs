@@ -2562,15 +2562,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorNoPaneHint => "Open a tab to watch its processes here.",
         L10nKey::MonitorProcsEmpty => "No processes to show.",
         L10nKey::MonitorProcsEmptyHint => "This pane has no processes to list.",
-        L10nKey::MonitorProcsUnavailable => {
-            "Processes are unavailable on this machine."
-        }
+        L10nKey::MonitorProcsUnavailable => "Processes are unavailable on this machine.",
         L10nKey::MonitorProcsUnavailableHint => {
             "The host that owns this pane cannot report its processes."
         }
-        L10nKey::MonitorProcsHeuristic => {
-            "Showing this machine's side of the connection."
-        }
+        L10nKey::MonitorProcsHeuristic => "Showing this machine's side of the connection.",
         L10nKey::MonitorProcsHeuristicHint => {
             "Processes running on the remote host are not visible here."
         }

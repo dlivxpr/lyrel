@@ -463,7 +463,11 @@ pub fn scan(roots: &Roots, directory: Option<&Path>) -> Vec<PastSession> {
     *cache = seen;
     drop(cache);
     if let Some(dir) = directory {
-        out.retain(|s| s.cwd.as_deref().is_some_and(|cwd| directory_matches(cwd, dir)));
+        out.retain(|s| {
+            s.cwd
+                .as_deref()
+                .is_some_and(|cwd| directory_matches(cwd, dir))
+        });
     }
     out.sort_by_key(|s| std::cmp::Reverse(s.updated));
     out.truncate(MAX_SESSIONS);
@@ -1371,7 +1375,9 @@ mod tests {
             "no query keeps the global recent cap exactly"
         );
         assert!(
-            unscoped.iter().all(|s| s.cwd.as_deref() == Some(Path::new("/elsewhere"))),
+            unscoped
+                .iter()
+                .all(|s| s.cwd.as_deref() == Some(Path::new("/elsewhere"))),
             "the capped unscoped list is the newest overall, as before"
         );
     }
@@ -1382,7 +1388,11 @@ mod tests {
     #[test]
     fn directory_matches_uses_owning_host_case_and_component_semantics() {
         // A Unix owning host, judged from any client.
-        assert!(directory_matches_with(Path::new("/work/repo"), Path::new("/work/repo"), '/'));
+        assert!(directory_matches_with(
+            Path::new("/work/repo"),
+            Path::new("/work/repo"),
+            '/'
+        ));
         assert!(!directory_matches_with(
             Path::new("/work/repo"),
             Path::new("/work/other"),
@@ -1394,10 +1404,22 @@ mod tests {
             '/',
         ));
         // A trailing separator or a `.` segment is not a different directory.
-        assert!(directory_matches_with(Path::new("/work/repo"), Path::new("/work/repo/"), '/'));
-        assert!(directory_matches_with(Path::new("/work/./repo"), Path::new("/work/repo"), '/'));
+        assert!(directory_matches_with(
+            Path::new("/work/repo"),
+            Path::new("/work/repo/"),
+            '/'
+        ));
+        assert!(directory_matches_with(
+            Path::new("/work/./repo"),
+            Path::new("/work/repo"),
+            '/'
+        ));
         // Rootedness matters: a relative path is not the absolute one.
-        assert!(!directory_matches_with(Path::new("/work/repo"), Path::new("work/repo"), '/'));
+        assert!(!directory_matches_with(
+            Path::new("/work/repo"),
+            Path::new("work/repo"),
+            '/'
+        ));
         // A backslash is an ordinary filename character on a Unix host, not
         // a separator — a Windows client must not split on it.
         assert!(directory_matches_with(
@@ -1486,7 +1508,10 @@ mod tests {
         if cfg!(windows) {
             // The live default stays owner-local: on the scanning host it is
             // this machine's semantics.
-            assert!(directory_matches(Path::new("/tmp/Repo"), Path::new("/tmp/repo")));
+            assert!(directory_matches(
+                Path::new("/tmp/Repo"),
+                Path::new("/tmp/repo")
+            ));
         }
     }
 }

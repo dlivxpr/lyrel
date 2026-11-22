@@ -532,9 +532,7 @@ impl LyrelApp {
             return;
         }
         let pane = self.context_pane(window, cx);
-        let pane_dir = pane
-            .as_ref()
-            .and_then(|pane| pane.read(cx).host_cwd());
+        let pane_dir = pane.as_ref().and_then(|pane| pane.read(cx).host_cwd());
         // The directory's owning host: the context pane's for the followed
         // directory, the pin's origin for a pinned worktree — never the
         // workspace's current host on its own, which a relink would silently
@@ -553,8 +551,8 @@ impl LyrelApp {
                     .map_or_else(|| self.spawn_host(cx), |pane| pane.read(cx).host_id()),
             ),
         };
-        let connection =
-            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
+        let connection = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host)
+            .map_or(0, |host| {
                 std::sync::Arc::as_ptr(&host) as *const () as usize
             });
         let repo = match &self.session_history.follow {
@@ -652,10 +650,9 @@ impl LyrelApp {
         if self.session_history.generation != generation {
             return;
         }
-        let live =
-            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
-                std::sync::Arc::as_ptr(&host) as *const () as usize
-            });
+        let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
+            std::sync::Arc::as_ptr(&host) as *const () as usize
+        });
         if live != connection {
             self.session_history.scanning = false;
             return;
@@ -1441,6 +1438,12 @@ mod tests {
         let seeded = host.join(&remote_home, ".pi/agent/sessions/r/remote-pi.jsonl");
         host.create_dir(seeded.parent().unwrap(), true).unwrap();
         host.write_file(&seeded, record.as_bytes()).unwrap();
+        let case_variant = host.join(&remote_home, ".pi/agent/sessions/r/remote-pi-case.jsonl");
+        host.write_file(
+            &case_variant,
+            b"{\"type\":\"session\",\"id\":\"remote-pi-case\",\"cwd\":\"/tmp/Remote-Project\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"case decoy\"}}\n",
+        )
+        .unwrap();
 
         let agent_launch = std::collections::HashMap::from([(
             CLIAgent::Hermes.slug().to_owned(),
@@ -1449,14 +1452,16 @@ mod tests {
         // The remote Pi store answers even if a separate Hermes launcher
         // cannot run. Keep the failure independent of the remote host's PATH.
         let scan = cx.update(|cx| {
-            plan_scan(
+            let mut scan = plan_scan(
                 host.id(),
                 &[],
                 &CLIAgent::ALL,
                 &remote_home,
                 &agent_launch,
                 cx,
-            )
+            );
+            scan.directory = Some(PathBuf::from("/tmp/remote-project"));
+            scan
         });
         let listing = collect_sessions(&*host, scan);
         let found = listing
@@ -1468,6 +1473,10 @@ mod tests {
         assert_eq!(
             found.cwd.as_deref(),
             Some(std::path::Path::new("/tmp/remote-project"))
+        );
+        assert!(
+            listing.sessions.iter().all(|s| s.id != "remote-pi-case"),
+            "the Linux owning Host distinguishes directories that differ in case"
         );
         assert!(
             !listing.errors.is_empty(),

@@ -60,7 +60,11 @@ impl SessionHistory {
             .partition(|s| {
                 here.as_deref().is_some_and(|here| {
                     s.cwd.as_deref().is_some_and(|cwd| {
-                        crate::core::agent_history::directory_matches_with(cwd, here, host_separator)
+                        crate::core::agent_history::directory_matches_with(
+                            cwd,
+                            here,
+                            host_separator,
+                        )
                     })
                 })
             });
