@@ -232,7 +232,7 @@ def main():
                 if mode == "plan":
                     results.append(prepare_one(db, root))
                 elif mode == "delete":
-                    results.append(delete_one(db, sessions_dir, root, expected.get(root)))
+                    results.append(delete_one(db, sessions_dir, root, expected.get(root), SessionActiveWriteGuardError))
                 else:
                     refuse("unknown adapter mode: %s" % mode)
                     return
@@ -276,7 +276,7 @@ def prepare_one(db, root):
     raise RuntimeError("Hermes did not report the native write guards")
 
 
-def delete_one(db, sessions_dir, root, expected):
+def delete_one(db, sessions_dir, root, expected, active_write_guard):
     if expected is None:
         return {"id": root, "status": "failed", "message": "no confirmed delete scope"}
     plan = plan_one(db, root)
@@ -291,7 +291,7 @@ def delete_one(db, sessions_dir, root, expected):
             expected_delete_ids=[str(item) for item in expected],
             exclude_active_write_guards=True,
         )
-    except SessionActiveWriteGuardError as error:
+    except active_write_guard as error:
         return {"id": root, "status": "guarded", "message": str(error)[:400]}
     if not removed:
         return {"id": root, "status": "stale", "message": "native cascade changed since confirmation"}
