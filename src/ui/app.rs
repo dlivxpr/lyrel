@@ -392,7 +392,9 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
-    pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
+    /// The shared host-metrics sampler this window demands; held only while
+    /// the title bar or the monitor shows its host (#373).
+    pub(crate) metric_view: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,

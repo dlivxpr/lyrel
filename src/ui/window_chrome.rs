@@ -321,6 +321,9 @@ pub(crate) enum ChromeCommand {
 pub(crate) struct WindowChrome {
     left: AnyElement,
     right: AnyElement,
+    /// The shared host-metrics strip (`element`, `width`) sitting left of the
+    /// button group; `None` where the window must not show it.
+    metrics: Option<(AnyElement, f32)>,
 }
 
 impl WindowChrome {
@@ -329,6 +332,7 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
+        metrics: Option<(AnyElement, f32)>,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -437,6 +441,7 @@ impl WindowChrome {
         Self {
             left: left.into_any_element(),
             right: right.into_any_element(),
+            metrics,
         }
     }
 
@@ -459,12 +464,14 @@ impl WindowChrome {
             .child(self.left);
         let left = title_bar_drag(left_row, "workbench-left-drag", window, cx).into_any_element();
         let trailing_inset = if macos_fullscreen { 0.75 } else { 0.25 };
+        let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);
         let strip = h_flex()
             .w_full()
             .min_w_0()
             .h_full()
             .justify_end()
             .pr(rems(trailing_inset))
+            .when_some(self.metrics, |strip, (metrics, _)| strip.child(metrics))
             .child(self.right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
         let native_width = if controls_drawn {
@@ -474,8 +481,9 @@ impl WindowChrome {
         } else {
             0.
         };
-        // 三按钮组与外边距共用宽度预算；原生控件不随界面缩放。
-        let right_width = window.rem_size().as_f32() * (6.5 + trailing_inset) + native_width;
+        // 三按钮组、指标条与外边距共用宽度预算；原生控件不随界面缩放。
+        let right_width =
+            window.rem_size().as_f32() * (6.5 + trailing_inset) + native_width + metrics_width;
         let right = if !macos_fullscreen && (controls_drawn || cfg!(target_os = "macos")) {
             TitleBar::new()
                 .h(rems(3.))

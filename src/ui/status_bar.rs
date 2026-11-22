@@ -369,7 +369,8 @@ impl LyrelApp {
             .child(context)
             .children(program)
             // Document state lives in the editor panel's own bottom bar now;
-            // the global bar only carries window context.
+            // the global bar only carries window context, and host CPU/RAM
+            // moved to the title bar (#373).
             .child(
                 h_flex()
                     .flex_none()
@@ -465,21 +466,17 @@ mod tests {
             settle(&mut vcx);
             vcx.update(|window, cx| {
                 assert_global_controls_in_bounds(window);
-                let bar = window.find("workbench-status").bounds();
-                let metrics = window.find("status-host-metrics").bounds();
                 let clock = window.find("status-clock").bounds();
-                for id in ["status-host-metrics", "status-cpu", "status-memory"] {
-                    let control = window.find(id);
-                    assert!(control.visible(), "{id} must remain visible");
-                    assert!(control.bounds().left() >= bar.left());
-                    assert!(control.bounds().right() <= clock.left());
-                }
+                assert!(
+                    window.try_find("status-host-metrics").is_none(),
+                    "host metrics moved to the title bar (#373)"
+                );
                 let host = window.find("status-host");
                 assert!(host.label().unwrap().contains(hostname));
                 assert!(host.visible());
                 let path_bounds = window.find("status-path").bounds();
                 assert!(path_bounds.left() >= host.bounds().right());
-                assert!(path_bounds.right() <= metrics.left());
+                assert!(path_bounds.right() <= clock.left());
                 assert!(path_bounds.size.width >= window.rem_size() * 1.25);
                 if font == 24. {
                     if width == 1440. {

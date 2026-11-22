@@ -302,6 +302,7 @@ impl LyrelApp {
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
+            self.render_titlebar_metrics(window, cx),
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
@@ -437,7 +438,8 @@ impl LyrelApp {
         // Keeps the Session History tool bound to the context pane's host and
         // directory while that tool is open.
         self.sync_session_history(window, cx);
-        self.sync_status_metrics(window, cx);
+        // Keeps one shared sampler alive for the title bar and the monitor.
+        self.sync_host_metrics(window, cx);
         let lifted = crate::ui::pane_drag::lifted(&self.pane_drag).is_some();
         if (!window.is_window_active()
             || (lifted && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none())))

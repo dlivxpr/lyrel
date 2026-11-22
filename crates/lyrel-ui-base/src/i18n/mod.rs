@@ -2013,6 +2013,12 @@ l10n_keys! {
     MonitorProcsUnavailableHint,
     MonitorProcsHeuristic,
     MonitorProcsHeuristicHint,
+    // The resource-trend section above the process tree: its heading and the
+    // approved trend windows.
+    MonitorResourcesTitle,
+    MonitorRangeTwoMinutes,
+    MonitorRangeQuarterHour,
+    MonitorRangeHour,
     // The title-bar `+` that offers every tool.
     ToolHostAdd,
     // A tool tab's close button; `{tool}` is the tool's visible name.
@@ -2383,6 +2389,8 @@ l10n_keys! {
     HostMetricsFailed,
     HostMetricsError,
     HostMetricsSample,
+    // The title-bar memory metric reads "RAM"; the monitor tile speaks of "Memory".
+    HostMetricsRam,
     RemoteProfileGone,
     RemoteRestartTitle,
     RemoteRestartBody,

@@ -459,7 +459,7 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
-            status_metrics: None,
+            metric_view: None,
             notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
             program_attention: Default::default(),
             status_document_focus: None,

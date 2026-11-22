@@ -80,6 +80,8 @@ pub(crate) struct MonitorState {
     /// The name/PID filter field.
     pub(crate) input: gpui_kit::Entity<InputState>,
     pub(crate) sort: MonitorSort,
+    /// The shared resource-trend window the CPU/RAM tiles chart.
+    pub(crate) range: crate::ui::host_metrics::MetricsRange,
     /// Branches the user has opened. A node not in the set renders folded,
     /// with its descendant count — the Shell root included, so the first
     /// paint is one row.
@@ -105,6 +107,7 @@ impl MonitorState {
         Self {
             input,
             sort: MonitorSort::Tree,
+            range: crate::ui::host_metrics::MetricsRange::default(),
             expanded: HashSet::new(),
             selected: None,
             pane: None,
@@ -491,6 +494,7 @@ impl LyrelApp {
             .min_h_0()
             .child(title)
             .child(host_line)
+            .child(self.render_monitor_resources(window, cx))
             .child(self.panel_search_with(&self.monitor.input, None, cx))
             .child(header)
             .children(self.monitor_source_note(source, muted))

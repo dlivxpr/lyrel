@@ -2354,6 +2354,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MonitorProcsUnavailableHint => "拥有此窗格的主机无法报告其进程。",
         L10nKey::MonitorProcsHeuristic => "仅显示本机一侧的连接进程。",
         L10nKey::MonitorProcsHeuristicHint => "远端主机上运行的进程不会显示在此处。",
+        L10nKey::MonitorResourcesTitle => "资源趋势",
+        L10nKey::MonitorRangeTwoMinutes => "2 分钟",
+        L10nKey::MonitorRangeQuarterHour => "15 分钟",
+        L10nKey::MonitorRangeHour => "1 小时",
         L10nKey::ToolHostAdd => "添加工具",
         L10nKey::ToolHostClose => "关闭{tool}",
         L10nKey::PanelNoSession => "没有活动会话。",
@@ -2631,6 +2635,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::HostMetricsFailed => "主机采样失败：{reason}",
         L10nKey::HostMetricsError => "主机采样失败",
         L10nKey::HostMetricsSample => "{host} · 整机 CPU · 内存 {used} / {total} GiB",
+        L10nKey::HostMetricsRam => "RAM",
         L10nKey::RemoteProfileGone => "已删除的配置",
         L10nKey::RemoteRestartTitle => "重启“{machine}”上的 lyrel server？",
         L10nKey::RemoteRestartBody => {

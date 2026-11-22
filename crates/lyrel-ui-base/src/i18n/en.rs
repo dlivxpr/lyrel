@@ -2608,6 +2608,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorProcsHeuristicHint => {
             "Processes running on the remote host are not visible here."
         }
+        L10nKey::MonitorResourcesTitle => "Resource trends",
+        L10nKey::MonitorRangeTwoMinutes => "2 min",
+        L10nKey::MonitorRangeQuarterHour => "15 min",
+        L10nKey::MonitorRangeHour => "1 hour",
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
@@ -2924,6 +2928,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
         L10nKey::HostMetricsError => "Host sampling failed",
         L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
+        L10nKey::HostMetricsRam => "RAM",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {
