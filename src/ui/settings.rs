@@ -37,6 +37,7 @@ mod inputs;
 pub(crate) mod kit;
 mod navigation;
 mod sections;
+mod sessions;
 mod shell;
 mod shortcuts;
 pub(crate) mod skills;
@@ -233,12 +234,13 @@ pub(crate) enum SettingsSection {
     Skills,
     Statistics,
     Keybindings,
+    Sessions,
     Usage,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 10] = [
+    pub(crate) const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Terminal,
@@ -247,6 +249,7 @@ impl SettingsSection {
         SettingsSection::Agents,
         SettingsSection::Skills,
         SettingsSection::Statistics,
+        SettingsSection::Sessions,
         SettingsSection::Usage,
         SettingsSection::About,
     ];
@@ -268,6 +271,7 @@ impl SettingsSection {
             Self::Agents => L10nKey::SettingsNavAgents,
             Self::Skills => L10nKey::SettingsNavSkills,
             Self::Statistics => L10nKey::StatisticsTitle,
+            Self::Sessions => L10nKey::SettingsNavSessions,
             Self::Usage => L10nKey::SettingsNavUsage,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
@@ -284,6 +288,7 @@ impl SettingsSection {
             Self::Agents => "icons/settings/integrations.svg",
             Self::Skills => "icons/settings/integrations.svg",
             Self::Statistics => "icons/settings/integrations.svg",
+            Self::Sessions => "icons/settings/terminal.svg",
             Self::Usage => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
@@ -299,6 +304,7 @@ impl SettingsSection {
             SettingsSection::Agents => "settings:agents",
             SettingsSection::Skills => "settings:skills",
             SettingsSection::Statistics => "settings:statistics",
+            SettingsSection::Sessions => "settings:sessions",
             SettingsSection::Usage => "settings:usage",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
@@ -379,6 +385,7 @@ pub(crate) struct SettingsState {
     /// Agents with an install or removal in flight.
     pub(crate) agent_busy: std::collections::HashSet<crate::core::agent_hooks::HookAgent>,
     pub(crate) statistics: statistics::StatisticsState,
+    pub(crate) sessions: sessions::SessionsState,
     pub(crate) _subs: Vec<Subscription>,
 }
 

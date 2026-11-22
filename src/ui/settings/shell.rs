@@ -786,6 +786,7 @@ impl SettingsWindow {
                 SettingsSection::Agents => self.render_settings_agents(cx),
                 SettingsSection::Skills => self.render_settings_skills(cx),
                 SettingsSection::Statistics => self.render_settings_statistics(cx),
+                SettingsSection::Sessions => self.render_settings_sessions(cx),
                 SettingsSection::Usage => self.render_settings_usage(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
                 SettingsSection::About => self.render_settings_about(cx),
@@ -795,7 +796,10 @@ impl SettingsWindow {
         let data_page = !searching
             && matches!(
                 section,
-                SettingsSection::Skills | SettingsSection::Statistics | SettingsSection::Usage
+                SettingsSection::Skills
+                    | SettingsSection::Statistics
+                    | SettingsSection::Sessions
+                    | SettingsSection::Usage
             );
 
         // Up in the title-bar band, where the window's own chrome sits, and
@@ -1476,6 +1480,22 @@ impl SettingsWindow {
                     self.settings_row(
                         t(L10nKey::StatisticsTitle),
                         t(L10nKey::StatisticsScope),
+                        control.into_any_element(),
+                        cx,
+                    );
+                }
+                SettingsSection::Sessions => {
+                    let control = kit::button(
+                        "sessions-search-open",
+                        t(L10nKey::SessionsOpen),
+                        kit::BtnKind::Secondary,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.navigate_settings(SettingsSection::Sessions, None, window, cx)
+                    }));
+                    self.settings_row(
+                        t(L10nKey::SettingsNavSessions),
+                        t(L10nKey::SessionsSubtitle),
                         control.into_any_element(),
                         cx,
                     );

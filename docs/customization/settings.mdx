@@ -49,6 +49,9 @@ SSH 主机与集成页面的智能体列表在内容超出列表高度时独立�
   <Card title="统计" icon="chart-simple">
     明确选择本机或已连接远端，查看 omp／pi／Kimi Code／OpenCode／Hermes 原生历史的 Token、费用与活跃主会话总览。
   </Card>
+  <Card title="会话" icon="terminal">
+    一次查看一台主机的已保存智能体会话，按智能体、最近活动、目录与标题／原生 ID 筛选；点击标题查看详情或复制 ID，逐行复选批量在 Lyrel 中隐藏或重新显示。
+  </Card>
   <Card title="用量" icon="coins">
     按服务商管理 Kimi Code、Command Code、StepFun Plan、DeepSeek 和 Xiaomi MiMo 账户，查看套餐额度或 API 余额，仅页面可见时按所选节奏刷新。
   </Card>
@@ -150,6 +153,14 @@ Hermes 将共享根本身配置为 `external_dirs` 时，其中精确指向被�
 正式依据：[omp Skills](https://github.com/can1357/oh-my-pi/blob/9d5d4ac5b50ac2bb5866e4202efc0cf785dfc57a/docs/skills.md)、[pi Skills](https://github.com/earendil-works/pi/blob/1402973a9dbe8c627341e04c9744c54953e285ca/packages/coding-agent/docs/skills.md)、[Kimi Code Skills](https://github.com/MoonshotAI/kimi-code/blob/472192c34c1efad89a369870eff0da0b708ce9bb/docs/en/customization/skills.md)、[OpenCode Skills](https://github.com/anomalyco/opencode/blob/v2.0.32/services/www/src/docs/content/skills.mdx)、[Hermes Skills](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/user-guide/features/skills.md)、[skills CLI 来源锁](https://github.com/vercel-labs/skills/blob/671e8c320810d36fed80fac5f1a2c1bf7e82d812/src/skill-lock.ts)。
 
 自动化验证使用隔离目录、真实 Host 文件读取和设置交互；真实桌面主题／缩放／窄窗口、真实 SSH 连接与远端编辑、macOS 实机仍需分别记录运行验收，不能以编译或 stdio 测试替代。
+
+## 会话
+
+从**设置 → 会话**进入，或搜索「会话」「历史」「隐藏」。页面一次只查看一台主机，默认选择发起设置的工作区所在主机，页头可随时切换；列表与发现与会话历史工具、随处搜索共用同一主机级扫描。
+
+顶部按标题或原生 ID 搜索，并按智能体、最近活动（不限、最近 7 天、最近 30 天、早于 30 天、自定义日期范围）与目录组合筛选；目录选择器搜索当前主机已发现的完整路径。左栏以「会话」和「已隐藏」页签分组，每条行首常驻复选框，顶部三态复选框只全选当前主机、当前页签、当前筛选下的记录；切换主机、页签或任一筛选会清空勾选。点击标题在右栏打开常驻详情：标题、智能体、工作目录、最近活动、存储来源和原生 ID，详情中可复制 ID。
+
+「在 Lyrel 中隐藏」只把会话从 Lyrel 的列表移除，可随时在「已隐藏」页签重新显示，智能体自己的历史不受影响。勾选多条后右栏切换为选中清单，并先标出暂不可删除的数量与逐条原因（如「会话运行中」「来源不支持删除」）；删除原生会话的确认界面由后续工单提供。
 
 <a id="skills-statistics-usage-boundaries"></a>
 ## 技能、统计与用量的引入边界

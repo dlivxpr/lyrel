@@ -47,7 +47,8 @@ impl SessionHistory {
 
     pub(super) fn items(&self, found: Vec<PastSession>, cx: &App) -> (Vec<Item>, usize) {
         let now = lyrel_core::core::config::unix_now();
-        let hidden = &cx.global::<Config>().hidden_agent_sessions;
+        let cfg = cx.global::<Config>();
+        let host = self.host;
         let here = &self.here;
         let home = &self.home;
         // `here` is a directory on this query's host; its records are judged
@@ -56,7 +57,12 @@ impl SessionHistory {
             .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
         let (mut mine, mut rest): (Vec<_>, Vec<_>) = found
             .into_iter()
-            .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
+            .filter(|s| {
+                !crate::ui::session_history::is_session_hidden(
+                    cfg,
+                    &crate::ui::session_history::SessionIdentity::of(host, s),
+                )
+            })
             .partition(|s| {
                 here.as_deref().is_some_and(|here| {
                     s.cwd.as_deref().is_some_and(|cwd| {

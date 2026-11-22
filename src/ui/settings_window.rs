@@ -27,6 +27,23 @@ pub(crate) struct SettingsContext {
     pub shells: Rc<dyn Fn(&App) -> Vec<crate::core::shells::DetectedShell>>,
     pub live_profiles: Rc<dyn Fn(&App) -> std::collections::HashSet<uuid::Uuid>>,
     pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
+    /// The host of the workspace that opened this settings window — the
+    /// Sessions page's initial host.
+    pub active_host: Rc<dyn Fn(&App) -> lyrel_ui_base::host_ops::HostId>,
+    /// The agent sessions that workspace currently has open, by the same
+    /// identity the session listings use — what marks a listed session
+    /// "running" in the Sessions page's batch summary.
+    pub live_sessions:
+        Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,
+    /// The planned host-scoped session-store scan for the Sessions page —
+    /// the same plan the Session History tool and Search Everywhere run,
+    /// built from that workspace's open panes and offered agents.
+    pub session_scan: Rc<
+        dyn Fn(
+            lyrel_ui_base::host_ops::HostId,
+            &App,
+        ) -> Option<crate::ui::session_history::SessionScan>,
+    >,
     pub credentials: std::sync::Arc<dyn crate::core::keychain::CredentialStore>,
     pub usage_vault: std::sync::Arc<dyn lyrel_insights::usage::accounts::SecretVault>,
 }
@@ -336,6 +353,9 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(cx.global::<Config>().ui_font_size));
         crate::ui::settings::kit::note_scale(window);
+        // Like the right panel's session history: the page stays bound to its
+        // one host, and a scan starts only when the bound moved.
+        self.sync_sessions_settings(window, cx);
         let page = self.render_settings(window, cx);
         gpui_kit::div()
             .size_full()

@@ -22,6 +22,11 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
             keywords: StatisticsKeywords,
         },
         SearchEntry {
+            section: Sessions,
+            title: SettingsNavSessions,
+            keywords: SessionsSettingsKeywords,
+        },
+        SearchEntry {
             section: Usage,
             title: SettingsNavUsage,
             keywords: UsageSearchKeywords,

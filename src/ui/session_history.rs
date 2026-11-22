@@ -1,5 +1,6 @@
-//! Directory-scoped Session History: the right panel's own tool, and the
-//! shared discovery behind it.
+//! Directory-scoped Session History: the right panel's own tool, the shared
+//! discovery behind it, and the visibility identity model every session
+//! consumer hides through.
 //!
 //! The discovery is host-scoped: a scan runs on the Host that owns the
 //! session stores (through [`HostOps`], never on the UI thread) and every
@@ -11,7 +12,8 @@
 //! per-source errors beside the sessions it did find, and the view says
 //! which is which. Search Everywhere's Sessions tab consumes the same
 //! plan/collect pair (see [`crate::ui::search`]), and Sessions settings
-//! (#366) builds on the listing type.
+//! (#366) builds on the listing type and the [`SessionIdentity`] visibility
+//! model both consumers hide through.
 
 use std::path::{Path, PathBuf};
 
@@ -101,6 +103,125 @@ impl SessionListing {
         }
         SessionHealth::Unsupported
     }
+}
+
+/// The identity behind one Lyrel visibility decision. Session History,
+/// Search Everywhere and Sessions settings (#366) all name a session by
+/// this, so a hide in one place reads the same in the others.
+///
+/// `key()` is the spelling `Config::hidden_agent_sessions` has always used —
+/// `<agent slug>:<session id>`, host-independent — so preferences written
+/// before Sessions settings existed keep matching. Everything else the
+/// listing preserved (`cwd`, `scope`) rides along so a future consumer can
+/// resolve the exact store the session lives in without rescanning.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionIdentity {
+    pub(crate) host: HostId,
+    pub(crate) agent: CLIAgent,
+    pub(crate) id: String,
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) scope: Option<lyrel_core::host::session_operations::SessionScope>,
+}
+
+/// Where one session's records live, as exactly as the scan could name it.
+/// Deletion (#367) and the settings eligibility read this: a session whose
+/// store cannot be confirmed must never read as deletable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SessionStore {
+    /// The exact session file the scan located (the native pi/Oh My Pi/Kimi
+    /// stores name one).
+    File(PathBuf),
+    /// The store the scope names — a profile and/or a store-root selector —
+    /// without an exact file.
+    Named { profile: Option<String>, root: Option<String> },
+    /// The listing preserved nothing addressable.
+    Unconfirmed,
+}
+
+impl SessionIdentity {
+    pub(crate) fn of(host: HostId, session: &PastSession) -> Self {
+        Self {
+            host,
+            agent: session.agent,
+            id: session.id.clone(),
+            cwd: session.cwd.clone(),
+            scope: session.scope.clone(),
+        }
+    }
+
+    /// The config key every consumer has always written: agent slug and the
+    /// agent-unique session id, nothing else. Hiding stays global across
+    /// hosts, exactly as before Sessions settings existed.
+    pub(crate) fn key(&self) -> String {
+        crate::core::agent_history::session_key(self.agent, &self.id)
+    }
+
+    /// Whether two identities name the same stored session on the same host.
+    /// Scopes compare by their durable store selectors (environment keys the
+    /// store answers from, profile, OpenCode storage) — never by the live
+    /// bridge fields or the exact session file, which the running pane's
+    /// readout may not repeat.
+    pub(crate) fn same_session(&self, other: &Self) -> bool {
+        self.host == other.host
+            && self.agent == other.agent
+            && self.id == other.id
+            && same_store_scope(self.scope.as_ref(), other.scope.as_ref())
+    }
+
+    /// The most exact store the scan preserved for this session.
+    pub(crate) fn store(&self) -> SessionStore {
+        let Some(scope) = &self.scope else {
+            return SessionStore::Unconfirmed;
+        };
+        if let Some(file) = &scope.session_file {
+            return SessionStore::File(file.clone());
+        }
+        let root = scope
+            .environment
+            .get("OPENCODE_DB")
+            .or_else(|| scope.environment.get("XDG_DATA_HOME"))
+            .or_else(|| scope.environment.get("PI_CODING_AGENT_DIR"))
+            .or_else(|| scope.environment.get("KIMI_CODE_HOME"))
+            .or_else(|| scope.environment.get("HOME"))
+            .or_else(|| scope.environment.get("USERPROFILE"))
+            .cloned();
+        match (scope.profile.clone(), root) {
+            (None, None) => SessionStore::Unconfirmed,
+            (profile, root) => SessionStore::Named { profile, root },
+        }
+    }
+}
+
+/// Scope equality by durable store selectors: what the store answers from,
+/// not the live bridge or the exact session file. Two `None`s name the same
+/// default store; a missing side against a present side does not.
+fn same_store_scope(
+    a: Option<&lyrel_core::host::session_operations::SessionScope>,
+    b: Option<&lyrel_core::host::session_operations::SessionScope>,
+) -> bool {
+    use lyrel_core::host::session_operations::durable_scope;
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let mut a = durable_scope(a);
+            let mut b = durable_scope(b);
+            // The scan's scope points at the file it read; a running pane's
+            // readout names the store, not the file. The file must not make
+            // the same store read as a different one.
+            a.session_file = None;
+            b.session_file = None;
+            a.session_dir = None;
+            b.session_dir = None;
+            a == b
+        }
+        _ => false,
+    }
+}
+
+/// Whether Lyrel's lists forget this session: the one predicate Session
+/// History, Search Everywhere and Sessions settings all filter through.
+pub(crate) fn is_session_hidden(cfg: &Config, identity: &SessionIdentity) -> bool {
+    cfg.hidden_agent_sessions.contains(&identity.key())
 }
 
 /// The per-provider requests one scan runs: OpenCode and Hermes each answer
@@ -679,7 +800,8 @@ impl LyrelApp {
         ) else {
             return Vec::new();
         };
-        let hidden = &cx.global::<Config>().hidden_agent_sessions;
+        let cfg = cx.global::<Config>();
+        let host = self.session_history.bound.host;
         // The rows judge the owning Host's records by the owning Host's
         // path semantics (a remote Linux host stays case-sensitive even
         // under a Windows client), not by this machine's.
@@ -691,7 +813,7 @@ impl LyrelApp {
             .listing
             .sessions
             .iter()
-            .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
+            .filter(|s| !is_session_hidden(cfg, &SessionIdentity::of(host, s)))
             .filter(|s| {
                 s.cwd.as_deref().is_some_and(|cwd| {
                     crate::core::agent_history::directory_matches_with(cwd, &dir, host_separator)
@@ -1153,15 +1275,22 @@ impl LyrelApp {
         ));
         let hide_agent = session.agent;
         let hide_id = session.id.clone();
+        let hide_host = host;
+        let hide_scope = session.scope.clone();
+        let hide_cwd = session.cwd.clone();
         menu.item(PopupMenuItem::new(t(L10nKey::SessionActionHide)).on_click({
             let app = app.clone();
             move |_, _window, cx| {
                 let _ = app.update(cx, |this, cx| {
                     this.update_config(cx, |cfg| {
-                        cfg.hidden_agent_sessions
-                            .insert(crate::core::agent_history::session_key(
-                                hide_agent, &hide_id,
-                            ));
+                        let identity = SessionIdentity {
+                            host: hide_host,
+                            agent: hide_agent,
+                            id: hide_id.clone(),
+                            cwd: hide_cwd.clone(),
+                            scope: hide_scope.clone(),
+                        };
+                        hide_session(cfg, &identity);
                     });
                 });
             }
