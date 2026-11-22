@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="414" height="338" viewBox="0 0 414 338" role="img" aria-label="五块资源磁贴、单行 Lyrel 用量和默认折叠的当前窗格进程树">
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --muted: #55555b;
+      --border: #a2a2a8;
+      --surface: #e8e8ed;
+      --accent: #1558ae;
+      --error: #a91f30;
+      --c1: #2462b3;
+      --c2: #296c55;
+      --c3: #7040a0;
+      --c4: #8b4a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #ececed;
+        --muted: #b6b6be;
+        --border: #686870;
+        --surface: #303037;
+        --accent: #8cb7ff;
+        --error: #ff8d9a;
+        --c1: #8cb7ff;
+        --c2: #7bd7ae;
+        --c3: #c5a4ff;
+        --c4: #ffbf83;
+      }
+    }
+  </style>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="13" fill="var(--fg)">
+    <rect x="1" y="1" width="412" height="336" rx="8" fill="none" stroke="var(--border)"/>
+    <text x="14" y="24" font-size="15" font-weight="600">活动监视器</text>
+    <text x="400" y="24" text-anchor="end" fill="var(--muted)" font-size="12">dev-linux</text>
+    <path d="M1 37h412M13 227h388M13 305h388" stroke="var(--border)"/>
+    <text x="14" y="56" fill="var(--muted)" font-size="11">资源趋势</text>
+    <rect x="220" y="41" width="54" height="22" rx="5" fill="var(--surface)"/>
+    <text x="247" y="56" text-anchor="middle" font-size="11">2 分钟</text>
+    <text x="312" y="56" text-anchor="middle" font-size="11" fill="var(--muted)">15 分钟</text>
+    <text x="377" y="56" text-anchor="middle" font-size="11" fill="var(--muted)">1 小时</text>
+    <g fill="var(--surface)" stroke="var(--border)">
+      <rect x="13" y="67" width="124" height="57" rx="7"/><rect x="145" y="67" width="124" height="57" rx="7"/>
+      <rect x="277" y="67" width="124" height="57" rx="7"/><rect x="13" y="131" width="190" height="59" rx="7"/>
+      <rect x="211" y="131" width="190" height="59" rx="7"/>
+    </g>
+    <g fill="var(--muted)" font-size="11">
+      <text x="22" y="83">CPU</text><text x="154" y="83">内存</text><text x="286" y="83">GPU</text>
+      <text x="22" y="147">网络</text><text x="220" y="147">磁盘 · 目录大小 / 所在卷总量</text>
+      <text x="220" y="181" font-family="Consolas, monospace">~/…/lyrel</text>
+    </g>
+    <g font-family="Consolas, monospace" font-size="17" font-weight="600">
+      <text x="22" y="103">12%</text><text x="154" y="103">13.1<tspan font-size="11" fill="var(--muted)"> / 32 GB</tspan></text>
+      <text x="286" y="103">8%</text><text x="22" y="166" font-size="13">↓ 2.1 MB/s</text>
+      <text x="193" y="166" text-anchor="end" font-size="11">↑ 240 KB/s</text><text x="220" y="166">4.6 GB / 512 GB</text>
+    </g>
+    <path d="M25 111v7m9-9v9m9-5v5m9-3v3m9-4v4m9-2v2m9-5v5m9-9v9m9-6v6m9-4v4m9-3v3m9-4v4" fill="none" stroke="var(--c1)" stroke-width="5"/>
+    <g fill="none" stroke-width="1.4" stroke-linejoin="round">
+      <path d="M154 118h16l11-2h18l12 1 10-3h14l11 1 13-2" stroke="var(--c2)"/>
+      <path d="M286 119h15l11-5 11 4 13 1 10-8 11 7h13l10-3 11 2" stroke="var(--c3)"/>
+      <path d="M22 177l20-2 14-6 12 6 15 2 13-5 13 5 13-8 12 6 16 2 13-3 14 2 16-5" stroke="var(--c1)"/>
+      <path d="M22 182h19l17-1 10 1h15l13-2 13 2 13-1 12 1h16l13-1 14 1 16-2" stroke="var(--c4)" stroke-dasharray="3 3"/>
+    </g>
+    <rect x="13" y="196" width="388" height="24" rx="5" fill="var(--surface)"/>
+    <text x="22" y="212" font-size="12" font-weight="600">Lyrel</text>
+    <text x="60" y="212" font-size="11" fill="var(--muted)">本机</text>
+    <g font-family="Consolas, monospace" font-size="12">
+      <text x="93" y="212">CPU 1.8%</text><text x="167" y="212">RAM 284 MB</text><text x="254" y="212">GPU 2%</text>
+    </g>
+    <text x="381" y="212" text-anchor="end" font-size="11" fill="var(--muted)">含远端</text>
+    <path d="M388 204l4 4-4 4M22 314l4 4-4 4" stroke="var(--fg)" fill="none" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="14" y="247" font-weight="600">进程</text><text x="46" y="247" font-size="11" fill="var(--muted)">当前窗格</text>
+    <rect x="324" y="232" width="77" height="22" rx="5" fill="var(--surface)"/>
+    <text x="362" y="247" font-size="12" text-anchor="middle" fill="var(--muted)">操作 ▾</text>
+    <rect x="13" y="258" width="388" height="23" rx="5" fill="var(--surface)"/>
+    <circle cx="26" cy="268" r="4" stroke="var(--muted)" fill="none"/><path d="M29 271l3 3" stroke="var(--muted)"/>
+    <text x="39" y="273" fill="var(--muted)" font-size="11">筛选进程名或 PID</text>
+    <g fill="var(--muted)" font-size="11">
+      <text x="21" y="298">进程名称</text><text x="237" y="298" text-anchor="end">PID</text>
+      <text x="310" y="298" text-anchor="end">CPU ↓</text><text x="389" y="298" text-anchor="end">内存</text>
+    </g>
+    <g font-family="Consolas, monospace" font-size="12">
+      <text x="35" y="323">bash</text><text x="237" y="323" text-anchor="end">5420</text>
+      <text x="310" y="323" text-anchor="end">0.1%</text><text x="389" y="323" text-anchor="end">84 MB</text>
+    </g>
+    <text x="74" y="323" font-size="11" fill="var(--muted)">7 个子进程</text>
+  </g>
+</svg>

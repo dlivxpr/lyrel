@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="752" height="324" viewBox="0 0 752 324" role="img" aria-label="会话设置 A 版，顶部筛选，左侧会话列表，右侧常驻详情">
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --muted: #55555b;
+      --border: #a2a2a8;
+      --surface: #e8e8ed;
+      --accent: #1558ae;
+      --error: #a91f30;
+      --c1: #2462b3;
+      --c2: #296c55;
+      --c3: #7040a0;
+      --c4: #8b4a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #ececed;
+        --muted: #b6b6be;
+        --border: #686870;
+        --surface: #303037;
+        --accent: #8cb7ff;
+        --error: #ff8d9a;
+        --c1: #8cb7ff;
+        --c2: #7bd7ae;
+        --c3: #c5a4ff;
+        --c4: #ffbf83;
+      }
+    }
+  </style>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="14" fill="var(--fg)">
+    <rect x="1" y="1" width="750" height="322" rx="9" fill="none" stroke="var(--border)"/>
+    <path d="M1 47h750M1 92h750M424 92v231M14 155h396" stroke="var(--border)"/>
+    <text x="17" y="30" font-size="16" font-weight="600">会话</text>
+    <g fill="var(--surface)">
+      <rect x="607" y="10" width="128" height="27" rx="6"/><rect x="14" y="55" width="181" height="28" rx="6"/>
+      <rect x="203" y="55" width="115" height="28" rx="6"/><rect x="326" y="55" width="167" height="28" rx="6"/>
+      <rect x="501" y="55" width="234" height="28" rx="6"/><rect x="14" y="101" width="50" height="25" rx="5"/>
+      <rect x="14" y="163" width="396" height="46" rx="6"/><rect x="442" y="280" width="128" height="28" rx="6"/>
+    </g>
+    <text x="620" y="29">dev-linux</text><text x="720" y="29" text-anchor="end" fill="var(--muted)">▾</text>
+    <text x="25" y="74" fill="var(--muted)">搜索标题或 ID</text><text x="214" y="74">全部智能体 ▾</text>
+    <text x="337" y="74"><tspan fill="var(--muted)">最近活动</tspan>　早于 30 天 ▾</text>
+    <text x="512" y="74"><tspan fill="var(--muted)">目录</tspan>　所有目录 ▾</text>
+    <text x="39" y="118" text-anchor="middle" font-weight="600">会话</text>
+    <text x="78" y="118" fill="var(--muted)">已隐藏</text>
+    <text x="401" y="118" text-anchor="end" font-size="12" fill="var(--muted)">3 条</text>
+    <rect x="24" y="133" width="13" height="13" rx="3" fill="none" stroke="var(--border)"/>
+    <text x="48" y="144" font-size="13">全选当前结果</text>
+    <g transform="translate(0 21)">
+    <g fill="none" stroke="var(--border)">
+      <rect x="24" y="151" width="13" height="13" rx="3"/><rect x="24" y="200" width="13" height="13" rx="3"/>
+      <rect x="24" y="249" width="13" height="13" rx="3"/>
+    </g>
+    <text x="48" y="163" font-weight="600">排查构建失败</text>
+    <text x="48" y="212">检查远端进程归属</text><text x="48" y="261">更新会话恢复说明</text>
+    <g font-size="12" fill="var(--muted)">
+      <text x="48" y="180">Oh My Pi · ~/dev/lyrel</text><text x="48" y="229">OpenCode · ~/dev/lyrel-monitor</text>
+      <text x="48" y="278">pi · ~/dev/lyrel</text>
+      <g text-anchor="end"><text x="398" y="180">10 月 18 日</text><text x="398" y="229">10 月 13 日</text><text x="398" y="278">10 月 7 日</text></g>
+    </g>
+    </g>
+    <text x="442" y="124" font-size="16" font-weight="600">排查构建失败</text>
+    <g font-size="13">
+      <g fill="var(--muted)">
+        <text x="442" y="157">智能体</text><text x="442" y="181">工作目录</text><text x="442" y="205">最近活动</text>
+        <text x="442" y="229">存储来源</text><text x="442" y="253">会话 ID</text>
+      </g>
+      <text x="527" y="157">Oh My Pi</text><text x="527" y="181" font-family="Consolas, monospace">~/dev/lyrel</text>
+      <text x="527" y="205">10 月 18 日 15:20</text><text x="527" y="229">默认 profile</text>
+      <text x="527" y="253" font-family="Consolas, monospace">b76c…9ca2</text>
+      <text x="728" y="253" text-anchor="end" fill="var(--muted)">复制 ID</text>
+      <text x="506" y="299" text-anchor="middle">在 Lyrel 中隐藏</text>
+      <rect x="580" y="280" width="125" height="28" rx="6" fill="none" stroke="var(--border)"/>
+      <text x="642" y="299" text-anchor="middle" fill="var(--error)">删除原生会话</text>
+    </g>
+  </g>
+</svg>

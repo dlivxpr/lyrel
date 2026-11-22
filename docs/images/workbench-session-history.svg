@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="530" height="247" viewBox="0 0 530 247" role="img" aria-label="会话历史采用随处搜索的紧凑单行样式，当前目录可切换，选中行显示操作快捷键">
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --muted: #55555b;
+      --border: #a2a2a8;
+      --surface: #e8e8ed;
+      --accent: #1558ae;
+      --error: #a91f30;
+      --c1: #2462b3;
+      --c2: #296c55;
+      --c3: #7040a0;
+      --c4: #8b4a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #ececed;
+        --muted: #b6b6be;
+        --border: #686870;
+        --surface: #303037;
+        --accent: #8cb7ff;
+        --error: #ff8d9a;
+        --c1: #8cb7ff;
+        --c2: #7bd7ae;
+        --c3: #c5a4ff;
+        --c4: #ffbf83;
+      }
+    }
+  </style>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" fill="var(--fg)">
+    <rect x="1" y="1" width="528" height="245" rx="8" fill="none" stroke="var(--border)"/>
+    <text x="17" y="27" font-size="15" font-weight="600">会话历史</text>
+    <path d="M1 40h528" stroke="var(--border)"/>
+    <text x="17" y="61" font-size="12" fill="var(--muted)">当前目录</text>
+    <text x="78" y="61" font-family="Consolas, monospace" font-size="13">~/…/worktrees/lyrel-monitor</text>
+    <path d="M271 55l4 4 4-4" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="8" y="72" width="514" height="29" rx="6" fill="var(--surface)"/>
+    <g font-size="11" font-weight="600" text-anchor="middle">
+      <text x="24" y="91">π</text><text x="24" y="120">O</text><text x="24" y="149">π</text>
+      <text x="24" y="178">K</text><text x="24" y="207">π</text><text x="24" y="236">H</text>
+    </g>
+    <g font-family="Consolas, Microsoft YaHei, monospace" font-size="13">
+      <text x="40" y="91">SIDE: Design Sidebar Sessions</text>
+      <text x="40" y="120">Inspect remote process ownership</text>
+      <text x="40" y="149">DEPS: Check rio-vt and gpui-kit versions</text>
+      <text x="40" y="178">梳理工作树目录的会话范围</text>
+      <text x="40" y="207">DEV: Launch Lyrel in dev mode</text>
+      <text x="40" y="236">查看本地安装日志</text>
+    </g>
+    <g font-size="11" text-anchor="end" fill="var(--muted)">
+      <text x="422" y="91">刚刚</text><text x="510" y="120">11 小时前</text><text x="510" y="149">14 小时前</text>
+      <text x="510" y="178">昨天</text><text x="510" y="207">昨天</text><text x="510" y="236">2 天前</text>
+    </g>
+    <text x="432" y="91" font-size="11" fill="var(--muted)">操作</text>
+    <rect x="460" y="77" width="49" height="19" rx="4" fill="none" stroke="var(--border)"/>
+    <text x="484.5" y="91" font-family="Consolas, monospace" font-size="11" text-anchor="middle" fill="var(--muted)">Ctrl E</text>
+  </g>
+</svg>

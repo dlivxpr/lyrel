@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="414" height="211" viewBox="0 0 414 211" role="img" aria-label="展开 Lyrel 用量后，按主机列出桌面界面、会话 daemon 和远端 Lyrel server 的 CPU、RAM、GPU 及网络用量">
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --muted: #55555b;
+      --border: #a2a2a8;
+      --surface: #e8e8ed;
+      --accent: #1558ae;
+      --error: #a91f30;
+      --c1: #2462b3;
+      --c2: #296c55;
+      --c3: #7040a0;
+      --c4: #8b4a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #ececed;
+        --muted: #b6b6be;
+        --border: #686870;
+        --surface: #303037;
+        --accent: #8cb7ff;
+        --error: #ff8d9a;
+        --c1: #8cb7ff;
+        --c2: #7bd7ae;
+        --c3: #c5a4ff;
+        --c4: #ffbf83;
+      }
+    }
+  </style>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" fill="var(--fg)" font-size="12">
+    <rect x="1" y="1" width="412" height="209" rx="8" fill="none" stroke="var(--border)"/>
+    <rect x="12" y="12" width="390" height="27" rx="5" fill="var(--surface)"/>
+    <text x="21" y="30" font-weight="600">Lyrel</text><text x="61" y="30" font-size="11" fill="var(--muted)">本机</text>
+    <g font-family="Consolas, monospace">
+      <text x="93" y="30">CPU 1.8%</text><text x="167" y="30">RAM 284 MB</text><text x="255" y="30">GPU 2%</text>
+    </g>
+    <text x="379" y="30" text-anchor="end" fill="var(--muted)" font-size="11">含远端</text>
+    <path d="M385 27l4-4 4 4" stroke="var(--fg)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <g fill="var(--muted)" font-size="11" text-anchor="end">
+      <text x="171" y="58">CPU</text><text x="235" y="58">RAM</text><text x="285" y="58">GPU</text><text x="391" y="58">网络 ↓ / ↑</text>
+    </g>
+    <path d="M12 66h390" stroke="var(--border)"/>
+    <text x="21" y="82" fill="var(--muted)" font-size="11">本机</text>
+    <text x="21" y="103">桌面界面</text><text x="21" y="125">会话 daemon</text>
+    <text x="21" y="152" fill="var(--muted)" font-size="11">远端 · dev-linux</text><text x="21" y="174">Lyrel server</text>
+    <g font-family="Consolas, monospace" text-anchor="end" font-size="11">
+      <text x="171" y="103">1.2%</text><text x="171" y="125">0.6%</text><text x="171" y="174">0.8%</text>
+      <text x="235" y="103">210 MB</text><text x="235" y="125">74 MB</text><text x="235" y="174">96 MB</text>
+      <text x="285" y="103">2%</text><text x="285" y="125">0%</text><text x="285" y="174" fill="var(--muted)">—</text>
+      <text x="391" y="103">52 / 8 KB/s</text><text x="391" y="125">208 / 30 KB/s</text><text x="391" y="174">200 / 25 KB/s</text>
+    </g>
+    <text x="21" y="196" font-size="11" fill="var(--muted)">dev-linux 无法读取进程 GPU 利用率</text>
+  </g>
+</svg>

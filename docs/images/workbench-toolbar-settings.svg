@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="650" height="490" viewBox="0 0 650 490" role="img" aria-label="工具栏设置分顶栏和状态栏两组，组件可独立开关，示例中已关闭咖啡因">
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --muted: #55555b;
+      --border: #a2a2a8;
+      --surface: #e8e8ed;
+      --accent: #1558ae;
+      --error: #a91f30;
+      --c1: #2462b3;
+      --c2: #296c55;
+      --c3: #7040a0;
+      --c4: #8b4a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #ececed;
+        --muted: #b6b6be;
+        --border: #686870;
+        --surface: #303037;
+        --accent: #8cb7ff;
+        --error: #ff8d9a;
+        --c1: #8cb7ff;
+        --c2: #7bd7ae;
+        --c3: #c5a4ff;
+        --c4: #ffbf83;
+      }
+    }
+  </style>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="14" fill="var(--fg)">
+    <rect x="1" y="1" width="648" height="488" rx="9" fill="none" stroke="var(--border)"/>
+    <path d="M148 1v488M148 45h501M167 182h461" fill="none" stroke="var(--border)"/>
+    <text x="17" y="29" font-size="16" font-weight="600">设置</text><text x="168" y="29" font-size="16" font-weight="600">工具栏</text>
+    <g fill="var(--muted)">
+      <text x="19" y="74">通用</text><text x="19" y="105">外观</text><text x="19" y="165">终端</text><text x="19" y="196">会话</text>
+    </g>
+    <rect x="9" y="115" width="129" height="28" rx="6" fill="var(--surface)"/>
+    <text x="19" y="134" font-weight="600">工具栏</text>
+    <g font-size="12" fill="var(--muted)">
+      <text x="168" y="73">顶栏</text><text x="168" y="206">状态栏</text><text x="168" y="395">关闭后停止保持唤醒</text>
+    </g>
+    <text x="168" y="103">CPU 利用率</text><text x="168" y="132">RAM 用量</text><text x="168" y="161">GPU 利用率</text>
+    <text x="168" y="234">设置入口</text><text x="168" y="263">主机</text><text x="168" y="292">路径</text>
+    <text x="168" y="321">Git 分支与改动数</text><text x="168" y="350">运行状态</text><text x="168" y="379">咖啡因</text>
+    <text x="168" y="427">时钟</text><text x="168" y="456">通知</text>
+    <g fill="var(--accent)">
+      <rect x="593" y="89" width="34" height="17" rx="8.5"/><rect x="593" y="118" width="34" height="17" rx="8.5"/>
+      <rect x="593" y="147" width="34" height="17" rx="8.5"/><rect x="593" y="220" width="34" height="17" rx="8.5"/>
+      <rect x="593" y="249" width="34" height="17" rx="8.5"/><rect x="593" y="278" width="34" height="17" rx="8.5"/>
+      <rect x="593" y="307" width="34" height="17" rx="8.5"/><rect x="593" y="336" width="34" height="17" rx="8.5"/>
+      <rect x="593" y="413" width="34" height="17" rx="8.5"/><rect x="593" y="442" width="34" height="17" rx="8.5"/>
+    </g>
+    <g fill="var(--surface)">
+      <circle cx="618" cy="97.5" r="6"/><circle cx="618" cy="126.5" r="6"/><circle cx="618" cy="155.5" r="6"/>
+      <circle cx="618" cy="228.5" r="6"/><circle cx="618" cy="257.5" r="6"/><circle cx="618" cy="286.5" r="6"/>
+      <circle cx="618" cy="315.5" r="6"/><circle cx="618" cy="344.5" r="6"/><circle cx="618" cy="421.5" r="6"/><circle cx="618" cy="450.5" r="6"/>
+    </g>
+    <rect x="593" y="365" width="34" height="17" rx="8.5" fill="var(--surface)" stroke="var(--border)"/>
+    <circle cx="602" cy="373.5" r="6" fill="var(--muted)"/>
+  </g>
+</svg>
