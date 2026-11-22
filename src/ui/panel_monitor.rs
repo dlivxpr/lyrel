@@ -390,13 +390,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let title = self.panel_title(
-            t(L10nKey::PanelMonitorTitle),
-            None,
-            self.monitor_actions_menu(window, cx),
-            window,
-            cx,
-        );
+        let title = self.panel_title(t(L10nKey::PanelMonitorTitle), None, None, window, cx);
         let Some(pane_id) = self.right_panel.procs_pane else {
             return self.panel_scroll(
                 self.panel_empty(
@@ -613,71 +607,7 @@ impl LyrelApp {
         )
     }
 
-    /// The toolbar「Actions」menu, trailing the panel title. The two items
-    /// act on the selected row; they disable rather than vanish when the
-    /// selection or the source cannot support them, so the affordance stays
-    /// discoverable on read-only sources.
-    fn monitor_actions_menu(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use gpui_kit::component::Sizable as _;
-        use gpui_kit::component::button::ButtonVariants as _;
-        use gpui_kit::component::menu::DropdownMenu as _;
-        if self.right_panel.procs_pane.is_none() {
-            return None;
-        }
-        let app = cx.entity().downgrade();
-        Some(
-            gpui_kit::component::button::Button::new("monitor-actions")
-                .ghost()
-                .small()
-                .child(t(L10nKey::MonitorActionMenu))
-                .dropdown_caret(true)
-                .dropdown_menu_with_anchor(
-                    gpui_kit::Anchor::BottomRight,
-                    move |menu, _window, cx| Self::monitor_actions_dropdown(menu, &app, cx),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn monitor_actions_dropdown(
-        menu: gpui_kit::component::menu::PopupMenu,
-        app: &gpui_kit::WeakEntity<Self>,
-        cx: &mut gpui_kit::App,
-    ) -> gpui_kit::component::menu::PopupMenu {
-        use gpui_kit::component::menu::PopupMenuItem;
-        let Some(app) = app.upgrade() else {
-            return menu;
-        };
-        let this = app.read(cx);
-        let (key, actionable) = this.monitor_actionable_selection();
-        let request = |tree: bool| {
-            let app = app.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut gpui_kit::App| {
-                let Some(key) = key else { return };
-                let _ = app.update(cx, |this, cx| {
-                    this.monitor_request_end(key, tree, window, cx);
-                });
-            }
-        };
-        menu.item(
-            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcess))
-                .disabled(!actionable)
-                .on_click(request(false)),
-        )
-        .item(
-            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcessTree))
-                .disabled(!actionable)
-                .on_click(request(true)),
-        )
-    }
-
-    /// The row's right-click menu: the same two actions, acting on the row
-    /// itself. The row is selected as the menu opens, so the toolbar menu
-    /// agrees with what the user just pointed at.
+    /// The process row's context menu acts on that row's identity.
     fn monitor_row_menu(
         menu: gpui_kit::component::menu::PopupMenu,
         app: &gpui_kit::WeakEntity<Self>,
@@ -708,15 +638,6 @@ impl LyrelApp {
                 .disabled(!actionable)
                 .on_click(request(true)),
         )
-    }
-
-    /// The selected row, but only when ending it is a verified action: the
-    /// source names this machine as the pane's home, and the row carries the
-    /// birth identity the daemon will re-check. Everything else is
-    /// read-only, whatever the menu that asked.
-    fn monitor_actionable_selection(&self) -> (Option<ProcKey>, bool) {
-        let key = self.monitor.selected;
-        (key, key.is_some_and(|key| self.monitor_actionable_row(key)))
     }
 
     fn monitor_actionable_row(&self, key: ProcKey) -> bool {
@@ -1139,10 +1060,8 @@ impl LyrelApp {
 
         use gpui_kit::component::menu::ContextMenuExt as _;
         let app = cx.entity().downgrade();
-        // Every row carries the menu; whether its items are actionable is
-        // decided when the menu opens, from the source class and the row's
-        // identity. A right click also selects the row, so the toolbar menu
-        // agrees with what the user just pointed at.
+        // Right-click selects the row. Ending it also requires a verified
+        // source and a process identity that the owning daemon can re-check.
         h_flex()
             .id(id.clone())
             .test_support()

@@ -2678,7 +2678,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorProcsUnconfirmedHint => {
             "Update the daemon to enable ending processes from here."
         }
-        L10nKey::MonitorActionMenu => "Actions",
         L10nKey::MonitorActionEndProcess => "End Process",
         L10nKey::MonitorActionEndProcessTree => "End Process Tree",
         L10nKey::MonitorConfirmEndTitle => "End {name}?",
@@ -2745,7 +2744,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Its Lyrel server predates session history support."
         }
         L10nKey::PanelSessionsPartial => "Some session sources could not be listed.",
-        L10nKey::PanelSessionsPending => "Still checking session sources…",
         L10nKey::PanelNotAGitRepo => "Not a git repository.",
         L10nKey::PanelNotAGitRepoHint => "cd into one and this tab lists its uncommitted changes.",
         L10nKey::PanelNoChanges => "No uncommitted changes.",
@@ -2931,10 +2929,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Created the worktree at {path} without opening a terminal tab."
         }
         L10nKey::ScmWorktrees => "Worktrees",
-        L10nKey::WorktreePickerTitle => "Switch Worktree",
-        L10nKey::WorktreePickerPlaceholder => "Search by directory, branch or path",
         L10nKey::WorktreePickerCurrent => "current",
-        L10nKey::WorktreePickerEmpty => "No matching checkout",
         L10nKey::WorktreePickerFailed => "Couldn't list worktrees: {error}",
         L10nKey::WorktreePickerRemove => "Remove from Disk",
         L10nKey::WorktreePickerRemoveTitle => "Remove checkout from disk?",
@@ -2972,7 +2967,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::WorktreePickerRemovedDetached => "Removed {path}. Recovery reference {ref}.",
         L10nKey::WorktreePickerRemoveFailed => "Couldn't remove the checkout: {error}",
         L10nKey::StatusGitWorktree => "Checkout menu",
-        L10nKey::StatusCheckoutChooseWorktree => "Switch worktree",
         L10nKey::StatusCheckoutBranchInPlace => "Switch branch in this checkout",
         L10nKey::StatusCheckoutCheckUpstream => "Check branch against upstream",
         L10nKey::StatusCheckoutNoUpstream => "No upstream branch",

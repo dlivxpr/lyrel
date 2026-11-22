@@ -1608,27 +1608,7 @@ impl LyrelApp {
                     list =
                         list.child(self.session_history_row(ix, session, selected == Some(ix), cx));
                 }
-                let mut body = v_flex().child(selector).child(list);
-                if self.session_history.scanning {
-                    // The native rows are up; the service portion is still
-                    // out. Say so — this is not the listing's whole answer.
-                    body = body.child(
-                        div()
-                            .id("panel-sessions-pending")
-                            .test_support()
-                            .px(px(TEXT_INSET))
-                            .py(px(4.))
-                            .text_size(rems(META))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(L10nKey::PanelSessionsPending)),
-                    );
-                } else if health == SessionHealth::Partial {
-                    body = body.child(session_source_diagnostics(
-                        &self.session_history.listing.errors,
-                        cx,
-                    ));
-                }
-                body.into_any_element()
+                v_flex().child(selector).child(list).into_any_element()
             }
         };
         self.panel_scroll(body, title)
@@ -1652,10 +1632,6 @@ impl LyrelApp {
         let pinned = match &self.session_history.follow {
             SessionDirectory::Worktree(path) => Some(path.clone()),
             SessionDirectory::FollowCwd => None,
-        };
-        let label = match follow {
-            true => t(L10nKey::PanelSessionsFollowCwd),
-            false => t(L10nKey::PanelSessionsWorktrees),
         };
         let shown: gpui_kit::SharedString = crate::ui::home::display_path(dir, home).into();
         let full_path: gpui_kit::SharedString =
@@ -1695,7 +1671,7 @@ impl LyrelApp {
                     .flex_none()
                     .text_size(rems(META))
                     .text_color(muted)
-                    .child(label),
+                    .child(t(L10nKey::SessionsDirectoryLead)),
             )
             .child(
                 div().flex_1().min_w_0().child(
@@ -3185,10 +3161,6 @@ mod tests {
                 observed(window, "panel-sessions-row-1"),
                 "the second native row is on screen"
             );
-            assert!(
-                observed(window, "panel-sessions-pending"),
-                "the pending service source is said on screen"
-            );
         });
 
         // The user moves the keyboard onto a native row; then the directory
@@ -3233,10 +3205,6 @@ mod tests {
             assert!(
                 observed(window, "panel-sessions-row-0"),
                 "the current scope's row is on screen"
-            );
-            assert!(
-                observed(window, "panel-sessions-pending"),
-                "the new scope still says its service source is pending on screen"
             );
         });
         app.update_in(&mut vcx, |app, _window, _cx| {
@@ -3290,23 +3258,10 @@ mod tests {
         );
         vcx.update(|window, cx| {
             window.render_frame(cx);
+            assert!(observed(window, "panel-sessions-row-1"));
             assert!(
-                !observed(window, "panel-sessions-pending"),
-                "the finished listing no longer reads as pending"
-            );
-            assert!(
-                observed(window, "panel-sessions-diagnostics"),
-                "the finished listing reads its incomplete sources on screen"
-            );
-            let diagnostics = window.find("panel-sessions-diagnostics");
-            let text = diagnostics.label().unwrap_or_default();
-            assert!(
-                text.contains("OpenCode history storage could not be confirmed"),
-                "the limit is on screen, not a generic sentence: {text}"
-            );
-            assert!(
-                text.contains("fixture hermes is unavailable"),
-                "the failing source's own error is on screen: {text}"
+                !observed(window, "panel-sessions-diagnostics"),
+                "available sessions are shown without the source warning"
             );
         });
 

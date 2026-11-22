@@ -497,10 +497,8 @@ impl LyrelApp {
             cx.set_active_drag_cursor_style(held, window);
         }
         let detach_caret = self.detach_caret(window, cx);
-        self.begin_worktree_picker_frame(window, cx);
         let main_layout = self.render_work_area(window, cx);
         let status_bar = self.render_status_bar(window, cx);
-        self.finish_worktree_picker_frame(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);

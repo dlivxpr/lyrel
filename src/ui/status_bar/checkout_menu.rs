@@ -10,7 +10,6 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::{
     Anchor, AnyElement, ClipboardItem, Context, WeakEntity, Window, div, prelude::*, rems,
 };
-use lyrel_core::core::config::RightPanelTab;
 use lyrel_core::core::git::{
     log::local_branches,
     ops::{GIT_NETWORK_DEADLINE, GitOp},
@@ -24,7 +23,7 @@ use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use crate::ui::app::LyrelApp;
 use crate::ui::notification_history::{Notification, NotificationWindowExt as _};
 use crate::ui::scm::state::RepoKey;
-use crate::ui::worktree_picker::WorktreePickerEntrance;
+use crate::ui::worktree_picker::{current_host, unavailable, worktree_submenu};
 
 impl LyrelApp {
     pub(super) fn status_checkout_trigger(
@@ -32,18 +31,10 @@ impl LyrelApp {
         button: Button,
         repo: RepoKey,
         branch: gpui_kit::SharedString,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let button = button.track_focus(&self.status_checkout_focus);
-        if self.worktree_picker_is_open_from(WorktreePickerEntrance::StatusBar) {
-            return self
-                .worktree_picker_trigger(WorktreePickerEntrance::StatusBar, button, window, cx)
-                .flex_shrink_1()
-                .min_w(rems(2.))
-                .max_w(rems(22.))
-                .into_any_element();
-        }
         let app = cx.entity().downgrade();
         let host = HostRegistry::lookup(cx, repo.host);
         let workspace = self.workspace;
@@ -76,28 +67,6 @@ impl LyrelApp {
             .child(dropdown)
             .into_any_element()
     }
-
-    fn status_checkout_is_current(
-        &self,
-        repo: &RepoKey,
-        workspace: lyrel_ui_base::session::WorkspaceId,
-        window: &Window,
-        cx: &gpui_kit::App,
-    ) -> bool {
-        self.workspace == workspace
-            && self.context_pane(window, cx).is_some_and(|pane| {
-                let view = pane.read(cx);
-                view.host_id() == repo.host
-                    && view.git_status_cwd().is_some_and(|cwd| {
-                        lyrel_ui_base::scm_snapshot::repo_root_for(cx, repo.host, cwd).as_ref()
-                            == Some(&repo.root)
-                    })
-            })
-    }
-}
-
-fn current_host(expected: &SharedHost, cx: &gpui_kit::App) -> bool {
-    HostRegistry::lookup(cx, expected.id()).is_some_and(|host| Arc::ptr_eq(&host, expected))
 }
 
 fn checkout_items(
@@ -113,78 +82,7 @@ fn checkout_items(
     let folder = repo.root.file_name().unwrap_or(repo.root.as_os_str());
     let menu = menu
         .min_w(window.rem_size() * 16.)
-        .label(folder.to_string_lossy().into_owned())
-        .item(
-            PopupMenuItem::new(t(L10nKey::StatusCheckoutChooseWorktree))
-                .disabled(host.is_none())
-                .on_click({
-                    let app = app.clone();
-                    let host = host.cloned();
-                    let repo = repo.clone();
-                    move |_, window, cx| {
-                        // Dismissal restores focus to the trigger, and
-                        // that restore runs after this handler returns.
-                        // Opening the picker synchronously loses the race:
-                        // its query input keeps the handle but the popup's
-                        // own restore wins back the trigger. Defer the
-                        // open past the dismiss chain so the picker's
-                        // focus lands last.
-                        let handle = window.window_handle();
-                        let app = app.clone();
-                        let host = host.clone();
-                        let repo = repo.clone();
-                        cx.defer(move |cx| {
-                            _ = handle.update(cx, |_, window, cx| {
-                                _ = app.update(cx, |app, cx| {
-                                    if !app.status_checkout_is_current(&repo, workspace, window, cx)
-                                        || !host.as_ref().is_some_and(|host| current_host(host, cx))
-                                    {
-                                        return;
-                                    }
-                                    app.open_worktree_picker(
-                                        WorktreePickerEntrance::StatusBar,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            });
-                        });
-                    }
-                }),
-        )
-        .item(
-            PopupMenuItem::new(t(L10nKey::CmdNewWorktreeTab))
-                .disabled(host.is_none())
-                .on_click({
-                    let app = app.clone();
-                    let host = host.cloned();
-                    let repo = repo.clone();
-                    move |_, window, cx| {
-                        if let Some(host) = host.as_ref().filter(|host| current_host(host, cx)) {
-                            _ = app.update(cx, |app, cx| {
-                                if !app.status_checkout_is_current(&repo, workspace, window, cx) {
-                                    return;
-                                }
-                                // The route is the pane the menu is bound
-                                // to, not the window's: a local pane
-                                // inside a remote workspace spawns the
-                                // worktree terminal locally.
-                                let source_workspace = app
-                                    .context_pane(window, cx)
-                                    .and_then(|pane| pane.read(cx).workspace().cloned());
-                                app.new_worktree_at(
-                                    host.clone(),
-                                    repo.root.clone(),
-                                    source_workspace,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        }
-                    }
-                }),
-        )
-        .separator();
+        .label(folder.to_string_lossy().into_owned());
 
     let menu = menu.submenu(branch, window, cx, {
         let app = app.clone();
@@ -226,11 +124,11 @@ fn checkout_items(
             menu.item(PopupMenuItem::new(t(L10nKey::PanelLoading)).disabled(true))
         }
     });
+    // 工作树 sits directly below the branch submenu; the file actions'
+    // leading separator keeps 查看文件/复制 on the far side of it.
+    let menu = menu.separator();
+    let menu = worktree_submenu(menu, window, cx, app, repo, workspace, host);
     checkout_file_actions(menu, window, cx, app, repo, workspace, host)
-}
-
-fn unavailable(menu: PopupMenu) -> PopupMenu {
-    menu.item(PopupMenuItem::new(t(L10nKey::ScmStatusUnavailable)).disabled(true))
 }
 
 fn branch_items(
@@ -370,22 +268,42 @@ fn checkout_file_actions(
     } else {
         repo.root.display().to_string()
     };
+    let terminal_directory = {
+        let app = app.clone();
+        let repo = repo.clone();
+        let host = host.cloned();
+        move |window: &Window, cx: &gpui_kit::App| {
+            if !repo.host.is_local() {
+                return None;
+            }
+            let host = host.as_ref().filter(|host| current_host(host, cx))?;
+            let app = app.upgrade()?;
+            let app = app.read(cx);
+            if !app.status_checkout_is_current(&repo, workspace, window, cx) {
+                return None;
+            }
+            app.context_pane(window, cx)?
+                .read(cx)
+                .host_cwd()
+                .filter(|dir| host.is_absolute(dir))
+        }
+    };
     menu.separator()
         .item(
-            PopupMenuItem::new(t(L10nKey::StatusCheckoutViewFiles)).on_click({
-                let app = app.clone();
-                let repo = repo.clone();
-                let host = host.cloned();
-                move |_, window, cx| {
-                    _ = app.update(cx, |app, cx| {
-                        if app.status_checkout_is_current(&repo, workspace, window, cx)
-                            && host.as_ref().is_some_and(|host| current_host(host, cx))
-                        {
-                            app.set_right_panel_tab(RightPanelTab::Files, window, cx);
-                        }
-                    });
-                }
-            }),
+            PopupMenuItem::new(t(L10nKey::StatusCheckoutViewFiles))
+                .disabled(terminal_directory(window, cx).is_none())
+                .on_click(move |_, window, cx| {
+                    let Some(dir) = terminal_directory(window, cx) else {
+                        return;
+                    };
+                    if let Err(err) = lyrel_ui_base::desktop_file::open_file_path(&dir) {
+                        let message = t_fmt(
+                            L10nKey::OpenInFileManagerFailed,
+                            &[("path", &dir.display().to_string())],
+                        );
+                        HostOps::notify_err(window, cx, &message, &err);
+                    }
+                }),
         )
         .submenu(t(L10nKey::StatusCheckoutCopy), window, cx, {
             let app = app.clone();

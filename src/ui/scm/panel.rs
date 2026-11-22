@@ -39,7 +39,7 @@ use crate::ui::scm::state::{BranchInput, RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm::tree::{TreeRow, normalize_query, path_matches, tree_rows};
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
-use crate::ui::worktree_picker::WorktreePickerEntrance;
+use crate::ui::worktree_picker::worktree_submenu;
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt, t_plural};
 use lyrel_ui_base::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
@@ -316,7 +316,6 @@ impl LyrelApp {
             &branch,
         );
         let branch_width = px((branch_label_width.ceil() + rem * 2.5).min(rem * 5.5));
-        let worktrees = t(L10nKey::ScmWorktrees);
         // The same helper `scm_push`'s guard asks, so the tile and the toast
         // cannot answer differently about the same HEAD.
         let unpushable = pushable_branch(&status.head).err();
@@ -403,26 +402,6 @@ impl LyrelApp {
                             ),
                     ),
             )
-            .child(
-                self.worktree_picker_trigger(
-                    WorktreePickerEntrance::Changes,
-                    Button::new("scm-worktree")
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .icon(Icon::empty().path("icons/folder.svg"))
-                        .label(worktrees)
-                        .tooltip(worktrees)
-                        .dropdown_caret(true)
-                        .w_full()
-                        .h_6()
-                        .px_1(),
-                    window,
-                    cx,
-                )
-                .min_w(rems(2.5))
-                .flex_shrink_1(),
-            )
             // Status chips use the remaining space, not the controls' budget.
             .child(
                 h_flex()
@@ -497,8 +476,10 @@ impl LyrelApp {
         };
         let branches = self.scm.branches(&repo).to_vec();
         let unpushable = pushable_branch(&status.head).is_err();
+        let workspace = self.workspace;
+        let host = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, repo.host);
 
-        move |menu, _window, _cx| {
+        move |menu, window, cx| {
             let mut menu = menu.min_w(px(200.));
             // Past a dozen the list stops being scannable, so it scrolls
             // rather than growing taller than the window.
@@ -559,7 +540,10 @@ impl LyrelApp {
                         }),
                 );
             }
-            menu
+            // The 工作树 submenu the status bar's checkout menu appends the
+            // identical one, so both Git surfaces list the same checkouts.
+            let menu = menu.separator();
+            worktree_submenu(menu, window, cx, &app, &repo, workspace, host.as_ref())
         }
     }
 

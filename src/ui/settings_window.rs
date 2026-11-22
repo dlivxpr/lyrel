@@ -27,9 +27,6 @@ pub(crate) struct SettingsContext {
     pub shells: Rc<dyn Fn(&App) -> Vec<crate::core::shells::DetectedShell>>,
     pub live_profiles: Rc<dyn Fn(&App) -> std::collections::HashSet<uuid::Uuid>>,
     pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
-    /// The host of the workspace that opened this settings window — the
-    /// Sessions page's initial host.
-    pub active_host: lyrel_ui_base::host_ops::HostId,
     /// The open sessions across workbench windows, using the native
     /// identity also used by the Sessions settings listing.
     pub live_sessions: Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,

@@ -13,20 +13,6 @@ use lyrel_ui_base::i18n::{L10nKey, t};
 
 mod checkout_menu;
 
-#[cfg(test)]
-pub(super) fn choose_status_worktree(cx: &mut gpui_kit::VisualTestContext) {
-    use gpui_kit::MouseButton;
-    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
-
-    cx.update(|window, cx| {
-        window.render_frame(cx);
-        let item = window.find_by_label(t(L10nKey::StatusCheckoutChooseWorktree));
-        let position = item.bounds().center();
-        window.pointer_down(position, MouseButton::Left, cx);
-        window.pointer_up(position, MouseButton::Left, cx);
-    });
-}
-
 pub(crate) struct Clock {
     text: SharedString,
 }
@@ -400,10 +386,12 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use crate::ui::app::test_window::harness_with_pane;
-    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
     use lyrel_ui_base::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
     use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::i18n::L10nKey;
+    use lyrel_ui_base::i18n::t;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -793,7 +781,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(cx: &mut TestAppContext) {
+    fn status_git_counts_open_changes_and_the_branch_menu_offers_worktrees(
+        cx: &mut TestAppContext,
+    ) {
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use lyrel_ui_base::host_ops::HostId;
 
@@ -837,7 +827,7 @@ mod tests {
             );
             assert!(window.try_find("status-path").is_none());
         });
-        // …and open Changes — not the picker.
+        // …and open Changes — never the removal confirmation.
         vcx.update(|window, cx| window.click("status-git-counts", cx));
         settle(&mut vcx);
         app.read_with(&vcx, |app, _| {
@@ -847,18 +837,24 @@ mod tests {
                 lyrel_core::core::config::RightPanelTab::Scm
             );
             assert!(
-                app.worktree_picker.is_none(),
-                "the counts action never opens the worktree picker"
+                app.worktree_removal.is_none(),
+                "the counts action never touches the worktree removal"
             );
         });
 
-        // The branch control opens the checkout menu, not the picker yet.
+        // The branch control opens the checkout menu, which offers the
+        // shared 工作树 submenu the Changes panel's branch menu appends too.
         vcx.update(|window, cx| window.click("status-git-branch", cx));
         settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_none()));
-        super::choose_status_worktree(&mut vcx);
-        settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.worktree_removal.is_none()));
+        vcx.update(|window, _| {
+            assert!(
+                window
+                    .try_find_by_label(&t(L10nKey::ScmWorktrees))
+                    .is_some(),
+                "the checkout menu offers the 工作树 submenu"
+            );
+        });
     }
 
     #[gpui_kit::test]

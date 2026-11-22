@@ -4,7 +4,7 @@
 use super::*;
 use crate::ui::settings::test_window::{harness, harness_standalone};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 use lyrel_ui_base::config::Config;
 
 const NOW: u64 = 1_760_000_000; // 2025-10-09，足够新的固定“现在”。
@@ -325,7 +325,7 @@ fn blockers_name_running_unsupported_and_unconfirmed() {
 }
 
 #[gpui_kit::test]
-fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext) {
+fn sessions_page_starts_on_local_host_with_all_directories_and_lays_out(cx: &mut TestAppContext) {
     let (settings, mut vcx) = harness(cx);
     settings.update_in(&mut vcx, |settings, window, cx| {
         settings.open_settings_section(SettingsSection::Sessions, window, cx);
@@ -337,7 +337,11 @@ fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext
         assert_eq!(
             state.sessions.host,
             HostId::LOCAL,
-            "one host at a time, defaulting to the workspace that opened settings"
+            "the page starts on this computer no matter which workspace opened settings"
+        );
+        assert!(
+            state.sessions.directory.is_none(),
+            "the page starts on All Directories"
         );
     });
     // Populate the real page before measuring the narrow layout.
@@ -431,6 +435,608 @@ fn host_tab_and_filter_moves_clear_selection(cx: &mut TestAppContext) {
             cx,
         );
         assert!(settings.sessions_source().0.is_empty());
+    });
+}
+
+// ---- 目录筛选：菜单固定两项、本机系统选择器、SSH 只读浏览器 ----
+
+/// The owning Host behind the directory-browser tests: POSIX spellings,
+/// canned listings per directory, and a record of every directory it was
+/// asked to list — the flow runs through the real HostOps wiring without
+/// touching a native store.
+struct DirectoryHost {
+    inner: lyrel_core::host::SharedHost,
+    listed: std::sync::Mutex<Vec<PathBuf>>,
+}
+
+impl DirectoryHost {
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            inner: lyrel_core::host::local::shared(),
+            listed: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    fn entry(name: &str, is_dir: bool, is_symlink: bool) -> lyrel_core::host::Entry {
+        lyrel_core::host::Entry {
+            name: name.into(),
+            is_dir,
+            is_symlink,
+            ignored: false,
+        }
+    }
+
+    fn listed(&self) -> Vec<PathBuf> {
+        self.listed.lock().unwrap().clone()
+    }
+}
+
+impl lyrel_core::host::Host for DirectoryHost {
+    fn id(&self) -> HostId {
+        HostId(0x5ca1_ab1e)
+    }
+    fn separator(&self) -> char {
+        '/'
+    }
+    fn is_absolute(&self, p: &Path) -> bool {
+        self.inner.is_absolute(p)
+    }
+    fn read_dir(
+        &self,
+        dir: &Path,
+        _root: Option<&Path>,
+    ) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
+        self.listed.lock().unwrap().push(dir.to_path_buf());
+        let names: &[&str] = match dir.to_string_lossy().as_ref() {
+            "/home/dev" => &["projects", "notes.txt", "work", "link"],
+            "/home" => &["dev", "ops"],
+            "/home/dev/projects" => &["lyrel"],
+            _ => &[],
+        };
+        Ok(names
+            .iter()
+            .map(|name| match *name {
+                "notes.txt" => Self::entry(name, false, false),
+                "link" => Self::entry(name, true, true),
+                _ => Self::entry(name, true, false),
+            })
+            .collect())
+    }
+    fn stat(&self, p: &Path) -> std::io::Result<lyrel_core::host::Meta> {
+        self.inner.stat(p)
+    }
+    fn read_file(&self, p: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+        self.inner.read_file(p, max)
+    }
+    fn canonicalize(&self, p: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(p)
+    }
+    fn search(
+        &self,
+        roots: &[PathBuf],
+        query: &str,
+        limit: usize,
+        dirs: usize,
+        hidden: bool,
+    ) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> {
+        self.inner.search(roots, query, limit, dirs, hidden)
+    }
+    fn search_content(
+        &self,
+        roots: &[PathBuf],
+        query: &lyrel_core::host::ContentQuery,
+        limits: &lyrel_core::host::ContentLimits,
+    ) -> std::io::Result<lyrel_core::host::ContentResults> {
+        self.inner.search_content(roots, query, limits)
+    }
+    fn write_file(&self, p: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> {
+        self.inner.write_file(p, bytes)
+    }
+    fn create_file_new(&self, p: &Path) -> std::io::Result<()> {
+        self.inner.create_file_new(p)
+    }
+    fn create_dir(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+        self.inner.create_dir(p, recursive)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn remove(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+        self.inner.remove(p, recursive)
+    }
+    fn repo_root(&self, p: &Path) -> std::io::Result<Option<PathBuf>> {
+        self.inner.repo_root(p)
+    }
+    fn git(&self, cwd: &Path, args: &[&str]) -> std::io::Result<lyrel_core::host::Output> {
+        self.inner.git(cwd, args)
+    }
+    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> {
+        self.inner.shells()
+    }
+    fn watch(&self, dirs: &[PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
+        self.inner.watch(dirs)
+    }
+}
+
+fn settle_directory_browser(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        vcx.run_until_parked();
+        if app.update_in(vcx, |app, _, _| {
+            app.active_settings()
+                .and_then(|s| s.sessions.directory_browser.as_ref())
+                .is_some_and(|browser| !browser.loading)
+        }) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "directory listing did not land"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn browser_names(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext) -> Vec<String> {
+    app.update_in(vcx, |app, _, _| {
+        app.active_settings()
+            .and_then(|s| s.sessions.directory_browser.as_ref())
+            .map(|browser| {
+                browser
+                    .entries
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+#[gpui_kit::test]
+fn directory_menu_lists_all_directories_and_choose_only(cx: &mut TestAppContext) {
+    let (settings, mut vcx) = harness(cx);
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.open_settings_section(SettingsSection::Sessions, window, cx);
+    });
+    vcx.run_until_parked();
+    settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings_mut()
+            .unwrap()
+            .sessions
+            .set_directory(Some(PathBuf::from("/w")));
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-trigger", cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("sessions-directory-item-0").visible(),
+            "All Directories is the first entry"
+        );
+        assert!(
+            window.find("sessions-directory-item-1").visible(),
+            "Choose Directory is the second entry"
+        );
+        assert!(
+            window.try_find("sessions-directory-item-2").is_none(),
+            "the menu holds exactly the two entries — no discovered folders, no search"
+        );
+    });
+    vcx.update(|window, cx| {
+        window.click("sessions-directory-item-0", cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        assert!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .directory
+                .is_none(),
+            "All Directories clears the directory filter"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn ssh_directory_browser_browses_by_host_paths_and_confirms(cx: &mut TestAppContext) {
+    let (settings, _, mut vcx) = harness_standalone(cx);
+    let host = DirectoryHost::new();
+    let shared: lyrel_core::host::SharedHost = host.clone();
+    settings.update_in(&mut vcx, |_, _window, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, shared.clone());
+        lyrel_ui_base::desktop_lookups::publish_remote_home(
+            cx,
+            shared.id(),
+            Some(PathBuf::from("/home/dev")),
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.open_settings_section(SettingsSection::Sessions, window, cx);
+    });
+    vcx.run_until_parked();
+    settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings_mut()
+            .unwrap()
+            .sessions
+            .select_host(shared.id());
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.choose_sessions_directory(window, cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings().unwrap();
+        let browser = state.sessions.directory_browser.as_ref().unwrap();
+        assert_eq!(
+            browser.current,
+            PathBuf::from("/home/dev"),
+            "the browser starts on the host's published home"
+        );
+        assert_eq!(
+            browser
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["projects", "work"],
+            "files and symlinks stay out of a read-only directory browser"
+        );
+    });
+    // 上级：按这台主机的分隔符语义退一级（不是本机 Path 语义）。
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-up", cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let browser = settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .directory_browser
+            .as_ref()
+            .unwrap();
+        assert_eq!(browser.current, PathBuf::from("/home"));
+    });
+    assert_eq!(
+        browser_names(&settings, &mut vcx),
+        ["dev", "ops"],
+        "directories only, sorted by the host's own names"
+    );
+    // 子目录：用主机的 join 拼写进入，客户端不重新解释。
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-entry-dev", cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let browser = settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .directory_browser
+            .as_ref()
+            .unwrap();
+        assert_eq!(browser.current, PathBuf::from("/home/dev"));
+    });
+    assert_eq!(
+        host.listed(),
+        vec![
+            PathBuf::from("/home/dev"),
+            PathBuf::from("/home"),
+            PathBuf::from("/home/dev"),
+        ],
+        "every listing so far ran against the owning host, in navigation order"
+    );
+    // Home 一键回到发布过的 home。
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-home", cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let browser = settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .directory_browser
+            .as_ref()
+            .unwrap();
+        assert_eq!(browser.current, PathBuf::from("/home/dev"));
+    });
+    // 选定：写进目录筛选并关掉浏览器。
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-confirm", cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings().unwrap();
+        assert_eq!(
+            state.sessions.directory.as_deref(),
+            Some(Path::new("/home/dev"))
+        );
+        assert!(state.sessions.directory_browser.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn directory_browser_landing_rejects_stale_answers(cx: &mut TestAppContext) {
+    let (settings, _, mut vcx) = harness_standalone(cx);
+    let host = DirectoryHost::new();
+    let shared: lyrel_core::host::SharedHost = host.clone();
+    settings.update_in(&mut vcx, |_, _window, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, shared.clone());
+        lyrel_ui_base::desktop_lookups::publish_remote_home(
+            cx,
+            shared.id(),
+            Some(PathBuf::from("/home/dev")),
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.open_settings_section(SettingsSection::Sessions, window, cx);
+    });
+    vcx.run_until_parked();
+    settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings_mut()
+            .unwrap()
+            .sessions
+            .select_host(shared.id());
+    });
+    let session = settings.update_in(&mut vcx, |settings, _, _| {
+        settings.active_settings().unwrap().navigation.session()
+    });
+    // 没有浏览器时，落地的答案无处可去。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            1,
+            shared.id(),
+            shared.clone(),
+            Ok(vec![DirectoryHost::entry("orphan", true, false)]),
+            cx,
+        );
+        assert!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .directory_browser
+                .is_none()
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.choose_sessions_directory(window, cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    // 取消再开：旧浏览器作废，之后的旧答案不能借新旅程落地。
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("sessions-directory-cancel", cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        assert!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .directory_browser
+                .is_none(),
+            "cancel drops the browser"
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.choose_sessions_directory(window, cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    let token = settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .directory_browser
+            .as_ref()
+            .unwrap()
+            .token
+    });
+    // 同一会话、同一主机、同一连接、同一令牌才落地。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token,
+            shared.id(),
+            shared.clone(),
+            Ok(vec![DirectoryHost::entry("fresh", true, false)]),
+            cx,
+        );
+    });
+    assert_eq!(browser_names(&settings, &mut vcx), ["fresh"]);
+    // 退休的旧令牌（上一次打开/导航的数字）：丢弃。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token - 1,
+            shared.id(),
+            shared.clone(),
+            Ok(vec![DirectoryHost::entry("stale", true, false)]),
+            cx,
+        );
+    });
+    assert_eq!(
+        browser_names(&settings, &mut vcx),
+        ["fresh"],
+        "an answer from a retired journey is dropped even after cancel/reopen"
+    );
+    // 别的主机：丢弃。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token,
+            HostId(u64::MAX),
+            shared.clone(),
+            Ok(vec![DirectoryHost::entry("stale", true, false)]),
+            cx,
+        );
+    });
+    assert_eq!(browser_names(&settings, &mut vcx), ["fresh"]);
+    // 同一主机身份、不同的连接 Arc：丢弃。
+    let reconnected: lyrel_core::host::SharedHost = DirectoryHost::new();
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token,
+            shared.id(),
+            reconnected,
+            Ok(vec![DirectoryHost::entry("stale", true, false)]),
+            cx,
+        );
+    });
+    assert_eq!(
+        browser_names(&settings, &mut vcx),
+        ["fresh"],
+        "a landing from a superseded connection is dropped"
+    );
+    // 重连后旧浏览器不再替新连接背书：选定被丢弃，筛选不落定。
+    let replacement: lyrel_core::host::SharedHost = DirectoryHost::new();
+    settings.update_in(&mut vcx, |_, _window, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::remove(cx, shared.id());
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, replacement.clone());
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.confirm_sessions_directory(window, cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings().unwrap();
+        assert!(state.sessions.directory.is_none());
+        assert!(
+            state.sessions.directory_browser.is_none(),
+            "confirm against a reconnected host drops the browser"
+        );
+    });
+    // 列失败留下错误态；此时选定不放行，浏览器留着展示错误。
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.choose_sessions_directory(window, cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    let token = settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .directory_browser
+            .as_ref()
+            .unwrap()
+            .token
+    });
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token,
+            replacement.id(),
+            replacement.clone(),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            )),
+            cx,
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.confirm_sessions_directory(window, cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings().unwrap();
+        assert!(
+            state.sessions.directory.is_none(),
+            "a failed listing cannot be confirmed"
+        );
+        assert!(
+            state.sessions.directory_browser.is_some(),
+            "the browser stays open so the error is visible"
+        );
+    });
+    // 同一路径重新列成功即可选定。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.sessions_directory_landed(
+            session,
+            token,
+            replacement.id(),
+            replacement.clone(),
+            Ok(vec![DirectoryHost::entry("fresh", true, false)]),
+            cx,
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.confirm_sessions_directory(window, cx);
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings().unwrap();
+        assert_eq!(
+            state.sessions.directory.as_deref(),
+            Some(Path::new("/home/dev"))
+        );
+        assert!(state.sessions.directory_browser.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn switching_host_cancels_the_directory_browser(cx: &mut TestAppContext) {
+    let (settings, _, mut vcx) = harness_standalone(cx);
+    let host = DirectoryHost::new();
+    let shared: lyrel_core::host::SharedHost = host.clone();
+    settings.update_in(&mut vcx, |_, _window, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, shared.clone());
+        lyrel_ui_base::desktop_lookups::publish_remote_home(
+            cx,
+            shared.id(),
+            Some(PathBuf::from("/home/dev")),
+        );
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.open_settings_section(SettingsSection::Sessions, window, cx);
+    });
+    vcx.run_until_parked();
+    settings.update_in(&mut vcx, |settings, _, _| {
+        settings
+            .active_settings_mut()
+            .unwrap()
+            .sessions
+            .select_host(shared.id());
+    });
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.choose_sessions_directory(window, cx);
+    });
+    settle_directory_browser(&settings, &mut vcx);
+    settings.update_in(&mut vcx, |settings, _, _| {
+        assert!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .directory_browser
+                .is_some()
+        );
+    });
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let state = settings.active_settings_mut().unwrap();
+        state
+            .sessions
+            .set_directory(Some(PathBuf::from("/home/dev/projects")));
+        state.sessions.select_host(HostId::LOCAL);
+        assert!(
+            state.sessions.directory.is_none(),
+            "switching host resets the directory filter"
+        );
+        assert!(
+            state.sessions.directory_browser.is_none(),
+            "switching host cancels the directory browser"
+        );
     });
 }
 

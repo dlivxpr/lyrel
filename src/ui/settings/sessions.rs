@@ -4,9 +4,10 @@
 //! 走 Host 契约的批量 prepare/execute（#367 起 Hermes 可删，#368–370 复用
 //! 同一对契约），本页负责真实选择、逐条原因、确认清单与结果呈现。
 use super::kit::{self, Tk, fs};
-use super::shell::{MenuEntry, SearchOption};
+use super::shell::MenuEntry;
 use super::*;
 use chrono::{Datelike as _, Timelike as _};
+use directory_browser::SessionDirectoryBrowser;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use lyrel_core::core::agent_history::PastSession;
@@ -20,7 +21,8 @@ use lyrel_ui_base::host_registry::HostRegistry;
 use lyrel_ui_base::i18n::L10nKey;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+
+mod directory_browser;
 
 use crate::core::cli_agent::CLIAgent;
 use crate::ui::session_history::{
@@ -83,7 +85,8 @@ impl SessionBlocker {
 /// 设置 → 会话 页的会话状态。一份设置会话持有一份；勾选集只存 key，
 /// 作用域永远等于「当前主机 + 当前页签 + 当前筛选」，切换任一即清空。
 pub(crate) struct SessionsState {
-    /// 一次只看一台主机；初始为发起设置的工作区所在主机。
+    /// 一次只看一台主机；设置页永远从本机开始，不管它是从哪个工作区
+    /// 打开的 —— 本页主机选择只在本次设置会话内保留。
     pub(crate) host: HostId,
     /// 当前列表所属的主机：`None` 到首次扫描认领前。与 `host` 不一致就
     /// 说明主机刚切走，下一轮 render 会重新扫描。
@@ -101,6 +104,12 @@ pub(crate) struct SessionsState {
     pub(crate) start: Entity<InputState>,
     pub(crate) end: Entity<InputState>,
     directory: Option<PathBuf>,
+    /// SSH 主机的只读目录浏览弹层；本机挑目录走系统文件夹选择器，不
+    /// 留状态。随主机切换取消。
+    directory_browser: Option<SessionDirectoryBrowser>,
+    /// 浏览器旅程令牌的单调来源：每次打开与每次导航 +1，旧令
+    /// 牌永不再用 —— 取消再开不会让旧旅程的数字复活。
+    directory_browser_seq: u64,
     pub(crate) search: Entity<InputState>,
     /// 勾选行的 key（`SessionIdentity::key` 拼写）。
     selected: BTreeSet<String>,
@@ -222,10 +231,10 @@ const ROW_H: f32 = 46.;
 const AVATAR: f32 = 18.;
 
 impl SessionsState {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>, host: HostId) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
-            host,
+            host: HostId::LOCAL,
             bound: None,
             connection: None,
             listing: SessionListing::default(),
@@ -238,6 +247,8 @@ impl SessionsState {
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
             directory: None,
+            directory_browser: None,
+            directory_browser_seq: 0,
             search: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(t(L10nKey::SessionsSearchPlaceholder))
             }),
@@ -254,27 +265,6 @@ impl SessionsState {
             chrono::NaiveDate::parse_from_str(input.read(cx).value().trim(), "%Y-%m-%d").ok()
         };
         (parse(&self.start), parse(&self.end))
-    }
-
-    /// 当前主机已发现的全部目录，排序后供目录选择器搜索。
-    fn discovered_directories(
-        &self,
-        home: Option<&Path>,
-    ) -> Vec<(PathBuf, gpui_kit::SharedString)> {
-        let mut dirs: Vec<PathBuf> = self
-            .listing
-            .sessions
-            .iter()
-            .filter_map(|s| s.cwd.clone())
-            .collect();
-        dirs.sort();
-        dirs.dedup();
-        dirs.into_iter()
-            .map(|dir| {
-                let shown = crate::ui::home::display_path(&dir, home).into();
-                (dir, shown)
-            })
-            .collect()
     }
 
     /// 勾选集的作用域变化（主机、页签、任一筛选）时调用：勾选清空，
@@ -294,6 +284,8 @@ impl SessionsState {
         }
         self.host = host;
         self.directory = None;
+        // 浏览器绑定的是旧主机：连进行中的列目录一起作废（代际失效）。
+        self.directory_browser = None;
         self.reset_listing();
         self.clear_scope(true);
     }
@@ -1319,36 +1311,35 @@ impl SettingsWindow {
             cx,
         );
 
-        let dirs = state.discovered_directories(home);
-        let current_dir = state
-            .directory
-            .as_ref()
-            .and_then(|wanted| dirs.iter().position(|(dir, _)| dir == wanted));
+        // 目录筛选只有两项：所有目录，或打开选择器挑一个 —— 不再列出扫
+        // 出来的会话目录，也不带搜索。本机走系统文件夹选择器；SSH 主机
+        // 开只读浏览器（见 directory_browser）。
         let dir_label: gpui_kit::SharedString = state
             .directory
             .as_ref()
             .map(|dir| crate::ui::home::display_path(dir, home).into())
             .unwrap_or_else(|| t(L10nKey::SessionsAllDirectories).into());
-        let options = Rc::new(
-            dirs.iter()
-                .map(|(_, shown)| SearchOption {
-                    label: shown.clone(),
-                    font: None,
-                })
-                .collect::<Vec<_>>(),
-        );
-        let pick_dirs: Rc<Vec<PathBuf>> =
-            Rc::new(dirs.iter().map(|(dir, _)| dir.clone()).collect());
-        let picked = pick_dirs.clone();
-        let directory_menu = self.settings_search_dropdown(
+        let directory_entries = vec![
+            MenuEntry::item(
+                t(L10nKey::SessionsAllDirectories),
+                state.directory.is_none(),
+                move |this, _window, cx| {
+                    this.select_sessions_directory(None, cx);
+                },
+            ),
+            MenuEntry::item(
+                t(L10nKey::PanelSessionsChooseDirectory),
+                false,
+                move |this, window, cx| {
+                    this.choose_sessions_directory(window, cx);
+                },
+            ),
+        ];
+        let directory_menu = self.settings_dropdown(
             "sessions-directory",
             dir_label,
-            options,
-            current_dir,
-            Rc::new(move |this, ix, _window, cx| {
-                let dir = picked.get(ix).cloned();
-                this.select_sessions_directory(dir, cx);
-            }),
+            lead(L10nKey::SessionsDirectoryLead),
+            directory_entries,
             cx,
         );
 

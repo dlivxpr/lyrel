@@ -68,7 +68,6 @@ pub(crate) fn harness_standalone(
             shells: Rc::new(|_| Vec::new()),
             live_profiles: Rc::new(|_| std::collections::HashSet::new()),
             session_sources: Rc::new(|_, _| Vec::new()),
-            active_host: lyrel_ui_base::host_ops::HostId::LOCAL,
             live_sessions: Rc::new(|_| Vec::new()),
             session_scan: Rc::new(|_, _| None),
             credentials: context_credentials.clone(),

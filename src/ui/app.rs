@@ -241,12 +241,11 @@ pub struct LyrelApp {
     pub(crate) session: SessionLifecycle,
     pub(crate) renaming: Option<Renaming>,
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
-    /// The shared worktree picker, while open. One instance serves both
-    /// Git entrances — the Changes header and the status bar's indicator —
-    /// because both entrances are the same choice, not two pickers (#351).
-    pub(crate) worktree_picker: Option<crate::ui::worktree_picker::WorktreePicker>,
+    /// The worktree removal confirmation, while it shows. Both Git menus —
+    /// the Changes panel's branch menu and the status bar's checkout menu —
+    /// open it for the checkout their removal entry names (#352).
+    pub(crate) worktree_removal: Option<crate::ui::worktree_picker::WorktreeRemoval>,
     pub(crate) status_checkout_focus: gpui_kit::FocusHandle,
-    pub(crate) changes_worktree_focus: gpui_kit::FocusHandle,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
     /// Generation that owns the pending badge fade-out, independent of later
@@ -4464,8 +4463,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.cancel_worktree_picker(window, cx);
-        if self.worktree_picker.is_some() {
+        self.cancel_worktree_removal(window, cx);
+        if self.worktree_removal.is_some() {
             // Keep the confirmation visible while Git is removing a checkout.
             return;
         }

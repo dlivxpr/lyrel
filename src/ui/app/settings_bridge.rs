@@ -75,7 +75,6 @@ impl LyrelApp {
                     .map(|app| app.read(cx).settings_session_sources(host, cx))
                     .unwrap_or_default()
             }),
-            active_host: self.spawn_host(cx),
             live_sessions: Rc::new(move |cx| {
                 let owner = live_sessions.upgrade();
                 let mut sessions = Vec::new();

@@ -1042,6 +1042,7 @@ impl SettingsWindow {
             })
             .when(!searching && section == SettingsSection::Sessions, |root| {
                 root.children(self.render_sessions_delete_overlay(cx))
+                    .children(self.render_sessions_directory_overlay(cx))
             })
             // While a popover is open the page under it only takes one click:
             // the one that closes it.
