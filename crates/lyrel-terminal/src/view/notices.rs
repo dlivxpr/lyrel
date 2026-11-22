@@ -349,6 +349,9 @@ impl TerminalView {
         if update.session_changed {
             cx.emit(AgentSessionChanged);
         }
+        if update.changed {
+            cx.emit(crate::view::AgentStatusChanged);
+        }
         if let Some(notice) = update.notice {
             if notice.delayed {
                 let task = cx.spawn(async move |this, cx| {

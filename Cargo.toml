@@ -162,6 +162,10 @@ windows-sys = { version = "0.61", features = [
     # module the binding needs — nothing here pulls in dbghelp.
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Threading",
+    # `SetThreadExecutionState` (Caffeine's idle-sleep hold in `ui::caffeine`):
+    # the process-wide ES_CONTINUOUS | ES_SYSTEM_REQUIRED request, deliberately
+    # without ES_DISPLAY_REQUIRED so display sleep and lock stay on system policy.
+    "Win32_System_Power",
     "Win32_System_Console",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",

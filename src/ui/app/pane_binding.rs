@@ -260,6 +260,16 @@ impl LyrelApp {
             },
         )
         .detach();
+        // Status transitions (Working/Waiting/Done) are Caffeine's signal:
+        // automatic mode holds or releases the idle-sleep request with them.
+        cx.subscribe_in(
+            view,
+            window,
+            |_app, _view, _: &lyrel_terminal::view::AgentStatusChanged, _window, cx| {
+                crate::ui::caffeine::CaffeineState::agents_changed(cx);
+            },
+        )
+        .detach();
         cx.subscribe_in(
             view,
             window,

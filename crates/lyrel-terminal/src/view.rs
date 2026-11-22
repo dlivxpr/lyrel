@@ -86,6 +86,14 @@ pub struct AgentSessionChanged;
 
 impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 
+/// The pane's observed agent status moved (Working/Waiting/Done/Idle), where
+/// [`AgentSessionChanged`] names an identity move. What a keep-awake
+/// controller aggregates; transitions fire here even when the session is the
+/// same one.
+pub struct AgentStatusChanged;
+
+impl gpui_kit::EventEmitter<AgentStatusChanged> for TerminalView {}
+
 /// A meaningful current-progress change; never a command/agent completion.
 pub struct ProgressChanged;
 impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}

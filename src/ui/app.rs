@@ -231,6 +231,7 @@ pub struct LyrelApp {
     _bounds_watch: Subscription,
     _git_status_watch: Subscription,
     _pane_liveness_watch: Subscription,
+    _caffeine_watch: Subscription,
     _appearance_watch: Subscription,
     pub(crate) search: SearchState,
     /// Preset that was live when the search's theme picker started previewing.
@@ -2610,6 +2611,8 @@ impl LyrelApp {
                         cx,
                     );
                 }
+                // A split pane went away with its agents; re-evaluate the hold.
+                crate::ui::caffeine::CaffeineState::agents_changed(cx);
                 self.focus_active(window, cx);
                 self.save_session(cx);
                 cx.notify();
@@ -3540,6 +3543,9 @@ impl LyrelApp {
             .flatten();
         let sidebar_had_focus = self.sidebar_nav_focus.is_focused(window);
         self.tabs.remove(index);
+        // The closed tab's Working agents went with it; automatic mode
+        // re-evaluates once this update unwinds.
+        crate::ui::caffeine::CaffeineState::agents_changed(cx);
         if navigation_on_closing {
             self.sidebar_nav_target = navigation_successor;
             self.sidebar_nav_settle(cx);

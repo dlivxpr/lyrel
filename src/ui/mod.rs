@@ -3,6 +3,9 @@ pub mod app;
 pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
+pub(crate) mod caffeine;
+#[cfg(test)]
+mod caffeine_consumer_tests;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub mod code_editor;
 pub mod desktop_lookups;
