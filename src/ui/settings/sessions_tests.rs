@@ -2,7 +2,7 @@
 //! 主机默认、页签/筛选清空勾选、隐藏往返走生产 Settings 消费者夹具。
 
 use super::*;
-use crate::ui::settings::test_window::harness;
+use crate::ui::settings::test_window::{harness, harness_standalone};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, px, size};
 use lyrel_ui_base::config::Config;
@@ -436,8 +436,7 @@ fn host_tab_and_filter_moves_clear_selection(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn hide_and_unhide_round_trip_through_the_visibility_key(cx: &mut TestAppContext) {
-    let (settings, mut vcx) = harness(cx);
-    lyrel_ui_base::config::pin_test_config_dir();
+    let (settings, _, mut vcx) = harness_standalone(cx);
     settings.update_in(&mut vcx, |settings, window, cx| {
         settings.open_settings_section(SettingsSection::Sessions, window, cx);
     });
@@ -501,8 +500,7 @@ fn hide_and_unhide_round_trip_through_the_visibility_key(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn legacy_hide_redisplays_one_row_without_exposing_same_id_siblings(cx: &mut TestAppContext) {
-    let (settings, mut vcx) = harness(cx);
-    lyrel_ui_base::config::pin_test_config_dir();
+    let (settings, _, mut vcx) = harness_standalone(cx);
     settings.update_in(&mut vcx, |settings, window, cx| {
         settings.open_settings_section(SettingsSection::Sessions, window, cx);
     });

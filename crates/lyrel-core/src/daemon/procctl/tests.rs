@@ -9,7 +9,9 @@
 
 use super::*;
 use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(windows, target_os = "linux"))]
+use std::time::Instant;
 
 /// Role markers in the child environment. `shell` spawns `sleepers` and
 /// then sleeps; `sleep` just sleeps.
@@ -71,17 +73,20 @@ fn identity_of(pid: u32) -> ProcIdentity {
 /// binding `execute` uses and asks whether the process object already
 /// exited: a killed-but-unreaped process stays openable, and its creation
 /// time stays readable, on both Windows and Linux — "opens" is not "lives".
+#[cfg(any(windows, target_os = "linux"))]
 fn alive(pid: u32) -> bool {
     bind::Bound::open(pid).is_some_and(|bound| !bound.exited())
 }
 
 /// A fixture shell with `sleepers` children, killed and reaped on drop so a
 /// failing assertion cannot leak sleepers into the next test.
+#[cfg(any(windows, target_os = "linux"))]
 struct Tree {
     shell: Child,
     children: Vec<u32>,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 impl Tree {
     fn spawn(sleepers: usize) -> Self {
         let shell = fixture_child("shell", sleepers);
@@ -137,6 +142,7 @@ impl Tree {
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 impl Drop for Tree {
     fn drop(&mut self) {
         // The fixture children are disposable, not daemon-owned: if a test
@@ -409,25 +415,27 @@ fn platforms_without_an_atomic_bind_fail_closed() {
     if fixture_role() {
         return;
     }
-    let tree = Tree::spawn(1);
-    let child = tree.children[0];
-    let shell_identity = tree.identity(tree.shell_pid());
+    let mut child = fixture_child("sleep", 0);
+    let identity = identity_of(child.id());
+    let plan_result = plan(shell_pid(), identity.pid, identity.started);
+    let outcomes = execute(shell_pid(), std::slice::from_ref(&identity));
+    let status = child.try_wait();
+    // The test owns this child handle. Reap through it before asserting so
+    // cleanup never depends on the process control feature under test.
+    let _ = child.kill();
+    child.wait().expect("reap the fixture child");
+    #[cfg(target_os = "macos")]
+    assert!(identity.started.is_some(), "the fixture has a birth stamp");
 
     assert!(
         !bind::ATOMIC_BIND,
         "this platform is the fail-closed arm under test"
     );
     assert_eq!(
-        plan(shell_pid(), tree.shell_pid(), shell_identity.started),
+        plan_result,
         Err(PlanRefusal::Unverifiable),
         "no scope is planned on a platform that cannot vouch for one"
     );
-    assert!(
-        alive(tree.shell_pid()) && alive(child),
-        "the refusal must not signal anything"
-    );
-
-    let outcomes = execute(shell_pid(), std::slice::from_ref(&shell_identity));
     assert_eq!(outcomes.len(), 1);
     assert_eq!(
         outcomes[0].state,
@@ -435,7 +443,7 @@ fn platforms_without_an_atomic_bind_fail_closed() {
         "each identity reports why it was not signaled"
     );
     assert!(
-        alive(tree.shell_pid()) && alive(child),
-        "fail closed leaves every fixture process running"
+        status.expect("read the fixture child status").is_none(),
+        "fail closed leaves the fixture child running"
     );
 }

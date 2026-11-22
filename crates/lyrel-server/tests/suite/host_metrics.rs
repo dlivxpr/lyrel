@@ -289,14 +289,14 @@ fn real_interface_traffic_appears_in_the_transmit_series() {
     // No listener is needed; the NIC counts what leaves it. The client link
     // itself rides stdio pipes and never touches an interface counter.
     let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
-    let payload = vec![0x5A_u8; 65_507];
+    // Stay below macOS's UDP send limit and avoid IP fragmentation.
+    let payload = [0x5A_u8; 1200];
     let mut peak_tx = idle_tx;
     let mut sent = 0_u64;
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(4) {
-        for _ in 0..32 {
-            socket.send_to(&payload, ("224.0.0.251", 5353)).unwrap();
-            sent += payload.len() as u64;
+        for _ in 0..64 {
+            sent += socket.send_to(&payload, ("239.255.0.1", 49_745)).unwrap() as u64;
         }
         if let Ok(metrics) = client.host_metrics()
             && let MetricsState::Sample(sample) = metrics.state()
@@ -308,7 +308,7 @@ fn real_interface_traffic_appears_in_the_transmit_series() {
     }
     client.close();
     assert!(
-        sent >= 100_000_000,
+        sent >= 2_000_000,
         "the burst itself must move real bytes: {sent}"
     );
     assert!(
