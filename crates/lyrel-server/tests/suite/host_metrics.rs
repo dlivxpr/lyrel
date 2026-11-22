@@ -284,38 +284,51 @@ fn real_interface_traffic_appears_in_the_transmit_series() -> io::Result<()> {
         }
     };
 
-    // An OS-default multicast route may select a tunnel whose bytes sysinfo
-    // excludes. Pin senders to IPv4 interfaces present in the kernel counter
-    // snapshot. The test's control link is stdio and contributes no traffic.
+    // The control link rides stdio. Find a counted interface that can
+    // actually send a link-local multicast datagram: an operational
+    // interface may still have no route to the multicast destination.
     let interfaces = sysinfo::Networks::new_with_refreshed_list().unwrap();
-    let senders = interfaces
+    let mut addresses = interfaces
         .values()
         .filter(|interface| interface.operational_state() == sysinfo::InterfaceOperationalState::Up)
         .flat_map(|interface| interface.ip_networks())
         .filter_map(|network| match network.addr {
             std::net::IpAddr::V4(addr) if !addr.is_loopback() => Some(addr),
             _ => None,
-        })
-        .map(|addr| {
-            let socket = std::net::UdpSocket::bind((addr, 0))?;
-            let socket = socket2::Socket::from(socket);
-            socket.set_multicast_if_v4(&addr)?;
-            socket.set_multicast_ttl_v4(1)?;
-            Ok::<_, io::Error>(std::net::UdpSocket::from(socket))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut senders = senders.iter().cycle();
+        });
     // Stay below macOS's UDP send limit and avoid IP fragmentation.
     let payload = [0x5A_u8; 1200];
+    let target = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(239, 255, 0, 1), 49_745);
+    let mut failures = Vec::new();
+    let sender = addresses
+        .find_map(|addr| {
+            let probe = || -> io::Result<std::net::UdpSocket> {
+                let socket = socket2::Socket::from(std::net::UdpSocket::bind((addr, 0))?);
+                socket.set_multicast_if_v4(&addr)?;
+                socket.set_multicast_ttl_v4(1)?;
+                let socket = std::net::UdpSocket::from(socket);
+                socket.send_to(&payload, target)?;
+                Ok(socket)
+            };
+            match probe() {
+                Ok(socket) => Some(socket),
+                Err(error) => {
+                    failures.push(format!("{addr}: {error}"));
+                    None
+                }
+            }
+        })
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "no counted IPv4 interface could send to {target}: {failures:?}"
+            ))
+        })?;
     let mut peak_tx = idle_tx;
     let mut sent = 0_u64;
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(4) {
         for _ in 0..64 {
-            let socket = senders
-                .next()
-                .expect("a counted IPv4 interface is required");
-            sent += socket.send_to(&payload, ("239.255.0.1", 49_745))? as u64;
+            sent += sender.send_to(&payload, target)? as u64;
         }
         if let Ok(metrics) = client.host_metrics()
             && let MetricsState::Sample(sample) = metrics.state()
