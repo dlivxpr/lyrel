@@ -2610,6 +2610,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorColPid => "PID",
         L10nKey::MonitorColCpu => "CPU",
         L10nKey::MonitorColMemory => "Memory",
+        L10nKey::MonitorColGpu => "GPU",
         L10nKey::MonitorSortTree => "Tree order",
         L10nKey::MonitorSortCpu => "By CPU",
         L10nKey::MonitorSortMemory => "By memory",

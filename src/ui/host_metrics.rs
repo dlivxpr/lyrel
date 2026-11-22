@@ -208,11 +208,13 @@ impl MetricsRange {
 /// One aggregated display slot: the peak of every sample that fell into it,
 /// so long windows compress without flattening spikes. `None` is a slot no
 /// sample reached — an unsampled stretch stays blank rather than reading as
-/// a quiet zero.
+/// a quiet zero. `gpu` is `None` within a reached slot when none of its
+/// samples carried a GPU reading.
 #[derive(Clone, Copy)]
 pub(crate) struct TrendBucket {
     pub(crate) cpu: f32,
     pub(crate) memory: f32,
+    pub(crate) gpu: Option<f32>,
 }
 
 /// One kept reading, stamped with the GUI-side arrival time. The wire's own
@@ -284,11 +286,20 @@ impl SampleHistory {
             let sample = &arrival.sample;
             let cpu = sample.cpu_percent().clamp(0., 100.);
             let memory = (sample.memory_percent() as f32).clamp(0., 100.);
+            let gpu = sample.gpu_percent().map(|gpu| gpu.clamp(0., 100.));
             out[ix] = Some(match out[ix] {
-                None => TrendBucket { cpu, memory },
+                None => TrendBucket { cpu, memory, gpu },
                 Some(prev) => TrendBucket {
                     cpu: prev.cpu.max(cpu),
                     memory: prev.memory.max(memory),
+                    // A slot's GPU peak keeps the busiest GPU reading that
+                    // reached it; slots with no GPU data stay `None`.
+                    gpu: match (prev.gpu, gpu) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => None,
+                    },
                 },
             });
         }
@@ -438,6 +449,8 @@ fn readout(state: &State) -> MetricReadout {
                 cpu: Some(sample.cpu_percent()),
                 memory_used_bytes: Some(sample.memory_used_bytes()),
                 memory_total_bytes: Some(sample.memory_total_bytes()),
+                gpu: sample.gpu_percent(),
+                gpu_reason: sample.gpu_unavailable_reason().map(str::to_owned),
                 marker: None,
                 status: None,
                 detail: t_fmt(
@@ -477,12 +490,19 @@ struct MetricReadout {
     cpu: Option<f32>,
     memory_used_bytes: Option<u64>,
     memory_total_bytes: Option<u64>,
+    /// The busiest-GPU-engine percentage; `None` while the sample carries
+    /// no GPU reading (unavailable, or the peer predates GPU sampling).
+    gpu: Option<f32>,
+    /// The sampler's own reason for that miss, shown as the GPU slot's
+    /// state word so the tile explains itself instead of bare `—`.
+    gpu_reason: Option<String>,
     /// `Some(Pending)` is the "…" family (waiting/connecting), `Some(Down)`
     /// the "—" family (disconnected/unsupported/failed); `None` while a real
     /// sample is on screen.
     marker: Option<MetricMarker>,
-    /// The short state word a tile shows beside its label.
-    status: Option<&'static str>,
+    /// The short state word a tile shows beside its label. Shared by the
+    /// whole readout; the GPU slot prefers [`Self::gpu_reason`].
+    status: Option<gpui_kit::SharedString>,
     /// The hover detail: host, used and total memory.
     detail: String,
 }
@@ -499,8 +519,10 @@ impl MetricReadout {
             cpu: None,
             memory_used_bytes: None,
             memory_total_bytes: None,
+            gpu: None,
+            gpu_reason: None,
             marker: Some(MetricMarker::Pending),
-            status: Some(status),
+            status: Some(status.into()),
             detail: status.to_owned(),
         }
     }
@@ -510,8 +532,10 @@ impl MetricReadout {
             cpu: None,
             memory_used_bytes: None,
             memory_total_bytes: None,
+            gpu: None,
+            gpu_reason: None,
             marker: Some(MetricMarker::Down),
-            status: Some(status),
+            status: Some(status.into()),
             detail,
         }
     }
@@ -540,6 +564,35 @@ impl MetricReadout {
             None => self.marker_text().into(),
         }
     }
+
+    fn gpu_text(&self) -> String {
+        match self.gpu {
+            Some(gpu) => format!("{:.0}%", gpu),
+            None => self.marker_text().into(),
+        }
+    }
+
+    /// The state word the GPU slot shows beside its label: the sampler's
+    /// reason while a sample is on screen without a GPU reading, otherwise
+    /// the shared pending/down word.
+    fn gpu_status(&self) -> Option<gpui_kit::SharedString> {
+        if self.gpu.is_some() {
+            return None;
+        }
+        self.gpu_reason
+            .as_deref()
+            .map(Into::into)
+            .or_else(|| self.status.clone())
+    }
+
+    /// The state word a monitor tile shows beside its label for `series`:
+    /// the GPU slot prefers its unavailable reason over the shared word.
+    fn status_for(&self, series: TrendSeries) -> Option<gpui_kit::SharedString> {
+        match series {
+            TrendSeries::Gpu => self.gpu_status(),
+            _ => self.status.clone(),
+        }
+    }
 }
 
 fn gb(bytes: u64) -> String {
@@ -560,13 +613,17 @@ fn now_millis() -> u64 {
 enum TrendSeries {
     Cpu,
     Memory,
+    Gpu,
 }
 
 impl TrendSeries {
-    fn get(self) -> fn(&TrendBucket) -> f32 {
+    /// The series value out of a reached slot; `None` (GPU only, for now)
+    /// paints a gap in that slot instead of a bar or step.
+    fn get(self) -> fn(&TrendBucket) -> Option<f32> {
         match self {
-            Self::Cpu => |bucket: &TrendBucket| bucket.cpu,
-            Self::Memory => |bucket: &TrendBucket| bucket.memory,
+            Self::Cpu => |bucket: &TrendBucket| Some(bucket.cpu),
+            Self::Memory => |bucket: &TrendBucket| Some(bucket.memory),
+            Self::Gpu => |bucket: &TrendBucket| bucket.gpu,
         }
     }
 
@@ -575,6 +632,7 @@ impl TrendSeries {
         match self {
             Self::Cpu => false,
             Self::Memory => true,
+            Self::Gpu => false,
         }
     }
 }
@@ -614,14 +672,21 @@ fn trend_chart(
                     let stroke = 1.5_f32.min(slot * 0.4).max(1.);
                     let mut prev: Option<(usize, f32)> = None;
                     for (ix, bucket) in buckets.iter().enumerate() {
+                        // A blank slot, or a slot whose samples carry no
+                        // value for this series, breaks the run — a gap
+                        // stays a gap either way.
                         let Some(bucket) = bucket else {
                             prev = None;
                             continue;
                         };
-                        let point = (ix, value(bucket));
+                        let Some(v) = value(bucket) else {
+                            prev = None;
+                            continue;
+                        };
+                        let point = (ix, v);
                         if let Some((pix, pv)) = prev {
                             let (x0, x1) = (x(pix), x(ix));
-                            let (y0, y1) = (y(pv), y(value(bucket)));
+                            let (y0, y1) = (y(pv), y(v));
                             let run = (x1 - x0).max(px(stroke));
                             window.paint_quad(fill(
                                 gpui_kit::Bounds {
@@ -647,7 +712,8 @@ fn trend_chart(
                     let bar_w = (slot * 0.6).max(1.);
                     for (ix, bucket) in buckets.iter().enumerate() {
                         let Some(bucket) = bucket else { continue };
-                        let bar_h = ((value(bucket).clamp(0., 100.) / 100.) * height_px).max(1.);
+                        let Some(v) = value(bucket) else { continue };
+                        let bar_h = ((v.clamp(0., 100.) / 100.) * height_px).max(1.);
                         window.paint_quad(fill(
                             gpui_kit::Bounds {
                                 origin: gpui_kit::point(
@@ -681,6 +747,7 @@ fn titlebar_metric(
     let value = match series {
         TrendSeries::Cpu => readout.cpu_text(),
         TrendSeries::Memory => readout.memory_text(),
+        TrendSeries::Gpu => readout.gpu_text(),
     };
     h_flex()
         .id(id)
@@ -729,7 +796,8 @@ fn titlebar_metric(
 
 /// One resource tile in the monitor: label, the shared reading, and the
 /// range's trend underneath. A pending or failed sampler replaces the value
-/// with its distinct state word and leaves the chart blank.
+/// with its distinct state word and leaves the chart blank. Each series
+/// derives its own state word — the GPU tile speaks its unavailable reason.
 fn monitor_tile(
     id: &'static str,
     label: &'static str,
@@ -746,6 +814,7 @@ fn monitor_tile(
             Some(total) => format!("{} / {} GB", readout.memory_text(), gb(total)),
             None => readout.memory_text(),
         },
+        TrendSeries::Gpu => readout.gpu_text(),
     };
     v_flex()
         .id(id)
@@ -767,10 +836,11 @@ fn monitor_tile(
                         .text_color(color)
                         .child(label),
                 )
-                .when_some(readout.status, |row, status| {
+                .when_some(readout.status_for(series), |row, status| {
                     row.child(
                         div()
                             .min_w_0()
+                            .flex_shrink(1.)
                             .text_ellipsis()
                             .text_color(theme.muted_foreground)
                             .child(status),
@@ -811,7 +881,7 @@ impl LyrelApp {
     /// the sync share this one predicate, so demand and paint never disagree.
     fn titlebar_metrics_visible(&self, window: &Window, cx: &Context<Self>) -> bool {
         let toolbar = cx.global::<Config>().toolbar;
-        if !toolbar.cpu && !toolbar.ram {
+        if !toolbar.cpu && !toolbar.ram && !toolbar.gpu {
             return false;
         }
         if self.status_document_context(window, cx).is_some() {
@@ -889,6 +959,7 @@ impl LyrelApp {
         let theme = cx.theme();
         let cpu_color = theme.accent;
         let memory_color = theme.success;
+        let gpu_color = theme.warning;
         let gap = px(TITLEBAR_TILE_GAP);
         let strip = h_flex()
             .id("titlebar-metrics")
@@ -902,7 +973,7 @@ impl LyrelApp {
                     "titlebar-metric-cpu",
                     "CPU",
                     &readout,
-                    if toolbar.ram {
+                    if toolbar.ram || toolbar.gpu {
                         buckets.clone()
                     } else {
                         std::mem::take(&mut buckets)
@@ -918,9 +989,25 @@ impl LyrelApp {
                     "titlebar-metric-ram",
                     t(L10nKey::HostMetricsRam),
                     &readout,
-                    buckets,
+                    if toolbar.gpu {
+                        buckets.clone()
+                    } else {
+                        std::mem::take(&mut buckets)
+                    },
                     TrendSeries::Memory,
                     memory_color,
+                    chart,
+                    cx,
+                ))
+            })
+            .when(toolbar.gpu, |strip| {
+                strip.child(titlebar_metric(
+                    "titlebar-metric-gpu",
+                    "GPU",
+                    &readout,
+                    buckets,
+                    TrendSeries::Gpu,
+                    gpu_color,
                     chart,
                     cx,
                 ))
@@ -931,13 +1018,13 @@ impl LyrelApp {
         } else {
             TITLEBAR_TILE_COMPACT_W
         };
-        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram);
+        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
         Some((strip, (tile_w + TITLEBAR_TILE_GAP) * f32::from(count)))
     }
 
     /// The Activity Monitor's resource section: the shared trend-range
-    /// selector and one tile per resource slot. GPU, network and disk slot
-    /// in here as their tickets land; the sampler, history and chart code
+    /// selector and one tile per resource slot. Network and disk slot in
+    /// here as their tickets land; the sampler, history and chart code
     /// above is already theirs to extend.
     pub(crate) fn render_monitor_resources(
         &mut self,
@@ -950,6 +1037,7 @@ impl LyrelApp {
         let theme = cx.theme();
         let cpu_color = theme.accent;
         let memory_color = theme.success;
+        let gpu_color = theme.warning;
         let muted = theme.muted_foreground;
 
         let selector = h_flex()
@@ -1017,9 +1105,18 @@ impl LyrelApp {
                 "monitor-tile-ram",
                 t(L10nKey::MonitorColMemory),
                 &readout,
-                buckets,
+                buckets.clone(),
                 TrendSeries::Memory,
                 memory_color,
+                cx,
+            ))
+            .child(monitor_tile(
+                "monitor-tile-gpu",
+                t(L10nKey::MonitorColGpu),
+                &readout,
+                buckets,
+                TrendSeries::Gpu,
+                gpu_color,
                 cx,
             ))
             .into_any_element();

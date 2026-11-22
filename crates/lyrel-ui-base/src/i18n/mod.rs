@@ -2014,6 +2014,7 @@ l10n_keys! {
     MonitorColPid,
     MonitorColCpu,
     MonitorColMemory,
+    MonitorColGpu,
     MonitorSortTree,
     MonitorSortCpu,
     MonitorSortMemory,

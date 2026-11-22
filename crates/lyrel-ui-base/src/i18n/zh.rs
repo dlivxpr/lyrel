@@ -2358,6 +2358,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MonitorColPid => "PID",
         L10nKey::MonitorColCpu => "CPU",
         L10nKey::MonitorColMemory => "内存",
+        L10nKey::MonitorColGpu => "GPU",
         L10nKey::MonitorSortTree => "树顺序",
         L10nKey::MonitorSortCpu => "按 CPU",
         L10nKey::MonitorSortMemory => "按内存",

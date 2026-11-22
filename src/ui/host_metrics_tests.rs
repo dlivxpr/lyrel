@@ -137,6 +137,72 @@ fn a_new_daemon_instance_drops_the_predecessors_samples() {
     );
 }
 
+#[test]
+fn gpu_readout_shows_a_percent_a_reason_or_an_honest_dash() {
+    let snapshot = |sample| HostMetrics::new("gpu-host", "instance", MetricsState::Sample(sample));
+
+    let ready = readout(&State::Ready(snapshot(
+        sample_at(0, 10., 8, 16).with_gpu(42.25),
+    )));
+    assert_eq!(ready.gpu_text(), "42%");
+    assert_eq!(ready.gpu_status(), None);
+
+    // The platform could not supply a reading: the value is the down marker
+    // and the slot's state word is the sampler's own reason.
+    let unavailable = readout(&State::Ready(snapshot(
+        sample_at(0, 10., 8, 16).with_gpu_unavailable("no GPU engine performance counters"),
+    )));
+    assert_eq!(unavailable.gpu_text(), "—");
+    assert_eq!(
+        unavailable.gpu_status().map(|status| status.to_string()),
+        Some("no GPU engine performance counters".to_owned()),
+        "the GPU slot explains the miss with the sampler's reason"
+    );
+
+    // A daemon that predates GPU sampling still parses: the slot shows the
+    // down marker without inventing a reason.
+    let legacy = readout(&State::Ready(snapshot(sample_at(0, 10., 8, 16))));
+    assert_eq!(legacy.gpu_text(), "—");
+    assert_eq!(legacy.gpu_status(), None);
+
+    // Whole-sample pending words are shared with the GPU slot.
+    let waiting = readout(&State::Waiting);
+    assert_eq!(waiting.gpu_text(), "…");
+    assert!(waiting.gpu_status().is_some());
+}
+
+#[test]
+fn history_buckets_keep_gpu_peaks_and_blank_slots_without_gpu() {
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 5., 8, 16).with_gpu(30.), "instance-a");
+    history.push(sample_at(0, 50., 8, 16).with_gpu(90.), "instance-a");
+    history.push(sample_at(0, 60., 8, 16), "instance-a");
+    let anchor = history
+        .latest()
+        .map(|arrival| arrival.arrived_millis)
+        .unwrap();
+    let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
+    let last = buckets[BUCKET_COUNT - 1].expect("the readings land in the last slot");
+    assert_eq!(last.cpu, 60.);
+    assert_eq!(
+        last.gpu,
+        Some(90.),
+        "a long view keeps the GPU peak, not the average"
+    );
+
+    // A sample without a GPU reading leaves earlier slots blank rather than
+    // painting a quiet zero.
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 5., 8, 16), "instance-a");
+    let anchor = history
+        .latest()
+        .map(|arrival| arrival.arrived_millis)
+        .unwrap();
+    let buckets = history.buckets(MetricsRange::TwoMinutes, anchor);
+    let last = buckets[BUCKET_COUNT - 1].expect("the reading lands in the last slot");
+    assert_eq!(last.gpu, None, "no GPU data is a gap, not a zero");
+}
+
 fn has_titlebar_sample(vcx: &mut VisualTestContext) -> bool {
     vcx.update(|window, _| {
         window
@@ -201,7 +267,11 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
 
     // Both metrics render with the host's own reading in their detail.
     vcx.update(|window, _| {
-        for id in ["titlebar-metric-cpu", "titlebar-metric-ram"] {
+        for id in [
+            "titlebar-metric-cpu",
+            "titlebar-metric-ram",
+            "titlebar-metric-gpu",
+        ] {
             let metric = window.find(id);
             assert!(metric.visible(), "{id} must render in the chrome");
             assert!(
@@ -211,6 +281,7 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
         }
         assert!(window.find("titlebar-metric-cpu-chart").visible());
         assert!(window.find("titlebar-metric-ram-chart").visible());
+        assert!(window.find("titlebar-metric-gpu-chart").visible());
     });
 
     // The former bottom-bar indicators are gone.
@@ -228,6 +299,7 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
     vcx.update(|window, _| {
         assert!(window.find("monitor-tile-cpu").visible());
         assert!(window.find("monitor-tile-ram").visible());
+        assert!(window.find("monitor-tile-gpu").visible());
         assert!(window.find("monitor-range-selector").visible());
         assert_eq!(
             window.find("monitor-tile-cpu").label(),
@@ -374,6 +446,10 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
                 assert!(
                     window.find("titlebar-metric-cpu-value").visible(),
                     "width {width}: readings survive the charts"
+                );
+                assert!(
+                    window.find("titlebar-metric-gpu-value").visible(),
+                    "width {width}: the GPU reading survives the charts like the others"
                 );
             }
             // The chrome around the strip never yields: native-adjacent

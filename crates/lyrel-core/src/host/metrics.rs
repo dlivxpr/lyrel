@@ -2,7 +2,7 @@
 //!
 //! The wire values live in `lyrel-protocol`; this crate owns the sampler and
 //! injects it into the full local Host at construction. Requests share one
-//! sampler per server process. Only the CPU and RAM APIs are refreshed;
+//! sampler per server process. Only the CPU, RAM and GPU APIs are refreshed;
 //! process enumeration is never enabled. A request worker performs the
 //! blocking platform work at most once a second, without a sampling thread
 //! or polling work when no client wants metrics.
@@ -14,11 +14,19 @@ use sysinfo::{MemoryRefreshKind, System};
 
 pub use lyrel_protocol::host::metrics::*;
 
+mod gpu;
+
+// The per-process acquisition behind #378's Lyrel detail: exposed for that
+// consumer, with no application wiring of its own yet.
+#[cfg(windows)]
+pub use gpu::{ProcessGpuSample, sample_processes};
+
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const IDLE_RESET: Duration = Duration::from_secs(10);
 
 struct Sampler {
     system: System,
+    gpu: gpu::GpuSampler,
     snapshot: HostMetrics,
     refreshed: Instant,
 }
@@ -42,6 +50,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         system.refresh_cpu_usage();
         *shared = Some(Sampler {
             system,
+            gpu: gpu::GpuSampler::open(),
             snapshot: HostMetrics::new(
                 hostname,
                 lyrel_protocol::daemon::control::server_instance(),
@@ -73,7 +82,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                 "the host OS did not return valid whole-machine CPU/RAM data".into(),
             )
         } else {
-            MetricsState::Sample(HostSample::new(
+            let sample = HostSample::new(
                 cpu,
                 used,
                 total,
@@ -82,7 +91,14 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                     .unwrap_or_default()
                     .as_millis()
                     .min(u128::from(u64::MAX)) as u64,
-            ))
+            );
+            // A missing GPU reading downgrades only the GPU slot; the CPU
+            // and RAM numbers above stay on screen.
+            let sample = match sampler.gpu.sample() {
+                gpu::GpuReading::Busy(percent) => sample.with_gpu(percent),
+                gpu::GpuReading::Unavailable(reason) => sample.with_gpu_unavailable(reason),
+            };
+            MetricsState::Sample(sample)
         };
         sampler.snapshot.set_state(state);
         sampler.refreshed = now;

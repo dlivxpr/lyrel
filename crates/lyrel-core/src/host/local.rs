@@ -119,6 +119,23 @@ mod tests {
             metrics.instance(),
             lyrel_protocol::daemon::control::server_instance()
         );
+        // The GPU slot rides the same per-host sample (#374): once a real
+        // reading lands, it is either a validated percentage or an explicit
+        // unavailable reason — never an unexplained hole.
+        std::thread::sleep(Duration::from_millis(1_100));
+        let metrics = host
+            .host_metrics()
+            .expect("the platform metrics sampler keeps answering");
+        if let lyrel_protocol::host::metrics::MetricsState::Sample(sample) = metrics.state() {
+            match (sample.gpu_percent(), sample.gpu_unavailable_reason()) {
+                (Some(gpu), None) => assert!(
+                    (0.0..=100.0).contains(&gpu),
+                    "GPU utilization stays a validated percentage, got {gpu}"
+                ),
+                (None, Some(reason)) => assert!(!reason.is_empty()),
+                other => panic!("the GPU reading and its reason disagree: {other:?}"),
+            }
+        }
     }
 
     #[test]
