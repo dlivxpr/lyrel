@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::caffeine::CaffeineState;
+use gpui_kit::component::switch::Switch;
 use lyrel_core::core::config::ToolbarVisibility;
 
 impl SettingsWindow {
@@ -56,12 +57,12 @@ impl SettingsWindow {
             .iter()
             .map(|&(id, title, field)| {
                 let is_caffeine = title == L10nKey::StatusCaffeineTitle;
-                let control = self.settings_switch(
-                    id,
-                    *field(&mut toolbar),
-                    cx,
-                    move |this, on, window, cx| {
-                        this.update_config(cx, |cfg| *field(&mut cfg.toolbar) = on);
+                let control = Switch::new(id)
+                    .small()
+                    .checked(*field(&mut toolbar))
+                    .accessibility_label(t(title))
+                    .on_change(cx.listener(move |this, on: &bool, window, cx| {
+                        this.update_config(cx, |cfg| *field(&mut cfg.toolbar) = *on);
                         if is_caffeine && !on {
                             cx.default_global::<CaffeineState>();
                             CaffeineState::reset(cx);
@@ -72,14 +73,16 @@ impl SettingsWindow {
                             }
                         }
                         cx.refresh_windows();
-                    },
-                );
+                    }))
+                    .into_any_element();
                 let desc = if is_caffeine {
                     t(L10nKey::ToolbarCaffeineDescription)
                 } else {
                     ""
                 };
                 self.settings_row(t(title), desc, control, cx)
+                    .min_h(gpui_kit::rems(1.875))
+                    .py_1()
                     .into_any_element()
             })
             .collect();
