@@ -5,8 +5,8 @@
 //! - macOS: an IOKit assertion of type `PreventUserIdleSystemSleep` — the
 //!   native idle *system sleep* assertion, never `PreventUserIdleDisplaySleep`.
 //! - Windows: `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`,
-//!   a request scoped to this process with no `ES_DISPLAY_REQUIRED`, cleared
-//!   by setting `ES_CONTINUOUS` alone.
+//!   owned by the UI thread, with no `ES_DISPLAY_REQUIRED`. Setting
+//!   `ES_CONTINUOUS` alone clears the request.
 //!
 //! Both calls are cheap syscalls (microseconds, never block on I/O), so the
 //! controller on the UI thread calls them synchronously and can report their
@@ -227,22 +227,29 @@ pub(super) mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_request_stays_process_wide_without_display_override() {
+    fn windows_hold_sets_and_clears_system_sleep_only() {
         use windows_sys::Win32::System::Power::{
             ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
         };
 
-        fn probe() -> u32 {
-            // Re-asserting the same flags returns the previous execution
-            // state, which is how this API surfaces the live request.
-            unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) }
+        fn read_and_clear() -> u32 {
+            // SAFETY: with ES_CONTINUOUS alone, Win32 returns the previous
+            // execution state of this thread and clears the request.
+            let previous = unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+            assert_ne!(previous, 0, "failed to read execution state");
+            previous
         }
 
-        let before = probe();
+        let before = read_and_clear();
         let mut hold = SleepHold::acquire("lyrel test").expect("acquire");
-        let during = probe();
+        let during = read_and_clear();
+        hold.release().expect("release after the probe");
+
+        // Use a fresh request to test release on a live hold. The first
+        // probe cleared the state when it verified the acquire flags.
+        let mut hold = SleepHold::acquire("lyrel test").expect("reacquire");
         hold.release().expect("release");
-        let after = probe();
+        let after = read_and_clear();
 
         assert_eq!(
             before & ES_SYSTEM_REQUIRED,
@@ -264,7 +271,5 @@ pub(super) mod tests {
             0,
             "display override never set"
         );
-        // Leave the probe's own re-assertion cleared for the next test.
-        unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
     }
 }
