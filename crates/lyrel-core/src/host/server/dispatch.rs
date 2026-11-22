@@ -617,6 +617,28 @@ fn run_request(
             ),
             Vec::new(),
         ),
+        ControlRequest::PaneEndProcessPlan {
+            pane_id,
+            pid,
+            started,
+        } => {
+            let panes = conn.panes.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "this server serves no panes")
+            })?;
+            let plan = panes
+                .pane_end_process_plan(pane_id, pid, started)
+                .map_err(|message| io::Error::new(io::ErrorKind::NotFound, message))?;
+            (ReplyOk::EndProcessPlan(plan), Vec::new())
+        }
+        ControlRequest::PaneEndProcess { pane_id, scope } => {
+            let panes = conn.panes.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "this server serves no panes")
+            })?;
+            (
+                ReplyOk::EndProcessReport(panes.pane_end_process(pane_id, &scope)),
+                Vec::new(),
+            )
+        }
         ControlRequest::Routes => (
             ReplyOk::Routes(crate::daemon::ssh::SshManager::global().routes()),
             Vec::new(),

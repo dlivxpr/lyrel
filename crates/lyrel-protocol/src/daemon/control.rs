@@ -78,7 +78,13 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// out the queried directory's own sessions. A v18 peer cannot decode the
 /// request and is turned away at the handshake, as with any other dialect
 /// change; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 19;
+/// v20 adds verified pane-process termination (`PaneEndProcessPlan` /
+/// `PaneEndProcess`) and the `pane-end-process` feature (#372). The owning
+/// daemon plans the scope from its complete walk, then re-verifies each
+/// confirmed identity against the live process and the pane's tree before
+/// signaling; a peer without the feature is never asked, and the caller's
+/// monitor stays read-only instead.
+pub const CONTROL_VERSION: u32 = 20;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -178,6 +184,12 @@ pub mod feature {
     /// simply unknown here: the pane lives in the peer's registry, and the
     /// local daemon this client would otherwise ask has never heard of it.
     pub const PANE_PROCS: &str = "pane-procs";
+    /// The peer can end a process in one of its panes — or the process's whole
+    /// verified subtree — after re-checking identity and pane ownership on its
+    /// own process table (#372). Without it a caller must keep its process
+    /// monitor read-only: the far side cannot vouch for a scope, and signaling
+    /// through a heuristic guess is how an innocent reused pid gets killed.
+    pub const PANE_END_PROCESS: &str = "pane-end-process";
     /// The peer can put a tab to sleep: mark it in the tree and stop its panes
     /// while keeping their screens (#762). Needs both a tree and panes, so a
     /// peer serving either alone does not say it.
@@ -522,6 +534,27 @@ pub enum ControlRequest {
     PaneProcs {
         pane_id: u64,
     },
+    /// The scope an End Process action would cover, computed by the daemon
+    /// that owns the pane from its complete walk — never from the client's
+    /// capped snapshot. `started` is the birth stamp the client's selected row
+    /// carries; a live process whose stamp does not match, or that no longer
+    /// belongs to the pane's tree, refuses the plan. Answered with
+    /// [`ReplyOk::EndProcessPlan`].
+    PaneEndProcessPlan {
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    },
+    /// Terminate exactly the confirmed identities, in the order the plan gave
+    /// them. The owning daemon re-verifies each identity against the live
+    /// process and the pane's tree immediately before signaling it, drops any
+    /// that have drifted, and never adds a process the client did not confirm.
+    /// Answered with [`ReplyOk::EndProcessReport`], one entry per confirmed
+    /// identity.
+    PaneEndProcess {
+        pane_id: u64,
+        scope: Vec<crate::daemon::protocol::ProcIdentity>,
+    },
     Routes,
     Status,
 }
@@ -619,6 +652,13 @@ impl ControlRequest {
             // between asks would only stack up requests behind a peer that has
             // stopped answering.
             | PaneProcs { .. } => Duration::from_secs(5),
+            // Planning is a walk plus one identity read. Termination signals a
+            // verified batch and then waits on the same handles for it to take,
+            // bounded by one deadline on the daemon side; this deadline sits
+            // past that so a slow batch still gets its per-target report
+            // instead of a dead link.
+            PaneEndProcessPlan { .. } => Duration::from_secs(10),
+            PaneEndProcess { .. } => Duration::from_secs(15),
             ReadFile { .. } | WriteFile { .. } | ReadChunk { .. } => Duration::from_secs(30),
             OpenRead { .. } | CloseRead { .. } => Duration::from_secs(5),
             // The server's own progress handler ends a query on its seconds
@@ -784,6 +824,13 @@ pub enum ReplyOk {
     Panes(Vec<u64>),
     AgentStates(Vec<PaneAgentState>),
     PaneProcs(crate::daemon::protocol::PaneProcs),
+    /// The answer to [`ControlRequest::PaneEndProcessPlan`]: the complete
+    /// scope the owning daemon would act on, each row with its plan-time
+    /// identity.
+    EndProcessPlan(crate::daemon::protocol::EndProcessPlan),
+    /// The answer to [`ControlRequest::PaneEndProcess`]: one outcome per
+    /// confirmed identity, in the order given.
+    EndProcessReport(Vec<crate::daemon::protocol::EndProcessOutcome>),
     Routes(Vec<RouteInfo>),
     Status(ServerStatus),
 }
@@ -2082,6 +2129,24 @@ mod tests {
             },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
+            ControlRequest::PaneEndProcessPlan {
+                pane_id: 7,
+                pid: 4242,
+                started: Some(1_700_000_000_000_000),
+            },
+            ControlRequest::PaneEndProcess {
+                pane_id: 7,
+                scope: vec![
+                    crate::daemon::protocol::ProcIdentity {
+                        pid: 4242,
+                        started: Some(1_700_000_000_000_000),
+                    },
+                    crate::daemon::protocol::ProcIdentity {
+                        pid: 4243,
+                        started: Some(1_700_000_000_000_001),
+                    },
+                ],
+            },
             ControlRequest::Sqlite {
                 request: Box::new(crate::host::sqlite::SqliteRequest::Open {
                     path: "/home/me/proj/data.sqlite".into(),
@@ -2957,6 +3022,21 @@ mod tests {
             ),
             (R::AgentStates, s(5)),
             (R::PaneProcs { pane_id: 7 }, s(5)),
+            (
+                R::PaneEndProcessPlan {
+                    pane_id: 7,
+                    pid: 4242,
+                    started: None,
+                },
+                s(10),
+            ),
+            (
+                R::PaneEndProcess {
+                    pane_id: 7,
+                    scope: vec![],
+                },
+                s(15),
+            ),
             (R::Routes, s(5)),
             (R::Status, s(5)),
         ];

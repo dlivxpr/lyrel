@@ -2628,6 +2628,35 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorProcsHeuristicHint => {
             "Processes running on the remote host are not visible here."
         }
+        L10nKey::MonitorProcsHeuristicRemote => "Sampled on the remote host over SSH.",
+        L10nKey::MonitorProcsHeuristicRemoteHint => {
+            "These processes cannot be verified from here, so ending them is unavailable."
+        }
+        L10nKey::MonitorProcsUnconfirmed => {
+            "This daemon cannot confirm where the pane's session runs."
+        }
+        L10nKey::MonitorProcsUnconfirmedHint => {
+            "Update the daemon to enable ending processes from here."
+        }
+        L10nKey::MonitorActionMenu => "Actions",
+        L10nKey::MonitorActionEndProcess => "End Process",
+        L10nKey::MonitorActionEndProcessTree => "End Process Tree",
+        L10nKey::MonitorConfirmEndTitle => "End {name}?",
+        L10nKey::MonitorConfirmEndProcessBody => {
+            "End {name} (PID {pid})? The process identity and this pane's ownership are re-verified before anything is signaled."
+        }
+        L10nKey::MonitorConfirmEndTreeBody => {
+            "End {name} (PID {pid}) and the {count} processes under it?\n{scope}\nEach identity and this pane's ownership are re-verified before anything is signaled."
+        }
+        L10nKey::MonitorEndRefused => "Could not confirm the process: {reason}",
+        L10nKey::MonitorEndIncomplete => {
+            "The process tree is too large to confirm its full scope here, so nothing was ended."
+        }
+        L10nKey::MonitorEndReport => "Ended {summary}.",
+        L10nKey::MonitorEndReportPartial => "Ended {summary}.\nRefused: {details}",
+        L10nKey::MonitorEndUnsupported => {
+            "The daemon answering this pane is too old to end processes. Update it and try again."
+        }
         L10nKey::MonitorResourcesTitle => "Resource trends",
         L10nKey::MonitorRangeTwoMinutes => "2 min",
         L10nKey::MonitorRangeQuarterHour => "15 min",

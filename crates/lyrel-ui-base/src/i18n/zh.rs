@@ -2372,6 +2372,27 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MonitorProcsUnavailableHint => "拥有此窗格的主机无法报告其进程。",
         L10nKey::MonitorProcsHeuristic => "仅显示本机一侧的连接进程。",
         L10nKey::MonitorProcsHeuristicHint => "远端主机上运行的进程不会显示在此处。",
+        L10nKey::MonitorProcsHeuristicRemote => "通过 SSH 采样自远端主机。",
+        L10nKey::MonitorProcsHeuristicRemoteHint => "这些进程的身份无法在本机核验，因此不能结束。",
+        L10nKey::MonitorProcsUnconfirmed => "此 daemon 无法确认窗格会话所在的位置。",
+        L10nKey::MonitorProcsUnconfirmedHint => "请更新 daemon 以启用从此处结束进程。",
+        L10nKey::MonitorActionMenu => "操作",
+        L10nKey::MonitorActionEndProcess => "结束进程",
+        L10nKey::MonitorActionEndProcessTree => "结束进程树",
+        L10nKey::MonitorConfirmEndTitle => "结束 {name}？",
+        L10nKey::MonitorConfirmEndProcessBody => {
+            "结束 {name}（PID {pid}）？在发送结束信号前会重新核验进程身份与此窗格的归属。"
+        }
+        L10nKey::MonitorConfirmEndTreeBody => {
+            "结束 {name}（PID {pid}）及其下 {count} 个进程？\n{scope}\n在发送结束信号前会逐一重新核验每个进程身份与此窗格的归属。"
+        }
+        L10nKey::MonitorEndRefused => "无法确认该进程：{reason}",
+        L10nKey::MonitorEndIncomplete => "进程树过大，无法在此确认完整范围，因此未结束任何进程。",
+        L10nKey::MonitorEndReport => "已结束 {summary}。",
+        L10nKey::MonitorEndReportPartial => "已结束 {summary}。\n已拒绝：{details}",
+        L10nKey::MonitorEndUnsupported => {
+            "应答此窗格的 daemon 版本过旧，无法结束进程。请更新后重试。"
+        }
         L10nKey::MonitorResourcesTitle => "资源趋势",
         L10nKey::MonitorRangeTwoMinutes => "2 分钟",
         L10nKey::MonitorRangeQuarterHour => "15 分钟",

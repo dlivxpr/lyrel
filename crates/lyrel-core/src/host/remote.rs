@@ -552,6 +552,69 @@ impl Host for RemoteHost {
         }
     }
 
+    /// The peer owns the pane's processes, so it is the only one that can
+    /// vouch for a termination scope. A peer without the feature answers
+    /// `None` and the caller's monitor stays read-only, same as `pane_procs`.
+    fn pane_end_process_plan(
+        &self,
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    ) -> Option<Result<crate::daemon::protocol::EndProcessPlan, String>> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::PANE_END_PROCESS)
+        {
+            return None;
+        }
+        match self.call(ControlRequest::PaneEndProcessPlan {
+            pane_id,
+            pid,
+            started,
+        }) {
+            Ok(ReplyOk::EndProcessPlan(plan)) => Some(Ok(plan)),
+            Ok(other) => {
+                log::warn!("PaneEndProcessPlan answered with {other:?}");
+                None
+            }
+            // The refusal reason is information, not a broken link: the row
+            // went stale between the poll and the click. Surface it so the
+            // caller can say why instead of offering a dead action.
+            Err(e) if crate::daemon::control::is_dialect_refusal(&e.to_string()) => {
+                log::debug!("peer refused PaneEndProcessPlan: {e}");
+                None
+            }
+            Err(e) => Some(Err(e.to_string())),
+        }
+    }
+
+    fn pane_end_process(
+        &self,
+        pane_id: u64,
+        scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Option<Vec<crate::daemon::protocol::EndProcessOutcome>> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::PANE_END_PROCESS)
+        {
+            return None;
+        }
+        match self.call(ControlRequest::PaneEndProcess {
+            pane_id,
+            scope: scope.to_vec(),
+        }) {
+            Ok(ReplyOk::EndProcessReport(outcomes)) => Some(outcomes),
+            Ok(other) => {
+                log::warn!("PaneEndProcess answered with {other:?}");
+                None
+            }
+            Err(e) => {
+                log::debug!("could not end pane {pane_id}'s processes: {e}");
+                None
+            }
+        }
+    }
+
     fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
         self.expect_unit(ControlRequest::Remove {
             path: wire_path(p),

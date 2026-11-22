@@ -1457,6 +1457,37 @@ impl DaemonPane {
         self.apply_reported_agent_event(event)
     }
 
+    /// The scope ending `pid` would cover, verified on this daemon — the
+    /// Activity Monitor's confirmation dialog builds on this and never on its
+    /// own capped snapshot. Refused with a reason when the identity cannot be
+    /// vouched for: a native-SSH pane has no local tree, and any other miss
+    /// means the row the client clicked is already stale.
+    pub fn end_process_plan(
+        &self,
+        pid: u32,
+        started: Option<u64>,
+    ) -> Result<crate::daemon::protocol::EndProcessPlan, String> {
+        let shell = self
+            .backend
+            .local_shell_pid()
+            .ok_or_else(|| format!("pane {} runs no local process", self.id))?;
+        crate::daemon::procctl::plan(shell, pid, started)
+            .map_err(|refusal| refusal.message(pid, self.id))
+    }
+
+    /// Terminate exactly the confirmed identities in `scope`, each re-checked
+    /// against the live process and this pane's tree immediately before its
+    /// signal, and report one outcome per identity.
+    pub fn end_process(
+        &self,
+        scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Vec<crate::daemon::protocol::EndProcessOutcome> {
+        let Some(shell) = self.backend.local_shell_pid() else {
+            return Vec::new();
+        };
+        crate::daemon::procctl::execute(shell, scope)
+    }
+
     /// Apply an authenticated hook report to this pane.
     pub fn apply_reported_agent_event(
         &self,

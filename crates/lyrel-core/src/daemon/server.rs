@@ -116,6 +116,28 @@ impl crate::host::server::PaneDirectory for Registry {
         self.get(pane_id).map(|p| p.procs()).unwrap_or_default()
     }
 
+    fn pane_end_process_plan(
+        &self,
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    ) -> Result<crate::daemon::protocol::EndProcessPlan, String> {
+        let pane = self
+            .get(pane_id)
+            .ok_or_else(|| format!("no such pane {pane_id}"))?;
+        pane.end_process_plan(pid, started)
+    }
+
+    fn pane_end_process(
+        &self,
+        pane_id: u64,
+        scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Vec<crate::daemon::protocol::EndProcessOutcome> {
+        self.get(pane_id)
+            .map(|p| p.end_process(scope))
+            .unwrap_or_default()
+    }
+
     fn hibernate_pane(&self, pane_id: u64) {
         hibernate_pane(self, pane_id);
     }

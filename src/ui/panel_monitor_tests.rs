@@ -10,7 +10,8 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::daemon::protocol::{
-    DaemonMsg, PaneContext, PaneProcs, ProcEntry, RemoteContext, RemoteKind,
+    DaemonMsg, EndProcessOutcome, EndProcessPlan, PaneContext, PaneProcs, ProcEntry, ProcIdentity,
+    RemoteContext, RemoteKind,
 };
 use crate::ui::app::test_window;
 use lyrel_core::core::config::RightPanelTab;
@@ -22,6 +23,11 @@ use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 #[derive(Default, Clone)]
 struct Fixture {
     procs: Arc<Mutex<HashMap<u64, Option<PaneProcs>>>>,
+    /// The end-process seam: what was asked, and what to answer.
+    plans: Arc<Mutex<Vec<(u64, u32, Option<u64>)>>>,
+    plan_answer: Arc<Mutex<Option<Option<Result<EndProcessPlan, String>>>>>,
+    executed: Arc<Mutex<Vec<(u64, Vec<ProcIdentity>)>>>,
+    outcomes: Arc<Mutex<Option<Vec<EndProcessOutcome>>>>,
 }
 
 /// A Host on the managed-remote path: the same `Host::pane_procs` seam the
@@ -102,6 +108,33 @@ impl Host for MonitorHost {
     }
     fn pane_procs(&self, pane_id: u64) -> Option<PaneProcs> {
         self.fixture.procs.lock().unwrap().get(&pane_id).cloned()?
+    }
+
+    fn pane_end_process_plan(
+        &self,
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    ) -> Option<Result<EndProcessPlan, String>> {
+        self.fixture
+            .plans
+            .lock()
+            .unwrap()
+            .push((pane_id, pid, started));
+        self.fixture.plan_answer.lock().unwrap().clone()?
+    }
+
+    fn pane_end_process(
+        &self,
+        pane_id: u64,
+        scope: &[ProcIdentity],
+    ) -> Option<Vec<EndProcessOutcome>> {
+        self.fixture
+            .executed
+            .lock()
+            .unwrap()
+            .push((pane_id, scope.to_vec()));
+        self.fixture.outcomes.lock().unwrap().clone()
     }
 }
 
@@ -444,4 +477,428 @@ fn t_heuristic() -> &'static str {
 
 fn t_unavailable() -> &'static str {
     lyrel_ui_base::i18n::t(lyrel_ui_base::i18n::L10nKey::MonitorProcsUnavailable)
+}
+
+fn end_target(pid: u32, name: &str, started: u64) -> crate::daemon::protocol::EndProcessTarget {
+    crate::daemon::protocol::EndProcessTarget {
+        pid,
+        name: name.into(),
+        started: Some(started),
+    }
+}
+
+/// The verified scope for ending `make` (101) in tree_one: its child `cc`
+/// (102) first, the target itself last — the order the daemon's complete
+/// walk produces, and the order execute must carry.
+fn make_plan() -> EndProcessPlan {
+    EndProcessPlan {
+        targets: vec![end_target(102, "cc", 1002), end_target(101, "make", 1001)],
+        complete: true,
+    }
+}
+
+fn request_end(
+    app: &gpui_kit::Entity<crate::ui::app::LyrelApp>,
+    vcx: &mut VisualTestContext,
+    key: super::panel_monitor::ProcKey,
+    tree: bool,
+) {
+    app.update_in(vcx, |app, window, cx| {
+        app.monitor_request_end(key, tree, window, cx);
+    });
+    settle(vcx);
+}
+
+#[gpui_kit::test]
+fn ending_a_process_confirms_the_verified_scope_then_executes_it(cx: &mut TestAppContext) {
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(make_plan())));
+    *fixture.outcomes.lock().unwrap() = Some(vec![
+        crate::daemon::protocol::EndProcessOutcome {
+            pid: 102,
+            name: "cc".into(),
+            state: crate::daemon::protocol::EndProcessState::Ended,
+        },
+        crate::daemon::protocol::EndProcessOutcome {
+            pid: 101,
+            name: "make".into(),
+            state: crate::daemon::protocol::EndProcessState::Ended,
+        },
+    ]);
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+
+    // Expand the root, select `make`, and ask to end the tree.
+    let root_id = row_id(1, 100, 1000);
+    vcx.update(|window, cx| window.click(format!("{root_id}-chevron"), cx));
+    settle(&mut vcx);
+    let make_id = row_id(1, 101, 1001);
+    vcx.update(|window, cx| window.click(make_id.clone(), cx));
+    settle(&mut vcx);
+
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        true,
+    );
+
+    // The plan went to the owning host with the row's exact identity.
+    assert_eq!(
+        fixture.plans.lock().unwrap().as_slice(),
+        [(1, 101, Some(1001))],
+        "the plan request names the pane, the pid, and the birth stamp"
+    );
+    // The confirmation names the target and the scope the daemon verified.
+    let (msg, detail) = vcx
+        .pending_prompt()
+        .expect("the confirm dialog must be up before anything is signaled");
+    assert!(msg.contains("make"), "the title names the target: {msg}");
+    assert!(
+        detail.contains("cc (102)") && detail.contains("make (101)"),
+        "the body lists the scope the daemon verified: {detail}"
+    );
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+
+    let executed = fixture.executed.lock().unwrap();
+    assert_eq!(executed.len(), 1, "exactly one execute request");
+    let (pane, scope) = &executed[0];
+    assert_eq!(*pane, 1);
+    assert_eq!(
+        scope.as_slice(),
+        [
+            ProcIdentity {
+                pid: 102,
+                started: Some(1002)
+            },
+            ProcIdentity {
+                pid: 101,
+                started: Some(1001)
+            },
+        ],
+        "the tree action carries the whole confirmed scope, deepest first"
+    );
+}
+
+#[gpui_kit::test]
+fn ending_a_single_process_executes_only_the_target(cx: &mut TestAppContext) {
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    // The plan for `make` names its child `cc` first — the deepest-first
+    // order a live walk produces. The single action must still confirm and
+    // execute only `make`'s own identity: a scope built from the plan's
+    // front row would name the child.
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(make_plan())));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+
+    let root_id = row_id(1, 100, 1000);
+    vcx.update(|window, cx| window.click(format!("{root_id}-chevron"), cx));
+    settle(&mut vcx);
+    let make_id = row_id(1, 101, 1001);
+    vcx.update(|window, cx| window.click(make_id.clone(), cx));
+    settle(&mut vcx);
+
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert!(vcx.has_pending_prompt(), "the single action confirms too");
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+
+    let executed = fixture.executed.lock().unwrap();
+    assert_eq!(executed.len(), 1);
+    assert_eq!(
+        executed[0].1.as_slice(),
+        [ProcIdentity {
+            pid: 101,
+            started: Some(1001)
+        }],
+        "the single action carries the target's own confirmed identity"
+    );
+    assert!(
+        executed[0].1.iter().all(|id| id.pid != 102),
+        "a child named by the deepest-first plan must never be executed by the single action"
+    );
+}
+
+#[gpui_kit::test]
+fn a_refused_or_incomplete_plan_executes_nothing(cx: &mut TestAppContext) {
+    // Refused: the daemon answered, and its answer was "this row is stale".
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Err(
+        "process 101 no longer matches the confirmed identity".into(),
+    )));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert_eq!(fixture.executed.lock().unwrap().len(), 0);
+    drop(app);
+
+    // Incomplete, tree: the walk never finished, so the tree scope cannot be
+    // confirmed — refused, nothing executes.
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(EndProcessPlan {
+        complete: false,
+        ..make_plan()
+    })));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        true,
+    );
+    assert_eq!(fixture.executed.lock().unwrap().len(), 0);
+    drop(app);
+
+    // Incomplete, single: the walk never finished, but the single action
+    // covers only the target's own identity, which the daemon did stamp —
+    // it stays available and executes exactly that identity.
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(EndProcessPlan {
+        complete: false,
+        ..make_plan()
+    })));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert!(vcx.has_pending_prompt(), "the single action still confirms");
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+    assert_eq!(
+        fixture.executed.lock().unwrap().as_slice(),
+        [(
+            1,
+            vec![ProcIdentity {
+                pid: 101,
+                started: Some(1001)
+            }]
+        )],
+        "the single action stays available on an incomplete subtree"
+    );
+    drop(app);
+
+    // A child row the daemon could not stamp: the tree action still cannot
+    // name its whole extent, while the single action on the stamped target
+    // remains available.
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(EndProcessPlan {
+        targets: vec![
+            crate::daemon::protocol::EndProcessTarget {
+                pid: 102,
+                name: "cc".into(),
+                started: None,
+            },
+            end_target(101, "make", 1001),
+        ],
+        ..make_plan()
+    })));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        true,
+    );
+    assert_eq!(fixture.executed.lock().unwrap().len(), 0);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert!(vcx.has_pending_prompt(), "the single action still confirms");
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+    assert_eq!(
+        fixture.executed.lock().unwrap().as_slice(),
+        [(
+            1,
+            vec![ProcIdentity {
+                pid: 101,
+                started: Some(1001)
+            }]
+        )],
+        "an unstamped child never blocks the single action on its stamped target"
+    );
+    drop(app);
+
+    // Unsupported: the host seam answers `None` — a peer too old for the
+    // request. The UI asked; the answer produced no execute and no crash.
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert_eq!(fixture.executed.lock().unwrap().len(), 0);
+}
+
+#[gpui_kit::test]
+fn read_only_sources_send_no_end_process_request(cx: &mut TestAppContext) {
+    // The pane's shell is running ssh: real rows, no vouch, no action.
+    let fixture = Fixture::default();
+    let mut near_side = tree_one();
+    near_side.context = Some(PaneContext {
+        local_pty: true,
+        remote: Some(RemoteContext {
+            kind: RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "dev".into()],
+            target: "dev".into(),
+        }),
+        ..Default::default()
+    });
+    fixture.procs.lock().unwrap().insert(1, Some(near_side));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(make_plan())));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: Some(1001),
+        },
+        false,
+    );
+    assert!(fixture.plans.lock().unwrap().is_empty());
+    assert!(fixture.executed.lock().unwrap().is_empty());
+    drop(app);
+
+    // A row without a birth stamp names a pid, not a process: no action
+    // either, whatever the source says.
+    let fixture = Fixture::default();
+    let mut unstamped = tree_one();
+    unstamped.procs[1].started = None;
+    fixture.procs.lock().unwrap().insert(1, Some(unstamped));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(make_plan())));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 101,
+            started: None,
+        },
+        false,
+    );
+    assert!(fixture.plans.lock().unwrap().is_empty());
+    assert!(fixture.executed.lock().unwrap().is_empty());
+}
+
+#[gpui_kit::test]
+fn two_panes_sharing_a_directory_scope_the_request_to_the_context_pane(cx: &mut TestAppContext) {
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    fixture.procs.lock().unwrap().insert(2, Some(tree_two()));
+    *fixture.plan_answer.lock().unwrap() = Some(Some(Ok(EndProcessPlan {
+        targets: vec![end_target(201, "python", 2001)],
+        complete: true,
+    })));
+    let (app, mut vcx, mut streams) = test_window::harness_with_tabs(cx, 2);
+    let shared = PathBuf::from("/tmp/monitor-shared");
+    for stream in streams.iter_mut() {
+        DaemonMsg::Cwd(shared.clone()).encode(stream).unwrap();
+    }
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+
+    // Pane 2 shows its own tree; ending its process asks about pane 2, and
+    // pane 1's fixture answer is never touched.
+    vcx.dispatch_action(lyrel_ui_base::actions::SelectNextTab);
+    settle(&mut vcx);
+    // The root renders folded: expand it so the `python` row exists to click.
+    let root_id = row_id(2, 200, 2000);
+    vcx.update(|window, cx| window.click(format!("{root_id}-chevron"), cx));
+    settle(&mut vcx);
+    let py_id = row_id(2, 201, 2001);
+    vcx.update(|window, cx| window.click(py_id.clone(), cx));
+    settle(&mut vcx);
+    request_end(
+        &app,
+        &mut vcx,
+        super::panel_monitor::ProcKey {
+            pid: 201,
+            started: Some(2001),
+        },
+        false,
+    );
+    assert!(vcx.has_pending_prompt());
+    vcx.simulate_prompt_answer("End Process");
+    settle(&mut vcx);
+    assert_eq!(
+        fixture.plans.lock().unwrap().as_slice(),
+        [(2, 201, Some(2001))],
+        "the request names the context pane, never a same-directory neighbor"
+    );
+    assert_eq!(
+        fixture.executed.lock().unwrap().as_slice(),
+        [(
+            2,
+            vec![ProcIdentity {
+                pid: 201,
+                started: Some(2001)
+            }]
+        )],
+    );
 }

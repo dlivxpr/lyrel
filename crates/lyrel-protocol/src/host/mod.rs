@@ -793,6 +793,32 @@ pub trait Host: Send + Sync + 'static {
     fn pane_procs(&self, _pane_id: u64) -> Option<crate::daemon::protocol::PaneProcs> {
         None
     }
+
+    /// The verified scope ending one of this host's pane processes would
+    /// cover, for the End Process confirmation dialog — or `None` where this
+    /// host cannot vouch for it (no link, or a peer too old to answer). `Err`
+    /// carries the owning daemon's refusal reason: the selected row is stale,
+    /// the pid was reused, or the process no longer belongs to the pane.
+    fn pane_end_process_plan(
+        &self,
+        _pane_id: u64,
+        _pid: u32,
+        _started: Option<u64>,
+    ) -> Option<Result<crate::daemon::protocol::EndProcessPlan, String>> {
+        None
+    }
+
+    /// Terminate exactly the confirmed identities in a previously planned
+    /// scope and report one outcome per identity. `None` where
+    /// [`Host::pane_end_process_plan`] is `None`; the caller must not offer
+    /// the action where it cannot first confirm the scope.
+    fn pane_end_process(
+        &self,
+        _pane_id: u64,
+        _scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Option<Vec<crate::daemon::protocol::EndProcessOutcome>> {
+        None
+    }
 }
 
 /// Did this watch event mean something *changed*, or only that something was

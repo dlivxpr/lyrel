@@ -907,6 +907,93 @@ fn default_term() -> String {
     "xterm-256color".to_string()
 }
 
+/// The confirmed identity of one process for a verified End Process action:
+/// the pid plus the birth stamp the owning daemon reported when it planned
+/// the scope. The pair is what the execute step re-checks — a bare pid can
+/// have been reused by an unrelated process between the two round trips, and
+/// signaling a reused number would end whatever innocuous process inherited
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcIdentity {
+    pub pid: u32,
+    /// The daemon-reported birth stamp (`ProcEntry::started`) at plan time.
+    /// `None` is never actionable: without a birth stamp a pid names whatever
+    /// process the kernel most recently assigned the number to.
+    pub started: Option<u64>,
+}
+
+impl ProcIdentity {
+    /// Only an identity carrying its birth stamp can be re-verified against
+    /// the live process; a bare pid is refused before any signal.
+    pub fn verifiable(&self) -> bool {
+        self.started.is_some()
+    }
+}
+
+/// One row of the scope an End Process action was confirmed against: what the
+/// owning daemon's complete walk found under the target, with the identity
+/// each row carried at plan time. Never built from the client's capped
+/// snapshot — the panel shows at most `MAX_PROCS` rows, and a scope trimmed
+/// to what fits on screen is exactly the silent truncation a confirmation
+/// dialog must not be built from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndProcessTarget {
+    pub pid: u32,
+    pub name: String,
+    /// The birth stamp at plan time; `None` where the daemon could not read
+    /// one, in which case this row can be shown but never confirmed.
+    pub started: Option<u64>,
+}
+
+/// The owning daemon's answer to an End Process scope request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndProcessPlan {
+    /// Every process the confirmed action would cover, deepest first so a
+    /// parent is never signaled before its children. The list always names
+    /// the requested target process itself, even when `complete` is `false`:
+    /// an incomplete scope cannot be confirmed as a whole, but the caller
+    /// must still be able to fall back to ending the target alone.
+    pub targets: Vec<EndProcessTarget>,
+    /// `false` when the walk that produced `targets` hit its pathological-tree
+    /// cap and the list is not known to be the whole subtree. A scope that is
+    /// not known complete must not be confirmed or executed.
+    pub complete: bool,
+}
+
+/// What became of one confirmed target when the owning daemon acted on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndProcessState {
+    /// Terminated and observed gone.
+    Ended,
+    /// Already gone when the daemon went to check — nothing to signal. The
+    /// outcome the user asked for is what they got; this is not an error.
+    Exited,
+    /// The live process's birth stamp no longer matches the confirmed one:
+    /// the pid was reused or the confirmed snapshot was stale. Refused —
+    /// never signaled.
+    Stale,
+    /// The process no longer belongs to the pane's tree. Refused — never
+    /// signaled.
+    NotOwned,
+    /// The daemon could not read a trustworthy identity for the live process.
+    /// Refused — fail closed rather than signal an unverifiable target.
+    Unverifiable,
+    /// Signaled, but still alive at the batch's deadline.
+    Failed,
+}
+
+/// The per-target result of a verified End Process action: which of the
+/// confirmed identities ended, and which were refused — with why — so a
+/// partial termination is reported as itself, never flattened into success
+/// or failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndProcessOutcome {
+    pub pid: u32,
+    pub name: String,
+    pub state: EndProcessState,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -2309,6 +2396,58 @@ mod tests {
         assert_eq!(
             DaemonMsg::read(&mut wire.as_slice()).unwrap(),
             DaemonMsg::Progress(None)
+        );
+    }
+
+    #[test]
+    fn end_process_payloads_round_trip_and_a_plan_row_may_carry_no_identity() {
+        // The confirmed identities travel as part of the control request's
+        // JSON body; the payload shapes must survive the wire exactly.
+        let plan = EndProcessPlan {
+            targets: vec![
+                EndProcessTarget {
+                    pid: 4242,
+                    name: "cc".into(),
+                    started: Some(1_700_000_000_000_000),
+                },
+                EndProcessTarget {
+                    pid: 4243,
+                    name: "make".into(),
+                    started: Some(1_700_000_000_000_001),
+                },
+            ],
+            complete: true,
+        };
+        let json = serde_json::to_vec(&plan).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<EndProcessPlan>(&json).unwrap(),
+            plan
+        );
+
+        // A row the daemon could not stamp still serializes — it is shown,
+        // but the `started: None` is what keeps it out of any confirmation.
+        let unstamped: EndProcessPlan = serde_json::from_str(
+            r#"{"targets":[{"pid":9,"name":"sudo","started":null}],"complete":true}"#,
+        )
+        .unwrap();
+        assert_eq!(unstamped.targets[0].started, None);
+
+        let report = vec![
+            EndProcessOutcome {
+                pid: 4242,
+                name: "cc".into(),
+                state: EndProcessState::Ended,
+            },
+            EndProcessOutcome {
+                pid: 4243,
+                name: "make".into(),
+                state: EndProcessState::Stale,
+            },
+        ];
+        let json = serde_json::to_vec(&report).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Vec<EndProcessOutcome>>(&json).unwrap(),
+            report
         );
     }
 

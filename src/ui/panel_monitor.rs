@@ -13,7 +13,8 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, MouseButton, Subscription, Window, div, prelude::*, px, rems};
 
-use crate::daemon::protocol::{PaneContext, PaneProcs, ProcEntry};
+use crate::daemon::control::{ControlRequest, feature};
+use crate::daemon::protocol::{PaneContext, PaneProcs, ProcEntry, ProcIdentity};
 use crate::ui::app::LyrelApp;
 use crate::ui::proc_usage::{CPU_W, CpuTracker, MEM_W};
 use crate::ui::right_panel::{
@@ -32,8 +33,8 @@ use lyrel_ui_base::session::WorkspaceStore;
 /// key: selection and expansion follow the process, never a reused pid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ProcKey {
-    pid: u32,
-    started: Option<u64>,
+    pub(crate) pid: u32,
+    pub(crate) started: Option<u64>,
 }
 
 impl ProcKey {
@@ -307,12 +308,18 @@ fn visible_rows<'a>(
 /// rather than letting a partial view read as the whole truth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcSource {
-    /// The answering daemon walked real processes on the pane's own host.
+    /// The answering daemon named this machine as the pane's home: its walk
+    /// is a verified picture of the pane's workload, and its End Process
+    /// actions vouch for scopes and identities on it.
     Verified,
     /// Real processes, but not a verifiable picture of this pane's workload:
     /// either the near side of a connection the shell is running (`ssh` from
     /// a local shell), or the far-side sampling a native-SSH pane reports.
     Heuristic,
+    /// A daemon from before `PaneContext` existed, which cannot say where the
+    /// pane's session runs. Its processes are real, but without its vouch the
+    /// actions stay read-only.
+    Unconfirmed,
     /// The owning host could not be asked at all.
     Unavailable,
 }
@@ -323,12 +330,12 @@ fn classify_source(unsupported: bool, procs: Option<&PaneProcs>) -> ProcSource {
     }
     match procs.and_then(|p| p.context.as_ref()) {
         Some(PaneContext {
-            local_pty: false, ..
-        })
-        | Some(PaneContext {
-            remote: Some(_), ..
-        }) => ProcSource::Heuristic,
-        _ => ProcSource::Verified,
+            local_pty: true,
+            remote: None,
+            ..
+        }) => ProcSource::Verified,
+        Some(_) => ProcSource::Heuristic,
+        None => ProcSource::Unconfirmed,
     }
 }
 
@@ -356,7 +363,13 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let title = self.panel_title(t(L10nKey::PanelMonitorTitle), None, None, window, cx);
+        let title = self.panel_title(
+            t(L10nKey::PanelMonitorTitle),
+            None,
+            self.monitor_actions_menu(window, cx),
+            window,
+            cx,
+        );
         let Some(pane_id) = self.right_panel.procs_pane else {
             return self.panel_scroll(
                 self.panel_empty(
@@ -432,7 +445,7 @@ impl LyrelApp {
                 Some(t(L10nKey::MonitorProcsUnavailableHint)),
                 cx,
             ),
-            ProcSource::Verified | ProcSource::Heuristic => {
+            ProcSource::Verified | ProcSource::Heuristic | ProcSource::Unconfirmed => {
                 match self.right_panel.procs.as_ref() {
                     None => v_flex().into_any_element(),
                     Some(procs) if procs.procs.is_empty() => self.panel_empty(
@@ -497,7 +510,16 @@ impl LyrelApp {
             .child(self.render_monitor_resources(window, cx))
             .child(self.panel_search_with(&self.monitor.input, None, cx))
             .child(header)
-            .children(self.monitor_source_note(source, muted))
+            .children(
+                self.monitor_source_note(
+                    source,
+                    self.right_panel
+                        .procs
+                        .as_ref()
+                        .and_then(|procs| procs.context.as_ref()),
+                    muted,
+                ),
+            )
             .child(with_vertical_scrollbar(
                 "right-panel-monitor-scrollbar",
                 body,
@@ -507,13 +529,34 @@ impl LyrelApp {
     }
 
     /// The marker over a partial or missing process answer, kept outside the
-    /// scrolling list so it cannot scroll out of sight.
-    fn monitor_source_note(&self, source: ProcSource, muted: gpui_kit::Hsla) -> Option<AnyElement> {
+    /// scrolling list so it cannot scroll out of sight. The heuristic case
+    /// names which side of the connection the list describes — this
+    /// machine's, for a pane running `ssh`, or the far host's sampling, for
+    /// a native-SSH pane — because "whose processes are these" is exactly
+    /// what decides whether ending them can ever be offered here.
+    fn monitor_source_note(
+        &self,
+        source: ProcSource,
+        context: Option<&PaneContext>,
+        muted: gpui_kit::Hsla,
+    ) -> Option<AnyElement> {
         let (text, hint) = match source {
             ProcSource::Verified => return None,
-            ProcSource::Heuristic => (
-                t(L10nKey::MonitorProcsHeuristic),
-                t(L10nKey::MonitorProcsHeuristicHint),
+            ProcSource::Heuristic => match context {
+                Some(PaneContext {
+                    local_pty: false, ..
+                }) => (
+                    t(L10nKey::MonitorProcsHeuristicRemote),
+                    t(L10nKey::MonitorProcsHeuristicRemoteHint),
+                ),
+                _ => (
+                    t(L10nKey::MonitorProcsHeuristic),
+                    t(L10nKey::MonitorProcsHeuristicHint),
+                ),
+            },
+            ProcSource::Unconfirmed => (
+                t(L10nKey::MonitorProcsUnconfirmed),
+                t(L10nKey::MonitorProcsUnconfirmedHint),
             ),
             ProcSource::Unavailable => (
                 t(L10nKey::MonitorProcsUnavailable),
@@ -534,6 +577,366 @@ impl LyrelApp {
                 .child(hint.to_string())
                 .into_any_element(),
         )
+    }
+
+    /// The toolbar「Actions」menu, trailing the panel title. The two items
+    /// act on the selected row; they disable rather than vanish when the
+    /// selection or the source cannot support them, so the affordance stays
+    /// discoverable on read-only sources.
+    fn monitor_actions_menu(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use gpui_kit::component::Sizable as _;
+        use gpui_kit::component::button::ButtonVariants as _;
+        use gpui_kit::component::menu::DropdownMenu as _;
+        if self.right_panel.procs_pane.is_none() {
+            return None;
+        }
+        let app = cx.entity().downgrade();
+        Some(
+            gpui_kit::component::button::Button::new("monitor-actions")
+                .ghost()
+                .small()
+                .child(t(L10nKey::MonitorActionMenu))
+                .dropdown_caret(true)
+                .dropdown_menu_with_anchor(
+                    gpui_kit::Anchor::BottomRight,
+                    move |menu, _window, cx| Self::monitor_actions_dropdown(menu, &app, cx),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn monitor_actions_dropdown(
+        menu: gpui_kit::component::menu::PopupMenu,
+        app: &gpui_kit::WeakEntity<Self>,
+        cx: &mut gpui_kit::App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        use gpui_kit::component::menu::PopupMenuItem;
+        let Some(app) = app.upgrade() else {
+            return menu;
+        };
+        let this = app.read(cx);
+        let (key, actionable) = this.monitor_actionable_selection();
+        let request = |tree: bool| {
+            let app = app.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut gpui_kit::App| {
+                let Some(key) = key else { return };
+                let _ = app.update(cx, |this, cx| {
+                    this.monitor_request_end(key, tree, window, cx);
+                });
+            }
+        };
+        menu.item(
+            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcess))
+                .disabled(!actionable)
+                .on_click(request(false)),
+        )
+        .item(
+            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcessTree))
+                .disabled(!actionable)
+                .on_click(request(true)),
+        )
+    }
+
+    /// The row's right-click menu: the same two actions, acting on the row
+    /// itself. The row is selected as the menu opens, so the toolbar menu
+    /// agrees with what the user just pointed at.
+    fn monitor_row_menu(
+        menu: gpui_kit::component::menu::PopupMenu,
+        app: &gpui_kit::WeakEntity<Self>,
+        key: ProcKey,
+        cx: &mut gpui_kit::App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        use gpui_kit::component::menu::PopupMenuItem;
+        let Some(app) = app.upgrade() else {
+            return menu;
+        };
+        let this = app.read(cx);
+        let actionable = this.monitor_actionable_row(key);
+        let request = |tree: bool| {
+            let app = app.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut gpui_kit::App| {
+                let _ = app.update(cx, |this, cx| {
+                    this.monitor_request_end(key, tree, window, cx);
+                });
+            }
+        };
+        menu.item(
+            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcess))
+                .disabled(!actionable)
+                .on_click(request(false)),
+        )
+        .item(
+            PopupMenuItem::new(t(L10nKey::MonitorActionEndProcessTree))
+                .disabled(!actionable)
+                .on_click(request(true)),
+        )
+    }
+
+    /// The selected row, but only when ending it is a verified action: the
+    /// source names this machine as the pane's home, and the row carries the
+    /// birth identity the daemon will re-check. Everything else is
+    /// read-only, whatever the menu that asked.
+    fn monitor_actionable_selection(&self) -> (Option<ProcKey>, bool) {
+        let key = self.monitor.selected;
+        (key, key.is_some_and(|key| self.monitor_actionable_row(key)))
+    }
+
+    fn monitor_actionable_row(&self, key: ProcKey) -> bool {
+        if classify_source(
+            self.right_panel.procs_unsupported,
+            self.right_panel.procs.as_ref(),
+        ) != ProcSource::Verified
+        {
+            return false;
+        }
+        self.monitor_entry(key)
+            .is_some_and(|entry| entry.started.is_some())
+    }
+
+    /// The snapshot's entry for `key`, if the current snapshot still
+    /// contains that identity.
+    fn monitor_entry(&self, key: ProcKey) -> Option<ProcEntry> {
+        self.right_panel
+            .procs
+            .as_ref()?
+            .procs
+            .iter()
+            .find(|entry| ProcKey::of(entry) == key)
+            .cloned()
+    }
+
+    /// Start the confirmed End Process flow for `key`: ask the owning daemon
+    /// for the verified scope, then — only on a complete, confirmable scope —
+    /// put the target and its extent in front of the user. Refusals land as
+    /// notifications naming the daemon's reason.
+    pub(crate) fn monitor_request_end(
+        &mut self,
+        key: ProcKey,
+        tree: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.monitor_actionable_row(key) {
+            return;
+        }
+        let Some(pane_id) = self.right_panel.procs_pane else {
+            return;
+        };
+        let Some(target) = self.monitor_entry(key) else {
+            return;
+        };
+        let pid = target.pid;
+        let started = target.started;
+        let host = self.right_panel.procs_host.clone();
+        let client = crate::ui::local_link::LocalLink::client(cx);
+        let local_supported =
+            crate::ui::local_link::LocalLink::supports(cx, feature::PANE_END_PROCESS);
+        let name = target.name.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let plan = cx
+                .background_executor()
+                .spawn(async move {
+                    monitor_plan(&host, client, local_supported, pane_id, pid, started)
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| match plan {
+                None => this.monitor_notify(
+                    lyrel_ui_base::notification_history::Notification::warning(t(
+                        L10nKey::MonitorEndUnsupported,
+                    )),
+                    window,
+                    cx,
+                ),
+                Some(Err(reason)) => this.monitor_notify(
+                    lyrel_ui_base::notification_history::Notification::warning(t_fmt(
+                        L10nKey::MonitorEndRefused,
+                        &[("reason", reason.as_str())],
+                    )),
+                    window,
+                    cx,
+                ),
+                Some(Ok(plan)) => {
+                    this.monitor_confirm_end(pane_id, name, pid, plan, tree, window, cx)
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The plan landed and names a complete scope: show the target and the
+    /// The plan landed: show the target and — for the tree action — the
+    /// extent, and only on the user's confirmation send the execute request
+    /// carrying the plan's exact identities. The single action covers only
+    /// the selected identity and stays available while the subtree walk is
+    /// incomplete, as long as the daemon could stamp the target itself; the
+    /// tree action names every process it will cover, so an incomplete walk
+    /// — or any row the daemon could not stamp — refuses it rather than
+    /// approximates the extent.
+    fn monitor_confirm_end(
+        &mut self,
+        pane_id: u64,
+        name: String,
+        pid: u32,
+        plan: crate::daemon::protocol::EndProcessPlan,
+        tree: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The identity the single action confirms is the daemon's stamp for
+        // the selected pid itself — found by pid, never taken from the front
+        // of the deepest-first list, which names a child whenever the target
+        // has children.
+        let target_started = plan
+            .targets
+            .iter()
+            .find(|target| target.pid == pid)
+            .and_then(|target| target.started);
+        if (tree && (!plan.complete || plan.targets.iter().any(|target| target.started.is_none())))
+            || target_started.is_none()
+        {
+            self.monitor_notify(
+                lyrel_ui_base::notification_history::Notification::warning(t(
+                    L10nKey::MonitorEndIncomplete,
+                )),
+                window,
+                cx,
+            );
+            return;
+        }
+        let (title, body) = if tree {
+            let under = plan.targets.len().saturating_sub(1);
+            let scope = monitor_scope_line(&plan.targets);
+            (
+                t_fmt(L10nKey::MonitorConfirmEndTitle, &[("name", name.as_str())]),
+                t_fmt(
+                    L10nKey::MonitorConfirmEndTreeBody,
+                    &[
+                        ("name", name.as_str()),
+                        ("pid", pid.to_string().as_str()),
+                        ("count", under.to_string().as_str()),
+                        ("scope", scope.as_str()),
+                    ],
+                ),
+            )
+        } else {
+            (
+                t_fmt(L10nKey::MonitorConfirmEndTitle, &[("name", name.as_str())]),
+                t_fmt(
+                    L10nKey::MonitorConfirmEndProcessBody,
+                    &[("name", name.as_str()), ("pid", pid.to_string().as_str())],
+                ),
+            )
+        };
+        let answer = window.prompt(
+            gpui_kit::PromptLevel::Warning,
+            &title,
+            Some(&body),
+            &crate::ui::confirm_answers(
+                t(L10nKey::MonitorActionEndProcess),
+                t(lyrel_ui_base::i18n::L10nKey::Cancel),
+            ),
+            cx,
+        );
+        // The single action covers exactly the confirmed target identity —
+        // the selected pid and the daemon's birth stamp for it, never a
+        // deepest-first row that may name a child; the tree action covers
+        // the whole confirmed scope, deepest first, and nothing the plan
+        // did not name.
+        let scope: Vec<ProcIdentity> = match tree {
+            true => plan
+                .targets
+                .iter()
+                .map(|target| ProcIdentity {
+                    pid: target.pid,
+                    started: target.started,
+                })
+                .collect(),
+            false => vec![ProcIdentity {
+                pid,
+                started: target_started,
+            }],
+        };
+        let host = self.right_panel.procs_host.clone();
+        let client = crate::ui::local_link::LocalLink::client(cx);
+        let local_supported =
+            crate::ui::local_link::LocalLink::supports(cx, feature::PANE_END_PROCESS);
+        cx.spawn_in(window, async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let outcomes = cx
+                .background_executor()
+                .spawn(
+                    async move { monitor_execute(&host, client, local_supported, pane_id, scope) },
+                )
+                .await;
+            let Some(outcomes) = outcomes else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.monitor_report_end(outcomes, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// One notification for the whole batch: what ended, and — when anything
+    /// was refused — which targets and how the batch came out partial.
+    fn monitor_report_end(
+        &mut self,
+        outcomes: Vec<crate::daemon::protocol::EndProcessOutcome>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::daemon::protocol::EndProcessState as State;
+        let ended = outcomes
+            .iter()
+            .filter(|o| matches!(o.state, State::Ended | State::Exited))
+            .count();
+        let refused: Vec<String> = outcomes
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.state,
+                    State::Stale | State::NotOwned | State::Unverifiable | State::Failed
+                )
+            })
+            .map(|o| format!("{} ({})", o.name, o.pid))
+            .collect();
+        let summary = format!("{ended} of {}", outcomes.len());
+        let notification = match refused.is_empty() {
+            true => lyrel_ui_base::notification_history::Notification::info(t_fmt(
+                L10nKey::MonitorEndReport,
+                &[("summary", summary.as_str())],
+            )),
+            false => {
+                let details = refused.join(", ");
+                let level = match ended {
+                    0 => lyrel_ui_base::notification_history::Notification::error,
+                    _ => lyrel_ui_base::notification_history::Notification::warning,
+                };
+                level(t_fmt(
+                    L10nKey::MonitorEndReportPartial,
+                    &[("summary", summary.as_str()), ("details", details.as_str())],
+                ))
+            }
+        };
+        self.monitor_notify(notification, window, cx);
+        cx.notify();
+    }
+
+    fn monitor_notify(
+        &mut self,
+        notification: lyrel_ui_base::notification_history::Notification,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::notification_history::NotificationWindowExt as _;
+        window.notify_app(notification, cx);
     }
 
     /// The fixed table header. CPU and Memory are the sort controls and the
@@ -664,6 +1067,12 @@ impl LyrelApp {
             .text_color(muted)
         });
 
+        use gpui_kit::component::menu::ContextMenuExt as _;
+        let app = cx.entity().downgrade();
+        // Every row carries the menu; whether its items are actionable is
+        // decided when the menu opens, from the source class and the row's
+        // identity. A right click also selects the row, so the toolbar menu
+        // agrees with what the user just pointed at.
         h_flex()
             .id(id.clone())
             .test_support()
@@ -684,6 +1093,14 @@ impl LyrelApp {
                 this.monitor.select(key);
                 cx.notify();
             }))
+            .on_mouse_down(MouseButton::Right, {
+                let key = key;
+                cx.listener(move |this, _, _, cx| {
+                    this.monitor.select(key);
+                    cx.notify();
+                })
+            })
+            .context_menu(move |menu, _window, cx| Self::monitor_row_menu(menu, &app, key, cx))
             .child(
                 div()
                     .id(format!("{id}-chevron"))
@@ -772,6 +1189,85 @@ impl LyrelApp {
             ))
             .into_any_element()
     }
+}
+
+/// Ask the owning daemon for the verified scope of ending `pid` in
+/// `pane_id`. `None` marks a peer that cannot answer at all — too old, or no
+/// link — which the caller reports differently from a refusal.
+fn monitor_plan(
+    host: &Option<lyrel_ui_base::host_ops::SharedHost>,
+    client: Option<std::sync::Arc<crate::daemon::control::ControlClient>>,
+    local_supported: bool,
+    pane_id: u64,
+    pid: u32,
+    started: Option<u64>,
+) -> Option<Result<crate::daemon::protocol::EndProcessPlan, String>> {
+    match host {
+        Some(host) => host.pane_end_process_plan(pane_id, pid, started),
+        None => {
+            if !local_supported {
+                return None;
+            }
+            let client = client?;
+            match client.call(ControlRequest::PaneEndProcessPlan {
+                pane_id,
+                pid,
+                started,
+            }) {
+                Ok(crate::daemon::control::ReplyOk::EndProcessPlan(plan)) => Some(Ok(plan)),
+                Ok(other) => Some(Err(format!("unexpected reply to plan request: {other:?}"))),
+                Err(e) => Some(Err(e.to_string())),
+            }
+        }
+    }
+}
+
+/// Send the confirmed scope to the owning daemon and return one outcome per
+/// identity. `None` when the request could not be sent at all.
+fn monitor_execute(
+    host: &Option<lyrel_ui_base::host_ops::SharedHost>,
+    client: Option<std::sync::Arc<crate::daemon::control::ControlClient>>,
+    local_supported: bool,
+    pane_id: u64,
+    scope: Vec<ProcIdentity>,
+) -> Option<Vec<crate::daemon::protocol::EndProcessOutcome>> {
+    match host {
+        Some(host) => host.pane_end_process(pane_id, &scope),
+        None => {
+            if !local_supported {
+                return None;
+            }
+            let client = client?;
+            match client.call(ControlRequest::PaneEndProcess { pane_id, scope }) {
+                Ok(crate::daemon::control::ReplyOk::EndProcessReport(outcomes)) => Some(outcomes),
+                Ok(other) => {
+                    log::warn!("unexpected reply to end-process request: {other:?}");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("end-process request failed: {e}");
+                    None
+                }
+            }
+        }
+    }
+}
+
+/// The one-line list of what a tree action covers, capped for the dialog:
+/// the first few `name (pid)` pairs, then how many more there are. The full
+/// list is what the daemon verified; the dialog only has room for a taste.
+fn monitor_scope_line(targets: &[crate::daemon::protocol::EndProcessTarget]) -> String {
+    const SHOWN: usize = 4;
+    let mut line = targets
+        .iter()
+        .take(SHOWN)
+        .map(|target| format!("{} ({})", target.name, target.pid))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if targets.len() > SHOWN {
+        line.push_str(&format!(", +{}", targets.len() - SHOWN));
+    }
+    line
 }
 
 #[cfg(test)]
@@ -963,15 +1459,29 @@ mod tests {
     #[test]
     fn sources_are_classified_explicitly() {
         assert_eq!(classify_source(true, None), ProcSource::Unavailable);
-        assert_eq!(classify_source(false, None), ProcSource::Verified);
+        // No context at all — a daemon from before the field existed: real
+        // processes, but nothing it can vouch for, so never Verified.
+        assert_eq!(classify_source(false, None), ProcSource::Unconfirmed);
 
         let mut procs = PaneProcs::default();
+        assert_eq!(
+            classify_source(false, Some(&procs)),
+            ProcSource::Unconfirmed
+        );
+        // The positive ownership statement: the answering daemon names this
+        // machine as the pane's home, with no connection on top.
+        procs.context = Some(PaneContext {
+            local_pty: true,
+            ..Default::default()
+        });
         assert_eq!(classify_source(false, Some(&procs)), ProcSource::Verified);
+        // A native-SSH pane: the far side's sampling, unverifiable here.
         procs.context = Some(PaneContext {
             local_pty: false,
             ..Default::default()
         });
         assert_eq!(classify_source(false, Some(&procs)), ProcSource::Heuristic);
+        // The pane's shell is running a connection: this machine's side of it.
         procs.context = Some(PaneContext {
             local_pty: true,
             remote: Some(crate::daemon::protocol::RemoteContext {
