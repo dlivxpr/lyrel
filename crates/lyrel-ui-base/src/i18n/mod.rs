@@ -1953,6 +1953,30 @@ l10n_keys! {
     PanelSearchTitle,
     PanelGitHubTitle,
     PanelSessionsTitle,
+    PanelMonitorTitle,
+    // The Activity Monitor's scope line names the context pane whose tree
+    // is shown — the pane, never a directory.
+    MonitorScopeCurrentPane,
+    MonitorFilterPlaceholder,
+    MonitorColName,
+    MonitorColPid,
+    MonitorColCpu,
+    MonitorColMemory,
+    MonitorSortTree,
+    MonitorSortCpu,
+    MonitorSortMemory,
+    // The folded-row count: `{count}` subprocesses are hidden under the row.
+    MonitorChildCount,
+    MonitorExpand,
+    MonitorCollapse,
+    MonitorNoPane,
+    MonitorNoPaneHint,
+    MonitorProcsEmpty,
+    MonitorProcsEmptyHint,
+    MonitorProcsUnavailable,
+    MonitorProcsUnavailableHint,
+    MonitorProcsHeuristic,
+    MonitorProcsHeuristicHint,
     // The title-bar `+` that offers every tool.
     ToolHostAdd,
     // A tool tab's close button; `{tool}` is the tool's visible name.
@@ -2491,6 +2515,7 @@ l10n_keys! {
     CmdRightPanelSearch,
     CmdRightPanelGitHub,
     CmdRightPanelSessions,
+    CmdRightPanelMonitor,
     CmdFocusRightPanelNavigation,
     CmdChangeTheme,
     CmdResetFontSize,

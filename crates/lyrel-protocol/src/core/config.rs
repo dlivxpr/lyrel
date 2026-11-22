@@ -1646,6 +1646,11 @@ pub enum RightPanelTab {
     /// Same rollback cost as `Search`: a build without it does not know
     /// `"sessions"`, falls through `de_lenient` to `Info`, and opens there.
     Sessions,
+    /// Activity Monitor — the context pane's process tree, moved out of Info
+    /// (#371) so Info keeps Session and Ports. Same rollback cost as
+    /// `Search`: a build without it folds the stored choice back to `Info`.
+    #[serde(rename = "monitor")]
+    Monitor,
 }
 
 /// What opens when a file link in the grid is clicked.

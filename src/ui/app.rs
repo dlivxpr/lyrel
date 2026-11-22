@@ -281,6 +281,10 @@ pub struct LyrelApp {
     _file_tree_events: Subscription,
     _file_tree_observer: Subscription,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
+    /// The Activity Monitor's per-pane UI state — filter field, sibling
+    /// sort, and the expanded/selected sets. The snapshot itself lives in
+    /// `right_panel`, shared with Info's Ports section.
+    pub(crate) monitor: crate::ui::panel_monitor::MonitorState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
     _editor_events: Subscription,
     _editor_observer: Subscription,

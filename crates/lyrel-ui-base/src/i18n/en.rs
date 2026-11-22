@@ -2545,6 +2545,35 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelSearchTitle => "Search",
         L10nKey::PanelGitHubTitle => "GitHub",
         L10nKey::PanelSessionsTitle => "Session History",
+        L10nKey::PanelMonitorTitle => "Activity Monitor",
+        L10nKey::MonitorScopeCurrentPane => "Current pane",
+        L10nKey::MonitorFilterPlaceholder => "Filter by name or PID",
+        L10nKey::MonitorColName => "Name",
+        L10nKey::MonitorColPid => "PID",
+        L10nKey::MonitorColCpu => "CPU",
+        L10nKey::MonitorColMemory => "Memory",
+        L10nKey::MonitorSortTree => "Tree order",
+        L10nKey::MonitorSortCpu => "By CPU",
+        L10nKey::MonitorSortMemory => "By memory",
+        L10nKey::MonitorChildCount => "{count} subprocesses",
+        L10nKey::MonitorExpand => "Expand",
+        L10nKey::MonitorCollapse => "Collapse",
+        L10nKey::MonitorNoPane => "No active pane.",
+        L10nKey::MonitorNoPaneHint => "Open a tab to watch its processes here.",
+        L10nKey::MonitorProcsEmpty => "No processes to show.",
+        L10nKey::MonitorProcsEmptyHint => "This pane has no processes to list.",
+        L10nKey::MonitorProcsUnavailable => {
+            "Processes are unavailable on this machine."
+        }
+        L10nKey::MonitorProcsUnavailableHint => {
+            "The host that owns this pane cannot report its processes."
+        }
+        L10nKey::MonitorProcsHeuristic => {
+            "Showing this machine's side of the connection."
+        }
+        L10nKey::MonitorProcsHeuristicHint => {
+            "Processes running on the remote host are not visible here."
+        }
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
@@ -3088,6 +3117,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelSearch => "Right Panel: Search",
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
         L10nKey::CmdRightPanelSessions => "Right Panel: Session History",
+        L10nKey::CmdRightPanelMonitor => "Right Panel: Activity Monitor",
         L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",

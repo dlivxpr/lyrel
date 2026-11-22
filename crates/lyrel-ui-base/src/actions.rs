@@ -99,6 +99,7 @@ actions!(
         ShowRightPanelSearch,
         ShowRightPanelGitHub,
         ShowRightPanelSessions,
+        ShowRightPanelMonitor,
         ScmCommit,
         ScmCommitAmend,
         ScmStageAll,

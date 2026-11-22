@@ -352,6 +352,7 @@ impl LyrelApp {
         // and what the files say through the content search.
         let panel_search =
             crate::ui::panel_search::PanelSearchState::new(file_search.clone(), window, cx);
+        let monitor = crate::ui::panel_monitor::MonitorState::new(window, cx);
         let mut app = Self {
             tabs: TabSet::new(tabs, active),
             pending_notification_source: None,
@@ -401,6 +402,7 @@ impl LyrelApp {
             _file_tree_events: file_tree_events,
             _file_tree_observer: file_tree_observer,
             panel_search,
+            monitor,
             editor,
             _editor_events: editor_events,
             _editor_observer: editor_observer,

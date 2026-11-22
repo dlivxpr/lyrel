@@ -34,6 +34,9 @@ pub mod pane_drag;
 pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;
 pub mod panel_github;
+pub(crate) mod panel_monitor;
+#[cfg(test)]
+mod panel_monitor_tests;
 pub mod panel_search;
 pub(crate) mod panel_slide;
 pub(crate) mod parked_deck;
