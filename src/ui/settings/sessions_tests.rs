@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::ui::settings::test_window::harness;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, px, size};
 use lyrel_ui_base::config::Config;
 
@@ -25,6 +26,7 @@ fn listing(sessions: Vec<PastSession>) -> SessionListing {
         sessions,
         errors: Vec::new(),
         host_reachable: true,
+        any_listed: true,
     }
 }
 
@@ -317,7 +319,7 @@ fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext
             "one host at a time, defaulting to the workspace that opened settings"
         );
     });
-    // 种子列表 + 最窄窗口布局：渲染路径（工具栏、页签、全选、详情栏）不 panic。
+    // Populate the real page before measuring the narrow layout.
     settings.update_in(&mut vcx, |settings, _, _| {
         let state = settings.active_settings_mut().expect("settings open");
         state.sessions.listing = listing(vec![
@@ -329,6 +331,29 @@ fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext
     });
     vcx.simulate_resize(size(px(720.), px(560.)));
     vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let header = window.find("sessions-host-trigger").bounds();
+        let body = window.find("settings-sessions").bounds();
+        let toolbar = window.find("sessions-toolbar").bounds();
+        let side = window.find("sessions-side").bounds();
+        assert!(toolbar.top() >= header.bottom());
+        assert!(toolbar.top() - header.bottom() <= window.rem_size() * 2.);
+        assert!(side.top() >= toolbar.bottom());
+        assert_eq!(side.bottom(), body.bottom());
+        for id in [
+            "sessions-agent-trigger",
+            "sessions-activity-trigger",
+            "sessions-directory-trigger",
+        ] {
+            let filter = window.find(id).bounds();
+            assert!(filter.right() <= toolbar.right(), "{id} is clipped");
+            assert!(
+                filter.bottom() <= toolbar.bottom(),
+                "{id} overlaps the list"
+            );
+        }
+    });
 }
 
 #[gpui_kit::test]

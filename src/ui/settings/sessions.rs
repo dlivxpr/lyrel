@@ -440,6 +440,7 @@ impl SettingsWindow {
                         retained: None,
                     }],
                         host_reachable: false,
+                        any_listed: false,
                     };
                 settings.sessions.scanning = false;
                 settings.sessions.landed = true;
@@ -642,68 +643,54 @@ impl SettingsWindow {
             })
             .collect();
 
-        let toolbar = self.sessions_toolbar(state, host, home.as_deref(), cx);
-        let mut left = v_flex()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .gap(px(8.))
-            .child(toolbar);
-        if state.activity == SessionActivity::Custom {
-            left = left.child(self.sessions_custom_range(state));
-        }
-        left = left.child(self.sessions_list(
+        let toolbar = self.sessions_toolbar(state, home.as_deref(), cx);
+        let left = self.sessions_list(
             state,
             &rows,
             landed_listing.as_ref(),
             now,
             home.as_deref(),
             cx,
-        ));
+        );
         let side = self.sessions_side(state, &rows, host, home.as_deref(), cx);
 
-        h_flex()
+        v_flex()
             .id("settings-sessions")
             .test_support()
-            .w_full()
-            .h_full()
+            .size_full()
             .min_h_0()
-            .gap(px(16.))
-            .child(left)
+            .gap_2()
+            .child(toolbar)
+            .when(state.activity == SessionActivity::Custom, |page| {
+                page.child(self.sessions_custom_range(state))
+            })
             .child(
-                div()
-                    .id("sessions-side")
-                    .test_support()
-                    .w(px(SIDE_W))
-                    .flex_shrink_0()
+                h_flex()
+                    .items_stretch()
+                    .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .border_l_1()
-                    .border_color(tk.k08)
-                    .pl(px(16.))
-                    .child(side),
+                    .gap_4()
+                    .child(v_flex().flex_1().min_w_0().min_h_0().child(left))
+                    .child(
+                        div()
+                            .id("sessions-side")
+                            .test_support()
+                            .w(gpui_kit::rems(SIDE_W / 16.))
+                            .max_w(gpui_kit::relative(0.44))
+                            .flex_shrink_0()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .border_l_1()
+                            .border_color(tk.k08)
+                            .pl(px(16.))
+                            .child(side),
+                    ),
             )
             .into_any_element()
     }
 
-    /// 顶部筛选行：标题/ID 搜索、智能体、最近活动、目录。
-    fn sessions_toolbar(
-        &self,
-        state: &SessionsState,
-        host: HostId,
-        home: Option<&Path>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let tk = Tk::of(cx);
-        let lead = |key: L10nKey| {
-            Some(
-                div()
-                    .text_size(fs(12.5))
-                    .text_color(tk.k45)
-                    .child(t(key))
-                    .into_any_element(),
-            )
-        };
+    pub(crate) fn render_sessions_host(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let host = self.active_settings()?.sessions.host;
         let machines = self.agent_hooks_machines(cx);
         let host_label = machines
             .iter()
@@ -719,6 +706,26 @@ impl SettingsWindow {
             })
             .collect();
         let host_menu = self.settings_dropdown("sessions-host", host_label, None, host_entries, cx);
+        Some(host_menu)
+    }
+
+    /// 顶部筛选行：标题/ID 搜索、智能体、最近活动、目录。
+    fn sessions_toolbar(
+        &self,
+        state: &SessionsState,
+        home: Option<&Path>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tk = Tk::of(cx);
+        let lead = |key: L10nKey| {
+            Some(
+                div()
+                    .text_size(fs(12.5))
+                    .text_color(tk.k45)
+                    .child(t(key))
+                    .into_any_element(),
+            )
+        };
 
         let agent_label = state
             .agent
@@ -819,14 +826,14 @@ impl SettingsWindow {
             .test_support()
             .w_full()
             .items_center()
+            .flex_wrap()
             .gap_2()
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(160.))
+                    .min_w(gpui_kit::rems(7.5))
                     .child(kit::search_field(&state.search, &tk)),
             )
-            .child(host_menu)
             .child(agent_menu)
             .child(activity_menu)
             .child(directory_menu)

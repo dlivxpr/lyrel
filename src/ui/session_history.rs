@@ -1251,14 +1251,6 @@ impl LyrelApp {
                     cx,
                 ))
                 .into_any_element(),
-            SessionHealth::Unsupported => v_flex()
-                .child(selector)
-                .child(self.panel_empty(
-                    t(L10nKey::PanelSessionsUnsupported),
-                    Some(t(L10nKey::PanelSessionsUnsupportedHint)),
-                    cx,
-                ))
-                .into_any_element(),
             // Loading covers the first trip, every later scope change, and
             // however long the service portion is still out: with a scan in
             // flight, zero rows — Empty or Unsupported — is the trip's

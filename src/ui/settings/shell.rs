@@ -837,6 +837,14 @@ impl SettingsWindow {
             .when_some(subtitle, |row, sub| {
                 row.child(div().text_size(fs(12.)).text_color(tk.k4).child(sub))
             });
+        let header = if !searching && section == SettingsSection::Sessions {
+            header
+                .items_center()
+                .justify_between()
+                .children(self.render_sessions_host(cx))
+        } else {
+            header
+        };
 
         let notices = self.render_settings_notices(cx);
 
