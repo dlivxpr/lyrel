@@ -73,7 +73,12 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v18 adds read-only SQLite browsing (`Sqlite`) and the `sqlite-browse-v1`
 /// feature. One request carries the whole operation, so later browsing
 /// operations stay additive inside it; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 18;
+/// v19 lets `AgentSessions` carry a directory: the scoped answer is filtered
+/// on the host, before the recent-history cap, so a busy store cannot crowd
+/// out the queried directory's own sessions. A v18 peer cannot decode the
+/// request and is turned away at the handshake, as with any other dialect
+/// change; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 19;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -306,8 +311,13 @@ pub enum ControlRequest {
 
     Shells,
 
-    /// Past supported coding-agent sessions on this machine.
-    AgentSessions,
+    /// Past supported coding-agent sessions on this machine. `directory`,
+    /// when set, scopes the answer to sessions that ran there, matched on
+    /// this host before the recent cap is applied.
+    AgentSessions {
+        #[serde(default)]
+        directory: Option<String>,
+    },
     SessionOperation {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
@@ -635,7 +645,7 @@ impl ControlRequest {
             // Past the host's own time budget (`ContentLimits::max_millis`),
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
-            Shells | AgentSessions => Duration::from_secs(20),
+            Shells | AgentSessions { .. } => Duration::from_secs(20),
             SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } | HermesStatistics { .. } => Duration::from_secs(120),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),

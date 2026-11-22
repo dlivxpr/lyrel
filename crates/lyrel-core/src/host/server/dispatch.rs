@@ -251,7 +251,10 @@ fn run_request(
         }
 
         ControlRequest::Shells => (ReplyOk::Shells(h.shells()?), Vec::new()),
-        ControlRequest::AgentSessions => (ReplyOk::AgentSessions(h.agent_sessions()?), Vec::new()),
+        ControlRequest::AgentSessions { directory } => (
+            ReplyOk::AgentSessions(h.agent_sessions(directory.as_deref().map(std::path::Path::new))?),
+            Vec::new(),
+        ),
         ControlRequest::SessionOperation { request } => (
             ReplyOk::SessionOperation(Box::new(h.session_operation(&request))),
             Vec::new(),

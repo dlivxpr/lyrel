@@ -571,8 +571,16 @@ pub trait Host: Send + Sync + 'static {
     }
 
     /// Past coding-agent sessions on this host, most recent first.
-    /// A host that cannot look has none to offer.
-    fn agent_sessions(&self) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+    /// A host that cannot look has none to offer. With `directory`, the
+    /// answer is filtered to sessions that ran there before the recent cap
+    /// is applied — hosts whose providers cannot filter exactly (a service
+    /// that only pages a recency window) ignore it and answer unscoped, and
+    /// the caller treats their cap as a partial source.
+    fn agent_sessions(
+        &self,
+        directory: Option<&Path>,
+    ) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+        let _ = directory;
         Ok(Vec::new())
     }
 

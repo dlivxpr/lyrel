@@ -106,7 +106,15 @@ impl SessionListing {
 /// The per-provider requests one scan runs: OpenCode and Hermes each answer
 /// per observed storage scope, so a pane running under a non-default profile
 /// or service keeps its history discoverable.
+///
+/// `directory` is the optional query the whole scan is scoped to: the owning
+/// Host applies it to the file-scanned stores before their recent cap, and
+/// the merged listing is filtered to it here. `None` lists everything
+/// (Search Everywhere's Sessions tab); the Session History tool sets it to
+/// the directory it is bound to. Consumers that cannot paginate exactly
+/// against it (the OpenCode service window) stay explicit about their cap.
 pub(crate) struct SessionScan {
+    directory: Option<PathBuf>,
     opencode: Vec<SessionOperation>,
     hermes: Vec<SessionOperation>,
     hermes_errors: Vec<SessionOperationError>,
@@ -221,6 +229,7 @@ pub(crate) fn plan_scan(
         }
     }
     SessionScan {
+        directory: None,
         opencode: opencode_scopes,
         hermes: hermes_scopes,
         hermes_errors,
@@ -230,17 +239,22 @@ pub(crate) fn plan_scan(
 /// Run one scan on its owning Host (blocking — call through `HostOps`).
 /// `agent_sessions` covers pi/Oh My Pi/Kimi; the scoped requests cover
 /// OpenCode and Hermes. A failing source is recorded as an error and never
-/// empties what the other sources found.
+/// empties what the other sources found. With `scan.directory`, the owning
+/// Host filters the file-scanned stores before their recent cap and the
+/// merged listing is filtered to the directory here; sources that cannot
+/// paginate exactly against a directory (the OpenCode service's recency
+/// window) keep their limit warning so a capped answer never reads complete.
 pub(crate) fn collect_sessions(
     host: &dyn lyrel_core::host::Host,
     scan: SessionScan,
 ) -> SessionListing {
+    let directory = scan.directory.clone();
     let mut listing = SessionListing {
         sessions: Vec::new(),
         errors: scan.hermes_errors,
         host_reachable: true,
     };
-    match host.agent_sessions() {
+    match host.agent_sessions(directory.as_deref()) {
         Ok(found) => listing.sessions.extend(found),
         Err(error) => {
             // The transport's own verdict is the only "disconnected" signal:
@@ -273,6 +287,12 @@ pub(crate) fn collect_sessions(
     for request in scan.opencode {
         match host.opencode_sessions(&request) {
             Ok(sessions) => {
+                // The service pages a fixed recency window; a scoped listing
+                // cannot tell whether the directory's older records fell
+                // past it, so a full window is said out loud instead of
+                // reading as a complete answer.
+                let window_full = directory.is_some()
+                    && sessions.len() >= lyrel_core::core::agent_history::MAX_SESSIONS;
                 for session in sessions {
                     let same = |existing: &PastSession| {
                         existing.agent == session.agent
@@ -306,6 +326,16 @@ pub(crate) fn collect_sessions(
                         retained: None,
                     });
                 }
+                if window_full {
+                    listing.errors.push(SessionOperationError {
+                        kind: SessionErrorKind::Unsupported,
+                        message: format!(
+                            "OpenCode history reached its {}-session window; older sessions for this directory may be missing",
+                            lyrel_core::core::agent_history::MAX_SESSIONS
+                        ),
+                        retained: None,
+                    });
+                }
             }
             Err(error) => listing.errors.push(error),
         }
@@ -326,6 +356,19 @@ pub(crate) fn collect_sessions(
             Err(error) => listing.errors.push(error),
         }
     }
+    // Service providers answer a recency window, not a directory query: the
+    // merged listing is filtered here, with the owning Host's path semantics
+    // (the scanner used the same match on its own machine), so every
+    // consumer of the shared listing sees exactly the queried directory —
+    // and a Windows client never merges a Linux host's /tmp/Repo with
+    // /tmp/repo.
+    if let Some(dir) = &directory {
+        listing.sessions.retain(|s| {
+            s.cwd.as_deref().is_some_and(|cwd| {
+                lyrel_core::core::agent_history::directory_matches_with(cwd, dir, host.separator())
+            })
+        });
+    }
     listing
         .sessions
         .sort_by_key(|s| std::cmp::Reverse(s.updated));
@@ -343,8 +386,11 @@ fn opencode_storage_confirmed(scope: &lyrel_core::host::session_operations::Sess
         || scope.environment.contains_key("USERPROFILE")
 }
 
-/// What each host's last session scan found: what every history consumer
-/// shows while the next scan runs, so none of them opens empty.
+/// What each host's last *unscoped* session scan found: the placeholder
+/// Search Everywhere's Sessions tab shows while its own query runs. Only
+/// Search writes it — the Session History tool's scans are directory-scoped,
+/// and caching those here would drop every other directory from the
+/// placeholder.
 static LAST_SESSIONS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<HostId, Vec<PastSession>>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -379,12 +425,23 @@ impl Default for SessionDirectory {
     }
 }
 
-/// The identity a started scan belongs to: its host and the directory the
-/// request was scoped to. Results landing for any other generation are
-/// stale and retired.
+/// The identity a started scan belongs to: its host, the actual connection,
+/// and the directory the request was scoped to. Results landing for any
+/// other generation are stale and retired; a bound that no longer equals the
+/// wanted one is rescanned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionBound {
     pub(crate) host: HostId,
+    /// The host connection the bound was claimed against — the registry's
+    /// host object identity. A relink replaces that object, so a reconnect
+    /// with an identical directory is a different bound and rescans; `0`
+    /// means no live connection was found for the host.
+    pub(crate) connection: usize,
+    /// The repository the listed directory belongs to: recorded when a
+    /// worktree is pinned, so the pin keeps its origin repository instead of
+    /// silently re-resolving under whatever repository the path names now.
+    /// `None` — the followed pane directory — is its own scope.
+    pub(crate) repo: Option<PathBuf>,
     /// The directory sessions will be matched against. `None` — no context
     /// pane, or none with a directory — is not scannable and renders its
     /// own empty state rather than a listing.
@@ -395,15 +452,31 @@ impl Default for SessionBound {
     fn default() -> Self {
         Self {
             host: HostId::LOCAL,
+            connection: 0,
+            repo: None,
             dir: None,
         }
     }
+}
+
+/// Where a pinned worktree's scope came from. The pin keeps this origin
+/// until the user re-picks: a workspace relink must not rebind the listing
+/// to the new host, and a path that now names another repository is a
+/// different scope, not the same pin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PinOrigin {
+    host: HostId,
+    connection: usize,
+    repo: Option<PathBuf>,
 }
 
 /// The Session History tool's view state.
 #[derive(Default)]
 pub(crate) struct SessionHistoryPanel {
     follow: SessionDirectory,
+    /// The origin host/connection/repository a pinned worktree was pinned
+    /// on. `None` while following the context pane.
+    pin_origin: Option<PinOrigin>,
     bound: SessionBound,
     listing: SessionListing,
     generation: u64,
@@ -447,22 +520,56 @@ const ROW_H: f32 = 28.;
 const ROW_AVATAR: f32 = 18.;
 
 impl LyrelApp {
-    /// Keep the Session History listing bound to the context pane's host and
-    /// directory. Driven from the window's render like the port watch: the
-    /// context pane's directory has no event of its own, so the bound is
-    /// recomputed each frame and a scan starts only when it moved.
+    /// Keep the Session History listing bound to its scope: the context
+    /// pane's host and directory, or the origin host and repository a
+    /// worktree was pinned on. Driven from the window's render like the port
+    /// watch: the context pane's directory has no event of its own, so the
+    /// bound is recomputed each frame and a scan starts only when it moved.
     pub(crate) fn sync_session_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.right_panel_tab != lyrel_core::core::config::RightPanelTab::Sessions
             || !self.right_panel_visible
         {
             return;
         }
-        let pane_dir = self
-            .context_pane(window, cx)
+        let pane = self.context_pane(window, cx);
+        let pane_dir = pane
+            .as_ref()
             .and_then(|pane| pane.read(cx).host_cwd());
+        // The directory's owning host: the context pane's for the followed
+        // directory, the pin's origin for a pinned worktree — never the
+        // workspace's current host on its own, which a relink would silently
+        // swap under a pinned listing.
+        let (dir, host) = match &self.session_history.follow {
+            SessionDirectory::Worktree(path) => (
+                Some(path.clone()),
+                self.session_history
+                    .pin_origin
+                    .as_ref()
+                    .map_or_else(|| self.spawn_host(cx), |origin| origin.host),
+            ),
+            SessionDirectory::FollowCwd => (
+                pane_dir,
+                pane.as_ref()
+                    .map_or_else(|| self.spawn_host(cx), |pane| pane.read(cx).host_id()),
+            ),
+        };
+        let connection =
+            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
+                std::sync::Arc::as_ptr(&host) as *const () as usize
+            });
+        let repo = match &self.session_history.follow {
+            SessionDirectory::Worktree(_) => self
+                .session_history
+                .pin_origin
+                .as_ref()
+                .and_then(|origin| origin.repo.clone()),
+            SessionDirectory::FollowCwd => None,
+        };
         let wanted = SessionBound {
-            host: self.spawn_host(cx),
-            dir: self.session_history.wanted_dir(pane_dir),
+            host,
+            connection,
+            repo,
+            dir,
         };
         if self.session_history.scanning || self.session_history.bound == wanted {
             return;
@@ -503,7 +610,7 @@ impl LyrelApp {
             .flat_map(|tab| tab.pane.terminals())
             .collect();
         let agents = self.offered_agents(cx);
-        let scan = plan_scan(
+        let mut scan = plan_scan(
             self.session_history.bound.host,
             &panes,
             &agents,
@@ -511,32 +618,52 @@ impl LyrelApp {
             &cx.global::<Config>().agent_launch.clone(),
             cx,
         );
+        // The tool lists one directory: the owning Host filters its
+        // file-scanned stores to it before the recent cap, and service
+        // sources are filtered to it when the listing merges.
+        scan.directory = Some(dir);
         let host_id = self.session_history.bound.host;
+        let connection = self.session_history.bound.connection;
         HostOps::run_in(
             host,
             window,
             cx,
             move |host| collect_sessions(host, scan),
             move |app, listing, _window, cx| {
-                app.session_history_landed(generation, host_id, listing, cx);
+                app.session_history_landed(generation, host_id, connection, listing, cx);
             },
         );
     }
 
-    /// A scan landed: keep it only if its generation is still the live one,
-    /// cache what the host said, and let the next render re-check the bound —
-    /// the pane may have moved while the scan was in flight.
+    /// A scan landed: keep it only if its generation is still the live one
+    /// and the connection it ran on is still the one the registry holds —
+    /// a relink or a drop mid-flight makes the answers the old connection's,
+    /// and applying them would bind its sessions to a host they did not come
+    /// from. Retired results leave the bound alone; the next render's sync
+    /// rebinds and rescans.
     fn session_history_landed(
         &mut self,
         generation: u64,
         host: HostId,
+        connection: usize,
         listing: SessionListing,
         cx: &mut Context<Self>,
     ) {
         if self.session_history.generation != generation {
             return;
         }
-        remember_sessions(host, listing.sessions.clone());
+        let live =
+            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
+                std::sync::Arc::as_ptr(&host) as *const () as usize
+            });
+        if live != connection {
+            self.session_history.scanning = false;
+            return;
+        }
+        // The panel's scans are directory-scoped; the shared cache feeds
+        // Search Everywhere's placeholder, which must stay the complete
+        // unscoped listing Search itself scans — a scoped listing would drop
+        // every other directory from the placeholder.
         self.session_history.scanning = false;
         self.session_history.landed = true;
         self.session_history.listing = listing;
@@ -556,13 +683,23 @@ impl LyrelApp {
             return Vec::new();
         };
         let hidden = &cx.global::<Config>().hidden_agent_sessions;
+        // The rows judge the owning Host's records by the owning Host's
+        // path semantics (a remote Linux host stays case-sensitive even
+        // under a Windows client), not by this machine's.
+        let host_separator =
+            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.session_history.bound.host)
+                .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
         let mut rows: Vec<PastSession> = self
             .session_history
             .listing
             .sessions
             .iter()
             .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
-            .filter(|s| s.cwd.as_deref() == Some(dir.as_path()))
+            .filter(|s| {
+                s.cwd.as_deref().is_some_and(|cwd| {
+                    crate::core::agent_history::directory_matches_with(cwd, &dir, host_separator)
+                })
+            })
             .cloned()
             .collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.updated));
@@ -912,7 +1049,31 @@ impl LyrelApp {
     /// Re-point the listing: a checkout of the same repository, or back at
     /// the context pane's live directory. Only the listing moves — no pane
     /// changes — and the next render's sync rescans for the new bound.
+    /// Pinning records where the pin was made — the host connection and the
+    /// repository the worktree list belonged to — so the listing keeps that
+    /// origin until the user re-picks instead of following the workspace's
+    /// current host after a relink.
     fn pick_session_directory(&mut self, follow: SessionDirectory, cx: &mut Context<Self>) {
+        self.session_history.pin_origin = match &follow {
+            SessionDirectory::Worktree(_) => Some(PinOrigin {
+                host: self.session_history.bound.host,
+                connection: self.session_history.bound.connection,
+                // The worktrees list belongs to the directory it was loaded
+                // for; a stale list (another directory claimed the slot
+                // meanwhile) says nothing about this pin's repository.
+                repo: (self.session_history.worktrees_for.as_deref()
+                    == self.session_history.bound.dir.as_deref())
+                .then(|| {
+                    self.session_history
+                        .worktrees
+                        .iter()
+                        .find(|worktree| worktree.main)
+                        .map(|worktree| worktree.path.clone())
+                })
+                .flatten(),
+            }),
+            SessionDirectory::FollowCwd => None,
+        };
         self.session_history.follow = follow;
         self.session_history.selected = None;
         self.session_history.close_actions(cx);
@@ -1333,5 +1494,54 @@ mod tests {
         });
         let listing = collect_sessions(&*host, scan);
         assert_eq!(listing.health(0), SessionHealth::Disconnected);
+    }
+
+    /// The scope fence names the actual host connection and the pinned
+    /// repository, not just the workspace's host id: a relink with an
+    /// identical directory is a different bound (rescan), and a pinned
+    /// worktree keeps its origin instead of re-binding to whatever host the
+    /// workspace currently names.
+    #[test]
+    fn session_bound_fences_on_connection_and_pin_origin() {
+        let base = SessionBound {
+            host: HostId::LOCAL,
+            connection: 0,
+            repo: None,
+            dir: Some(PathBuf::from("/repo/main")),
+        };
+        // A reconnect replaces the connection object: same host id, same
+        // directory — still a different bound, so the listing rescans.
+        assert_ne!(
+            base,
+            SessionBound {
+                connection: 1,
+                ..base.clone()
+            },
+            "an identical directory on a new connection must rescan"
+        );
+        // A pinned worktree carries the repository it was pinned on.
+        assert_ne!(
+            base,
+            SessionBound {
+                repo: Some(PathBuf::from("/repo/main")),
+                ..base.clone()
+            },
+            "the same path under another repository is another scope"
+        );
+        // No directory remains its own state: nothing to scan against.
+        assert_ne!(
+            base,
+            SessionBound {
+                dir: None,
+                ..base.clone()
+            }
+        );
+        assert_eq!(
+            base,
+            SessionBound {
+                dir: Some(PathBuf::from("/repo/main")),
+                ..SessionBound::default()
+            }
+        );
     }
 }

@@ -34,7 +34,8 @@ pub fn discover_pi(host: &dyn Host, launch: &HashMap<String, String>) -> io::Res
     let mut sources = vec![source(host, &home, &agent, root, depth)];
     // Existing Host history exposes captured pane selectors, not a second statistics cache.
     // This is only discovery: all accounting reads complete JSONL files below those stores.
-    let sessions = match host.agent_sessions() {
+    // Statistics discovery wants every session a store holds — no directory scope.
+    let sessions = match host.agent_sessions(None) {
         Ok(sessions) => sessions,
         Err(error) => {
             let mut failed = source(host, &home, &agent, agent.clone(), 0);

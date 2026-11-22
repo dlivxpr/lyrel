@@ -284,7 +284,77 @@ pub fn omp_profile(
     Ok(profile)
 }
 
-pub fn scan(roots: &Roots) -> Vec<PastSession> {
+/// Whether a session's recorded working directory is the queried one, by
+/// this machine's own path semantics — the right answer for code running
+/// *on* the owning Host (the scanner). A GUI filtering a *remote* host's
+/// records must use [`directory_matches_with`] with the owning Host's
+/// separator instead: a Windows client judging a Linux host's `/tmp/Repo`
+/// against `/tmp/repo` would wrongly merge two different directories, and
+/// the client's `Path::components` cannot parse a remote path at all.
+pub fn directory_matches(session_cwd: &Path, query: &Path) -> bool {
+    directory_matches_with(session_cwd, query, std::path::MAIN_SEPARATOR)
+}
+
+/// The directory match under an explicit owning Host's path semantics,
+/// marked by that Host's path separator (`Host::separator` on the wire).
+/// Pure with respect to this build's platform: both paths are split by the
+/// owning Host's separator rules — a Windows host takes both `/` and `\`,
+/// everything else takes `/` — and compared segment for segment, dropping
+/// empty and `.` segments and requiring the same rootedness, case-
+/// insensitively only when the owning Host's directories are (its separator
+/// is `\`). `..` is kept literal: recorded working directories are already
+/// normalized by their host.
+pub fn directory_matches_with(session_cwd: &Path, query: &Path, host_separator: char) -> bool {
+    let windows = host_separator == '\\';
+    let session = session_cwd.to_string_lossy();
+    let query = query.to_string_lossy();
+    if host_path_rooted(&session, windows) != host_path_rooted(&query, windows) {
+        return false;
+    }
+    let mut cwd_segments = host_path_segments(&session, windows);
+    let mut query_segments = host_path_segments(&query, windows);
+    loop {
+        match (cwd_segments.next(), query_segments.next()) {
+            (None, None) => return true,
+            (Some(a), Some(b)) => {
+                let equal = match windows {
+                    true => a.eq_ignore_ascii_case(b),
+                    false => a == b,
+                };
+                if !equal {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Whether an owning-Host path is rooted, by that Host's rules: a leading
+/// separator, or a Windows drive prefix (`C:`).
+fn host_path_rooted(path: &str, windows: bool) -> bool {
+    path.starts_with('/')
+        || windows && (path.starts_with('\\') || path.as_bytes().get(1) == Some(&b':'))
+}
+
+/// One owning-Host path's meaningful segments, split by that Host's rules —
+/// never this platform's: a Windows host takes both separator styles,
+/// everything else takes `/`.
+fn host_path_segments(path: &str, windows: bool) -> impl Iterator<Item = &str> {
+    path.split(move |c: char| match windows {
+        true => c == '/' || c == '\\',
+        false => c == '/',
+    })
+    .filter(|segment| !segment.is_empty() && *segment != ".")
+}
+
+/// The parsed sessions, newest first, capped at [`MAX_SESSIONS`]. With
+/// `directory`, only sessions that ran there are listed: the match is
+/// applied before the cap — the stores are read in full and the newest
+/// [`MAX_SESSIONS`] *of the directory* are kept, so sessions that rank below
+/// the newest 500 overall still list. Without one, the global recent cap is
+/// unchanged.
+pub fn scan(roots: &Roots, directory: Option<&Path>) -> Vec<PastSession> {
     let mut files = Vec::new();
     for (index, scope) in roots.pi_scopes.iter().enumerate() {
         if let Some(dir) = &scope.session_dir {
@@ -321,7 +391,12 @@ pub fn scan(roots: &Roots) -> Vec<PastSession> {
     files.retain(|file| seen_paths.insert(file.path.clone()));
     files.extend(kimi_files(&roots.kimi));
     files.sort_by_key(|f| std::cmp::Reverse(f.modified));
-    files.truncate(MAX_SESSIONS);
+    // A directory query must not let the recent cap drop the directory's
+    // own files: every store file is read, and the cap lands on the matches
+    // (below) instead of on the newest overall.
+    if directory.is_none() {
+        files.truncate(MAX_SESSIONS);
+    }
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = Vec::new();
     let mut seen = HashMap::with_capacity(files.len());
@@ -387,6 +462,9 @@ pub fn scan(roots: &Roots) -> Vec<PastSession> {
     }
     *cache = seen;
     drop(cache);
+    if let Some(dir) = directory {
+        out.retain(|s| s.cwd.as_deref().is_some_and(|cwd| directory_matches(cwd, dir)));
+    }
     out.sort_by_key(|s| std::cmp::Reverse(s.updated));
     out.truncate(MAX_SESSIONS);
     out
@@ -860,7 +938,7 @@ mod tests {
         let mut roots = Roots::from_environment(&home, &environment).unwrap();
         assert_eq!(roots.omp, home.join(".omp-custom/profiles/work/agent"));
         roots.omp_session_dir = Some(sessions.clone());
-        let session = scan(&roots)
+        let session = scan(&roots, None)
             .into_iter()
             .find(|s| s.agent == CLIAgent::OhMyPi)
             .unwrap();
@@ -923,7 +1001,7 @@ mod tests {
         let kimi_file = kimi_home.join("sessions/wd_project/configured-kimi/state.json");
         std::fs::create_dir_all(kimi_file.parent().unwrap()).unwrap();
         std::fs::write(&kimi_file, json!({"id":"configured-kimi","cwd":"/project","title":"scoped Kimi","updatedAt":1792320000123u64}).to_string()).unwrap();
-        let sessions = scan(&Roots::from_target(home.path(), &target).unwrap());
+        let sessions = scan(&Roots::from_target(home.path(), &target).unwrap(), None);
         let pi = sessions
             .iter()
             .find(|session| session.id == "configured-pi")
@@ -976,7 +1054,7 @@ mod tests {
             "id":"session-k", "cwd":"/project", "title":"New Session", "lastPrompt":"检查主会话",
             "updatedAt":1792320000123u64, "archived":false
         }).to_string()).unwrap();
-        let selected = scan(&roots)
+        let selected = scan(&roots, None)
             .into_iter()
             .find(|session| session.agent == CLIAgent::Kimi)
             .unwrap();
@@ -1003,11 +1081,11 @@ mod tests {
                 "type": "session", "id": "same-native-id", "cwd": "/project", "title": "selected history"
             }))).unwrap();
         }
-        let first = scan(&one)
+        let first = scan(&one, None)
             .into_iter()
             .find(|s| s.agent == CLIAgent::OhMyPi)
             .unwrap();
-        let second = scan(&two)
+        let second = scan(&two, None)
             .into_iter()
             .find(|s| s.agent == CLIAgent::OhMyPi)
             .unwrap();
@@ -1058,7 +1136,7 @@ mod tests {
                 )]),
                 ..Default::default()
             });
-        let session = scan(&roots)
+        let session = scan(&roots, None)
             .into_iter()
             .find(|session| session.id == "private-source")
             .unwrap();
@@ -1113,7 +1191,7 @@ mod tests {
         )
         .unwrap();
         roots.pi_sessions = Some(store.clone());
-        let session = scan(&roots)
+        let session = scan(&roots, None)
             .into_iter()
             .find(|s| s.agent == CLIAgent::Pi)
             .unwrap();
@@ -1224,7 +1302,7 @@ mod tests {
             "{\"type\":\"session\",\"id\":\"current-pi\",\"cwd\":\"/work\"}\n",
             "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"continue the real work\"}}\n"
         )).unwrap();
-        let found = scan(&Roots::under(home.path()));
+        let found = scan(&Roots::under(home.path()), None);
         assert_eq!(
             found
                 .iter()
@@ -1233,5 +1311,182 @@ mod tests {
             vec![(CLIAgent::Pi, "current-pi", "continue the real work")]
         );
         assert_eq!(std::fs::read_to_string(&retired).unwrap(), old);
+    }
+
+    /// A directory query is matched before the recent cap: sessions that
+    /// rank below the newest [`MAX_SESSIONS`] overall still list, which the
+    /// old global cap silently dropped. The crowd is enumerated first and
+    /// written afterwards, so any cap on the newest overall lands on it.
+    #[test]
+    fn scoped_scan_matches_the_directory_before_the_recent_cap() {
+        use crate::host::session_operations::SessionScope;
+        let home = tempfile::tempdir().unwrap();
+        let mut roots = Roots::under(home.path());
+        let crowd_dir = home.path().join("crowd-store");
+        let project_dir = home.path().join("project-store");
+        std::fs::create_dir_all(&crowd_dir).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        // The directory's own sessions are written first: they are the
+        // oldest, so a newest-first cap is exactly what would lose them.
+        for (ix, cwd) in ["/project", "/project/sub"].iter().enumerate() {
+            std::fs::write(
+                project_dir.join(format!("project-{ix}.jsonl")),
+                line(
+                    json!({"type":"session","id":format!("project-{ix}"),"cwd":cwd,"title":"project task"}),
+                ),
+            )
+            .unwrap();
+        }
+        for ix in 0..MAX_SESSIONS + 100 {
+            std::fs::write(
+                crowd_dir.join(format!("crowd-{ix}.jsonl")),
+                line(json!({"type":"session","id":format!("crowd-{ix}"),"cwd":"/elsewhere","title":"crowd task"})),
+            )
+            .unwrap();
+        }
+        roots.pi_scopes = vec![
+            SessionScope {
+                session_dir: Some(crowd_dir.clone()),
+                ..Default::default()
+            },
+            SessionScope {
+                session_dir: Some(project_dir),
+                ..Default::default()
+            },
+        ];
+        let scoped = scan(&roots, Some(Path::new("/project")));
+        assert_eq!(
+            scoped.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["project-0"],
+            "only the queried directory lists, however old its sessions are"
+        );
+        assert!(
+            scan(&roots, Some(Path::new("/absent"))).is_empty(),
+            "a directory with no sessions reads as empty, not as the crowd"
+        );
+        let unscoped = scan(&roots, None);
+        assert_eq!(
+            unscoped.len(),
+            MAX_SESSIONS,
+            "no query keeps the global recent cap exactly"
+        );
+        assert!(
+            unscoped.iter().all(|s| s.cwd.as_deref() == Some(Path::new("/elsewhere"))),
+            "the capped unscoped list is the newest overall, as before"
+        );
+    }
+
+    /// Directory matching follows the owning Host's path rules, never the
+    /// client's platform: component for component under that Host's
+    /// separator, case-insensitively only where that Host's directories are.
+    #[test]
+    fn directory_matches_uses_owning_host_case_and_component_semantics() {
+        // A Unix owning host, judged from any client.
+        assert!(directory_matches_with(Path::new("/work/repo"), Path::new("/work/repo"), '/'));
+        assert!(!directory_matches_with(
+            Path::new("/work/repo"),
+            Path::new("/work/other"),
+            '/'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("/work/repo"),
+            Path::new("/work/Repo"),
+            '/',
+        ));
+        // A trailing separator or a `.` segment is not a different directory.
+        assert!(directory_matches_with(Path::new("/work/repo"), Path::new("/work/repo/"), '/'));
+        assert!(directory_matches_with(Path::new("/work/./repo"), Path::new("/work/repo"), '/'));
+        // Rootedness matters: a relative path is not the absolute one.
+        assert!(!directory_matches_with(Path::new("/work/repo"), Path::new("work/repo"), '/'));
+        // A backslash is an ordinary filename character on a Unix host, not
+        // a separator — a Windows client must not split on it.
+        assert!(directory_matches_with(
+            Path::new("/tmp/my\\dir"),
+            Path::new("/tmp/my\\dir"),
+            '/'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("/tmp/my\\dir"),
+            Path::new("/tmp/my/dir"),
+            '/'
+        ));
+
+        // A Windows owning host, judged from any client: either separator
+        // style, case-insensitive by components, rootedness still enforced.
+        assert!(directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("c:/users/repo"),
+            '\\'
+        ));
+        assert!(directory_matches_with(
+            Path::new("C:\\Users\\Repo"),
+            Path::new("C:\\Users\\Repo\\"),
+            '\\'
+        ));
+        assert!(directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("C:\\Users\\REPO"),
+            '\\'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("C:/Users/Repos"),
+            '\\'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("C:/Users/repo2"),
+            '\\'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("C:/Users"),
+            '\\'
+        ));
+        assert!(!directory_matches_with(
+            Path::new("C:/Users/Repo"),
+            Path::new("Users/Repo"),
+            '\\'
+        ));
+
+        if cfg!(windows) {
+            assert!(
+                directory_matches(Path::new("C:/Users/Repo"), Path::new("c:\\users\\repo")),
+                "on the owner itself the live matcher is the case-insensitive one"
+            );
+            assert!(
+                !directory_matches(Path::new("C:/Users/Repo"), Path::new("C:/Users/repo2")),
+                "case-insensitive is still component-wise"
+            );
+        }
+    }
+
+    /// A client filters a *remote* host's records with the owning Host's
+    /// semantics, not the client's: under a Windows GUI a Linux host's
+    /// `/tmp/Repo` and `/tmp/repo` stay two directories, and only the
+    /// explicit flag for a Windows owner merges them.
+    #[test]
+    fn directory_matches_with_follows_the_owning_host_not_the_client() {
+        assert!(
+            !directory_matches_with(Path::new("/tmp/Repo"), Path::new("/tmp/repo"), '/'),
+            "a Linux owning host is case-sensitive even under a Windows client"
+        );
+        assert!(
+            directory_matches_with(Path::new("/tmp/Repo"), Path::new("/tmp/REPO"), '\\'),
+            "a Windows owning host merges the case variants"
+        );
+        assert!(
+            !directory_matches_with(Path::new("/tmp/Repo"), Path::new("/tmp/repo2"), '\\'),
+            "a different name does not merge under case-insensitivity"
+        );
+        assert!(
+            !directory_matches_with(Path::new("/tmp/Repo"), Path::new("/tmp"), '\\'),
+            "a prefix is not the directory"
+        );
+        if cfg!(windows) {
+            // The live default stays owner-local: on the scanning host it is
+            // this machine's semantics.
+            assert!(directory_matches(Path::new("/tmp/Repo"), Path::new("/tmp/repo")));
+        }
     }
 }

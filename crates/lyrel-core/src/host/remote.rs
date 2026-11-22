@@ -652,8 +652,14 @@ impl Host for RemoteHost {
         Ok(environment)
     }
 
-    fn agent_sessions(&self) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
-        match self.call(ControlRequest::AgentSessions)? {
+    fn agent_sessions(
+        &self,
+        directory: Option<&Path>,
+    ) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+        guard_off_ui();
+        match self.call(ControlRequest::AgentSessions {
+            directory: directory.map(|dir| dir.to_string_lossy().into_owned()),
+        })? {
             ReplyOk::AgentSessions(sessions) => Ok(sessions),
             other => Err(wrong_shape("a list of agent sessions", &other)),
         }
@@ -2263,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_sessions_come_from_the_peer() {
+    fn agent_sessions_come_from_the_peer_scoped_to_the_directory() {
         use crate::core::agent_history::PastSession;
         use crate::core::cli_agent::CLIAgent;
         let session = PastSession {
@@ -2277,16 +2283,39 @@ mod tests {
         };
         let reply = session.clone();
         let (host, seen) = host_with_peer('/', move |req| match req {
-            ControlRequest::AgentSessions => Some((
-                ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
+            ControlRequest::AgentSessions { directory: Some(directory) } if directory == "/home/me/repo" => {
+                Some((
+                    ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
+                    vec![],
+                ))
+            }
+            other => panic!("unexpected request {other:?}"),
+        });
+
+        let found = host
+            .agent_sessions(Some(Path::new("/home/me/repo")))
+            .unwrap();
+        assert_eq!(
+            seen.recv().unwrap(),
+            ControlRequest::AgentSessions {
+                directory: Some("/home/me/repo".into())
+            }
+        );
+        assert_eq!(found, vec![session]);
+
+        // No directory: the unscoped request is what an unscoped consumer sends.
+        let (host, seen) = host_with_peer('/', |req| match req {
+            ControlRequest::AgentSessions { directory: None } => Some((
+                ControlReply::Ok(ReplyOk::AgentSessions(Vec::new())),
                 vec![],
             )),
             other => panic!("unexpected request {other:?}"),
         });
-
-        let found = host.agent_sessions().unwrap();
-        assert_eq!(seen.recv().unwrap(), ControlRequest::AgentSessions);
-        assert_eq!(found, vec![session]);
+        assert!(host.agent_sessions(None).unwrap().is_empty());
+        assert_eq!(
+            seen.recv().unwrap(),
+            ControlRequest::AgentSessions { directory: None }
+        );
     }
 
     #[test]

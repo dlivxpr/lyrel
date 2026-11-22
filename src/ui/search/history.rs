@@ -50,10 +50,20 @@ impl SessionHistory {
         let hidden = &cx.global::<Config>().hidden_agent_sessions;
         let here = &self.here;
         let home = &self.home;
+        // `here` is a directory on this query's host; its records are judged
+        // by that host's path semantics, not by the client's platform.
+        let host_separator = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.host)
+            .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
         let (mut mine, mut rest): (Vec<_>, Vec<_>) = found
             .into_iter()
             .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
-            .partition(|s| here.is_some() && s.cwd.as_ref() == here.as_ref());
+            .partition(|s| {
+                here.as_deref().is_some_and(|here| {
+                    s.cwd.as_deref().is_some_and(|cwd| {
+                        crate::core::agent_history::directory_matches_with(cwd, here, host_separator)
+                    })
+                })
+            });
         let here_section: Option<gpui_kit::SharedString> = here.as_ref().map(|dir| {
             t_fmt(
                 L10nKey::SearchSectionSessionsHere,
