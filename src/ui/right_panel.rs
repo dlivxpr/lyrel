@@ -29,12 +29,13 @@ pub(crate) fn shown_tab(tab: RightPanelTab) -> RightPanelTab {
 }
 
 /// The tools the host offers, in `+` menu order: Info leads as the default
-/// and the pane's overview; then the project's files, and its version
-/// control, local to remote (Changes, GitHub). Session History follows —
-/// the saved agent conversations scoped to the context pane's directory.
-/// Search is not among them — it is the Files tool's input mode, commanded
-/// through [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
-pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 5] = [
+/// and the pane's overview; then the project's files, its version control,
+/// local to remote (Changes, GitHub), then Session History — the saved
+/// agent conversations scoped to the context pane's directory — and the
+/// Activity Monitor watching the context pane's processes. Search is not
+/// among them — it is the Files tool's input mode, commanded through
+/// [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
+pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 6] = [
     (
         RightPanelTab::Info,
         L10nKey::PanelInfoTitle,
@@ -61,6 +62,9 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 5] = [
         "icons/list-flat.svg",
     ),
     (
+        RightPanelTab::Monitor,
+        L10nKey::PanelMonitorTitle,
+        "icons/list-tree.svg",
     ),
 ];
 
@@ -93,6 +97,7 @@ pub(crate) fn tool_tab_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Scm => "tool-tab-changes",
         RightPanelTab::GitHub => "tool-tab-github",
         RightPanelTab::Sessions => "tool-tab-sessions",
+        RightPanelTab::Monitor => "tool-tab-monitor",
     }
 }
 
@@ -104,6 +109,7 @@ fn tool_tab_close_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Scm => "tool-tab-close-changes",
         RightPanelTab::GitHub => "tool-tab-close-github",
         RightPanelTab::Sessions => "tool-tab-close-sessions",
+        RightPanelTab::Monitor => "tool-tab-close-monitor",
     }
 }
 
@@ -116,6 +122,7 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Scm => "changes",
         RightPanelTab::GitHub => "github",
         RightPanelTab::Sessions => "sessions",
+        RightPanelTab::Monitor => "monitor",
     }
 }
 
@@ -165,9 +172,10 @@ const INFO_ROW_H: f32 = 28.;
 /// the list is read as one block rather than line by line.
 pub(crate) const PROC_ROW_H: f32 = 26.;
 
-/// How far a child process sits in from its parent, the width of the `└`
-/// elbow that marks it.
-const PROC_INDENT: f32 = 14.;
+/// How far a child process sits in from its parent — now the depth step of
+/// the Activity Monitor's tree, which inherited the indent when the process
+/// list left Info (#371).
+pub(crate) const PROC_INDENT: f32 = 14.;
 
 /// The space between two sections of the Info tab.
 pub(crate) const SECTION_GAP: f32 = 16.;
@@ -319,6 +327,10 @@ pub(crate) struct RightPanelState {
     pub(crate) procs_forwards: Option<lyrel_ui_base::route::ForwardRoute>,
     /// Who to ask about `procs_pane` — `None` means this machine's daemon.
     pub(crate) procs_host: Option<lyrel_ui_base::host_ops::SharedHost>,
+    /// Identity of `procs_host`'s instance, fenced alongside the pane id: a
+    /// replacement host after a reconnect may serve the same pane id, and an
+    /// answer from the old instance must not publish over the new one's tree.
+    pub(crate) procs_host_key: Option<usize>,
     /// Whether the host that owns this pane cannot describe its processes at
     /// all: an older `lyrel-server` on the far end, which does not know the
     /// request. Kept apart from an empty list, because "nothing is listening"
@@ -1201,6 +1213,7 @@ impl LyrelApp {
             RightPanelTab::Files | RightPanelTab::Search => self.render_panel_files(window, cx),
             RightPanelTab::GitHub => self.render_panel_github(window, cx),
             RightPanelTab::Sessions => self.render_panel_sessions(window, cx),
+            RightPanelTab::Monitor => self.render_panel_monitor(window, cx),
         };
         let body = self.with_tool_page_entrance(body);
         let (backing, handle) = self.right_panel_resize(window, cx);
@@ -2026,7 +2039,6 @@ impl LyrelApp {
         // Which pane the sections below describe, and what can be done with
         // its ports. Worked out once, by the same call the watch uses.
         let ctx = self.pane_forward_ctx(window, cx);
-        let mut pane_id: Option<u64> = None;
         // Where the `changes` row's counts lead. Same source as the sidebar's.
         let mut diff_target: Option<(lyrel_ui_base::host_ops::HostId, PathBuf)> = None;
         let mut git: Option<crate::ui::scm::status_cache::GitStatus> = None;
@@ -2036,7 +2048,7 @@ impl LyrelApp {
         if self.tabs.get(self.tabs.active_index()).is_some() {
             if let Some(leaf) = self.context_pane(window, cx) {
                 let view = leaf.read(cx);
-                pane_id = Some(view.pane_id);
+                let pane_id = Some(view.pane_id);
                 diff_target = view
                     .git_status_cwd()
                     .map(|cwd| (view.host_id(), cwd.to_path_buf()));
@@ -2160,7 +2172,8 @@ impl LyrelApp {
                     .child(self.panel_subtitle(t(L10nKey::PanelSessionSubtitle), None, cx))
                     .child(list),
             )
-            .children(self.procs_section(pane_id, cx))
+            // The process tree lives in the Activity Monitor now (#371);
+            // Info keeps its Session and Ports sections.
             .children(self.ports_section(ctx.as_ref(), cx))
             .into_any_element();
         self.panel_scroll(inner, title)
@@ -2424,80 +2437,6 @@ impl LyrelApp {
             )
             .when_some(trailing, |this, t| this.child(t))
             .into_any_element()
-    }
-
-    fn procs_section(&self, pane_id: Option<u64>, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let procs = &self.procs(pane_id)?.procs;
-        // A remote login can have nothing but the shell itself; that row is
-        // exactly the process the user came here to see.
-        if procs.is_empty() {
-            return None;
-        }
-        let mono = cx.theme().mono_font_family.clone();
-        let hover = gpui_kit::rgb(
-            cx.global::<lyrel_ui_base::presets::Surfaces>()
-                .sidebar
-                .hover,
-        );
-        let mut list = v_flex().px(px(CONTENT_INSET));
-        for p in procs {
-            let depth = f32::from(p.depth);
-            list = list.child(
-                h_flex()
-                    .h(px(PROC_ROW_H))
-                    .items_center()
-                    .gap(px(6.))
-                    .px(px(ROW_INSET))
-                    .rounded(ROW_FILL_RADIUS)
-                    .hover(move |s| s.bg(hover))
-                    // A child hangs off its parent by an elbow in the last
-                    // column of its indent; the root has neither.
-                    .when(p.depth > 0, |row| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .w(px(depth * PROC_INDENT))
-                                .flex()
-                                .justify_end()
-                                .pr(px(2.))
-                                .text_size(rems(META))
-                                .text_color(cx.theme().muted_foreground)
-                                .child("└"),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rems(TEXT))
-                            // Which of these has the terminal is the one thing
-                            // the list is read for, and a hue apart from its
-                            // neighbours was carrying it alone — a difference
-                            // a light theme flattens and colour vision can
-                            // miss. Weight says it a second way.
-                            .text_color(cx.theme().foreground)
-                            .when(p.foreground, |d| {
-                                d.font_weight(gpui_kit::FontWeight::MEDIUM)
-                            })
-                            .child(p.name.clone()),
-                    )
-                    .child(crate::ui::proc_usage::row_cells(
-                        p,
-                        &self.right_panel.cpu,
-                        mono.clone(),
-                        cx,
-                    )),
-            );
-        }
-        let total = crate::ui::proc_usage::total_row(procs, &self.right_panel.cpu, mono, cx);
-        let list = list.children(total);
-        Some(
-            v_flex()
-                .child(self.panel_subtitle(t(L10nKey::PanelProcessesSubtitle), None, cx))
-                .child(list)
-                .into_any_element(),
-        )
     }
 
     /// The ports this pane is serving, and what it takes to reach them.
@@ -2877,8 +2816,16 @@ impl LyrelApp {
     }
 
     /// Whether the process/port poll should run at all this round.
+    ///
+    /// The snapshot feeds two readers — Info's Ports section and the
+    /// Activity Monitor's process tree — so the poll runs while either tool
+    /// is on screen, not only for the tab that happened to open it.
     fn procs_wanted(&self) -> bool {
-        (self.right_panel_visible && self.right_panel_tab == RightPanelTab::Info)
+        (self.right_panel_visible
+            && matches!(
+                self.right_panel_tab,
+                RightPanelTab::Info | RightPanelTab::Monitor
+            ))
             || self.watching_ports()
     }
 
@@ -3000,9 +2947,35 @@ impl LyrelApp {
         host: Option<lyrel_ui_base::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
-        let Some(pane_id) = pane_id else { return };
+        let Some(pane_id) = pane_id else {
+            // No context pane at all: nobody owns a tree. Retire the watch
+            // instead of polling a stale pane forever, and drop the snapshot
+            // with it — a later pane must not open on another pane's list.
+            if self.right_panel.procs_pane.is_some()
+                || self.right_panel.procs_host.is_some()
+                || self.right_panel.procs.is_some()
+            {
+                self.right_panel.procs_pane = None;
+                self.right_panel.procs = None;
+                self.right_panel.procs_host = None;
+                self.right_panel.procs_host_key = None;
+                self.loopback_panel.clear_panel();
+                self.right_panel.procs_gen += 1;
+                self.right_panel.procs_loading = false;
+                self.right_panel.procs_unsupported = false;
+                self.monitor.reset_branches();
+            }
+            return;
+        };
         self.right_panel.procs_forwards = forwards.clone();
         self.right_panel.procs_host = host.clone();
+        // The host instance, not just its id: after a reconnect the registry
+        // holds a replacement serving the same pane id, and an answer fetched
+        // by the old instance must not land on the new one's tree. The
+        // generation bump retires anything already in flight.
+        let host_key = host
+            .as_ref()
+            .map(|host| std::sync::Arc::as_ptr(host) as *const u8 as usize);
         // Per host, not per pane — see `link_host`. A pane of this machine's
         // own has no host at all, which is what clears the section rather than
         // leaving the last remote pane's numbers under a local one.
@@ -3011,13 +2984,21 @@ impl LyrelApp {
             self.right_panel.link_host = link_host;
             self.right_panel.link_rtt = None;
         }
-        if self.right_panel.procs_pane != Some(pane_id) {
+        if self.right_panel.procs_pane != Some(pane_id)
+            || self.right_panel.procs_host_key != host_key
+        {
             self.right_panel.procs_pane = Some(pane_id);
+            self.right_panel.procs_host_key = host_key;
             self.right_panel.procs = None;
             self.loopback_panel.clear_panel();
             self.right_panel.procs_gen += 1;
             self.right_panel.procs_loading = false;
             self.right_panel.procs_unsupported = false;
+            // The Activity Monitor's expansion and selection belong to one
+            // owner — pane and host instance together; either changing starts
+            // folded at the new Shell root.
+            self.monitor.pane_changed(pane_id);
+            self.monitor.reset_branches();
         }
         // Asked before the first query as well as before every later one. This
         // used to be reached only from the Info panel's own render, where the
@@ -3091,6 +3072,9 @@ impl LyrelApp {
                             .cpu
                             .sample(&procs.procs, std::time::Instant::now());
                         app.right_panel.procs = Some(procs);
+                        // Rows without a birth stamp identify a pid, not a
+                        // process; nothing keyed on one may cross a refresh.
+                        app.monitor.snapshot_landed();
                     }
                     app.loopback_panel.accept_list(managed);
                     // Only when this round actually asked. A round that did not
@@ -3116,7 +3100,14 @@ impl LyrelApp {
             }
             let gap = this
                 .read_with(cx, |app, _| {
-                    match app.right_panel_visible && app.right_panel_tab == RightPanelTab::Info {
+                    // The watch cadence only matters with the panel shut; while
+                    // a tool that shows the snapshot is visible the on-screen
+                    // poll applies, whichever of the two readers it is.
+                    match app.right_panel_visible
+                        && matches!(
+                            app.right_panel_tab,
+                            RightPanelTab::Info | RightPanelTab::Monitor
+                        ) {
                         true => PROCS_POLL,
                         false => PORT_WATCH_POLL,
                     }
