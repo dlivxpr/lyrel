@@ -57,6 +57,9 @@ pub struct PendingPane {
     launch_agent: Option<crate::core::cli_agent::CLIAgent>,
     /// `run_on_land` is already scoped by the session operation; type it as-is.
     prepared_launch: bool,
+    /// The prepared identity behind a history-safe `run_on_land`, kept for the
+    /// retained give-up error when the landed pane never proves idle.
+    history_prepared: Option<Box<lyrel_core::host::session_operations::PreparedSession>>,
 }
 
 /// How many times a pane standing in for one that may still be running asks
@@ -154,6 +157,7 @@ impl PendingPane {
             attach_spec: None,
             launch_agent: None,
             prepared_launch: false,
+            history_prepared: None,
         }
     }
 
@@ -238,6 +242,22 @@ impl PendingPane {
         self.spawn.run_on_land = Some(command);
         self.launch_agent = None;
         self.prepared_launch = true;
+    }
+
+    /// A history restoration's prepared line: typed as-is, like
+    /// [`Self::run_prepared_when_ready`], but through the route that re-proves
+    /// the landed pane idle before writing and keeps the prepared identity
+    /// for the give-up error. The session fields are bound separately for the
+    /// connection card's retry.
+    pub(crate) fn run_history_prepared_when_ready(
+        &mut self,
+        command: String,
+        prepared: lyrel_core::host::session_operations::PreparedSession,
+    ) {
+        self.spawn.run_on_land = Some(command);
+        self.launch_agent = None;
+        self.prepared_launch = true;
+        self.history_prepared = Some(Box::new(prepared));
     }
     pub(crate) fn resume_agent(
         &mut self,

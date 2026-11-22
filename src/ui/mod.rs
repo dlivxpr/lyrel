@@ -61,6 +61,9 @@ pub mod scm;
 pub mod scm_snapshot;
 pub mod search;
 pub(crate) mod session_history;
+#[cfg(test)]
+#[path = "session_history_resume_tests.rs"]
+mod session_history_resume_tests;
 pub(crate) mod session_lifecycle;
 pub mod settings;
 pub mod settings_window;

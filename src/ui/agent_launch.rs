@@ -128,6 +128,9 @@ pub(crate) fn remember_launch_line(cfg: &mut Config, agent: CLIAgent, line: Stri
 /// command is typed anyway.
 const PROMPT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 const PROMPT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+// History activation cannot fall back to blind typing. Allow login profiles
+// time to start and report their first prompt, including on remote hosts.
+const HISTORY_PROMPT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Type `command` into the shell `slot` holds — now if it is up, or the
 /// moment it lands if it is still connecting.
@@ -276,6 +279,7 @@ pub(crate) fn run_known_agent_when_ready(
 
 /// What resuming — or forking — a saved agent session needs beyond the window
 /// and context. Built by the command dispatch that already holds the pieces.
+#[derive(Clone)]
 pub(crate) struct ResumeSessionRequest {
     pub(crate) agent: CLIAgent,
     pub(crate) session_id: String,
@@ -283,6 +287,40 @@ pub(crate) struct ResumeSessionRequest {
     pub(crate) host_id: lyrel_ui_base::host_ops::HostId,
     pub(crate) scope: Option<lyrel_core::host::session_operations::SessionScope>,
     pub(crate) fork: bool,
+}
+
+/// Exact identity match between an open pane and a saved session row: the
+/// pane's own host, the same agent, the same native session id, and the same
+/// durable storage scope (the volatile OpenCode bridge/server selectors
+/// [`durable_scope`] strips never identify a record). Search Everywhere and
+/// the Session History tool funnel both through `LyrelApp::resume_session`,
+/// which uses this to focus an already-open session rather than starting a
+/// second writer for it.
+fn pane_matches_history_session(
+    view: &lyrel_terminal::view::TerminalView,
+    request: &ResumeSessionRequest,
+) -> bool {
+    use lyrel_core::host::session_operations::durable_scope;
+    if view.terminal.exited
+        || view.host_id() != request.host_id
+        || view.agent() != Some(request.agent)
+    {
+        return false;
+    }
+    let Some(state) = view.agent_session() else {
+        return false;
+    };
+    if state.session_id.as_deref() != Some(request.session_id.as_str()) {
+        return false;
+    }
+    let (Some(live), Some(saved)) = (state.readout.session_scope.as_ref(), request.scope.as_ref())
+    else {
+        return false;
+    };
+    if let (Some(live_file), Some(saved_file)) = (&live.session_file, &saved.session_file) {
+        return live_file == saved_file;
+    }
+    durable_scope(live) == durable_scope(saved)
 }
 
 impl LyrelApp {
@@ -324,9 +362,13 @@ impl LyrelApp {
                 });
                 self.new_tab_slot(cwd, None, window, cx)
             }
-            SpawnWhere::Split => {
-                self.split_slot(Axis::Horizontal, Some(SpawnAs::Shell(None)), window, cx)
-            }
+            SpawnWhere::Split => self.split_slot(
+                Axis::Horizontal,
+                Some(SpawnAs::Shell(None)),
+                None,
+                window,
+                cx,
+            ),
         };
         // Nothing opened (the spawn failed, or this workspace cannot host a
         // shell right now), and the reason is already on screen. The command
@@ -346,11 +388,8 @@ impl LyrelApp {
         });
     }
 
-    /// Reopen `agent`'s session `session_id` in a new tab in `cwd`, the
-    /// directory it ran in — an agent keys its history by directory, and
-    /// `--resume` elsewhere finds nothing. The resume carries the flags the
-    /// agent is configured to launch with (`agent_launch`), so a session
-    /// started with them comes back with them.
+    /// Focus the matching pane or reopen the session on its owning host and
+    /// source directory. Use the configured launch flags with the native scope.
     ///
     /// With `fork`, the session is branched instead: the agent starts a new
     /// one from its history and the original is left as it was.
@@ -367,12 +406,15 @@ impl LyrelApp {
             host_id,
             scope,
             fork,
-        } = request;
+        } = request.clone();
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
         let Some(cwd) = cwd else {
             window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
         };
+        if !fork && self.focus_history_session(&request, window, cx) {
+            return;
+        }
         if self.spawn_host(cx) != host_id {
             window.notify_app(
                 crate::ui::notification_history::Notification::error(
@@ -429,13 +471,34 @@ impl LyrelApp {
             launch_argv,
             scope,
         };
+        let source = host.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(
             host,
             window,
             cx,
             move |host| host.session_operation(&request),
-            |app, result, window, cx| match result {
-                Ok(prepared) => app.open_prepared_session(prepared, window, cx),
+            move |app, result, window, cx| match result {
+                Ok(prepared) => {
+                    let current = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id);
+                    if app.spawn_host(cx) != host_id
+                        || !current.is_some_and(|host| std::sync::Arc::ptr_eq(&host, &source))
+                        || !source.is_connected()
+                    {
+                        app.notify_session_operation_error(
+                            prepared.opening_failed(
+                                "the selected session's host changed while preparing it",
+                            ),
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    if fork {
+                        app.open_prepared_session(prepared, window, cx)
+                    } else {
+                        app.open_history_resumed_session(prepared, window, cx)
+                    }
+                }
                 Err(error) => app.notify_session_operation_error(error, window, cx),
             },
         );
@@ -495,6 +558,246 @@ impl LyrelApp {
             }
         }
         run_prepared_when_ready(&slot, command, cx);
+    }
+
+    /// Focus the pane already running exactly this session, in this window or
+    /// any other known workspace window, and report whether one took it. A
+    /// match never starts a second writer: the pane the session already runs
+    /// in is brought forward, unmaximized if needed, and focused.
+    fn focus_history_session(
+        &mut self,
+        request: &ResumeSessionRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Never read this entity through the registry while it is already
+        // leased: self is matched against the registry id and scanned directly.
+        let me = cx.entity_id();
+        let mut found: Option<(u64, bool)> = None;
+        for (_, weak) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+            let Some(app) = weak.upgrade() else { continue };
+            if app.entity_id() == me {
+                continue;
+            }
+            let other = app.read(cx);
+            if let Some(leaf) = other
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.pane.terminals())
+                .find(|leaf| pane_matches_history_session(&leaf.read(cx), request))
+            {
+                found = Some((leaf.entity_id().as_u64(), false));
+                break;
+            }
+        }
+        if found.is_none()
+            && let Some(leaf) = self
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.pane.terminals())
+                .find(|leaf| pane_matches_history_session(&leaf.read(cx), request))
+        {
+            found = Some((leaf.entity_id().as_u64(), true));
+        }
+        let Some((leaf_id, own)) = found else {
+            return false;
+        };
+        if own {
+            if let Some(tab_ix) = self.tabs.iter().position(|t| {
+                t.pane
+                    .leaves()
+                    .iter()
+                    .any(|l| l.entity_id().as_u64() == leaf_id)
+            }) {
+                self.activate(tab_ix, window, cx);
+                if self
+                    .maximized
+                    .as_ref()
+                    .is_some_and(|m| m.entity_id().as_u64() != leaf_id)
+                {
+                    self.maximized = None;
+                }
+                if let Some(leaf) = self.tabs[tab_ix]
+                    .pane
+                    .leaves()
+                    .into_iter()
+                    .find(|l| l.entity_id().as_u64() == leaf_id)
+                {
+                    self.tabs[tab_ix].remember_leaf(leaf.entity_id());
+                    self.focus_leaf(&leaf, window, cx);
+                }
+                cx.notify();
+            }
+        } else {
+            cx.defer(move |cx| crate::ui::tray::reveal_pane(leaf_id, cx));
+        }
+        true
+    }
+
+    /// Open a prepared non-fork resume at its destination, chosen and
+    /// re-verified synchronously at dispatch: the context pane is reused only
+    /// when it is still a verified idle Shell on the session's owning host in
+    /// the session's source directory with nothing unsubmitted on its line.
+    /// Anything else — a busy pane, an agent, a TUI, unreadiness, or a state
+    /// that changed while the prepare ran — opens a new pane to the right, in
+    /// the source directory, leaving the original pane's programs and input
+    /// untouched. The launch is then typed through the history-safe route,
+    /// which proves the destination idle again right before writing and gives
+    /// up with a retained, retryable error instead of typing into a program.
+    fn open_history_resumed_session(
+        &mut self,
+        prepared: lyrel_core::host::session_operations::PreparedSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.spawn_host(cx).0 != prepared.host_id {
+            self.notify_session_operation_error(
+                prepared.opening_failed("the selected workspace moved to another host"),
+                window,
+                cx,
+            );
+            return;
+        }
+        let Some(command) = prepared.command.clone() else {
+            self.notify_session_operation_error(
+                prepared.opening_failed(
+                    "the session exists but its launch context could not be prepared",
+                ),
+                window,
+                cx,
+            );
+            return;
+        };
+        if let Some(pane) = self.history_reuse_pane(&prepared, window, cx) {
+            pane.update(cx, |view, cx| {
+                if let Some(title) = prepared.title.as_deref() {
+                    view.seed_session_title(title, cx);
+                }
+            });
+            // The idle proof above ran on this same turn with no await
+            // between it and the write; nothing could have started in the pane
+            // since, so the line the command lands on is the empty prompt.
+            pane.update(cx, |view, _| view.run_command_line(&command));
+            self.focus_leaf(&crate::ui::pane::PaneSlot::Ready(pane.clone()), window, cx);
+            cx.notify();
+            return;
+        }
+        let Some(slot) = self.split_slot(
+            Axis::Horizontal,
+            Some(SpawnAs::Shell(None)),
+            Some(prepared.cwd.clone()),
+            window,
+            cx,
+        ) else {
+            self.notify_session_operation_error(
+                prepared.opening_failed("the restored session's new pane could not be opened"),
+                window,
+                cx,
+            );
+            return;
+        };
+        match &slot {
+            PaneSlot::Connecting(pending) => {
+                pending.update(cx, |pending, _| {
+                    pending.resume_agent(
+                        Some(prepared.agent),
+                        prepared.target_id.clone(),
+                        Some(prepared.launch_argv.clone()),
+                        Some(prepared.scope.clone()),
+                        false,
+                    );
+                    pending.set_agent_title(prepared.title.clone());
+                });
+            }
+            PaneSlot::Ready(view) => {
+                if let Some(title) = prepared.title.as_deref() {
+                    view.update(cx, |view, cx| view.seed_session_title(title, cx));
+                }
+            }
+        }
+        self.run_history_prepared_when_ready(slot, prepared, window, cx);
+    }
+
+    /// The context pane, but only when reusing it is provably safe at this
+    /// instant: still the session's owning host, still the session's source
+    /// directory, and a verified idle Shell with no unsubmitted input.
+    fn history_reuse_pane(
+        &self,
+        prepared: &lyrel_core::host::session_operations::PreparedSession,
+        window: &Window,
+        cx: &App,
+    ) -> Option<gpui_kit::Entity<lyrel_terminal::view::TerminalView>> {
+        let pane = self.context_pane(window, cx)?;
+        let view = pane.read(cx);
+        (view.host_id().0 == prepared.host_id
+            && view.host_cwd().as_deref() == Some(prepared.cwd.as_path())
+            && view.idle_shell_ready_for_reuse())
+        .then(|| pane.clone())
+    }
+
+    /// The history-safe counterpart to `run_prepared_when_ready`. That route
+    /// waits out the shell's first prompt and then types unconditionally;
+    /// history activation must never inject into a running program, so this
+    /// route re-proves the destination idle on every poll and immediately
+    /// before the write, and gives up with the retained, retryable error
+    /// instead of typing into anything less.
+    pub(crate) fn run_history_prepared_when_ready(
+        &mut self,
+        slot: PaneSlot,
+        prepared: lyrel_core::host::session_operations::PreparedSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = prepared.command.clone() else {
+            self.notify_session_operation_error(
+                prepared.opening_failed(
+                    "the session exists but its launch context could not be prepared",
+                ),
+                window,
+                cx,
+            );
+            return;
+        };
+        match &slot {
+            PaneSlot::Ready(view) => {
+                let view = view.downgrade();
+                cx.spawn_in(window, async move |this, cx| {
+                    let executor = cx.background_executor().clone();
+                    let deadline = executor.now() + HISTORY_PROMPT_WAIT;
+                    loop {
+                        match view.read_with(cx, |view, _| view.idle_shell_ready_for_reuse()) {
+                            // The pane is gone — closed under the wait; there
+                            // is nothing left to type into, and no error to
+                            // surface for a pane the user took away.
+                            Err(_) => return,
+                            Ok(true) => break,
+                            Ok(false) => {}
+                        }
+                        if executor.now() >= deadline {
+                            let _ = this.update_in(cx, |app, window, cx| {
+                                app.notify_session_operation_error(
+                                    prepared.opening_failed(
+                                        "the restored session's pane never reached an idle prompt",
+                                    ),
+                                    window,
+                                    cx,
+                                );
+                            });
+                            return;
+                        }
+                        executor.timer(PROMPT_POLL).await;
+                    }
+                    let _ =
+                        view.update_in(cx, |view, _window, _cx| view.run_command_line(&command));
+                })
+                .detach();
+            }
+            PaneSlot::Connecting(pending) => {
+                pending.update(cx, |pending, _| {
+                    pending.run_history_prepared_when_ready(command, prepared)
+                });
+            }
+        }
     }
 
     pub(crate) fn notify_session_operation_error(

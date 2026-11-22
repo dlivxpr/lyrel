@@ -1711,7 +1711,7 @@ impl LyrelApp {
         );
     }
 
-    fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
+    pub(crate) fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
         let handle = leaf.focus_handle(cx);
         window.focus(&handle, cx);
     }
@@ -1740,6 +1740,11 @@ impl LyrelApp {
             }
             PendingLaunch::Prepared(command) => {
                 crate::ui::agent_launch::run_prepared_when_ready(&slot, command, cx)
+            }
+            PendingLaunch::HistoryPrepared(command, prepared) => {
+                let mut prepared = *prepared;
+                prepared.command = Some(command);
+                self.run_history_prepared_when_ready(slot.clone(), prepared, window, cx)
             }
             PendingLaunch::Resume {
                 agent,
@@ -2486,26 +2491,34 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.split_slot(axis, spawn, window, cx);
+        self.split_slot(axis, spawn, None, window, cx);
     }
 
     /// [`Self::split_into`], answering with the pane it placed, or `None`
-    /// when nothing was placed.
+    /// when nothing was placed. `cwd` overrides the directory the split would
+    /// inherit from its source pane — history restoration passes the saved
+    /// session's source directory so the new pane lands where the session
+    /// belongs, not wherever the busy pane happened to be.
     pub(crate) fn split_slot(
         &mut self,
         axis: Axis,
         spawn: Option<SpawnAs>,
+        cwd: Option<std::path::PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneSlot> {
-        let request = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .prepare_split(spawn, window, cx)?;
+        let workspace_override = cwd.as_ref().map(|_| self.window_workspace(cx));
+        let request = self.tabs.get(self.tabs.active_index())?.prepare_split(
+            spawn,
+            cwd.as_deref(),
+            window,
+            cx,
+        )?;
         if !self.guard_local_spawn(window, cx) {
             return None;
         }
         let (tab_id, target, spawn, cwd, workspace) = request.into_parts();
+        let workspace = workspace_override.unwrap_or(workspace);
         let new = match spawn {
             SpawnAs::Ssh(spec) => {
                 Self::new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx)
