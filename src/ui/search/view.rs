@@ -1202,7 +1202,9 @@ fn match_range(title: &str, query: &str) -> Option<std::ops::Range<usize>> {
 const EDIT_GESTURE: &str = "secondary-e";
 
 /// Matches `EDIT_GESTURE` against a live keystroke. Keep the two in step.
-fn is_edit_gesture(ks: &gpui_kit::Keystroke) -> bool {
+/// Shared with the Session History tool's list, whose rows answer to the
+/// same gesture.
+pub(crate) fn is_edit_gesture(ks: &gpui_kit::Keystroke) -> bool {
     if ks.key != "e" {
         return false;
     }

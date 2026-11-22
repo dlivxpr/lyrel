@@ -253,6 +253,9 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, window, cx| {
             this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::GitHub, window, cx)
         }))
+        .on_action(cx.listener(|this, _: &ShowRightPanelSessions, window, cx| {
+            this.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Sessions, window, cx)
+        }))
         .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(
             cx.listener(|this, _: &ToggleDiffViewMode, _window, cx| this.toggle_diff_view_mode(cx)),

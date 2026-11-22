@@ -54,6 +54,7 @@ pub mod right_panel;
 pub mod scm;
 pub mod scm_snapshot;
 pub mod search;
+pub(crate) mod session_history;
 pub(crate) mod session_lifecycle;
 pub mod settings;
 pub mod settings_window;

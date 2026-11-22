@@ -1642,6 +1642,10 @@ pub enum RightPanelTab {
     /// cost as `Search`.
     #[serde(rename = "github")]
     GitHub,
+    /// Saved agent conversations scoped to the context pane's directory.
+    /// Same rollback cost as `Search`: a build without it does not know
+    /// `"sessions"`, falls through `de_lenient` to `Info`, and opens there.
+    Sessions,
 }
 
 /// What opens when a file link in the grid is clicked.

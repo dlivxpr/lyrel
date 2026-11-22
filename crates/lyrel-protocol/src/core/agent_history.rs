@@ -22,8 +22,9 @@ use crate::core::cli_agent::CLIAgent;
 
 /// How many sessions are listed, newest first. Past this the list is a
 /// search target, not something to scroll, and older sessions are rarely
-/// worth resuming.
-const MAX_SESSIONS: usize = 500;
+/// worth resuming. The cap is public so consumers of a scoped listing can
+/// tell a genuine empty from a truncated scan.
+pub const MAX_SESSIONS: usize = 500;
 
 /// How much of a file's head and tail is read.
 const HEAD_BYTES: u64 = 64 * 1024;

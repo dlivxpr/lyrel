@@ -2544,6 +2544,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelFilesTitle => "Files",
         L10nKey::PanelSearchTitle => "Search",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::PanelSessionsTitle => "Session History",
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
@@ -2553,6 +2554,22 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelNoWorkingDirectory => "No working directory.",
         L10nKey::PanelNoWorkingDirectoryHint => "This pane has not reported one yet.",
         L10nKey::PanelLoading => "Loading…",
+        L10nKey::PanelSessionsFollowCwd => "Follow Current Directory",
+        L10nKey::PanelSessionsChooseDirectory => "Choose directory",
+        L10nKey::PanelSessionsWorktrees => "Worktrees",
+        L10nKey::PanelSessionsEmpty => "No saved sessions in this directory.",
+        L10nKey::PanelSessionsEmptyHint => {
+            "Run an agent here and its saved conversations will show up."
+        }
+        L10nKey::PanelSessionsDisconnected => "This host is disconnected.",
+        L10nKey::PanelSessionsDisconnectedHint => {
+            "Reconnect to browse the saved sessions on that machine."
+        }
+        L10nKey::PanelSessionsUnsupported => "This host cannot list saved sessions.",
+        L10nKey::PanelSessionsUnsupportedHint => {
+            "Its Lyrel server predates session history support."
+        }
+        L10nKey::PanelSessionsPartial => "Some session sources could not be listed.",
         L10nKey::PanelNotAGitRepo => "Not a git repository.",
         L10nKey::PanelNotAGitRepoHint => "cd into one and this tab lists its uncommitted changes.",
         L10nKey::PanelNoChanges => "No uncommitted changes.",
@@ -3070,6 +3087,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelFiles => "Right Panel: Files",
         L10nKey::CmdRightPanelSearch => "Right Panel: Search",
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
+        L10nKey::CmdRightPanelSessions => "Right Panel: Session History",
         L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",

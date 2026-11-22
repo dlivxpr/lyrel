@@ -417,6 +417,8 @@ impl LyrelApp {
             right_panel_nav_return: None,
             right_panel_nav_wait: Cell::new(0),
             right_panel_nav_renders: Cell::new(0),
+            session_history: crate::ui::session_history::SessionHistoryPanel::default(),
+            session_history_focus: cx.focus_handle().tab_stop(true),
             sidebar_collapsed,
             panel_slides: Default::default(),
             sidebar_scroll: gpui_kit::ScrollHandle::new(),

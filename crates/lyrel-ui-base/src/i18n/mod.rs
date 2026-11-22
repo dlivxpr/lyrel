@@ -1952,6 +1952,7 @@ l10n_keys! {
     PanelFilesTitle,
     PanelSearchTitle,
     PanelGitHubTitle,
+    PanelSessionsTitle,
     // The title-bar `+` that offers every tool.
     ToolHostAdd,
     // A tool tab's close button; `{tool}` is the tool's visible name.
@@ -1961,6 +1962,18 @@ l10n_keys! {
     PanelNoWorkingDirectory,
     PanelNoWorkingDirectoryHint,
     PanelLoading,
+    // Session History tool: directory selector, its dropdown sections and the
+    // distinct empty/unavailable/incomplete states of a scoped scan.
+    PanelSessionsFollowCwd,
+    PanelSessionsChooseDirectory,
+    PanelSessionsWorktrees,
+    PanelSessionsEmpty,
+    PanelSessionsEmptyHint,
+    PanelSessionsDisconnected,
+    PanelSessionsDisconnectedHint,
+    PanelSessionsUnsupported,
+    PanelSessionsUnsupportedHint,
+    PanelSessionsPartial,
     PanelNotAGitRepo,
     PanelNotAGitRepoHint,
     PanelNoChanges,
@@ -2477,6 +2490,7 @@ l10n_keys! {
     CmdRightPanelFiles,
     CmdRightPanelSearch,
     CmdRightPanelGitHub,
+    CmdRightPanelSessions,
     CmdFocusRightPanelNavigation,
     CmdChangeTheme,
     CmdResetFontSize,

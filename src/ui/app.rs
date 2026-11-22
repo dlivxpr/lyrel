@@ -301,6 +301,10 @@ pub struct LyrelApp {
     pub(crate) right_panel_nav_return: Option<gpui_kit::FocusHandle>,
     pub(crate) right_panel_nav_wait: Cell<u8>,
     pub(crate) right_panel_nav_renders: Cell<u8>,
+    /// The Session History tool's view state: which directory it follows and
+    /// the listing bound to it. The list's keyboard stop lives beside it.
+    pub(crate) session_history: crate::ui::session_history::SessionHistoryPanel,
+    pub(crate) session_history_focus: gpui_kit::FocusHandle,
     pub(crate) sidebar_collapsed: bool,
     /// Panel boundary slides in flight, one slot per `PanelBoundary`. A toggle
     /// flips the settled state immediately and parks the visual seam's journey

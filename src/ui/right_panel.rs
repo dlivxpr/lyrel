@@ -30,10 +30,11 @@ pub(crate) fn shown_tab(tab: RightPanelTab) -> RightPanelTab {
 
 /// The tools the host offers, in `+` menu order: Info leads as the default
 /// and the pane's overview; then the project's files, and its version
-/// control, local to remote (Changes, GitHub). Search is not among them — it
-/// is the Files tool's input mode, commanded through
-/// [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
-pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 4] = [
+/// control, local to remote (Changes, GitHub). Session History follows —
+/// the saved agent conversations scoped to the context pane's directory.
+/// Search is not among them — it is the Files tool's input mode, commanded
+/// through [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
+pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 5] = [
     (
         RightPanelTab::Info,
         L10nKey::PanelInfoTitle,
@@ -54,6 +55,11 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 4] = [
         L10nKey::PanelGitHubTitle,
         "icons/github.svg",
     ),
+    (
+        RightPanelTab::Sessions,
+        L10nKey::PanelSessionsTitle,
+        "icons/list-flat.svg",
+    ),
 ];
 
 // Inspector chrome stays compact and leaves the width to the tools. At the
@@ -68,12 +74,12 @@ const TOOL_DIVIDER_OPACITY: f32 = 0.09;
 
 /// What the host renders for `tab`: label key and icon path. Only ever
 /// called with the layout's identities — Search has already folded into
-/// Files — so it spells the four real tools.
+/// Files — so it spells the five real tools.
 fn tool_spec(tab: RightPanelTab) -> (RightPanelTab, L10nKey, &'static str) {
     TOOL_HOST_TOOLS
         .into_iter()
         .find(|(tool, _, _)| *tool == tab)
-        .expect("a layout identity is one of the four tools")
+        .expect("a layout identity is one of the five tools")
 }
 
 /// The stable element id of `tab`'s tool tab.
@@ -84,6 +90,7 @@ pub(crate) fn tool_tab_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Search => "tool-tab-files",
         RightPanelTab::Scm => "tool-tab-changes",
         RightPanelTab::GitHub => "tool-tab-github",
+        RightPanelTab::Sessions => "tool-tab-sessions",
     }
 }
 
@@ -94,6 +101,7 @@ fn tool_tab_close_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Files | RightPanelTab::Search => "tool-tab-close-files",
         RightPanelTab::Scm => "tool-tab-close-changes",
         RightPanelTab::GitHub => "tool-tab-close-github",
+        RightPanelTab::Sessions => "tool-tab-close-sessions",
     }
 }
 
@@ -105,6 +113,7 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
         RightPanelTab::Files | RightPanelTab::Search => "files",
         RightPanelTab::Scm => "changes",
         RightPanelTab::GitHub => "github",
+        RightPanelTab::Sessions => "sessions",
     }
 }
 
@@ -1189,6 +1198,7 @@ impl LyrelApp {
             RightPanelTab::Scm => self.render_panel_scm(window, cx),
             RightPanelTab::Files | RightPanelTab::Search => self.render_panel_files(window, cx),
             RightPanelTab::GitHub => self.render_panel_github(window, cx),
+            RightPanelTab::Sessions => self.render_panel_sessions(window, cx),
         };
         let body = self.with_tool_page_entrance(body);
         let (backing, handle) = self.right_panel_resize(window, cx);

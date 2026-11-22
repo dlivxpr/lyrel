@@ -434,6 +434,9 @@ impl LyrelApp {
         // open or not — a port that appears while the panel is shut is exactly
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
+        // Keeps the Session History tool bound to the context pane's host and
+        // directory while that tool is open.
+        self.sync_session_history(window, cx);
         self.sync_status_metrics(window, cx);
         let lifted = crate::ui::pane_drag::lifted(&self.pane_drag).is_some();
         if (!window.is_window_active()
