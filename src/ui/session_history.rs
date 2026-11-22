@@ -576,22 +576,19 @@ impl LyrelApp {
     ) -> AnyElement {
         self.sync_session_history(window, cx);
         let title = self.panel_title(t(L10nKey::PanelSessionsTitle), None, None, window, cx);
-        let rows = self.session_rows(window, cx);
-        if rows.is_empty() {
+        let dir = self.session_history.wanted_dir(
+            self.context_pane(window, cx)
+                .and_then(|pane| pane.read(cx).host_cwd()),
+        );
+        let Some(dir) = dir else {
             let body = self.panel_empty(
                 t(L10nKey::PanelNoWorkingDirectory),
                 Some(t(L10nKey::PanelNoWorkingDirectoryHint)),
                 cx,
             );
             return self.panel_scroll(body, title);
-        }
-        let dir = self.session_history.wanted_dir(
-            self.context_pane(window, cx)
-                .and_then(|pane| pane.read(cx).host_cwd()),
-        );
-        let Some(dir) = dir else {
-            unreachable!("rows imply a directory");
         };
+        let rows = self.session_rows(window, cx);
         let home = crate::ui::desktop_lookups::home_for_host(cx, self.session_history.bound.host);
         let health = self.session_history.listing.health(rows.len());
         let selector = self.session_history_selector(window, &dir, home.as_deref(), cx);
@@ -725,54 +722,76 @@ impl LyrelApp {
             .h(px(SCOPE_ROW_H))
             .pl(px(CONTENT_INSET))
             .pr(px(CONTENT_INSET))
-            .child(div().text_size(rems(META)).text_color(muted).child(label))
             .child(
-                gpui_kit::component::button::Button::new("panel-sessions-directory")
-                    .ghost()
-                    .small()
-                    .dropdown_caret(true)
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rems(TEXT))
-                            .text_color(fg)
-                            .child(shown.clone()),
-                    )
-                    .tooltip(shown.clone())
-                    .dropdown_menu_with_anchor(
-                        gpui_kit::Anchor::BottomLeft,
-                        move |menu, _window, _cx| {
-                            let mut menu = menu
-                                .min_w(px(200.))
-                                .item(PopupMenuItem::label(menu_follow).checked(follow));
-                            if !worktrees.is_empty() {
-                                menu = menu.separator().item(PopupMenuItem::label(menu_section));
-                                for (path, display) in &worktrees {
-                                    let path = path.clone();
-                                    let checked = pinned.as_deref() == Some(path.as_path());
-                                    menu = menu.item(
-                                        PopupMenuItem::new(display.clone())
-                                            .checked(checked)
-                                            .on_click({
-                                                let app = app.clone();
-                                                move |_, _window, cx| {
-                                                    let _ = app.update(cx, |this, cx| {
-                                                        this.pick_session_directory(
-                                                            SessionDirectory::Worktree(
-                                                                path.clone(),
-                                                            ),
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
-                                    );
+                div()
+                    .flex_none()
+                    .text_size(rems(META))
+                    .text_color(muted)
+                    .child(label),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    gpui_kit::component::button::Button::new("panel-sessions-directory")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .dropdown_caret(true)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(rems(TEXT))
+                                .text_color(fg)
+                                .child(shown.clone()),
+                        )
+                        .accessibility_label(shown.clone())
+                        .tooltip(shown)
+                        .dropdown_menu_with_anchor(
+                            gpui_kit::Anchor::BottomLeft,
+                            move |menu, window, _cx| {
+                                let follow_app = app.clone();
+                                let mut menu = menu.min_w(window.rem_size() * 12.5).item(
+                                    PopupMenuItem::new(menu_follow).checked(follow).on_click(
+                                        move |_, _, cx| {
+                                            let _ = follow_app.update(cx, |this, cx| {
+                                                this.pick_session_directory(
+                                                    SessionDirectory::FollowCwd,
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    ),
+                                );
+                                if !worktrees.is_empty() {
+                                    menu =
+                                        menu.separator().item(PopupMenuItem::label(menu_section));
+                                    for (path, display) in &worktrees {
+                                        let path = path.clone();
+                                        let checked = pinned.as_deref() == Some(path.as_path());
+                                        menu = menu.item(
+                                            PopupMenuItem::new(display.clone())
+                                                .checked(checked)
+                                                .on_click({
+                                                    let app = app.clone();
+                                                    move |_, _window, cx| {
+                                                        let _ = app.update(cx, |this, cx| {
+                                                            this.pick_session_directory(
+                                                                SessionDirectory::Worktree(
+                                                                    path.clone(),
+                                                                ),
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }),
+                                        );
+                                    }
                                 }
-                            }
-                            menu
-                        },
-                    ),
+                                menu
+                            },
+                        ),
+                ),
             )
             .into_any_element()
     }
@@ -1252,14 +1271,16 @@ mod tests {
             "{\"type\":\"session\",\"id\":\"remote-pi\",\"cwd\":\"/tmp/remote-project\"}\n",
             "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"scoped work\"}}\n"
         );
-        let seeded = remote_home.join(".pi/agent/sessions/r/remote-pi.jsonl");
+        let seeded = host.join(&remote_home, ".pi/agent/sessions/r/remote-pi.jsonl");
         host.create_dir(seeded.parent().unwrap(), true).unwrap();
         host.write_file(&seeded, record.as_bytes()).unwrap();
 
-        let agent_launch = std::collections::HashMap::new();
-        // No panes: the no-observed-scopes case. The native stores still
-        // answer, and Hermes — local-only by design — must surface as a
-        // per-source error, not empty the listing.
+        let agent_launch = std::collections::HashMap::from([(
+            CLIAgent::Hermes.slug().to_owned(),
+            format!("{}/unavailable-hermes-launcher", fixture.remote_home()),
+        )]);
+        // The remote Pi store answers even if a separate Hermes launcher
+        // cannot run. Keep the failure independent of the remote host's PATH.
         let scan = cx.update(|cx| {
             plan_scan(
                 host.id(),
@@ -1282,10 +1303,7 @@ mod tests {
             Some(std::path::Path::new("/tmp/remote-project"))
         );
         assert!(
-            listing
-                .errors
-                .iter()
-                .any(|e| e.kind == SessionErrorKind::Unsupported),
+            !listing.errors.is_empty(),
             "a source the remote cannot list is reported, not swallowed"
         );
         assert_eq!(
