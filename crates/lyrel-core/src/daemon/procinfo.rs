@@ -275,8 +275,8 @@ fn current_uid() -> u32 {
     0
 }
 
-struct Row {
-    ppid: u32,
+pub(super) struct Row {
+    pub(super) ppid: u32,
     pgid: u32,
     /// The effective uid of the process, which is what decides whether this
     /// daemon may look at its sockets. 0 on platforms that have no such thing,
@@ -467,20 +467,27 @@ fn process_table() -> HashMap<u32, Row> {
 
 #[cfg(windows)]
 fn process_table() -> HashMap<u32, Row> {
-    crate::daemon::winproc::snapshot()
-        .into_iter()
-        .map(|p| {
-            (
-                p.pid,
-                Row {
-                    ppid: p.parent,
-                    pgid: 0,
-                    uid: 0,
-                    name: p.name,
-                },
-            )
-        })
-        .collect()
+    checked_windows_process_table().unwrap_or_default()
+}
+
+#[cfg(windows)]
+pub(super) fn checked_windows_process_table() -> Option<HashMap<u32, Row>> {
+    Some(
+        crate::daemon::winproc::checked_snapshot()?
+            .into_iter()
+            .map(|p| {
+                (
+                    p.pid,
+                    Row {
+                        ppid: p.parent,
+                        pgid: 0,
+                        uid: 0,
+                        name: p.name,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
@@ -503,8 +510,13 @@ fn process_table() -> HashMap<u32, Row> {
 /// process rather than the pane's shell, and it does not stop at
 /// `MAX_DEPTH`, because the scope of an End Process action has to name every
 /// process it will cover, not just the ones the panel has rows for.
-pub(crate) fn complete_subtree(root: u32) -> (Vec<(u32, String)>, bool) {
-    complete_subtree_from(root, &process_table())
+pub(super) fn complete_subtree(
+    root: u32,
+    #[cfg(windows)] table: &HashMap<u32, Row>,
+) -> (Vec<(u32, String)>, bool) {
+    #[cfg(not(windows))]
+    let table = &process_table();
+    complete_subtree_from(root, table)
 }
 
 /// [`complete_subtree`] over an injected table: the unit tests build tables

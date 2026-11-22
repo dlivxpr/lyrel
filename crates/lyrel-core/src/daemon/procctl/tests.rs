@@ -26,36 +26,39 @@ const LIFETIME: &str = "LYREL_PROCCTL_LIFETIME";
 #[cfg(windows)]
 #[test]
 fn a_reused_parent_pid_does_not_own_the_older_child() {
-    use crate::daemon::winproc::Proc;
-
-    let shell = Proc {
-        pid: 23,
-        parent: 1,
-        name: "shell".into(),
+    let parent_of = |pid| match pid {
+        23 => Some(1),
+        24 => Some(23),
+        25 => Some(24),
+        _ => None,
     };
-    let worker = Proc {
-        pid: 24,
-        parent: 23,
-        name: "worker".into(),
-    };
-    let helper = Proc {
-        pid: 25,
-        parent: 24,
-        name: "helper".into(),
-    };
-    let table = [shell, worker, helper];
 
     let started = |pid| match pid {
         23 => Some(20),
         24 => Some(10),
         _ => None,
     };
-    assert!(!windows_owns(&table, 23, 25, 15, started));
-    assert!(windows_owns(&table, 23, 25, 15, |pid| if pid == 23 {
-        Some(5)
-    } else {
-        started(pid)
-    }));
+    assert_eq!(
+        windows_ownership(23, 25, 15, parent_of, started),
+        Some(false)
+    );
+    assert_eq!(
+        windows_ownership(23, 25, 15, parent_of, |pid| if pid == 23 {
+            Some(5)
+        } else {
+            started(pid)
+        }),
+        Some(true)
+    );
+    assert_eq!(
+        windows_ownership(23, 25, 15, parent_of, |pid| (pid == 24).then_some(10)),
+        None
+    );
+    assert_eq!(
+        windows_ownership(99, 25, 15, parent_of, |_| None),
+        Some(false),
+        "unreadable birth times outside the pane tree do not change the refusal"
+    );
 }
 
 /// When re-run as a fixture child, live in that role and never return.

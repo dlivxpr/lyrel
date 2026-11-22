@@ -118,15 +118,28 @@ pub(crate) fn plan(
         return Err(PlanRefusal::Stale);
     }
     #[cfg(windows)]
-    let table = crate::daemon::winproc::checked_snapshot().ok_or(PlanRefusal::Unverifiable)?;
+    let table = crate::daemon::procinfo::checked_windows_process_table()
+        .ok_or(PlanRefusal::Unverifiable)?;
     #[cfg(windows)]
-    let owned = |pid, started| windows_owns(&table, shell_pid, pid, started, process_started);
+    let owned = |pid, started| {
+        windows_ownership(
+            shell_pid,
+            pid,
+            started,
+            |pid| table.get(&pid).map(|r| r.ppid),
+            process_started,
+        )
+    };
     #[cfg(not(windows))]
-    let owned = |pid, _| crate::daemon::procinfo::descends_from(pid, shell_pid);
-    if !owned(pid, started) {
+    let owned = |pid, _| Some(crate::daemon::procinfo::descends_from(pid, shell_pid));
+    if !owned(pid, started).ok_or(PlanRefusal::Unverifiable)? {
         return Err(PlanRefusal::NotOwned);
     }
-    let (members, complete) = crate::daemon::procinfo::complete_subtree(pid);
+    let (members, complete) = crate::daemon::procinfo::complete_subtree(
+        pid,
+        #[cfg(windows)]
+        &table,
+    );
     #[cfg(windows)]
     let mut complete = complete;
     let targets = members
@@ -138,9 +151,13 @@ pub(crate) fn plan(
                 crate::daemon::procstat::read(member).started
             };
             #[cfg(windows)]
-            if !member_started.is_some_and(|stamp| owned(member, stamp)) {
-                complete = false;
-                return None;
+            match member_started.and_then(|stamp| owned(member, stamp)) {
+                Some(true) => {}
+                Some(false) => return None,
+                None => {
+                    complete = false;
+                    return None;
+                }
             }
             Some(EndProcessTarget {
                 pid: member,
@@ -212,9 +229,18 @@ fn verify(shell_pid: u32, id: &ProcIdentity) -> Result<(bind::Bound, String), Si
     }
     let name = live_name(id.pid);
     #[cfg(windows)]
-    let owned = crate::daemon::winproc::checked_snapshot()
-        .ok_or(SignalRefusal::Unverifiable)
-        .map(|table| windows_owns(&table, shell_pid, id.pid, started, process_started))?;
+    let owned = {
+        let table = crate::daemon::procinfo::checked_windows_process_table()
+            .ok_or(SignalRefusal::Unverifiable)?;
+        windows_ownership(
+            shell_pid,
+            id.pid,
+            started,
+            |pid| table.get(&pid).map(|r| r.ppid),
+            process_started,
+        )
+        .ok_or(SignalRefusal::Unverifiable)?
+    };
     #[cfg(not(windows))]
     let owned = crate::daemon::procinfo::descends_from(id.pid, shell_pid);
     if !owned {
@@ -230,35 +256,43 @@ fn process_started(pid: u32) -> Option<u64> {
 
 /// Windows keeps the creator's numeric PID after it exits. A current
 /// process born after the child can never be that creator.
+/// `None` means the relation could not be verified from this snapshot.
 #[cfg(windows)]
-fn windows_owns(
-    table: &[crate::daemon::winproc::Proc],
+fn windows_ownership(
     root: u32,
     mut child: u32,
     mut child_started: u64,
+    parent_of: impl Fn(u32) -> Option<u32>,
     mut started: impl FnMut(u32) -> Option<u64>,
-) -> bool {
+) -> Option<bool> {
+    parent_of(child)?;
+    let mut ancestor = child;
     for _ in 0..64 {
-        let Some(row) = table.iter().find(|row| row.pid == child) else {
-            return false;
+        if ancestor == root {
+            parent_of(root)?;
+            // Only a chain that reaches this pane needs birth-time checks.
+            // An inaccessible process above an unrelated tree cannot make
+            // that tree a candidate for termination.
+            while child != root {
+                let parent = parent_of(child)?;
+                let parent_started = started(parent)?;
+                if parent_started > child_started {
+                    return Some(false);
+                }
+                child = parent;
+                child_started = parent_started;
+            }
+            return Some(true);
+        }
+        let Some(parent) = parent_of(ancestor).filter(|&parent| parent > 1) else {
+            return Some(false);
         };
-        if child == root {
-            return true;
+        if parent == ancestor {
+            return None;
         }
-        let parent = row.parent;
-        if parent <= 1 || parent == child {
-            return false;
-        }
-        let Some(parent_started) = started(parent) else {
-            return false;
-        };
-        if parent_started > child_started {
-            return false;
-        }
-        child = parent;
-        child_started = parent_started;
+        ancestor = parent;
     }
-    false
+    None
 }
 
 /// The name the pid names right now, or an empty string when it names
