@@ -180,6 +180,11 @@ impl Host for RemoteHost {
         self.client.host_metrics()
     }
 
+    fn disk_usage(&self, dir: &Path) -> io::Result<crate::host::disk::DiskUsage> {
+        guard_off_ui();
+        self.client.disk_usage(&dir.to_string_lossy().into_owned())
+    }
+
     fn separator(&self) -> char {
         self.separator
     }

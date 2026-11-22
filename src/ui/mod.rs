@@ -21,6 +21,7 @@ pub mod forwards;
 pub mod github;
 pub mod hints;
 pub mod home;
+pub(crate) mod host_disk;
 pub(crate) mod host_metrics;
 pub(crate) mod ime;
 pub mod keymap;

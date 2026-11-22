@@ -7,10 +7,11 @@
 //! whole-host metrics sampling, the remote SSH host and the server listener.
 
 pub mod content_search;
+pub mod disk;
 mod file_version;
 pub mod local;
-pub mod metrics;
 pub mod lyrel_usage;
+pub mod metrics;
 pub mod read;
 mod read_lease;
 pub mod session_operations;
@@ -357,6 +358,16 @@ pub trait Host: Send + Sync + 'static {
     /// `Unsupported`.
     fn has_lyrel_usage(&self) -> bool {
         false
+    }
+
+    /// Size of a bounded directory walk and capacity of its containing volume,
+    /// computed on the owning host. Run on the Host executor.
+    fn disk_usage(&self, _dir: &Path) -> io::Result<disk::DiskUsage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "disk usage is unavailable on this transport",
+        ))
     }
 
     /// How far away this host is: the round trip to it, measured now.

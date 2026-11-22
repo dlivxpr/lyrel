@@ -10,6 +10,7 @@ use notify::{RecursiveMode, Watcher};
 use crate::core::agent_history::{PastSession, Roots};
 use crate::core::git;
 use crate::core::gitignore::GitignoreChain;
+use crate::host::disk::{DiskScanner, DiskUsage};
 use crate::host::file_version::FileVersion;
 use crate::host::metrics::HostMetrics;
 use crate::host::read_lease::ReadLease;
@@ -85,10 +86,8 @@ fn no_prompt_env() -> Vec<(&'static str, Option<&'static str>)> {
 ///
 /// The base [`LocalHost::new`] is C-free: it answers every filesystem, git,
 /// search, watch and native agent-session request, and reports read-only
-/// SQLite browsing and whole-host metrics as `Unsupported`. `lyrel-core`
-/// builds the full local Host through [`LocalHost::with_capabilities`],
-/// injecting the SQLite engine, platform metrics sampler, and history roots
-/// enriched with live pane scopes. Both shapes use the same `Host` implementation.
+/// SQLite, metrics and disk scans as `Unsupported`. `lyrel-core` adds those
+/// capabilities and live pane scopes through [`LocalHost::with_capabilities`].
 pub struct LocalHost {
     gitignore: Arc<Mutex<GitignoreChain>>,
     /// Read-only SQLite views opened on this machine. One per Host so a
@@ -101,6 +100,7 @@ pub struct LocalHost {
     /// The Lyrel daemon-process usage sampler, injected by the same owner.
     /// `None` reports `Unsupported` and leaves the wire field absent.
     lyrel_usage: Option<LyrelUsageSampler>,
+    disk: Option<DiskScanner>,
     history_roots: fn() -> io::Result<Roots>,
 }
 
@@ -108,7 +108,7 @@ impl LocalHost {
     /// The C-free base local Host: no SQLite engine, no metrics sampler.
     #[allow(clippy::new_ret_no_self)]
     pub fn new() -> SharedHost {
-        Self::with_capabilities(None, None, None, Roots::local)
+        Self::with_capabilities(None, None, None, None, Roots::local)
     }
 
     /// The base local Host's process-wide singleton.
@@ -117,16 +117,14 @@ impl LocalHost {
         LOCAL.clone()
     }
 
-    /// The full local Host: the base implementation plus the capabilities
-    /// this process can actually provide — a read-only SQLite browsing engine
-    /// (`None` keeps the honest `Unsupported`), a whole-host metrics
-    /// sampler (`None` likewise), and a Lyrel usage sampler (`None`
-    /// likewise). The history roots callback lets the daemon
-    /// include live pane scopes without putting MachineStore in this crate.
+    /// Install the capabilities available in this process. Absent samplers
+    /// and engines report `Unsupported`. The history callback can add live
+    /// pane scopes without depending on `MachineStore`.
     pub fn with_capabilities(
         sqlite: Option<Arc<dyn SqliteEngine>>,
         metrics: Option<MetricsSampler>,
         lyrel_usage: Option<LyrelUsageSampler>,
+        disk: Option<DiskScanner>,
         history_roots: fn() -> io::Result<Roots>,
     ) -> SharedHost {
         Arc::new(LocalHost {
@@ -134,6 +132,7 @@ impl LocalHost {
             sqlite,
             metrics,
             lyrel_usage,
+            disk,
             history_roots,
         })
     }
@@ -234,6 +233,16 @@ impl Host for LocalHost {
 
     fn has_lyrel_usage(&self) -> bool {
         self.lyrel_usage.is_some()
+    }
+
+    fn disk_usage(&self, dir: &Path) -> io::Result<DiskUsage> {
+        guard_off_ui();
+        self.disk.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "disk usage is unavailable on this transport",
+            )
+        })?(dir)
     }
 
     fn separator(&self) -> char {

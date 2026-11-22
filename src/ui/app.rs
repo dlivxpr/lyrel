@@ -399,6 +399,7 @@ pub struct LyrelApp {
     /// demands; held only while that section is on screen (#377). The title
     /// bar never holds it, so it never pays for process sampling.
     pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
+    pub(crate) disk_view: Option<Entity<crate::ui::host_disk::HostDiskView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,

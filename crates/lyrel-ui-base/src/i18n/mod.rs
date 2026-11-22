@@ -2058,6 +2058,14 @@ l10n_keys! {
     MonitorRangeTwoMinutes,
     MonitorRangeQuarterHour,
     MonitorRangeHour,
+    MonitorColDisk,
+    MonitorDiskHint,
+    MonitorDiskScanning,
+    MonitorDiskPartial,
+    MonitorDiskUnavailable,
+    MonitorDiskFailed,
+    MonitorDiskDetail,
+    MonitorDiskPartialDetail,
     // The Lyrel component-usage row under the resource tiles (#377): the
     // collapsed local summary and the per-component rows grouped by host.
     LyrelUsageLocal,

@@ -21,6 +21,7 @@ pub mod conformance;
 
 pub use lyrel_protocol::host::*;
 
+pub mod disk;
 pub mod local;
 pub mod lyrel_usage;
 pub mod metrics;

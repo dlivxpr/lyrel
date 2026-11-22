@@ -55,13 +55,13 @@ const TITLEBAR_TILE_COMPACT_W: f32 = 76.;
 const TITLEBAR_TILE_GAP: f32 = 12.;
 
 #[derive(Clone)]
-enum MetricsSource {
+pub(crate) enum MetricsSource {
     Local(Arc<lyrel_core::daemon::control::ControlClient>),
     Remote(Arc<RemoteHost>),
 }
 
 impl MetricsSource {
-    fn get(host: HostId, cx: &mut App) -> Option<Self> {
+    pub(crate) fn get(host: HostId, cx: &mut App) -> Option<Self> {
         if host.is_local() {
             LocalLink::client(cx).map(Self::Local)
         } else {
@@ -76,7 +76,17 @@ impl MetricsSource {
         }
     }
 
-    fn same_connection(&self, current: &Self) -> bool {
+    pub(crate) fn disk_usage(
+        &self,
+        dir: &str,
+    ) -> std::io::Result<lyrel_core::host::disk::DiskUsage> {
+        match self {
+            Self::Local(client) => client.disk_usage(dir),
+            Self::Remote(host) => host.disk_usage(std::path::Path::new(dir)),
+        }
+    }
+
+    pub(crate) fn same_connection(&self, current: &Self) -> bool {
         match (self, current) {
             (Self::Local(old), Self::Local(current)) => Arc::ptr_eq(old, current),
             (Self::Remote(old), Self::Remote(current)) => Arc::ptr_eq(old, current),
@@ -118,14 +128,14 @@ impl MetricsSource {
         }
     }
 
-    fn instance(&self) -> &str {
+    pub(crate) fn instance(&self) -> &str {
         match self {
             Self::Local(client) => &client.hello().instance,
             Self::Remote(host) => &host.peer().instance,
         }
     }
 
-    fn is_connected(&self) -> bool {
+    pub(crate) fn is_connected(&self) -> bool {
         match self {
             Self::Local(client) => client.is_connected(),
             Self::Remote(host) => host.client().is_connected(),
@@ -147,7 +157,7 @@ struct MetricsHistories(HashMap<HostId, SampleHistory>);
 impl Global for MetricsHistories {}
 
 #[derive(Clone, Debug, PartialEq)]
-enum State {
+pub(crate) enum State {
     Waiting,
     Connecting,
     Reconnecting,
@@ -157,7 +167,7 @@ enum State {
     Failed(String),
 }
 
-fn missing_source(host: HostId, cx: &App) -> State {
+pub(crate) fn missing_source(host: HostId, cx: &App) -> State {
     if host.is_local() {
         return match LocalLink::status(cx) {
             LocalLinkStatus::Connecting => State::Connecting,
@@ -1127,6 +1137,14 @@ impl LyrelApp {
             .flex_none()
             .child(heading)
             .child(tiles)
+            .child(
+                h_flex()
+                    .id("monitor-resource-tiles-secondary")
+                    .test_support()
+                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
+                    .gap(px(8.))
+                    .child(self.render_disk_tile(window, cx)),
+            )
             // #377: the collapsed Lyrel summary and its expanded per-component
             // rows; everything it needs lives in `ui::lyrel_usage`.
             .child(self.render_lyrel_usage(cx))

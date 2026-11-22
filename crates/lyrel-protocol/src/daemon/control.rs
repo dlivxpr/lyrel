@@ -84,7 +84,9 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// confirmed identity against the live process and the pane's tree before
 /// signaling; a peer without the feature is never asked, and the caller's
 /// monitor stays read-only instead.
-pub const CONTROL_VERSION: u32 = 20;
+/// v21 adds `DirectoryScan` and the `disk-usage-v1` feature. The owning
+/// host scans the directory under a work bound and reports its volume size.
+pub const CONTROL_VERSION: u32 = 21;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -182,6 +184,8 @@ pub mod feature {
     /// ignorable field on control v19, so a peer without the name simply
     /// answers without the field and a client without it drops it on decode.
     pub const LYREL_USAGE: &str = "lyrel-usage-v1";
+    /// The peer answers [`ControlRequest::DirectoryScan`] on the owning host.
+    pub const DISK_USAGE: &str = "disk-usage-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that
@@ -237,6 +241,9 @@ pub use crate::core::session::WorkspaceId;
 pub enum ControlRequest {
     Ping,
     HostMetrics,
+    DirectoryScan {
+        path: String,
+    },
 
     ReadDir {
         dir: String,
@@ -644,6 +651,7 @@ impl ControlRequest {
         use ControlRequest::*;
         match self {
             Ping | HostMetrics => Duration::from_secs(5),
+            DirectoryScan { .. } => Duration::from_secs(30),
             ReadDir { .. }
             | Stat { .. }
             | Exists { .. }
@@ -760,6 +768,7 @@ pub enum ReplyOk {
     Unit,
     Pong,
     HostMetrics(crate::host::metrics::HostMetrics),
+    DiskUsage(crate::host::disk::DiskUsage),
     Entries(Vec<Entry>),
     Meta(Meta),
     Bool(bool),
@@ -1735,6 +1744,37 @@ impl ControlClient {
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "host metrics came from an unexpected daemon",
+            )),
+        }
+    }
+
+    /// Scan the exact directory on this daemon. Check the returned instance
+    /// and directory before handing a result to the desktop.
+    pub fn disk_usage(&self, path: &str) -> io::Result<crate::host::disk::DiskUsage> {
+        crate::host::guard_off_ui();
+        if !self.is_connected() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "disk scan daemon is disconnected",
+            ));
+        }
+        if !self.hello().has_feature(feature::DISK_USAGE) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "daemon does not support directory disk scans",
+            ));
+        }
+        match self.call(ControlRequest::DirectoryScan {
+            path: path.to_owned(),
+        })? {
+            ReplyOk::DiskUsage(usage)
+                if usage.instance() == self.hello().instance && usage.directory() == path =>
+            {
+                Ok(usage)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "disk usage came from an unexpected daemon or directory",
             )),
         }
     }

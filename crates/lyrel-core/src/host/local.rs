@@ -17,13 +17,13 @@ use lyrel_protocol::host::SharedHost;
 pub use lyrel_protocol::host::local::LocalHost;
 
 /// This machine's Host with its read-only SQLite browsing engine, whole-host
-/// metrics sampler, Lyrel usage sampler, and active pane scopes for agent
-/// history.
+/// and Lyrel usage samplers, directory scanner, and live agent history scopes.
 pub fn new() -> SharedHost {
     LocalHost::with_capabilities(
         Some(Arc::new(crate::host::sqlite::SqliteService::new())),
         Some(crate::host::metrics::sample_local),
         Some(crate::host::lyrel_usage::sample_local),
+        Some(crate::host::disk::scan_local),
         crate::core::agent_history::local_roots,
     )
 }

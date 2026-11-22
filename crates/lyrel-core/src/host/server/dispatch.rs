@@ -140,6 +140,9 @@ fn run_request(
             }
             (ReplyOk::HostMetrics(metrics), Vec::new())
         }
+        ControlRequest::DirectoryScan { path } => {
+            (ReplyOk::DiskUsage(h.disk_usage(&p(&path))?), Vec::new())
+        }
 
         ControlRequest::ReadDir { dir, root } => {
             let root = root.map(|r| p(&r));
