@@ -55,6 +55,11 @@ pub(crate) struct SessionListing {
     pub(crate) sessions: Vec<PastSession>,
     pub(crate) errors: Vec<SessionOperationError>,
     pub(crate) host_reachable: bool,
+    /// At least one source answered its listing successfully, even with an
+    /// empty result: the membership is known, so zero rows reads as a
+    /// genuinely empty directory — not as a host that could not list at
+    /// all. Every source failing is the other sentence (Unsupported).
+    pub(crate) any_listed: bool,
 }
 
 impl Default for SessionListing {
@@ -63,6 +68,7 @@ impl Default for SessionListing {
             sessions: Vec::new(),
             errors: Vec::new(),
             host_reachable: true,
+            any_listed: false,
         }
     }
 }
@@ -98,7 +104,12 @@ impl SessionListing {
         if !self.host_reachable {
             return SessionHealth::Disconnected;
         }
-        if self.errors.is_empty() {
+        if self.errors.is_empty() || self.any_listed {
+            // No errors is a genuine empty; so is a membership some source
+            // listed successfully (empty or not) with other sources failing
+            // beside — the directory was read, and it has no saved sessions.
+            // Only a scan where nothing could be listed at all is
+            // Unsupported.
             return SessionHealth::Empty;
         }
         SessionHealth::Unsupported
@@ -547,18 +558,39 @@ pub(crate) fn plan_scan(
 /// merged listing is filtered to the directory here; sources that cannot
 /// paginate exactly against a directory (the OpenCode service's recency
 /// window) keep their limit warning so a capped answer never reads complete.
+///
+/// This is the whole discovery in one blocking step — what Search
+/// Everywhere's Sessions tab and Sessions settings (#366) run. The Session
+/// History tool runs the very same pieces as two landings
+/// ([`collect_native_sessions`] first, [`collect_service_sessions`] when the
+/// slow sources answered, [`merge_listing`] for both) so the fast native
+/// rows paint before the services do.
 pub(crate) fn collect_sessions(
     host: &dyn lyrel_core::host::Host,
     scan: SessionScan,
 ) -> SessionListing {
     let directory = scan.directory.clone();
-    let mut listing = SessionListing {
-        sessions: Vec::new(),
-        errors: scan.hermes_errors,
-        host_reachable: true,
-    };
-    match host.agent_sessions(directory.as_deref()) {
-        Ok(found) => listing.sessions.extend(found),
+    let mut listing = collect_native_sessions(host, directory.as_deref());
+    let services = collect_service_sessions(host, scan);
+    merge_listing(host, directory.as_deref(), &mut listing, services);
+    listing
+}
+
+/// The native-file portion of a scan: the pi/Oh My Pi/Kimi stores the
+/// owning Host reads off its own disk. No service round-trips happen here —
+/// on an isolated machine this is the part that answers in milliseconds —
+/// so the Session History tool lands it on its own and keeps the slow
+/// service portion pending beside it instead of waiting for it.
+pub(crate) fn collect_native_sessions(
+    host: &dyn lyrel_core::host::Host,
+    directory: Option<&Path>,
+) -> SessionListing {
+    let mut listing = SessionListing::default();
+    match host.agent_sessions(directory) {
+        Ok(found) => {
+            listing.any_listed = true;
+            listing.sessions.extend(found);
+        }
         Err(error) => {
             // The transport's own verdict is the only "disconnected" signal:
             // a host that is up but cannot look reads as a per-source
@@ -587,9 +619,29 @@ pub(crate) fn collect_sessions(
             retained: None,
         });
     }
-    for request in scan.opencode {
-        match host.opencode_sessions(&request) {
+    listing
+}
+
+/// The service portion of a scan: OpenCode and Hermes answer their scoped
+/// requests here, each separately, so one absent or slow service is
+/// recorded beside the others and never blocks — or empties — the native
+/// portion. The returned listing holds only what the services answered;
+/// folding it into the native portion is [`merge_listing`]'s job.
+pub(crate) fn collect_service_sessions(
+    host: &dyn lyrel_core::host::Host,
+    scan: SessionScan,
+) -> SessionListing {
+    let directory = scan.directory.clone();
+    let mut listing = SessionListing {
+        sessions: Vec::new(),
+        errors: scan.hermes_errors,
+        host_reachable: true,
+        any_listed: false,
+    };
+    for request in &scan.opencode {
+        match host.opencode_sessions(request) {
             Ok(sessions) => {
+                listing.any_listed = true;
                 // The service pages a fixed recency window; a scoped listing
                 // cannot tell whether the directory's older records fell
                 // past it, so a full window is said out loud instead of
@@ -597,21 +649,11 @@ pub(crate) fn collect_sessions(
                 let window_full = directory.is_some()
                     && sessions.len() >= lyrel_core::core::agent_history::MAX_SESSIONS;
                 for session in sessions {
-                    let same = |existing: &PastSession| {
-                        existing.agent == session.agent
-                            && existing.id == session.id
-                            && existing
-                                .scope
-                                .as_ref()
-                                .and_then(|s| s.opencode.as_ref())
-                                .map(|s| (&s.server, &s.connection_argv))
-                                == session
-                                    .scope
-                                    .as_ref()
-                                    .and_then(|s| s.opencode.as_ref())
-                                    .map(|s| (&s.server, &s.connection_argv))
-                    };
-                    if !listing.sessions.iter().any(same) {
+                    if !listing
+                        .sessions
+                        .iter()
+                        .any(|existing| same_listed_session(existing, &session))
+                    {
                         listing.sessions.push(session);
                     }
                 }
@@ -643,15 +685,16 @@ pub(crate) fn collect_sessions(
             Err(error) => listing.errors.push(error),
         }
     }
-    for request in scan.hermes {
-        match host.hermes_sessions(&request) {
+    for request in &scan.hermes {
+        match host.hermes_sessions(request) {
             Ok(sessions) => {
+                listing.any_listed = true;
                 for session in sessions {
-                    if !listing.sessions.iter().any(|existing| {
-                        existing.agent == session.agent
-                            && existing.id == session.id
-                            && existing.scope == session.scope
-                    }) {
+                    if !listing
+                        .sessions
+                        .iter()
+                        .any(|existing| same_listed_session(existing, &session))
+                    {
                         listing.sessions.push(session);
                     }
                 }
@@ -659,13 +702,42 @@ pub(crate) fn collect_sessions(
             Err(error) => listing.errors.push(error),
         }
     }
+    listing
+}
+
+/// Fold a later portion into the listing the earlier portions built: a row
+/// the listing already holds (by [`same_listed_session`]) is not repeated,
+/// the portion's errors join the listing's, and the combined answer is then
+/// filtered to the scan's directory with the owning Host's path semantics —
+/// the same match the Host's own scanner used — and ordered most-recent-
+/// first. Pure data work over one cheap `Host` read, so a landing callback
+/// may run it on the UI thread; [`collect_sessions`] runs the same merge on
+/// the Host's own thread.
+pub(crate) fn merge_listing(
+    host: &dyn lyrel_core::host::Host,
+    directory: Option<&Path>,
+    listing: &mut SessionListing,
+    extra: SessionListing,
+) {
+    for session in extra.sessions {
+        if !listing
+            .sessions
+            .iter()
+            .any(|existing| same_listed_session(existing, &session))
+        {
+            listing.sessions.push(session);
+        }
+    }
+    listing.errors.extend(extra.errors);
+    listing.host_reachable &= extra.host_reachable;
+    listing.any_listed |= extra.any_listed;
     // Service providers answer a recency window, not a directory query: the
     // merged listing is filtered here, with the owning Host's path semantics
     // (the scanner used the same match on its own machine), so every
     // consumer of the shared listing sees exactly the queried directory —
     // and a Windows client never merges a Linux host's /tmp/Repo with
     // /tmp/repo.
-    if let Some(dir) = &directory {
+    if let Some(dir) = directory {
         listing.sessions.retain(|s| {
             s.cwd.as_deref().is_some_and(|cwd| {
                 lyrel_core::core::agent_history::directory_matches_with(cwd, dir, host.separator())
@@ -675,7 +747,34 @@ pub(crate) fn collect_sessions(
     listing
         .sessions
         .sort_by_key(|s| std::cmp::Reverse(s.updated));
-    listing
+}
+
+/// Whether `incoming` is the row `existing` already lists: the identity the
+/// portions dedup on. Same agent and id, plus the service-scoped selectors a
+/// service row carries — an OpenCode row repeats on its server and
+/// connection argv, a Hermes row on its whole scope — while the native
+/// agents hold one row per id, so the agent and id are the whole identity
+/// there.
+fn same_listed_session(existing: &PastSession, incoming: &PastSession) -> bool {
+    if existing.agent != incoming.agent || existing.id != incoming.id {
+        return false;
+    }
+    match incoming.agent {
+        CLIAgent::OpenCode => {
+            existing
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.opencode.as_ref())
+                .map(|scope| (&scope.server, &scope.connection_argv))
+                == incoming
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.opencode.as_ref())
+                    .map(|scope| (&scope.server, &scope.connection_argv))
+        }
+        CLIAgent::Hermes => existing.scope == incoming.scope,
+        _ => true,
+    }
 }
 
 /// Whether a scope names the store an OpenCode service answers from. The
@@ -828,6 +927,10 @@ impl LyrelApp {
     /// worktree was pinned on. Driven from the window's render like the port
     /// watch: the context pane's directory has no event of its own, so the
     /// bound is recomputed each frame and a scan starts only when it moved.
+    /// A scan already in flight never blocks the rebind — the new bound
+    /// claims the panel and the old trip's landing retires itself on its
+    /// generation and connection fences — so a slow service source cannot
+    /// hold the old rows up or the new ones back.
     pub(crate) fn sync_session_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.right_panel_tab != lyrel_core::core::config::RightPanelTab::Sessions
             || !self.right_panel_visible
@@ -872,21 +975,29 @@ impl LyrelApp {
             repo,
             dir,
         };
-        if self.session_history.scanning || self.session_history.bound == wanted {
+        if self.session_history.bound == wanted {
             return;
         }
+        // The bound moved: the listing on screen belongs to the old scope,
+        // so it comes down now — only the current generation may paint —
+        // and the fast native landing puts the new scope's rows up.
+        self.session_history.listing = SessionListing::default();
+        self.session_history.landed = false;
+        self.session_history.selected = None;
+        self.session_history.close_actions(cx);
         // No directory (no pane yet): nothing to match, and scanning a
         // made-up home would list sessions the tool cannot scope.
         let Some(dir) = wanted.dir.clone() else {
             self.session_history.bound = wanted;
+            self.session_history.scanning = false;
             self.session_history.landed = true;
-            self.session_history.listing = SessionListing::default();
             return;
         };
         let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, wanted.host) else {
             // The host is gone from under the workspace: say disconnected
             // instead of waiting on a scan that has nobody to run on.
             self.session_history.bound = wanted;
+            self.session_history.scanning = false;
             self.session_history.landed = true;
             self.session_history.listing = SessionListing {
                 sessions: Vec::new(),
@@ -896,6 +1007,7 @@ impl LyrelApp {
                     retained: None,
                 }],
                 host_reachable: false,
+                any_listed: false,
             };
             return;
         };
@@ -925,49 +1037,149 @@ impl LyrelApp {
         scan.directory = Some(dir);
         let host_id = self.session_history.bound.host;
         let connection = self.session_history.bound.connection;
+        // The native portion answers in milliseconds; it lands on its own,
+        // before the service portion is even asked. That trip starts from
+        // the native landing, not here.
+        let directory = scan.directory.clone();
         HostOps::run_in(
             host,
             window,
             cx,
-            move |host| collect_sessions(host, scan),
-            move |app, listing, _window, cx| {
-                app.session_history_landed(generation, host_id, connection, listing, cx);
+            move |host| collect_native_sessions(host, directory.as_deref()),
+            move |app, native, window, cx| {
+                app.session_history_native_landed(
+                    generation, host_id, connection, scan, native, window, cx,
+                );
             },
         );
     }
 
-    /// A scan landed: keep it only if its generation is still the live one
-    /// and the connection it ran on is still the one the registry holds —
-    /// a relink or a drop mid-flight makes the answers the old connection's,
-    /// and applying them would bind its sessions to a host they did not come
-    /// from. Retired results leave the bound alone; the next render's sync
-    /// rebinds and rescans.
-    fn session_history_landed(
+    /// The native portion landed: it paints at once — the panel stays
+    /// `scanning`, and the footer says the service portion is still out —
+    /// and it starts that portion's trip from here. A landing whose
+    /// generation is no longer the live one, or whose connection is not the
+    /// object the registry holds anymore, retires without touching the
+    /// panel: its answers belong to a scope the bound has already left.
+    fn session_history_native_landed(
         &mut self,
         generation: u64,
-        host: HostId,
+        host_id: HostId,
         connection: usize,
-        listing: SessionListing,
+        scan: SessionScan,
+        native: SessionListing,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.session_history.generation != generation {
             return;
         }
-        let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host).map_or(0, |host| {
-            std::sync::Arc::as_ptr(&host) as *const () as usize
-        });
-        if live != connection {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            return;
+        };
+        if std::sync::Arc::as_ptr(&host) as *const () as usize != connection {
             self.session_history.scanning = false;
             return;
         }
-        // The panel's scans are directory-scoped; the shared cache feeds
-        // Search Everywhere's placeholder, which must stay the complete
-        // unscoped listing Search itself scans — a scoped listing would drop
-        // every other directory from the placeholder.
+        let old_rows = self.session_rows(window, cx);
+        let directory = scan.directory.clone();
+        let host_reachable = native.host_reachable;
+        let mut listing = native;
+        // One portion, one merge: the shared listing's directory filter and
+        // ordering, with nothing else to fold in yet.
+        merge_listing(
+            &*host,
+            directory.as_deref(),
+            &mut listing,
+            SessionListing::default(),
+        );
+        self.apply_history_landing(old_rows, listing, window, cx);
+        // A host the native portion already reads as unreachable cannot
+        // answer the services either (their own first check is the same
+        // connection), so the pending state would be a wait for a known
+        // answer: fail closed on the native portion's verdict instead.
+        if !host_reachable {
+            self.session_history.scanning = false;
+            cx.notify();
+            return;
+        }
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |host| collect_service_sessions(host, scan),
+            move |app, services, window, cx| {
+                app.session_history_services_landed(
+                    generation, host_id, connection, directory, services, window, cx,
+                );
+            },
+        );
+    }
+
+    /// The service portion landed: fold it into the listing the panel
+    /// already shows and close the scan. Every source's final errors and
+    /// limit warnings are on the listing now; the footer reads them. The
+    /// same generation and connection fences as the native landing apply —
+    /// a superseded service answer never repaints the current scope.
+    fn session_history_services_landed(
+        &mut self,
+        generation: u64,
+        host_id: HostId,
+        connection: usize,
+        directory: Option<PathBuf>,
+        services: SessionListing,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_history.generation != generation {
+            return;
+        }
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            return;
+        };
+        if std::sync::Arc::as_ptr(&host) as *const () as usize != connection {
+            self.session_history.scanning = false;
+            return;
+        }
         self.session_history.scanning = false;
-        self.session_history.landed = true;
+        let old_rows = self.session_rows(window, cx);
+        let mut listing = std::mem::take(&mut self.session_history.listing);
+        merge_listing(&*host, directory.as_deref(), &mut listing, services);
+        self.apply_history_landing(old_rows, listing, window, cx);
+    }
+
+    /// Put one landed portion's listing up. The keyboard's row survives the
+    /// relist only while the same session is still a row (a later portion
+    /// reordering the list must not move the selection onto another
+    /// session): it is re-pointed at the session's new index, and it is
+    /// dropped when that session is gone. An open action menu is dropped
+    /// whenever the row its index names changed — a menu that stayed would
+    /// act on whatever row took the index.
+    fn apply_history_landing(
+        &mut self,
+        old_rows: Vec<PastSession>,
+        listing: SessionListing,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         self.session_history.listing = listing;
-        self.session_history.selected = None;
+        self.session_history.landed = true;
+        let new_rows = self.session_rows(window, cx);
+        let same_row = |a: &PastSession, b: &PastSession| a.agent == b.agent && a.id == b.id;
+        self.session_history.selected = self
+            .session_history
+            .selected
+            .and_then(|ix| old_rows.get(ix))
+            .and_then(|old| new_rows.iter().position(|new| same_row(old, new)));
+        let menu_stale = match self.session_history.actions_row {
+            Some(ix) => match (old_rows.get(ix), new_rows.get(ix)) {
+                (Some(old), Some(new)) => !same_row(old, new),
+                _ => true,
+            },
+            None => false,
+        };
+        if menu_stale {
+            self.session_history.close_actions(cx);
+        }
         cx.notify();
     }
 
@@ -1047,18 +1259,51 @@ impl LyrelApp {
                     cx,
                 ))
                 .into_any_element(),
-            SessionHealth::Empty if !self.session_history.landed => v_flex()
-                .child(selector)
-                .child(self.panel_empty(t(L10nKey::PanelLoading), None, cx))
-                .into_any_element(),
-            SessionHealth::Empty => v_flex()
+            // Loading covers the first trip, every later scope change, and
+            // however long the service portion is still out: with a scan in
+            // flight, zero rows — Empty or Unsupported — is the trip's
+            // in-flight state, never the listing's verdict. An early native
+            // error with the services still pending is pending, not "cannot
+            // list"; only the finished listing may say Unsupported.
+            SessionHealth::Empty | SessionHealth::Unsupported
+                if !self.session_history.landed || self.session_history.scanning =>
+            {
+                v_flex()
+                    .child(selector)
+                    .child(self.panel_empty(t(L10nKey::PanelLoading), None, cx))
+                    .into_any_element()
+            }
+            SessionHealth::Unsupported => v_flex()
                 .child(selector)
                 .child(self.panel_empty(
-                    t(L10nKey::PanelSessionsEmpty),
-                    Some(t(L10nKey::PanelSessionsEmptyHint)),
+                    t(L10nKey::PanelSessionsUnsupported),
+                    Some(t(L10nKey::PanelSessionsUnsupportedHint)),
                     cx,
                 ))
                 .into_any_element(),
+            SessionHealth::Empty => {
+                // A directory some source listed successfully (its
+                // membership is known) with other sources failing beside
+                // still says which ones could not be listed.
+                let mut body = v_flex().child(selector).child(self.panel_empty(
+                    t(L10nKey::PanelSessionsEmpty),
+                    Some(t(L10nKey::PanelSessionsEmptyHint)),
+                    cx,
+                ));
+                if !self.session_history.listing.errors.is_empty() {
+                    body = body.child(
+                        div()
+                            .id("panel-sessions-partial")
+                            .test_support()
+                            .px(px(TEXT_INSET))
+                            .py(px(4.))
+                            .text_size(rems(META))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(L10nKey::PanelSessionsPartial)),
+                    );
+                }
+                body.into_any_element()
+            }
             SessionHealth::Ready | SessionHealth::Partial => {
                 // Clamp a selection left over from a taller list.
                 if self
@@ -1097,9 +1342,24 @@ impl LyrelApp {
                         list.child(self.session_history_row(ix, session, selected == Some(ix), cx));
                 }
                 let mut body = v_flex().child(selector).child(list);
-                if health == SessionHealth::Partial {
+                if self.session_history.scanning {
+                    // The native rows are up; the service portion is still
+                    // out. Say so — this is not the listing's whole answer.
                     body = body.child(
                         div()
+                            .id("panel-sessions-pending")
+                            .test_support()
+                            .px(px(TEXT_INSET))
+                            .py(px(4.))
+                            .text_size(rems(META))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(L10nKey::PanelSessionsPending)),
+                    );
+                } else if health == SessionHealth::Partial {
+                    body = body.child(
+                        div()
+                            .id("panel-sessions-partial")
+                            .test_support()
                             .px(px(TEXT_INSET))
                             .py(px(4.))
                             .text_size(rems(META))
@@ -1591,7 +1851,12 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyrel_core::host::Host as _;
+    use gpui_kit::test::TestWindowExt as _;
+    use lyrel_core::daemon::protocol::DaemonMsg;
+    use lyrel_core::host::Host;
+    use lyrel_ui_base::host_ops::{Entry, Meta, Output, SearchHit, SharedHost, WatchSub};
+    use std::io::Write as _;
+    use std::sync::{Arc, Mutex};
 
     fn error(kind: SessionErrorKind) -> SessionOperationError {
         SessionOperationError {
@@ -1619,6 +1884,7 @@ mod tests {
             }],
             errors: vec![],
             host_reachable: true,
+            any_listed: true,
         };
         assert_eq!(ready.health(1), SessionHealth::Ready);
         assert_eq!(
@@ -1631,6 +1897,7 @@ mod tests {
             sessions: ready.sessions.clone(),
             errors: vec![error(SessionErrorKind::Unsupported)],
             host_reachable: true,
+            any_listed: true,
         };
         assert_eq!(partial.health(1), SessionHealth::Partial);
 
@@ -1640,6 +1907,7 @@ mod tests {
             sessions: vec![],
             errors: vec![error(SessionErrorKind::Connection)],
             host_reachable: true,
+            any_listed: false,
         };
         assert_eq!(provider_connection.health(0), SessionHealth::Unsupported);
 
@@ -1647,6 +1915,7 @@ mod tests {
             sessions: vec![],
             errors: vec![error(SessionErrorKind::Connection)],
             host_reachable: false,
+            any_listed: false,
         };
         assert_eq!(disconnected.health(0), SessionHealth::Disconnected);
 
@@ -1654,8 +1923,20 @@ mod tests {
             sessions: vec![],
             errors: vec![error(SessionErrorKind::Unsupported)],
             host_reachable: true,
+            any_listed: false,
         };
         assert_eq!(unsupported.health(0), SessionHealth::Unsupported);
+
+        // A directory some source listed successfully (empty membership,
+        // known) with other sources failing beside is an empty directory —
+        // not a host that cannot list at all.
+        let listed_empty_with_errors = SessionListing {
+            sessions: vec![],
+            errors: vec![error(SessionErrorKind::Unsupported)],
+            host_reachable: true,
+            any_listed: true,
+        };
+        assert_eq!(listed_empty_with_errors.health(0), SessionHealth::Empty);
 
         assert_eq!(
             SessionListing::default().health(0),
@@ -2206,5 +2487,598 @@ mod tests {
                 ..SessionBound::default()
             }
         );
+    }
+
+    /// The extracted portions are the blocking scan, just split: native
+    /// rows first, service rows folded in with the same identity dedup, the
+    /// same directory filter under the owning Host's path semantics, the
+    /// same most-recent-first order, and every source's errors kept beside
+    /// the sessions it found.
+    #[test]
+    fn split_portions_merge_to_what_the_blocking_collect_sessions_returns() {
+        let (host, _fixture) = fixture_host(SessionFixture::merged());
+        let native = collect_native_sessions(&*host, Some(Path::new("/project")));
+        assert_eq!(
+            ids(&native.sessions),
+            ["pi-native", "omp-native"],
+            "the native portion answers for the queried directory"
+        );
+        let services = collect_service_sessions(&*host, service_scan(host.id()));
+        assert_eq!(
+            ids(&services.sessions),
+            ["oc-service", "oc-elsewhere"],
+            "the service portion folds the identity it repeated but keeps its other rows"
+        );
+        assert!(
+            services.errors.iter().any(|e| e
+                .message
+                .contains("OpenCode history storage could not be confirmed")),
+            "the unconfirmed default service scope is said out loud"
+        );
+        assert!(
+            services
+                .errors
+                .iter()
+                .any(|e| e.message.contains("fixture hermes is unavailable")),
+            "a failing service is recorded beside the ones that answered"
+        );
+        let mut listing = native;
+        merge_listing(&*host, Some(Path::new("/project")), &mut listing, services);
+        assert_eq!(
+            ids(&listing.sessions),
+            ["oc-service", "omp-native", "pi-native"]
+        );
+        assert!(
+            listing
+                .sessions
+                .iter()
+                .all(|s| s.cwd.as_deref() != Some(Path::new("/elsewhere"))),
+            "the merge filters every source to the queried directory"
+        );
+        assert!(listing.host_reachable, "both portions reached their host");
+
+        // The blocking entry point Search Everywhere and Sessions settings
+        // consume is the same two portions through the same merge.
+        let whole = collect_sessions(&*host, service_scan(host.id()));
+        assert_eq!(ids(&whole.sessions), ids(&listing.sessions));
+        assert_eq!(
+            whole
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>(),
+            listing
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// End to end through the production window: the native rows paint
+    /// while a service source is held pending, a scope change drops the old
+    /// rows immediately and retires the superseded service landing on its
+    /// generation fence, and the keyboard's selection follows its session
+    /// across the reorder the late portion brings.
+    #[gpui_kit::test]
+    fn native_rows_paint_while_service_pending_and_stale_landings_retire(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use lyrel_core::core::config::RightPanelTab;
+        use lyrel_ui_base::route::PaneWorkspace;
+        use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
+
+        let (app, mut vcx, mut streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        let target = RemoteTarget::Alias {
+            alias: "session-history-fixture".into(),
+        };
+        let fixture = Arc::new(Mutex::new(SessionFixture::production_like()));
+        vcx.update(|_, cx| {
+            lyrel_ui_base::host_registry::HostRegistry::insert(
+                cx,
+                fixture_host_with(target.host_id(), &fixture),
+            );
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            let leaf = app.tabs[0]
+                .detail_pane(window, cx)
+                .expect("the harness pane");
+            leaf.update(cx, |view, _| {
+                view.set_workspace(Some(PaneWorkspace {
+                    workspace: WorkspaceId::new(),
+                    target: target.clone(),
+                    spec: None,
+                    label: Some("session-history-fixture".into()),
+                    resize_echo: false,
+                }));
+            });
+        });
+        // Offer OpenCode and Hermes on any PATH: the scan must plan their
+        // service requests whether or not the real CLIs are installed.
+        vcx.update(|_, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            let command = format!("\"{}\"", std::env::current_exe().unwrap().display());
+            cfg.agent_launch
+                .insert(CLIAgent::OpenCode.slug().into(), command.clone());
+            cfg.agent_launch
+                .insert(CLIAgent::Hermes.slug().into(), command);
+            cx.set_global(cfg);
+        });
+        let mut daemon = streams.remove(0);
+        send_cwd(&mut daemon, "/project");
+        for _ in 0..200 {
+            vcx.run_until_parked();
+            if pane_dir(&app, &mut vcx).as_deref() == Some(Path::new("/project")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            pane_dir(&app, &mut vcx).as_deref(),
+            Some(Path::new("/project")),
+            "the pane reports its directory before the panel scans"
+        );
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Sessions, window, cx);
+        });
+
+        // First paint: the native portion landed while the service source
+        // sits parked behind the closed gate.
+        settle(&mut vcx);
+        assert!(
+            app.update_in(&mut vcx, |app, _window, _cx| app.session_history.scanning),
+            "the service portion is still pending"
+        );
+        assert!(
+            app.update_in(&mut vcx, |app, _window, _cx| app.session_history.landed),
+            "the native portion painted"
+        );
+        assert_eq!(
+            ids(&app.update_in(&mut vcx, |app, _window, _cx| {
+                app.session_history.listing.sessions.clone()
+            })),
+            ["omp-native", "pi-native"],
+            "the known native rows are listed before any service answers"
+        );
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                observed(window, "panel-sessions-row-0"),
+                "the first native row is on screen, not a loading placeholder"
+            );
+            assert!(
+                observed(window, "panel-sessions-row-1"),
+                "the second native row is on screen"
+            );
+            assert!(
+                observed(window, "panel-sessions-pending"),
+                "the pending service source is said on screen"
+            );
+        });
+
+        // The user moves the keyboard onto a native row; then the directory
+        // changes while the service source is still parked. The old rows
+        // come down at once — only the current generation may paint.
+        app.update_in(&mut vcx, |app, _window, _cx| {
+            app.session_history.selected = Some(1);
+        });
+        send_cwd(&mut daemon, "/other");
+        for _ in 0..200 {
+            vcx.run_until_parked();
+            if pane_dir(&app, &mut vcx).as_deref() == Some(Path::new("/other")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        vcx.update(|window, cx| window.render_frame(cx));
+        assert!(
+            app.update_in(&mut vcx, |app, _window, _cx| {
+                app.session_history.listing.sessions.is_empty()
+            }),
+            "the scope change takes the old generation's rows down before anything lands"
+        );
+        settle(&mut vcx);
+        assert!(
+            app.update_in(&mut vcx, |app, _window, _cx| app.session_history.scanning),
+            "the current scope's service portion is still pending behind the gate"
+        );
+        assert_eq!(
+            ids(&app.update_in(&mut vcx, |app, _window, _cx| {
+                app.session_history.listing.sessions.clone()
+            })),
+            ["kimi-native"],
+            "only the current scope's rows are up: {}",
+            phase_b_dump(&app, &mut vcx, &fixture)
+        );
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                observed(window, "panel-sessions-row-0"),
+                "the current scope's row is on screen"
+            );
+            assert!(
+                observed(window, "panel-sessions-pending"),
+                "the new scope still says its service source is pending on screen"
+            );
+        });
+        app.update_in(&mut vcx, |app, _window, _cx| {
+            app.session_history.selected = Some(0);
+        });
+
+        // Both service answers land: the second scan's rows merge, and the
+        // first scan's marker error arrives late enough that its landing
+        // must retire on the generation fence — the marker may not paint.
+        fixture_wait_for_calls(&fixture, 2);
+        settle(&mut vcx);
+        let (scanning, selected, errors) = app.update_in(&mut vcx, |app, _window, _cx| {
+            (
+                app.session_history.scanning,
+                app.session_history.selected,
+                app.session_history.listing.errors.clone(),
+            )
+        });
+        let sessions = app.update_in(&mut vcx, |app, _window, _cx| {
+            app.session_history.listing.sessions.clone()
+        });
+        assert!(!scanning, "the live scan closed");
+        assert_eq!(ids(&sessions), ["oc-service", "kimi-native"]);
+        assert_eq!(
+            selected,
+            Some(1),
+            "the selection followed its session across the reorder"
+        );
+        assert_eq!(sessions[1].id, "kimi-native");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.message != "stale-generation marker"),
+            "the superseded service landing retired instead of painting: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e
+                .message
+                .contains("OpenCode history storage could not be confirmed")),
+            "the live landing kept the final source limits and errors: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("fixture hermes is unavailable")),
+            "the failing service source is reported on the final listing: {errors:?}"
+        );
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                !observed(window, "panel-sessions-pending"),
+                "the finished listing no longer reads as pending"
+            );
+            assert!(
+                observed(window, "panel-sessions-partial"),
+                "the finished listing reads its incomplete sources on screen"
+            );
+        });
+    }
+
+    fn ids(sessions: &[PastSession]) -> Vec<&str> {
+        sessions.iter().map(|session| session.id.as_str()).collect()
+    }
+
+    /// A scan the way `plan_scan` builds it for one offered service agent:
+    /// the default scope the pane would fall back to.
+    fn service_scan(host: HostId) -> SessionScan {
+        let service_request = |agent| SessionOperation {
+            expected_host: host.0,
+            agent,
+            kind: SessionOperationKind::Resume,
+            source_id: String::new(),
+            cwd: PathBuf::from("/project"),
+            launch_argv: vec!["fixture".into()],
+            scope: Default::default(),
+        };
+        SessionScan {
+            directory: Some(PathBuf::from("/project")),
+            opencode: vec![service_request(CLIAgent::OpenCode)],
+            hermes: vec![service_request(CLIAgent::Hermes)],
+            hermes_errors: Vec::new(),
+        }
+    }
+
+    /// The directory the context pane currently reports, if any.
+    fn pane_dir(
+        app: &gpui_kit::Entity<LyrelApp>,
+        vcx: &mut gpui_kit::VisualTestContext,
+    ) -> Option<PathBuf> {
+        app.update_in(vcx, |app, window, cx| {
+            app.context_pane(window, cx)
+                .and_then(|pane| pane.read(cx).host_cwd())
+        })
+    }
+
+    fn phase_b_dump(
+        app: &gpui_kit::Entity<LyrelApp>,
+        vcx: &mut gpui_kit::VisualTestContext,
+        fixture: &Arc<Mutex<SessionFixture>>,
+    ) -> String {
+        let (scanning, landed, generation, bound_dir) = app.update_in(vcx, |app, _window, _cx| {
+            (
+                app.session_history.scanning,
+                app.session_history.landed,
+                app.session_history.generation,
+                app.session_history.bound.dir.clone(),
+            )
+        });
+        let fixture = fixture.lock().unwrap();
+        format!(
+            "scanning={scanning} landed={landed} generation={generation} \
+             bound_dir={bound_dir:?} native_calls={} service_calls={}",
+            fixture.native_calls, fixture.service_calls
+        )
+    }
+
+    fn settle(vcx: &mut gpui_kit::VisualTestContext) {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+    }
+
+    /// Whether an observed element id painted visible in the window's last
+    /// frame. Text queries cannot see views GPUI Fast retains, so on-screen
+    /// proof goes through the `test_support` element observations.
+    fn observed(window: &gpui_kit::Window, id: &'static str) -> bool {
+        window.find_all(id).iter().any(|element| element.visible())
+    }
+
+    fn send_cwd(daemon: &mut lyrel_core::daemon::transport::Stream, dir: &str) {
+        DaemonMsg::Cwd(PathBuf::from(dir)).encode(daemon).unwrap();
+        daemon.flush().unwrap();
+    }
+
+    /// The fixture host and its fixture: the service source answers slowly.
+    fn fixture_host(
+        fixture: SessionFixture,
+    ) -> (Arc<GatedSessionHost>, Arc<Mutex<SessionFixture>>) {
+        let fixture = Arc::new(Mutex::new(fixture));
+        let host = fixture_host_with(HostId::from_connection_key("session-fixture"), &fixture);
+        (host, fixture)
+    }
+
+    fn fixture_host_with(
+        id: HostId,
+        fixture: &Arc<Mutex<SessionFixture>>,
+    ) -> Arc<GatedSessionHost> {
+        Arc::new(GatedSessionHost {
+            id,
+            inner: lyrel_core::host::local::shared(),
+            fixture: fixture.clone(),
+        })
+    }
+
+    /// The slow-source fixture: the native stores answer immediately, every
+    /// OpenCode service call sleeps before answering (the production Windows
+    /// stall, minus the two minutes) — the first call with the marker error,
+    /// the later calls with the service rows — and Hermes fails at once like
+    /// an uninstalled provider.
+    struct SessionFixture {
+        native: Vec<PastSession>,
+        opencode: Vec<PastSession>,
+        stale_marker: Option<String>,
+        /// How long a service answer takes. Generous windows: the
+        /// assertions between a scan and its service landing run in
+        /// milliseconds.
+        delay: std::time::Duration,
+        service_calls: usize,
+        completed_calls: usize,
+        native_calls: usize,
+    }
+
+    impl SessionFixture {
+        const DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+        fn production_like() -> Self {
+            Self {
+                native: vec![
+                    session_row("pi-native", CLIAgent::Pi, "/project", 100),
+                    session_row("omp-native", CLIAgent::OhMyPi, "/project", 200),
+                    session_row("kimi-native", CLIAgent::Kimi, "/other", 150),
+                ],
+                opencode: vec![
+                    session_row("oc-service", CLIAgent::OpenCode, "/other", 250),
+                    session_row("oc-service", CLIAgent::OpenCode, "/other", 250),
+                ],
+                stale_marker: Some("stale-generation marker".into()),
+                delay: Self::DELAY,
+                service_calls: 0,
+                completed_calls: 0,
+                native_calls: 0,
+            }
+        }
+
+        /// Both portions hold rows in the queried directory; the service
+        /// portion repeats one identity and holds one row outside it.
+        fn merged() -> Self {
+            Self {
+                native: vec![
+                    session_row("pi-native", CLIAgent::Pi, "/project", 100),
+                    session_row("omp-native", CLIAgent::OhMyPi, "/project", 200),
+                ],
+                opencode: vec![
+                    session_row("oc-service", CLIAgent::OpenCode, "/project", 250),
+                    session_row("oc-service", CLIAgent::OpenCode, "/project", 250),
+                    session_row("oc-elsewhere", CLIAgent::OpenCode, "/elsewhere", 300),
+                ],
+                stale_marker: None,
+                delay: std::time::Duration::ZERO,
+                service_calls: 0,
+                completed_calls: 0,
+                native_calls: 0,
+            }
+        }
+    }
+
+    /// Wait until enough fixture service calls answered, so the superseded
+    /// landing's marker had its chance to paint (a fenced one never does).
+    /// The lock is taken per poll: a panic here must not poison the mutex
+    /// the parked service threads are about to take.
+    fn fixture_wait_for_calls(fixture: &Mutex<SessionFixture>, want: usize) {
+        for _ in 0..600 {
+            if fixture.lock().unwrap().completed_calls >= want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("the fixture service calls never completed");
+    }
+
+    fn session_row(id: &str, agent: CLIAgent, cwd: &str, updated: u64) -> PastSession {
+        PastSession {
+            agent,
+            id: id.into(),
+            cwd: Some(PathBuf::from(cwd)),
+            title: format!("{id} title"),
+            branch: None,
+            updated,
+            scope: None,
+        }
+    }
+
+    struct GatedSessionHost {
+        id: HostId,
+        inner: SharedHost,
+        fixture: Arc<Mutex<SessionFixture>>,
+    }
+
+    impl Host for GatedSessionHost {
+        fn id(&self) -> HostId {
+            self.id
+        }
+        fn separator(&self) -> char {
+            self.inner.separator()
+        }
+        fn is_absolute(&self, p: &Path) -> bool {
+            self.inner.is_absolute(p)
+        }
+        fn read_dir(&self, dir: &Path, root: Option<&Path>) -> std::io::Result<Vec<Entry>> {
+            self.inner.read_dir(dir, root)
+        }
+        fn stat(&self, p: &Path) -> std::io::Result<Meta> {
+            self.inner.stat(p)
+        }
+        fn read_file(&self, p: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+            self.inner.read_file(p, max_bytes)
+        }
+        fn canonicalize(&self, p: &Path) -> std::io::Result<PathBuf> {
+            self.inner.canonicalize(p)
+        }
+        fn search(
+            &self,
+            roots: &[PathBuf],
+            query: &str,
+            limit: usize,
+            max_dirs: usize,
+            show_hidden: bool,
+        ) -> std::io::Result<Vec<SearchHit>> {
+            self.inner
+                .search(roots, query, limit, max_dirs, show_hidden)
+        }
+        fn search_content(
+            &self,
+            roots: &[PathBuf],
+            query: &lyrel_core::host::ContentQuery,
+            limits: &lyrel_core::host::ContentLimits,
+        ) -> std::io::Result<lyrel_core::host::ContentResults> {
+            self.inner.search_content(roots, query, limits)
+        }
+        fn write_file(&self, p: &Path, bytes: &[u8]) -> std::io::Result<Meta> {
+            self.inner.write_file(p, bytes)
+        }
+        fn create_file_new(&self, p: &Path) -> std::io::Result<()> {
+            self.inner.create_file_new(p)
+        }
+        fn create_dir(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+            self.inner.create_dir(p, recursive)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.inner.rename(from, to)
+        }
+        fn remove(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+            self.inner.remove(p, recursive)
+        }
+        fn repo_root(&self, p: &Path) -> std::io::Result<Option<PathBuf>> {
+            self.inner.repo_root(p)
+        }
+        fn git(&self, cwd: &Path, args: &[&str]) -> std::io::Result<Output> {
+            self.inner.git(cwd, args)
+        }
+        fn shells(&self) -> std::io::Result<lyrel_core::host::ShellInventory> {
+            self.inner.shells()
+        }
+        fn watch(&self, dirs: &[PathBuf]) -> std::io::Result<WatchSub> {
+            self.inner.watch(dirs)
+        }
+        fn agent_sessions(&self, directory: Option<&Path>) -> std::io::Result<Vec<PastSession>> {
+            let mut fixture = self.fixture.lock().unwrap();
+            fixture.native_calls += 1;
+            Ok(fixture
+                .native
+                .iter()
+                .filter(|session| {
+                    directory.is_none_or(|dir| {
+                        session.cwd.as_deref().is_some_and(|cwd| {
+                            lyrel_core::core::agent_history::directory_matches_with(
+                                cwd,
+                                dir,
+                                self.separator(),
+                            )
+                        })
+                    })
+                })
+                .cloned()
+                .collect())
+        }
+        fn opencode_sessions(
+            &self,
+            _request: &SessionOperation,
+        ) -> Result<Vec<PastSession>, SessionOperationError> {
+            let (first, rows, marker, delay) = {
+                let mut fixture = self.fixture.lock().unwrap();
+                let first = fixture.service_calls == 0;
+                fixture.service_calls += 1;
+                (
+                    first,
+                    fixture.opencode.clone(),
+                    fixture.stale_marker.clone(),
+                    fixture.delay,
+                )
+            };
+            // The production stall: the service answer waits, and the scope
+            // may move on underneath the wait.
+            std::thread::sleep(delay);
+            let outcome = match (first, marker) {
+                (true, Some(marker)) => Err(SessionOperationError {
+                    // The first call belongs to the first scan: answer with
+                    // the marker, so a landing that escaped the generation
+                    // fence would show it on the panel.
+                    kind: SessionErrorKind::Connection,
+                    message: marker.into(),
+                    retained: None,
+                }),
+                _ => Ok(rows),
+            };
+            let mut fixture = self.fixture.lock().unwrap();
+            fixture.completed_calls += 1;
+            outcome
+        }
+        fn hermes_sessions(
+            &self,
+            request: &SessionOperation,
+        ) -> Result<Vec<PastSession>, SessionOperationError> {
+            let _ = request;
+            Err(SessionOperationError {
+                kind: SessionErrorKind::Unsupported,
+                message: "fixture hermes is unavailable".into(),
+                retained: None,
+            })
+        }
     }
 }

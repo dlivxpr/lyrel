@@ -2040,6 +2040,8 @@ l10n_keys! {
     PanelSessionsUnsupported,
     PanelSessionsUnsupportedHint,
     PanelSessionsPartial,
+    // The scoped scan's fast rows are up; its service sources are still out.
+    PanelSessionsPending,
     PanelNotAGitRepo,
     PanelNotAGitRepoHint,
     PanelNoChanges,

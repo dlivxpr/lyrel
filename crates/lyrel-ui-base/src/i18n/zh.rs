@@ -2375,6 +2375,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanelSessionsUnsupported => "该主机无法列出已保存的会话。",
         L10nKey::PanelSessionsUnsupportedHint => "该主机的 Lyrel server 版本早于会话历史支持。",
         L10nKey::PanelSessionsPartial => "部分会话来源无法列出。",
+        L10nKey::PanelSessionsPending => "仍在检查会话来源…",
         L10nKey::PanelNotAGitRepo => "不是 git 仓库。",
         L10nKey::PanelNotAGitRepoHint => "进入 git 仓库后，此标签页会列出未提交的变更。",
         L10nKey::PanelNoChanges => "没有未提交的变更。",

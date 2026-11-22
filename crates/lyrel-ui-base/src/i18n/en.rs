@@ -2637,6 +2637,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Its Lyrel server predates session history support."
         }
         L10nKey::PanelSessionsPartial => "Some session sources could not be listed.",
+        L10nKey::PanelSessionsPending => "Still checking session sources…",
         L10nKey::PanelNotAGitRepo => "Not a git repository.",
         L10nKey::PanelNotAGitRepoHint => "cd into one and this tab lists its uncommitted changes.",
         L10nKey::PanelNoChanges => "No uncommitted changes.",
