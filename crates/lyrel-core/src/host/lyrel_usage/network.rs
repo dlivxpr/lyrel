@@ -61,3 +61,55 @@ fn read_totals(output: &[u8], pid: u32) -> Option<(u64, u64)> {
     let observed_pid = row.next()?.trim_matches(['"', ' ']).rsplit_once('.')?.1;
     (lines.next().is_none() && observed_pid.parse::<u32>().ok()? == pid).then_some((received, sent))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+
+    #[test]
+    fn nettop_attributes_loopback_traffic_to_the_current_process() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut receiver, _) = listener.accept().unwrap();
+        let timeout = Some(Duration::from_secs(2));
+        sender.set_write_timeout(timeout).unwrap();
+        receiver.set_read_timeout(timeout).unwrap();
+
+        let payload = [0x5a; 8192];
+        let mut received = [0; 8192];
+        let mut exchange = || {
+            sender.write_all(&payload).unwrap();
+            receiver.read_exact(&mut received).unwrap();
+            assert_eq!(received, payload);
+        };
+
+        // Keep the same sockets open across both samples so their cumulative
+        // counters cannot disappear when the traffic has finished.
+        exchange();
+        let mut sampler = Sampler::default();
+        let pid = std::process::id();
+        assert_eq!(
+            sampler.sample(pid),
+            None,
+            "nettop must establish a baseline"
+        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            exchange();
+            let reading = sampler.sample(pid);
+            if reading.is_some_and(|result| {
+                result
+                    .is_ok_and(|rate| rate.rx_bytes_per_sec() > 0. && rate.tx_bytes_per_sec() > 0.)
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "nettop did not attribute the loopback transfer to PID {pid}: {reading:?}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
