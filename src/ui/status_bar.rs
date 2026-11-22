@@ -375,9 +375,6 @@ impl LyrelApp {
                 h_flex()
                     .flex_none()
                     .gap_1()
-                    .when(!document, |controls| {
-                        controls.child(self.render_host_metrics(cx))
-                    })
                     .child(self.render_caffeine(window, cx))
                     .child(self.status_clock.clone())
                     .child(self.notification_bell.clone()),
