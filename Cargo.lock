@@ -6537,6 +6537,8 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "serde_json",
+ "socket2",
+ "sysinfo 0.40.1",
  "tempfile",
  "windows-sys 0.61.2",
 ]

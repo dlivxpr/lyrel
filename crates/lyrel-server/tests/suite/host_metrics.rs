@@ -245,7 +245,7 @@ fn remote_metrics_keep_their_daemon_identity_across_hosts_disconnect_and_reconne
 }
 
 #[test]
-fn real_interface_traffic_appears_in_the_transmit_series() {
+fn real_interface_traffic_appears_in_the_transmit_series() -> io::Result<()> {
     let profile = tempfile::tempdir().unwrap();
     let (stdout, stdin, closer) = stdio_connection(profile.path());
     let client = ControlClient::connect_with(
@@ -284,11 +284,27 @@ fn real_interface_traffic_appears_in_the_transmit_series() {
         }
     };
 
-    // Multicast datagrams egress the real interface — never loopback — so a
-    // sustained burst must lift the daemon's transmit rate while it samples.
-    // No listener is needed; the NIC counts what leaves it. The client link
-    // itself rides stdio pipes and never touches an interface counter.
-    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+    // An OS-default multicast route may select a tunnel whose bytes sysinfo
+    // excludes. Pin senders to IPv4 interfaces present in the kernel counter
+    // snapshot. The test's control link is stdio and contributes no traffic.
+    let interfaces = sysinfo::Networks::new_with_refreshed_list().unwrap();
+    let senders = interfaces
+        .values()
+        .filter(|interface| interface.operational_state() == sysinfo::InterfaceOperationalState::Up)
+        .flat_map(|interface| interface.ip_networks())
+        .filter_map(|network| match network.addr {
+            std::net::IpAddr::V4(addr) if !addr.is_loopback() => Some(addr),
+            _ => None,
+        })
+        .map(|addr| {
+            let socket = std::net::UdpSocket::bind((addr, 0))?;
+            let socket = socket2::Socket::from(socket);
+            socket.set_multicast_if_v4(&addr)?;
+            socket.set_multicast_ttl_v4(1)?;
+            Ok::<_, io::Error>(std::net::UdpSocket::from(socket))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut senders = senders.iter().cycle();
     // Stay below macOS's UDP send limit and avoid IP fragmentation.
     let payload = [0x5A_u8; 1200];
     let mut peak_tx = idle_tx;
@@ -296,7 +312,10 @@ fn real_interface_traffic_appears_in_the_transmit_series() {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(4) {
         for _ in 0..64 {
-            sent += socket.send_to(&payload, ("239.255.0.1", 49_745)).unwrap() as u64;
+            let socket = senders
+                .next()
+                .expect("a counted IPv4 interface is required");
+            sent += socket.send_to(&payload, ("239.255.0.1", 49_745))? as u64;
         }
         if let Ok(metrics) = client.host_metrics()
             && let MetricsState::Sample(sample) = metrics.state()
@@ -315,6 +334,7 @@ fn real_interface_traffic_appears_in_the_transmit_series() {
         peak_tx >= idle_tx + 512_000.,
         "a ~{sent}-byte multicast burst must lift the transmit rate well above the idle {idle_tx} B/s (peak {peak_tx} B/s)"
     );
+    Ok(())
 }
 
 #[test]
