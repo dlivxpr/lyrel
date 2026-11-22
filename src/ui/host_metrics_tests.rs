@@ -614,6 +614,8 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
 
     for (width, charts, strip) in [
         (1440., true, true),
+        (790., false, true),
+        (760., false, true),
         (720., false, true),
         (500., false, false),
     ] {
@@ -639,6 +641,25 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
                     window.find("titlebar-metric-gpu-value").visible(),
                     "width {width}: the GPU reading survives the charts like the others"
                 );
+                // The strip begins after the left command group and ends
+                // before the right one: no chart or tile may sit over a
+                // command tile at the widths the old fixed threshold let
+                // through.
+                let metrics = window.find("titlebar-metrics").bounds();
+                let left_group_end = window.find("titlebar-add").bounds();
+                let right_command = window.find("titlebar-split-right").bounds();
+                assert!(
+                    metrics.left() >= left_group_end.right(),
+                    "width {width}: the metrics strip covers the left command group"
+                );
+                assert!(
+                    metrics.left() - left_group_end.right() >= px(40.),
+                    "width {width}: the drag band shrank below the chrome budget"
+                );
+                assert!(
+                    metrics.right() <= right_command.left(),
+                    "width {width}: the metrics strip covers the right command group"
+                );
             }
             // The chrome around the strip never yields: native-adjacent
             // controls and the drag area stay put at every width.
@@ -651,6 +672,34 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
             }
         });
     }
+
+    // The budget is in rems: a larger interface loses the compact strip
+    // earlier than the default rem would at the same pixel width.
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = 20.;
+        cx.notify();
+    });
+    vcx.simulate_resize(size(px(730.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(
+            window.try_find("titlebar-metrics").is_some(),
+            "a 730px window still has room for compact readings at a 20px rem"
+        );
+        assert!(
+            window.try_find("titlebar-metric-cpu-chart").is_none(),
+            "charts do not fit at this rem either"
+        );
+    });
+    vcx.simulate_resize(size(px(690.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(
+            window.try_find("titlebar-metrics").is_none(),
+            "a 690px window at a 20px rem has no room for the strip"
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -966,4 +1015,43 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
             );
         });
     }
+}
+
+/// The 760–790px band that used to paint the chart over the left command
+/// group now buys compact readings. Keep the drag band and native controls.
+#[test]
+fn the_titlebar_budget_drops_charts_then_the_whole_strip() {
+    assert_eq!(titlebar_metrics_layout(1440., 16., 3, false), Some(true));
+    for width in [760., 775., 790.] {
+        assert_eq!(
+            titlebar_metrics_layout(width, 16., 3, false),
+            Some(false),
+            "width {width}: charts must give way before the command group"
+        );
+    }
+    assert_eq!(titlebar_metrics_layout(720., 16., 3, false), Some(false));
+    assert_eq!(titlebar_metrics_layout(500., 16., 3, false), None);
+
+    assert_eq!(titlebar_metrics_layout(730., 20., 3, false), Some(false));
+    assert_eq!(titlebar_metrics_layout(690., 20., 3, false), None);
+    assert_eq!(titlebar_metrics_layout(600., 16., 1, false), Some(true));
+    assert_eq!(titlebar_metrics_layout(760., 16., 1, false), Some(true));
+    assert_eq!(titlebar_metrics_layout(760., 16., 0, false), None);
+}
+
+#[test]
+fn titlebar_ram_and_monitor_pair_carry_their_unit() {
+    let gib = 1_073_741_824_u64;
+    let state = State::Ready(
+        serde_json::from_value(serde_json::json!({
+            "cpu_percent": 12.0,
+            "memory_used_bytes": (13.1_f64 * gib as f64) as u64,
+            "memory_total_bytes": 32 * gib,
+            "sampled_at_millis": 1_700_000_000_000_u64,
+        }))
+        .unwrap(),
+    );
+    let reading = readout(&state, false);
+    assert_eq!(reading.memory_text(), "13.1 GB");
+    assert_eq!(reading.memory_pair_text(), "13.1 GB / 32 GB");
 }

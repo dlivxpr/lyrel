@@ -318,10 +318,13 @@ impl DiskReadout {
     fn value_text(&self) -> String {
         match self.size_bytes {
             Some(size) => {
-                // An unknown volume total shows "—" beside the size: the two
-                // states mean different things and read differently.
-                let total = self.total_bytes.map(gb).unwrap_or_else(|| "—".into());
-                let text = format!("{} / {} GB", gb(size), total);
+                // Each side carries its own unit; an unknown volume total is
+                // a bare "—", never the self-contradictory "— GB".
+                let total = self
+                    .total_bytes
+                    .map(|total| format!("{} GB", gb(total)))
+                    .unwrap_or_else(|| "—".into());
+                let text = format!("{} GB / {}", gb(size), total);
                 if self.partial {
                     format!("≥ {text}")
                 } else {

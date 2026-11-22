@@ -573,6 +573,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SearchSectionSessionsRecent => "Recent",
         L10nKey::AppSessionNotResumable => "{name} cannot resume a session by id.",
         L10nKey::AppSessionDirectoryGone => "The session's directory no longer exists: {path}",
+        L10nKey::AppSessionOpenUnconfirmed => {
+            "A pane already runs session {id}, but its store could not be confirmed from here. Resume it in that pane instead of starting a second writer."
+        }
         L10nKey::SearchSessionActions => "Choose what to do with this session…",
         L10nKey::SessionActionsHint => "actions",
         L10nKey::SessionActionResume => "Resume",

@@ -46,17 +46,37 @@ const HISTORY_SPAN_MILLIS: u64 = 3_600_000;
 /// long views aggregate samples per slot and keep the peak.
 const BUCKET_COUNT: usize = 60;
 
-/// Below this viewport width (scaled by the UI rem) the title bar keeps the
-/// readings but drops the charts; below [`TITLEBAR_METRICS_MIN_WIDTH`] it
-/// drops the strip entirely, so tabs, drag area and native controls survive.
-const TITLEBAR_CHART_MIN_WIDTH: f32 = 760.;
-const TITLEBAR_METRICS_MIN_WIDTH: f32 = 520.;
-
 /// Fixed strip widths handed to the chrome budget, matching the tiles built
 /// in [`titlebar_metric`]: label + chart + value, or label + value.
 const TITLEBAR_TILE_FULL_W: f32 = 132.;
 const TITLEBAR_TILE_COMPACT_W: f32 = 76.;
 const TITLEBAR_TILE_GAP: f32 = 12.;
+
+/// Which title-bar strip the available width buys, if any: `Some(true)`
+/// for full tiles with trends, `Some(false)` for compact readings, `None`
+/// when even those would crowd the command groups, drag band or native
+/// controls. The space those fixed pieces need is
+/// [`crate::ui::window_chrome::titlebar_chrome_reserve`], not a second
+/// guess at the same geometry, so the chart and the chrome cannot disagree.
+pub(crate) fn titlebar_metrics_layout(
+    viewport_width: f32,
+    rem_size: f32,
+    count: u8,
+    fullscreen: bool,
+) -> Option<bool> {
+    if count == 0 {
+        return None;
+    }
+    let available =
+        viewport_width - crate::ui::window_chrome::titlebar_chrome_reserve(rem_size, fullscreen);
+    let full = (TITLEBAR_TILE_FULL_W + TITLEBAR_TILE_GAP) * f32::from(count);
+    let compact = (TITLEBAR_TILE_COMPACT_W + TITLEBAR_TILE_GAP) * f32::from(count);
+    match available >= full {
+        true => Some(true),
+        false if available >= compact => Some(false),
+        false => None,
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum MetricsSource {
@@ -659,10 +679,20 @@ impl MetricReadout {
         }
     }
 
+    /// The title bar's RAM reading carries its unit beside CPU's and GPU's
+    /// percentages: `13.1 GB`.
     fn memory_text(&self) -> String {
         match self.memory_used_bytes {
-            Some(used) => gb(used),
+            Some(used) => format!("{} GB", gb(used)),
             None => self.marker_text().into(),
+        }
+    }
+
+    /// The monitor tile's used/total pair, e.g. `13.1 GB / 32 GB`.
+    fn memory_pair_text(&self) -> String {
+        match self.memory_total_bytes {
+            Some(total) => format!("{} / {} GB", self.memory_text(), gb(total)),
+            None => self.memory_text(),
         }
     }
 
@@ -963,10 +993,7 @@ fn monitor_tile(
     let theme = cx.theme();
     let value = match series {
         TrendSeries::Cpu => readout.cpu_text(),
-        TrendSeries::Memory => match readout.memory_total_bytes {
-            Some(total) => format!("{} / {} GB", readout.memory_text(), gb(total)),
-            None => readout.memory_text(),
-        },
+        TrendSeries::Memory => readout.memory_pair_text(),
         TrendSeries::Gpu => readout.gpu_text(),
     };
     v_flex()
@@ -1254,18 +1281,30 @@ impl LyrelApp {
             .map_or_else(|| self.spawn_host(cx), |leaf| leaf.read(cx).host_id())
     }
 
+    /// Which title-bar strip this frame can afford, if any: the same
+    /// predicate drives demand (sampling) and paint, so a hidden strip never
+    /// keeps sampling and a shown one never disagrees about charts.
+    fn titlebar_metrics_state(&self, window: &Window, cx: &Context<Self>) -> Option<bool> {
+        let toolbar = cx.global::<Config>().toolbar;
+        if !toolbar.cpu && !toolbar.ram && !toolbar.gpu {
+            return None;
+        }
+        if self.status_document_context(window, cx).is_some() {
+            return None;
+        }
+        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
+        titlebar_metrics_layout(
+            window.viewport_size().width.as_f32(),
+            window.rem_size().as_f32(),
+            count,
+            window.is_fullscreen(),
+        )
+    }
+
     /// Whether the title-bar strip shows at all this frame. The strip and
     /// the sync share this one predicate, so demand and paint never disagree.
     fn titlebar_metrics_visible(&self, window: &Window, cx: &Context<Self>) -> bool {
-        let toolbar = cx.global::<Config>().toolbar;
-        if !toolbar.cpu && !toolbar.ram && !toolbar.gpu {
-            return false;
-        }
-        if self.status_document_context(window, cx).is_some() {
-            return false;
-        }
-        let scale = window.rem_size().as_f32() / 16.;
-        window.viewport_size().width.as_f32() >= TITLEBAR_METRICS_MIN_WIDTH * scale
+        self.titlebar_metrics_state(window, cx).is_some()
     }
 
     /// Keep exactly one sampler alive for the host some consumer is showing,
@@ -1328,13 +1367,9 @@ impl LyrelApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<(AnyElement, f32)> {
-        if !self.titlebar_metrics_visible(window, cx) {
-            return None;
-        }
+        let chart = self.titlebar_metrics_state(window, cx)?;
         let toolbar = cx.global::<Config>().toolbar;
         let host = self.metric_host(window, cx);
-        let scale = window.rem_size().as_f32() / 16.;
-        let chart = window.viewport_size().width.as_f32() >= TITLEBAR_CHART_MIN_WIDTH * scale;
         let (readout, mut buckets) = self.metric_presentation(host, MetricsRange::TwoMinutes, cx);
         let theme = cx.theme();
         let cpu_color = theme.accent;

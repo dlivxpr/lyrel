@@ -211,10 +211,13 @@ fn monitor_lyrel_row_collapses_summarizes_and_expands_by_host(cx: &mut TestAppCo
                 .ends_with('%')
         );
         assert!(window.find("lyrel-usage-daemon-mem").label().is_some());
-        for device in ["desktop", "daemon"] {
-            let gpu = window.find(format!("lyrel-usage-{device}-gpu").as_str());
+        for (gpu_id, network_id) in [
+            ("lyrel-usage-desktop-gpu", "lyrel-usage-desktop-network"),
+            ("lyrel-usage-daemon-gpu", "lyrel-usage-daemon-network"),
+        ] {
+            let gpu = window.find(gpu_id);
             assert!(gpu.label().unwrap().starts_with("GPU"));
-            let network = window.find(format!("lyrel-usage-{device}-network").as_str());
+            let network = window.find(network_id);
             let label = network.label().unwrap();
             #[cfg(not(target_os = "macos"))]
             assert_eq!(

@@ -514,6 +514,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SearchSectionSessionsRecent => "最近",
         L10nKey::AppSessionNotResumable => "{name} 不支持按 ID 恢复会话。",
         L10nKey::AppSessionDirectoryGone => "会话所在的目录已不存在：{path}",
+        L10nKey::AppSessionOpenUnconfirmed => {
+            "已有窗格在运行会话 {id}，但无法从这里确认其存储。请直接在该窗格中恢复，以免启动第二个写入者。"
+        }
         L10nKey::SearchSessionActions => "选择要对这个会话执行的操作…",
         L10nKey::SessionActionsHint => "操作",
         L10nKey::SessionActionResume => "恢复",

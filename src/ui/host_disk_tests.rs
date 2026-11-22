@@ -108,6 +108,33 @@ fn scanned_at(app: &gpui_kit::Entity<LyrelApp>, vcx: &mut VisualTestContext) -> 
     })
 }
 
+/// The approved reading is `4.6 GB / 512 GB`; without a volume total the
+/// unknown side is a bare `—`, never `— GB`. Partial scans keep the `≥`.
+#[test]
+fn disk_value_puts_a_unit_on_each_side_and_never_on_a_missing_total() {
+    let readout = |size: u64, total: Option<u64>, partial: bool| DiskReadout {
+        size_bytes: Some(size),
+        total_bytes: total,
+        partial,
+        directory: None,
+        marker: None,
+        status: None,
+        detail: String::new(),
+    };
+    let gib = 1_073_741_824_u64;
+    let size = (4.6_f64 * gib as f64) as u64;
+    let total = 512 * gib;
+    assert_eq!(
+        readout(size, Some(total), false).value_text(),
+        "4.6 GB / 512 GB"
+    );
+    assert_eq!(readout(size, None, false).value_text(), "4.6 GB / —");
+    assert_eq!(
+        readout(size, Some(total), true).value_text(),
+        "≥ 4.6 GB / 512 GB"
+    );
+}
+
 #[gpui_kit::test]
 fn disk_tile_shows_the_completed_scan_of_the_context_directory(cx: &mut TestAppContext) {
     let server = HostServer::new();
@@ -138,8 +165,8 @@ fn disk_tile_shows_the_completed_scan_of_the_context_directory(cx: &mut TestAppC
     );
     let value = disk_value(&mut vcx).unwrap();
     assert!(
-        value.contains(" / "),
-        "the value pairs the directory size with the volume total: {value}"
+        value.starts_with("0.6 GB / ") && value.ends_with(" GB"),
+        "each side carries its own unit: directory size then volume total: {value}"
     );
     let shown = disk_dir(&mut vcx).unwrap_or_default();
     let leaf = temp.path().file_name().unwrap().to_string_lossy();

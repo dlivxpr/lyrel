@@ -417,12 +417,19 @@ impl LyrelApp {
         let mono = cx.theme().mono_font_family.clone();
         let muted = cx.theme().muted_foreground;
 
-        // The host label names the machine the snapshot comes from — the
-        // pane's owning host when there is one, this machine otherwise.
-        let (host_label, host_remote) = match &self.right_panel.procs_host {
-            Some(_) => {
-                let label = self
-                    .context_pane(window, cx)
+        // The host label names the pane's own machine, from the pane's
+        // stable route — not from whether a live shared host object is
+        // around. A managed remote pane whose link dropped still owns a
+        // remote workspace, and its label must not switch to this client
+        // while the tiles beside it say Disconnected.
+        let pane = self.context_pane(window, cx);
+        let pane_is_remote = pane
+            .as_ref()
+            .is_some_and(|leaf| !leaf.read(cx).host_id().is_local());
+        let (host_label, host_remote) = match pane_is_remote {
+            true => {
+                let label = pane
+                    .as_ref()
                     .and_then(|leaf| {
                         let view = leaf.read(cx);
                         view.workspace().map(|w| {
@@ -435,7 +442,7 @@ impl LyrelApp {
                     .unwrap_or_else(|| t(L10nKey::MonitorScopeCurrentPane).to_string());
                 (label, true)
             }
-            None => (crate::ui::remote_connect::client_hostname(), false),
+            false => (crate::ui::remote_connect::client_hostname(), false),
         };
 
         let host_line = h_flex()

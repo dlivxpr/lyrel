@@ -252,6 +252,58 @@ pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
     !cfg!(target_os = "macos") && !fullscreen
 }
 
+/// The draggable band the title bar keeps when every command group and the
+/// metrics strip are present. Narrow windows drop the strip, never this.
+const TITLEBAR_DRAG_MIN_WIDTH: f32 = 40.;
+
+/// One command group's width: three `size_8` tiles plus its pad and gaps.
+/// Every part is rem-based, so the group follows `ui_font_size`; the
+/// metrics tiles do not.
+fn titlebar_group_width(rem_size: f32) -> f32 {
+    (TILE_SIZE * 3. + 8.) * (rem_size / 16.)
+}
+
+fn titlebar_trailing_inset(fullscreen: bool) -> f32 {
+    if cfg!(target_os = "macos") && fullscreen {
+        0.75
+    } else {
+        0.25
+    }
+}
+
+/// Width the title bar keeps for its leading inset, window mark, both
+/// command groups, native window controls and the drag band before the
+/// metrics strip gets a pixel. `host_metrics` reads this one number to
+/// choose the strip's full, compact and hidden states; `render` lays those
+/// same pieces out, so a chart cannot be chosen over a command group.
+pub(crate) fn titlebar_chrome_reserve(rem_size: f32, fullscreen: bool) -> f32 {
+    let scale = rem_size / 16.;
+    let macos_fullscreen = cfg!(target_os = "macos") && fullscreen;
+    let lead = if macos_fullscreen {
+        // A fullscreen macOS window has no traffic lights; the row uses
+        // `pl_3` instead of their reserved lead.
+        12. * scale
+    } else {
+        TITLE_BAR_LEAD
+    };
+    let native = if window_controls_drawn(fullscreen) {
+        gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
+    } else {
+        0.
+    };
+    let group = titlebar_group_width(rem_size);
+    TITLEBAR_DRAG_MIN_WIDTH
+        + lead
+        + WINDOW_MARK_SIZE * scale
+        // Left row: `gap_2` before the group and `pr_1` after it.
+        + 12. * scale
+        + group
+        // Right strip: the group and its trailing inset.
+        + group
+        + rem_size * titlebar_trailing_inset(fullscreen)
+        + native
+}
+
 pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
     chrome_tile_variant_for(false, cx)
 }
@@ -463,7 +515,7 @@ impl WindowChrome {
             .child(window_mark())
             .child(self.left);
         let left = title_bar_drag(left_row, "workbench-left-drag", window, cx).into_any_element();
-        let trailing_inset = if macos_fullscreen { 0.75 } else { 0.25 };
+        let trailing_inset = titlebar_trailing_inset(macos_fullscreen);
         let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);
         let strip = h_flex()
             .w_full()
@@ -482,8 +534,14 @@ impl WindowChrome {
             0.
         };
         // 三按钮组、指标条与外边距共用宽度预算；原生控件不随界面缩放。
-        let right_width =
-            window.rem_size().as_f32() * (6.5 + trailing_inset) + native_width + metrics_width;
+        // The group's tiles and spacing follow the rem; keeping the same
+        // arithmetic here and in `titlebar_chrome_reserve` is what stops a
+        // wide metrics strip from being chosen over the group.
+        let rem_size = window.rem_size().as_f32();
+        let right_width = titlebar_group_width(rem_size)
+            + rem_size * trailing_inset
+            + native_width
+            + metrics_width;
         let right = if !macos_fullscreen && (controls_drawn || cfg!(target_os = "macos")) {
             TitleBar::new()
                 .h(rems(3.))

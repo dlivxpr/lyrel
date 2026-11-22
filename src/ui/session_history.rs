@@ -28,7 +28,7 @@ use gpui_kit::{
 
 use lyrel_core::core::agent_history::PastSession;
 use lyrel_core::host::session_operations::{
-    SessionErrorKind, SessionOperation, SessionOperationError, SessionOperationKind,
+    SessionErrorKind, SessionOperation, SessionOperationError, SessionOperationKind, SessionScope,
 };
 use lyrel_terminal::view::TerminalView;
 use lyrel_ui_base::config::Config;
@@ -89,6 +89,101 @@ pub(crate) enum SessionHealth {
     Partial,
     /// Every source answered.
     Ready,
+}
+
+/// How a live pane's readout relates to the store a saved history row
+/// names.
+///
+/// The durable selectors that spell a stored session's identity decide:
+/// profile, store-root environment and OpenCode's saved connection, compared
+/// only where both sides state them. An exact native file confirms the
+/// identity when both sides name one. `Unconfirmed` is the third answer the
+/// old exact-file check collapsed into "different": a same-ID pane whose
+/// store cannot be checked against the row's may be the same writer, so
+/// resuming there could start a second one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpenSessionMatch {
+    /// Both sides identify the same native file or store.
+    Same,
+    /// Both sides name stores or native files that are known to differ.
+    Distinct,
+    /// The evidence one side states is missing from the other. Neither a
+    /// match nor a known-different session.
+    Unconfirmed,
+}
+
+/// Whether the store a saved row names (`saved`) and a running pane's
+/// readout (`live`) describe the same stored session. `host_separator` is
+/// the owning host's, so Windows path spellings compare under the remote
+/// host's own rules rather than this client's.
+///
+/// Missing evidence is never "different": only two stated and conflicting
+/// selectors, or two stated and different native files, prove the records
+/// apart. A row and a pane that both name no durable store name the same
+/// default store.
+pub(crate) fn match_open_session_scope(
+    saved: Option<&SessionScope>,
+    live: Option<&SessionScope>,
+    host_separator: char,
+) -> OpenSessionMatch {
+    match (saved, live) {
+        (None, None) => OpenSessionMatch::Same,
+        (None, Some(_)) | (Some(_), None) => OpenSessionMatch::Unconfirmed,
+        (Some(saved), Some(live)) => {
+            // Two exact files decide by their own identity, before the store
+            // selectors: the same file is the same record, and two files
+            // that differ under the owning host's spelling rules are
+            // different records even when they share a store.
+            if let (Some(saved_file), Some(live_file)) = (&saved.session_file, &live.session_file) {
+                return match lyrel_core::core::agent_history::directory_matches_with(
+                    saved_file,
+                    live_file,
+                    host_separator,
+                ) {
+                    true => OpenSessionMatch::Same,
+                    false => OpenSessionMatch::Distinct,
+                };
+            }
+            let (saved_profile, saved_roots, saved_connection) = store_selectors(saved);
+            let (live_profile, live_roots, live_connection) = store_selectors(live);
+            if saved_profile.is_some() != live_profile.is_some()
+                || saved.session_dir.is_some() != live.session_dir.is_some()
+                || saved_connection.is_empty() != live_connection.is_empty()
+                || !saved_roots
+                    .iter()
+                    .map(|(key, _)| key)
+                    .eq(live_roots.iter().map(|(key, _)| key))
+            {
+                return OpenSessionMatch::Unconfirmed;
+            }
+            let same_path = |a: &Path, b: &Path| {
+                lyrel_core::core::agent_history::directory_matches_with(a, b, host_separator)
+            };
+            if saved_profile != live_profile
+                || saved_connection != live_connection
+                || saved
+                    .session_dir
+                    .as_deref()
+                    .zip(live.session_dir.as_deref())
+                    .is_some_and(|(a, b)| !same_path(a, b))
+                || saved_roots
+                    .iter()
+                    .zip(&live_roots)
+                    .any(|((_, a), (_, b))| !same_path(Path::new(a), Path::new(b)))
+            {
+                return OpenSessionMatch::Distinct;
+            }
+            if saved_profile.is_none()
+                && saved.session_dir.is_none()
+                && saved_roots.is_empty()
+                && saved_connection.is_empty()
+                && (saved.session_file.is_some() || live.session_file.is_some())
+            {
+                return OpenSessionMatch::Unconfirmed;
+            }
+            OpenSessionMatch::Same
+        }
+    }
 }
 
 impl SessionListing {
@@ -934,6 +1029,17 @@ pub(crate) struct PinOrigin {
     repo: Option<PathBuf>,
 }
 
+/// The list of checkouts one selector menu can offer: bound to the
+/// directory it was listed for and the host connection that answered, so a
+/// list loaded before a directory, host or reconnect change is never shown
+/// or used to pin under the new scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorktreeScope {
+    dir: PathBuf,
+    host: HostId,
+    connection: usize,
+}
+
 /// The Session History tool's view state.
 #[derive(Default)]
 pub(crate) struct SessionHistoryPanel {
@@ -955,8 +1061,16 @@ pub(crate) struct SessionHistoryPanel {
     /// Worktree choices for the selector, loaded for the directory whose
     /// repository they belong to.
     worktrees: Vec<lyrel_core::core::worktree::Listed>,
-    worktrees_for: Option<PathBuf>,
-    loading_worktrees: bool,
+    /// The scope the loaded choices belong to; `None` once it moved (or
+    /// after a failure) so old choices cannot be shown or pinned.
+    worktrees_for: Option<WorktreeScope>,
+    /// The in-flight worktree request, if any. Only this exact scope's late
+    /// answer may land.
+    loading_worktrees: Option<WorktreeScope>,
+    /// A scope whose worktree listing failed. Render never retries it, so a
+    /// dead repository is not rescanned every frame; opening the selector
+    /// retries it once, and a new directory/host/connection own a new scope.
+    failed_worktrees: Option<WorktreeScope>,
     /// The keyboard's row, when the list holds it.
     selected: Option<usize>,
     /// The row whose action menu is open (keyboard or pointer).
@@ -965,6 +1079,50 @@ pub(crate) struct SessionHistoryPanel {
 }
 
 impl SessionHistoryPanel {
+    /// The scope a selector load for `dir` belongs to: the directory, the
+    /// listing's owning host, and the connection object that answered.
+    fn worktree_scope(&self, dir: &Path) -> WorktreeScope {
+        WorktreeScope {
+            dir: dir.to_path_buf(),
+            host: self.bound.host,
+            connection: self.bound.connection,
+        }
+    }
+
+    /// The loaded worktree choices, but only while they belong to the
+    /// current scope. A list from the previous directory, host or
+    /// connection is not a menu of the repository on screen.
+    fn current_worktrees(&self) -> Option<&[lyrel_core::core::worktree::Listed]> {
+        let dir = self.bound.dir.as_deref()?;
+        (self.worktrees_for.as_ref() == Some(&self.worktree_scope(dir)))
+            .then_some(self.worktrees.as_slice())
+    }
+
+    /// One menu choice, but only when it belongs to the current scope: a
+    /// click on a menu the directory moved out from under cannot pin a
+    /// checkout the new listing never offered.
+    fn current_worktree(&self, path: &Path) -> Option<&lyrel_core::core::worktree::Listed> {
+        self.current_worktrees()?
+            .iter()
+            .find(|worktree| worktree.path == path)
+    }
+
+    /// Whether a render may start a worktree listing for `scope`. A failed
+    /// request is not retried here: a dead repository would be rescanned
+    /// every frame. The selector's next open owns that retry.
+    fn worktree_load_needed(&self, scope: &WorktreeScope) -> bool {
+        self.loading_worktrees.as_ref() != Some(scope)
+            && self.worktrees_for.as_ref() != Some(scope)
+            && self.failed_worktrees.as_ref() != Some(scope)
+    }
+
+    /// Whether opening the selector may ask again for `scope`: a load or
+    /// current choices make it a no-op; a failure or a moved scope retries
+    /// once.
+    fn worktree_retry_needed(&self, scope: &WorktreeScope) -> bool {
+        self.loading_worktrees.as_ref() != Some(scope) && self.worktrees_for.as_ref() != Some(scope)
+    }
+
     /// The directory the listing should match right now: the pinned
     /// worktree, or the context pane's live directory.
     fn wanted_dir(&self, pane_dir: Option<PathBuf>) -> Option<PathBuf> {
@@ -988,6 +1146,39 @@ const SCOPE_ROW_H: f32 = 30.;
 const ROW_H: f32 = 28.;
 /// The agent disc, the same size Search Everywhere's session rows use.
 const ROW_AVATAR: f32 = 18.;
+
+/// What the sources that failed actually said: their own diagnostics and
+/// limits, not a generic "some sources failed" line. The heading is the
+/// localized summary every surface uses; each message is the provider's
+/// own (a cap, an unconfirmed store, a connection refusal) so an Empty or
+/// Unsupported verdict says why it is not the whole truth.
+fn session_source_diagnostics(errors: &[SessionOperationError], cx: &App) -> AnyElement {
+    let detail = errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    v_flex()
+        .id("panel-sessions-diagnostics")
+        .test_support()
+        .flex_none()
+        .gap(px(2.))
+        .px(px(TEXT_INSET))
+        .py(px(4.))
+        .text_size(rems(META))
+        .text_color(cx.theme().muted_foreground)
+        .aria_label(gpui_kit::SharedString::from(detail))
+        .child(div().child(t(L10nKey::PanelSessionsPartial)))
+        .children(errors.iter().enumerate().map(|(index, error)| {
+            div()
+                .id(("panel-sessions-diagnostic", index))
+                .test_support()
+                .min_w_0()
+                .aria_label(gpui_kit::SharedString::from(error.message.clone()))
+                .child(error.message.clone())
+        }))
+        .into_any_element()
+}
 
 impl LyrelApp {
     /// Keep the Session History listing bound to its scope: the context
@@ -1345,34 +1536,38 @@ impl LyrelApp {
                     .child(self.panel_empty(t(L10nKey::PanelLoading), None, cx))
                     .into_any_element()
             }
-            SessionHealth::Unsupported => v_flex()
-                .child(selector)
-                .child(self.panel_empty(
+            SessionHealth::Unsupported => {
+                let mut body = v_flex().child(selector).child(self.panel_empty(
                     t(L10nKey::PanelSessionsUnsupported),
                     Some(t(L10nKey::PanelSessionsUnsupportedHint)),
                     cx,
-                ))
-                .into_any_element(),
+                ));
+                // "Cannot list" is a verdict about every source; say what
+                // each one actually answered instead of only the version
+                // hint.
+                if !self.session_history.listing.errors.is_empty() {
+                    body = body.child(session_source_diagnostics(
+                        &self.session_history.listing.errors,
+                        cx,
+                    ));
+                }
+                body.into_any_element()
+            }
             SessionHealth::Empty => {
                 // A directory some source listed successfully (its
                 // membership is known) with other sources failing beside
-                // still says which ones could not be listed.
+                // still says which ones could not be listed, with their own
+                // errors and limits.
                 let mut body = v_flex().child(selector).child(self.panel_empty(
                     t(L10nKey::PanelSessionsEmpty),
                     Some(t(L10nKey::PanelSessionsEmptyHint)),
                     cx,
                 ));
                 if !self.session_history.listing.errors.is_empty() {
-                    body = body.child(
-                        div()
-                            .id("panel-sessions-partial")
-                            .test_support()
-                            .px(px(TEXT_INSET))
-                            .py(px(4.))
-                            .text_size(rems(META))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(L10nKey::PanelSessionsPartial)),
-                    );
+                    body = body.child(session_source_diagnostics(
+                        &self.session_history.listing.errors,
+                        cx,
+                    ));
                 }
                 body.into_any_element()
             }
@@ -1428,16 +1623,10 @@ impl LyrelApp {
                             .child(t(L10nKey::PanelSessionsPending)),
                     );
                 } else if health == SessionHealth::Partial {
-                    body = body.child(
-                        div()
-                            .id("panel-sessions-partial")
-                            .test_support()
-                            .px(px(TEXT_INSET))
-                            .py(px(4.))
-                            .text_size(rems(META))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(L10nKey::PanelSessionsPartial)),
-                    );
+                    body = body.child(session_source_diagnostics(
+                        &self.session_history.listing.errors,
+                        cx,
+                    ));
                 }
                 body.into_any_element()
             }
@@ -1475,7 +1664,8 @@ impl LyrelApp {
                 .into();
         let worktrees: Vec<(PathBuf, gpui_kit::SharedString)> = self
             .session_history
-            .worktrees
+            .current_worktrees()
+            .unwrap_or_default()
             .iter()
             .map(|wt| {
                 (
@@ -1487,6 +1677,10 @@ impl LyrelApp {
         let menu_follow = t(L10nKey::PanelSessionsFollowCwd);
         let menu_section = t(L10nKey::PanelSessionsWorktrees);
         let app = cx.entity().downgrade();
+        // Opening the menu is the one retry a failed or superseded listing
+        // gets: a render pass never rescans a dead repository, and a
+        // reconnect or directory change already owns a different scope.
+        let retry_app = app.clone();
         h_flex()
             .id("panel-sessions-scope")
             .test_support()
@@ -1566,7 +1760,14 @@ impl LyrelApp {
                                 }
                                 menu
                             },
-                        ),
+                        )
+                        .on_open_change(move |open, _window, cx| {
+                            if *open {
+                                let _ = retry_app.update_in(cx, |this, window, cx| {
+                                    this.retry_session_worktrees(window, cx);
+                                });
+                            }
+                        }),
                 ),
             )
             .into_any_element()
@@ -1687,23 +1888,27 @@ impl LyrelApp {
     /// origin until the user re-picks instead of following the workspace's
     /// current host after a relink.
     fn pick_session_directory(&mut self, follow: SessionDirectory, cx: &mut Context<Self>) {
+        // A menu click is a choice of the repository the list described. If
+        // the listing moved (or the list failed) before the click landed,
+        // that choice is stale: ignore it rather than pin under a host,
+        // connection or repository it never belonged to.
+        if let SessionDirectory::Worktree(path) = &follow
+            && self.session_history.current_worktree(path).is_none()
+        {
+            return;
+        }
         self.session_history.pin_origin = match &follow {
             SessionDirectory::Worktree(_) => Some(PinOrigin {
                 host: self.session_history.bound.host,
                 connection: self.session_history.bound.connection,
-                // The worktrees list belongs to the directory it was loaded
-                // for; a stale list (another directory claimed the slot
-                // meanwhile) says nothing about this pin's repository.
-                repo: (self.session_history.worktrees_for.as_deref()
-                    == self.session_history.bound.dir.as_deref())
-                .then(|| {
-                    self.session_history
-                        .worktrees
-                        .iter()
-                        .find(|worktree| worktree.main)
-                        .map(|worktree| worktree.path.clone())
-                })
-                .flatten(),
+                // Only choices loaded for this exact directory, host and
+                // connection described the repository the pin came from; a
+                // stale list says nothing about it.
+                repo: self
+                    .session_history
+                    .current_worktrees()
+                    .and_then(|worktrees| worktrees.iter().find(|worktree| worktree.main))
+                    .map(|worktree| worktree.path.clone()),
             }),
             SessionDirectory::FollowCwd => None,
         };
@@ -1887,34 +2092,87 @@ impl LyrelApp {
     /// Load the other checkouts of the repository `dir` is in, for the
     /// selector's menu. A directory that is not in a repository offers no
     /// worktrees — the menu shows only "Follow Current Directory".
+    ///
+    /// A directory, host or connection that already owns loaded choices, an
+    /// in-flight request, or a failed request starts nothing: the render
+    /// path cannot rescan a dead repository every frame. A new scope starts
+    /// its own request; a failed one is retried by the next menu open.
     fn load_session_worktrees(&mut self, window: &Window, dir: &Path, cx: &mut Context<Self>) {
-        if self.session_history.loading_worktrees
-            || self.session_history.worktrees_for.as_deref() == Some(dir)
-        {
+        let scope = self.session_history.worktree_scope(dir);
+        if !self.session_history.worktree_load_needed(&scope) {
             return;
         }
-        let Some(host) =
-            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.session_history.bound.host)
-        else {
+        self.start_worktree_load(window, scope, cx);
+    }
+
+    /// Open the selector's one retry: a failure for exactly this scope is
+    /// cleared, and a directory/host/connection whose list moved on is
+    /// loaded again. A live request or current choices make it a no-op, so
+    /// repeated opens never stack requests.
+    fn retry_session_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(dir) = self.session_history.bound.dir.clone() else {
             return;
         };
-        self.session_history.loading_worktrees = true;
-        self.session_history.worktrees_for = Some(dir.to_path_buf());
-        let dir = dir.to_path_buf();
-        let claimed = dir.clone();
+        let scope = self.session_history.worktree_scope(&dir);
+        if !self.session_history.worktree_retry_needed(&scope) {
+            return;
+        }
+        if self.session_history.failed_worktrees.as_ref() == Some(&scope) {
+            self.session_history.failed_worktrees = None;
+        }
+        self.start_worktree_load(window, scope, cx);
+    }
+
+    fn start_worktree_load(
+        &mut self,
+        window: &Window,
+        scope: WorktreeScope,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, scope.host) else {
+            // No connection: there is nothing to ask, and choices from the
+            // previous connection must not stand in for this one. A later
+            // menu open retries.
+            self.session_history.worktrees.clear();
+            self.session_history.worktrees_for = None;
+            self.session_history.failed_worktrees = Some(scope);
+            return;
+        };
+        self.session_history.loading_worktrees = Some(scope.clone());
+        // Choices from another scope must not sit in the menu while this
+        // one loads.
+        self.session_history.worktrees.clear();
+        self.session_history.worktrees_for = None;
+        let dir = scope.dir.clone();
+        let claimed = scope;
         HostOps::run_in(
             host,
             window,
             cx,
             move |host| lyrel_core::core::worktree::list(host, &dir),
             move |app, listed, _window, cx| {
-                app.session_history.loading_worktrees = false;
-                // A newer directory may have claimed the slot meanwhile; the
-                // worktrees belong to the repository the claim names.
-                if app.session_history.worktrees_for.as_deref() == Some(&claimed) {
-                    app.session_history.worktrees = listed.unwrap_or_default();
-                    cx.notify();
+                // Only the request still in flight may land: a newer
+                // directory/host/connection owns the slot now, and its
+                // answer must not be overwritten by this one.
+                if app.session_history.loading_worktrees.as_ref() != Some(&claimed) {
+                    return;
                 }
+                app.session_history.loading_worktrees = None;
+                match listed {
+                    Ok(worktrees) => {
+                        app.session_history.worktrees = worktrees;
+                        app.session_history.worktrees_for = Some(claimed);
+                        app.session_history.failed_worktrees = None;
+                    }
+                    Err(_) => {
+                        // Not an empty repository: a failed list must not
+                        // read as "this checkout is the only one".
+                        app.session_history.worktrees.clear();
+                        app.session_history.worktrees_for = None;
+                        app.session_history.failed_worktrees = Some(claimed);
+                    }
+                }
+                cx.notify();
             },
         );
     }
@@ -2014,6 +2272,113 @@ mod tests {
             SessionListing::default().health(0),
             SessionHealth::Empty,
             "no scan and no errors is a genuine empty, not an error"
+        );
+    }
+
+    /// Resume's focus decision uses the same durable-store identity as the
+    /// rest of the workbench. A repeated exact file confirms the record; a
+    /// shared selector confirms an equivalent store; conflicting selectors
+    /// or files are known-different; and missing evidence is neither a
+    /// match nor "different", because resuming could start a second writer.
+    #[test]
+    fn open_session_match_uses_durable_selectors_and_rejects_missing_evidence() {
+        use lyrel_core::host::session_operations::SessionScope;
+
+        let store = |key: &str, value: &str, file: Option<&str>| {
+            let mut scope = SessionScope::default();
+            if !key.is_empty() {
+                scope.environment.insert(key.into(), value.into());
+            }
+            scope.session_file = file.map(PathBuf::from);
+            scope
+        };
+        let default_scope = SessionScope::default();
+
+        assert_eq!(
+            match_open_session_scope(None, None, '/'),
+            OpenSessionMatch::Same,
+            "two rows/pane without a reported store name the default store"
+        );
+        assert_eq!(
+            match_open_session_scope(Some(&default_scope), Some(&default_scope), '/'),
+            OpenSessionMatch::Same
+        );
+
+        // The saved row repeats the exact file; the live readout names only
+        // the file (its store environment need not repeat). Positive file
+        // identity wins over the row's extra durable selectors.
+        let saved_file = store("PI_CODING_AGENT_DIR", "/store", Some("/store/a.jsonl"));
+        let live_file = store("", "", Some("/store/a.jsonl"));
+        assert_eq!(
+            match_open_session_scope(Some(&saved_file), Some(&live_file), '/'),
+            OpenSessionMatch::Same
+        );
+
+        // Both sides state a file and they differ: two native records.
+        let other_file = store("", "", Some("/store/b.jsonl"));
+        assert_eq!(
+            match_open_session_scope(Some(&saved_file), Some(&other_file), '/'),
+            OpenSessionMatch::Distinct
+        );
+
+        // Matching durable selectors identify the same store.
+        let saved_store = store("PI_CODING_AGENT_DIR", "/store", None);
+        let live_store = store("PI_CODING_AGENT_DIR", "/store", None);
+        assert_eq!(
+            match_open_session_scope(Some(&saved_store), Some(&live_store), '/'),
+            OpenSessionMatch::Same
+        );
+
+        // Conflicting selectors are known-different stores.
+        let other_store = store("PI_CODING_AGENT_DIR", "/other", None);
+        assert_eq!(
+            match_open_session_scope(Some(&saved_store), Some(&other_store), '/'),
+            OpenSessionMatch::Distinct
+        );
+
+        // Missing evidence is unconfirmed, not "different".
+        assert_eq!(
+            match_open_session_scope(Some(&saved_store), Some(&default_scope), '/'),
+            OpenSessionMatch::Unconfirmed,
+            "a live readout with no store cannot prove it is a second writer"
+        );
+        assert_eq!(
+            match_open_session_scope(None, Some(&live_store), '/'),
+            OpenSessionMatch::Unconfirmed,
+            "a row with no store cannot prove the pane is another record"
+        );
+        assert_eq!(
+            match_open_session_scope(Some(&saved_store), None, '/'),
+            OpenSessionMatch::Unconfirmed
+        );
+
+        let mut saved_profile = saved_store.clone();
+        saved_profile.profile = Some("default".into());
+        let mut live_profile = default_scope.clone();
+        live_profile.profile.clone_from(&saved_profile.profile);
+        assert_eq!(
+            match_open_session_scope(Some(&saved_profile), Some(&live_profile), '/'),
+            OpenSessionMatch::Unconfirmed,
+            "matching profile names do not identify a one-sided store override"
+        );
+        live_profile.session_dir = Some(PathBuf::from("/another-store"));
+        assert_eq!(
+            match_open_session_scope(Some(&default_scope), Some(&live_profile), '/'),
+            OpenSessionMatch::Unconfirmed
+        );
+
+        // The owning host's spelling rules decide a file comparison: a
+        // Windows host folds case and both separators; a Linux host does
+        // not.
+        let windows_saved = store("", "", Some("C:\\Store\\A.jsonl"));
+        let windows_live = store("", "", Some("c:/store/a.jsonl"));
+        assert_eq!(
+            match_open_session_scope(Some(&windows_saved), Some(&windows_live), '\\'),
+            OpenSessionMatch::Same
+        );
+        assert_eq!(
+            match_open_session_scope(Some(&windows_saved), Some(&windows_live), '/'),
+            OpenSessionMatch::Distinct
         );
     }
 
@@ -2512,6 +2877,103 @@ mod tests {
         assert_eq!(listing.health(0), SessionHealth::Disconnected);
     }
 
+    /// Worktree choices are a menu of one directory on one connection, not
+    /// a repository-wide cache: a directory change, host change or reconnect
+    /// hides the old list (so it is neither shown nor used to pin), while
+    /// the same scope keeps its loaded answer.
+    #[test]
+    fn worktree_choices_are_bound_to_directory_host_and_connection() {
+        let mut panel = SessionHistoryPanel::default();
+        panel.bound = SessionBound {
+            host: HostId::LOCAL,
+            connection: 7,
+            repo: None,
+            dir: Some(PathBuf::from("/repo/main")),
+        };
+        let scope = panel.worktree_scope(Path::new("/repo/main"));
+        panel.worktrees_for = Some(scope.clone());
+        panel.worktrees = vec![lyrel_core::core::worktree::Listed {
+            path: PathBuf::from("/repo/main"),
+            branch: Some("main".into()),
+            main: true,
+            managed: false,
+        }];
+        assert_eq!(
+            panel.current_worktrees().map(|worktrees| worktrees.len()),
+            Some(1)
+        );
+        assert!(
+            panel.current_worktree(Path::new("/repo/main")).is_some(),
+            "the menu's own choice is pinnable"
+        );
+        assert!(
+            panel.current_worktree(Path::new("/repo/other")).is_none(),
+            "a path the loaded menu never offered is not pinnable"
+        );
+
+        // The listing moved to another checkout: its old choices are not a
+        // menu of the new directory.
+        panel.bound.dir = Some(PathBuf::from("/repo/other"));
+        assert!(
+            panel.current_worktrees().is_none(),
+            "a directory change hides the old repository's worktrees"
+        );
+        assert!(
+            panel.current_worktree(Path::new("/repo/main")).is_none(),
+            "a click on the out-of-scope menu cannot pin it"
+        );
+        panel.bound.dir = Some(PathBuf::from("/repo/main"));
+        assert!(panel.current_worktrees().is_some());
+
+        // The same path on another host is another repository.
+        panel.bound.host = HostId::from_connection_key("ssh-direct:me@box:22");
+        assert!(
+            panel.current_worktrees().is_none(),
+            "another host's same path is not this menu"
+        );
+        panel.bound.host = HostId::LOCAL;
+
+        // A reconnect replaces the connection object under an identical
+        // host id and directory: the old answer belongs to the old link.
+        panel.bound.connection = 8;
+        assert!(
+            panel.current_worktrees().is_none(),
+            "a reconnect must not keep the dropped connection's choices"
+        );
+        panel.bound.connection = 7;
+        assert!(panel.current_worktrees().is_some());
+        assert_eq!(
+            panel.worktree_scope(Path::new("/repo/main")),
+            scope,
+            "the loaded scope is the exact key the selector checks"
+        );
+
+        // A failed request keeps no choices; the next menu open owns the
+        // retry instead of this render.
+        panel.worktrees_for = None;
+        panel.failed_worktrees = Some(scope.clone());
+        assert!(panel.current_worktrees().is_none());
+        assert!(
+            !panel.worktree_load_needed(&scope),
+            "a render pass must not rescan a dead repository every frame"
+        );
+        assert!(
+            panel.worktree_retry_needed(&scope),
+            "opening the selector owns the one retry"
+        );
+        // Clearing the failure (the menu's retry) lets the load start.
+        panel.failed_worktrees = None;
+        assert!(panel.worktree_load_needed(&scope));
+
+        // A reconnect is a different scope and starts its own request
+        // without waiting for the menu.
+        panel.bound.connection = 9;
+        let reconnected = panel.worktree_scope(Path::new("/repo/main"));
+        assert_ne!(reconnected, scope);
+        assert!(panel.worktree_load_needed(&reconnected));
+        assert!(panel.worktree_retry_needed(&reconnected));
+    }
+
     /// The scope fence names the actual host connection and the pinned
     /// repository, not just the workspace's host id: a relink with an
     /// identical directory is a different bound (rescan), and a pinned
@@ -2825,8 +3287,67 @@ mod tests {
                 "the finished listing no longer reads as pending"
             );
             assert!(
-                observed(window, "panel-sessions-partial"),
+                observed(window, "panel-sessions-diagnostics"),
                 "the finished listing reads its incomplete sources on screen"
+            );
+            let diagnostics = window.find("panel-sessions-diagnostics");
+            let text = diagnostics.label().unwrap_or_default();
+            assert!(
+                text.contains("OpenCode history storage could not be confirmed"),
+                "the limit is on screen, not a generic sentence: {text}"
+            );
+            assert!(
+                text.contains("fixture hermes is unavailable"),
+                "the failing source's own error is on screen: {text}"
+            );
+        });
+
+        // A directory with no saved sessions is still an incomplete
+        // listing when a source failed: Empty says whose records it could
+        // not check, instead of a silent zero.
+        send_cwd(&mut daemon, "/empty");
+        for _ in 0..200 {
+            vcx.run_until_parked();
+            if pane_dir(&app, &mut vcx).as_deref() == Some(Path::new("/empty")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        settle(&mut vcx);
+        // Drive both executors until the new directory's results are rendered.
+        let empty_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            settle(&mut vcx);
+            if fixture.lock().unwrap().completed_calls >= 3
+                && app.read_with(&vcx, |app, _| !app.session_history.scanning)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < empty_deadline,
+                "the empty directory's scan closes within the deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            app.update_in(&mut vcx, |app, _window, _cx| app
+                .session_history
+                .listing
+                .health(app.session_history.listing.sessions.len())),
+            SessionHealth::Empty,
+            "native sources answered for /empty while the failing sources are kept beside them"
+        );
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                observed(window, "panel-sessions-diagnostics"),
+                "an Empty listing still shows the per-source errors"
+            );
+            let diagnostics = window.find("panel-sessions-diagnostics");
+            let text = diagnostics.label().unwrap_or_default();
+            assert!(
+                text.contains("fixture hermes is unavailable"),
+                "the source that failed is named in the empty state: {text}"
             );
         });
     }

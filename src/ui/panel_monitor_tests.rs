@@ -16,6 +16,7 @@ use crate::daemon::protocol::{
 use crate::ui::app::test_window;
 use lyrel_core::core::config::RightPanelTab;
 use lyrel_ui_base::host_ops::{Entry, Host, HostId, Meta, Output, SearchHit, WatchSub};
+use lyrel_ui_base::host_registry::HostRegistry;
 use lyrel_ui_base::route::PaneWorkspace;
 use lyrel_ui_base::session::{RemoteTarget, WorkspaceId};
 
@@ -428,6 +429,43 @@ fn two_panes_sharing_a_directory_keep_separate_trees(cx: &mut TestAppContext) {
         assert!(window.try_find(one_root.clone()).is_none());
         // The host line names the fixture host for this pane too.
         assert!(window.find("monitor-host-line").label().is_some());
+    });
+}
+
+/// A managed remote pane owns a remote workspace even when its link is
+/// gone: the host line must keep naming that machine rather than falling
+/// back to this client while the tiles say Disconnected.
+#[gpui_kit::test]
+fn a_disconnected_managed_remote_keeps_its_host_label(cx: &mut TestAppContext) {
+    let fixture = Fixture::default();
+    fixture.procs.lock().unwrap().insert(1, Some(tree_one()));
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    install_monitor_host(&app, &mut vcx, &fixture);
+    open_monitor(&app, &mut vcx);
+    let target = RemoteTarget::Alias {
+        alias: "monitor-fixture".into(),
+    };
+    let local = crate::ui::remote_connect::client_hostname();
+    vcx.update(|window, _| {
+        let element = window.find("monitor-host-line");
+        let label = element.label().unwrap();
+        assert!(label.contains("monitor-fixture"));
+        assert_ne!(label, local);
+    });
+
+    // Drop the link: the shared host object is gone, the workspace is not.
+    vcx.update(|_, cx| {
+        let _ = HostRegistry::remove(cx, target.host_id());
+    });
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        let element = window.find("monitor-host-line");
+        let label = element.label().unwrap();
+        assert!(
+            label.contains("monitor-fixture"),
+            "a dropped link must not relabel the pane as this client: {label}"
+        );
+        assert_ne!(label, local);
     });
 }
 

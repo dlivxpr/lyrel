@@ -39,6 +39,10 @@ struct HistoryHost {
     seen: Mutex<Vec<(SessionOperationKind, String)>>,
     queue: Mutex<Vec<Result<PreparedSession, SessionOperationError>>>,
     gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// Bumped when the request reaches the Host, before a held gate delays
+    /// its answer, so a test can act while the prepare is genuinely in
+    /// flight.
+    asked: std::sync::atomic::AtomicUsize,
 }
 
 impl HistoryHost {
@@ -48,7 +52,12 @@ impl HistoryHost {
             seen: Mutex::new(Vec::new()),
             queue: Mutex::new(Vec::new()),
             gate: Mutex::new(None),
+            asked: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn push(&self, answer: Result<PreparedSession, SessionOperationError>) {
@@ -135,6 +144,7 @@ impl Host for HistoryHost {
         &self,
         request: &SessionOperation,
     ) -> Result<PreparedSession, SessionOperationError> {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(gate) = self.gate.lock().unwrap().take()
             && gate.recv().is_err()
         {
@@ -394,6 +404,228 @@ fn resume_focuses_an_open_exact_session_without_a_second_writer(cx: &mut TestApp
         second.read_with(&mut vcx, |view, cx| view.focus_handle(cx)),
         first_focus
     );
+}
+
+/// The live readout need not repeat the row's exact file: the durable store
+/// selectors both sides state are enough to confirm the same session, so
+/// the open pane is focused instead of a second writer opening beside it.
+#[gpui_kit::test]
+fn resume_focuses_an_open_session_with_an_equivalent_store(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let first = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+    let mut live_scope = lyrel_core::host::session_operations::SessionScope::default();
+    live_scope
+        .environment
+        .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
+    DaemonMsg::Agent(Some(CLIAgent::Pi))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some(SESSION_ID.into()),
+        readout: AgentReadout {
+            session_scope: Some(live_scope),
+            ..Default::default()
+        },
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the agent report lands", || {
+        first.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
+    });
+
+    // Focus sits in a second, non-matching pane so the focus move is visible.
+    let (second, mut _second_stream) = app.update_in(&mut vcx, |app, window, cx| {
+        let (view, stream) = lyrel_terminal::view::quiet_test_pane(78, window, cx);
+        LyrelApp::watch_terminal(&view, window, cx);
+        app.tabs
+            .push(crate::ui::tab::Tab::new(crate::ui::pane::Pane::leaf(
+                crate::ui::pane::PaneSlot::Ready(view.clone()),
+            )));
+        app.tabs.select(1);
+        let focus = view.read(cx).focus_handle(cx).clone();
+        window.focus(&focus, cx);
+        cx.notify();
+        (view, stream)
+    });
+    assert_eq!(
+        vcx.update(|window, cx| window.focused(cx)),
+        Some(second.read_with(&mut vcx, |view, cx| view.focus_handle(cx))),
+        "the second pane starts focused"
+    );
+    let panes_before = pane_count(&app, &mut vcx);
+    let mut req_scope = lyrel_core::host::session_operations::SessionScope::default();
+    req_scope.session_file = Some(PathBuf::from("/store/hist365.jsonl"));
+    req_scope
+        .environment
+        .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
+    let mut req = request(Some(cwd), false);
+    req.scope = Some(req_scope);
+    run_resume(&app, &mut vcx, req);
+    vcx.background_executor.run_until_parked();
+
+    assert!(
+        host.seen().is_empty(),
+        "an equivalent store must not reach the Host: {:?}",
+        host.seen()
+    );
+    assert_eq!(pane_count(&app, &mut vcx), panes_before, "no new pane");
+    let focused = vcx.update(|window, cx| window.focused(cx));
+    assert_eq!(
+        focused,
+        Some(first.read_with(&mut vcx, |view, cx| view.focus_handle(cx))),
+        "the original pane took focus"
+    );
+}
+
+/// A same-ID pane whose store cannot be checked against the selected row is
+/// neither focused (it may be another store's record) nor resumed over (it
+/// may already be this one): the identity failure is surfaced instead of
+/// starting a second writer.
+#[gpui_kit::test]
+fn resume_refuses_an_unconfirmed_open_session_instead_of_a_second_writer(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let view = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+    // The pane reports the same agent and native id but no store scope:
+    // there is no evidence either way.
+    DaemonMsg::Agent(Some(CLIAgent::Pi))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some(SESSION_ID.into()),
+        readout: AgentReadout::default(),
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the agent report lands", || {
+        view.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
+    });
+    let tabs_before = tab_count(&app, &mut vcx);
+    let panes_before = pane_count(&app, &mut vcx);
+
+    let mut req_scope = lyrel_core::host::session_operations::SessionScope::default();
+    req_scope
+        .environment
+        .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
+    let mut req = request(Some(cwd), false);
+    req.scope = Some(req_scope);
+    run_resume(&app, &mut vcx, req);
+    settle(&mut vcx, "the unconfirmed identity is surfaced", |cx| {
+        crate::ui::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .any(|record| record.message().contains(SESSION_ID))
+    });
+
+    assert!(
+        host.seen().is_empty(),
+        "no resume may be prepared while a same-ID writer is unconfirmed: {:?}",
+        host.seen()
+    );
+    assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
+    assert_eq!(pane_count(&app, &mut vcx), panes_before, "no new pane");
+    assert!(inputs_now(&mut stream).is_empty());
+}
+
+/// A session that opens while its prepare is in flight is found again at
+/// dispatch: the prepared line is not typed into a new split beside the
+/// pane that already runs it.
+#[gpui_kit::test]
+fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let first = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+
+    // A second pane holds focus, so the dispatch's focus move is observable.
+    app.update_in(&mut vcx, |app, window, cx| {
+        let (view, _stream) = lyrel_terminal::view::quiet_test_pane(79, window, cx);
+        LyrelApp::watch_terminal(&view, window, cx);
+        app.tabs
+            .push(crate::ui::tab::Tab::new(crate::ui::pane::Pane::leaf(
+                crate::ui::pane::PaneSlot::Ready(view.clone()),
+            )));
+        app.tabs.select(1);
+        let focus = view.read(cx).focus_handle(cx).clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    });
+    let panes_before = pane_count(&app, &mut vcx);
+
+    let (release, gate) = std::sync::mpsc::channel();
+    host.hold_until(gate);
+    host.push(Ok(prepared(cwd.clone())));
+    let mut req_scope = lyrel_core::host::session_operations::SessionScope::default();
+    req_scope
+        .environment
+        .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
+    let mut req = request(Some(cwd.clone()), false);
+    req.scope = Some(req_scope);
+    run_resume(&app, &mut vcx, req);
+    let prepare_deadline = Instant::now() + Duration::from_secs(15);
+    while host.asked() == 0 {
+        vcx.background_executor.run_until_parked();
+        assert!(
+            Instant::now() < prepare_deadline,
+            "the prepare is asked within the deadline"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // The session comes up in the original pane while the answer is held.
+    let mut live_scope = lyrel_core::host::session_operations::SessionScope::default();
+    live_scope
+        .environment
+        .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
+    DaemonMsg::Agent(Some(CLIAgent::Pi))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some(SESSION_ID.into()),
+        readout: AgentReadout {
+            session_scope: Some(live_scope),
+            ..Default::default()
+        },
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the late agent report lands", || {
+        first.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
+    });
+
+    release.send(()).unwrap();
+    let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        vcx.background_executor.run_until_parked();
+        if vcx.update(|window, cx| window.focused(cx)) == Some(first_focus.clone()) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the dispatch focuses the opened pane within the deadline"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(
+        pane_count(&app, &mut vcx),
+        panes_before,
+        "the prepared line did not open a second pane"
+    );
+    assert!(inputs_now(&mut stream).is_empty());
 }
 
 fn install_host_for(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, host: Arc<HistoryHost>) {

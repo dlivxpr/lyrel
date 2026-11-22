@@ -23,6 +23,7 @@ use gpui_kit::{App, Axis, Context, Window};
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::ui::app::{LyrelApp, SpawnWhere};
 use crate::ui::pane::PaneSlot;
+use crate::ui::session_history::{OpenSessionMatch, match_open_session_scope};
 use crate::ui::settings::arguments::join_shell_args;
 use crate::ui::tab::presentation::SpawnAs;
 use lyrel_core::core::config::{ProfileUsage, unix_now};
@@ -295,38 +296,69 @@ enum SessionPlacement {
     History,
 }
 
-/// Exact identity match between an open pane and a saved session row: the
-/// pane's own host, the same agent, the same native session id, and the same
-/// durable storage scope (the volatile OpenCode bridge/server selectors
-/// [`durable_scope`] strips never identify a record). Search Everywhere and
-/// the Session History tool funnel both through `LyrelApp::resume_session`,
-/// which uses this to focus an already-open session rather than starting a
-/// second writer for it.
-fn pane_matches_history_session(
+/// What the search for an already-open pane settled. `Unconfirmed` names a
+/// same-ID writer whose store the row cannot be checked against: neither
+/// focusing it (it may be another store's record) nor resuming (it may
+/// already be this one) is safe, so the caller surfaces the identity
+/// failure instead of starting a second writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FocusHistoryOutcome {
+    Focused,
+    NoMatch,
+    Unconfirmed,
+}
+
+/// How an open pane's same-host agent/native ID relates to a saved session
+/// row, or `None` when the pane is not a same-ID candidate at all.
+///
+/// The durable store semantics live in
+/// [`crate::ui::session_history::match_open_session_scope`]: an exact native
+/// file when both sides name one, otherwise the durable selectors each side
+/// states. `Unconfirmed` is not a match and not a known-different session —
+/// it is the answer that must never start a second writer.
+fn pane_open_session_match(
     view: &lyrel_terminal::view::TerminalView,
     request: &ResumeSessionRequest,
-) -> bool {
-    use lyrel_core::host::session_operations::durable_scope;
+    cx: &App,
+) -> Option<OpenSessionMatch> {
     if view.terminal.exited
         || view.host_id() != request.host_id
         || view.agent() != Some(request.agent)
     {
-        return false;
+        return None;
     }
-    let Some(state) = view.agent_session() else {
-        return false;
-    };
+    let state = view.agent_session()?;
     if state.session_id.as_deref() != Some(request.session_id.as_str()) {
-        return false;
+        return None;
     }
-    let (Some(live), Some(saved)) = (state.readout.session_scope.as_ref(), request.scope.as_ref())
-    else {
-        return false;
-    };
-    if let (Some(live_file), Some(saved_file)) = (&live.session_file, &saved.session_file) {
-        return live_file == saved_file;
-    }
-    durable_scope(live) == durable_scope(saved)
+    // The pane's host names the path semantics its session files use; a
+    // remote pane's `/tmp/x` must not be compared as this client's path.
+    let separator = view
+        .host(cx)
+        .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
+    Some(match_open_session_scope(
+        request.scope.as_ref(),
+        state.readout.session_scope.as_ref(),
+        separator,
+    ))
+}
+
+/// Say why a same-ID pane was neither focused nor resumed over: its store
+/// could not be checked against the selected row, and choosing either way
+/// could leave two writers on one native session.
+fn notify_unconfirmed_session(
+    request: &ResumeSessionRequest,
+    window: &mut Window,
+    cx: &mut Context<LyrelApp>,
+) {
+    window.notify_app(
+        crate::ui::notification_history::Notification::error(t_fmt(
+            L10nKey::AppSessionOpenUnconfirmed,
+            &[("id", &request.session_id)],
+        ))
+        .autohide(false),
+        cx,
+    );
 }
 
 fn history_destination_ready(
@@ -434,8 +466,15 @@ impl LyrelApp {
             window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
         };
-        if !fork && self.focus_history_session(&request, window, cx) {
-            return;
+        if !fork {
+            match self.focus_history_session(&request, window, cx) {
+                FocusHistoryOutcome::Focused => return,
+                FocusHistoryOutcome::Unconfirmed => {
+                    notify_unconfirmed_session(&request, window, cx);
+                    return;
+                }
+                FocusHistoryOutcome::NoMatch => {}
+            }
         }
         if self.spawn_host(cx) != host_id {
             window.notify_app(
@@ -558,46 +597,60 @@ impl LyrelApp {
     }
 
     /// Focus the pane already running exactly this session, in this window or
-    /// any other known workspace window, and report whether one took it. A
-    /// match never starts a second writer: the pane the session already runs
-    /// in is brought forward, unmaximized if needed, and focused.
+    /// any other known workspace window. A confirmed match never starts a
+    /// second writer: the pane the session already runs in is brought
+    /// forward, unmaximized if needed, and focused. A same-ID pane whose
+    /// store cannot be confirmed is reported as `Unconfirmed` — the caller
+    /// surfaces it rather than deciding between a wrong focus and a
+    /// duplicate writer.
     fn focus_history_session(
         &mut self,
         request: &ResumeSessionRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) -> FocusHistoryOutcome {
         // Never read this entity through the registry while it is already
         // leased: self is matched against the registry id and scanned directly.
         let me = cx.entity_id();
         let mut found: Option<(u64, bool)> = None;
+        let mut unconfirmed = false;
         for (_, weak) in crate::ui::windows::WindowRegistry::open_windows(cx) {
             let Some(app) = weak.upgrade() else { continue };
             if app.entity_id() == me {
                 continue;
             }
             let other = app.read(cx);
-            if let Some(leaf) = other
-                .tabs
-                .iter()
-                .flat_map(|tab| tab.pane.terminals())
-                .find(|leaf| pane_matches_history_session(&leaf.read(cx), request))
-            {
-                found = Some((leaf.entity_id().as_u64(), false));
+            for leaf in other.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+                match pane_open_session_match(&leaf.read(cx), request, cx) {
+                    Some(OpenSessionMatch::Same) => {
+                        found = Some((leaf.entity_id().as_u64(), false));
+                        break;
+                    }
+                    Some(OpenSessionMatch::Unconfirmed) => unconfirmed = true,
+                    Some(OpenSessionMatch::Distinct) | None => {}
+                }
+            }
+            if found.is_some() {
                 break;
             }
         }
-        if found.is_none()
-            && let Some(leaf) = self
-                .tabs
-                .iter()
-                .flat_map(|tab| tab.pane.terminals())
-                .find(|leaf| pane_matches_history_session(&leaf.read(cx), request))
-        {
-            found = Some((leaf.entity_id().as_u64(), true));
+        if found.is_none() {
+            for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+                match pane_open_session_match(&leaf.read(cx), request, cx) {
+                    Some(OpenSessionMatch::Same) => {
+                        found = Some((leaf.entity_id().as_u64(), true));
+                        break;
+                    }
+                    Some(OpenSessionMatch::Unconfirmed) => unconfirmed = true,
+                    Some(OpenSessionMatch::Distinct) | None => {}
+                }
+            }
         }
         let Some((leaf_id, own)) = found else {
-            return false;
+            return match unconfirmed {
+                true => FocusHistoryOutcome::Unconfirmed,
+                false => FocusHistoryOutcome::NoMatch,
+            };
         };
         if own {
             if let Some(tab_ix) = self.tabs.iter().position(|t| {
@@ -628,7 +681,7 @@ impl LyrelApp {
         } else {
             cx.defer(move |cx| crate::ui::tray::reveal_pane(leaf_id, cx));
         }
-        true
+        FocusHistoryOutcome::Focused
     }
 
     /// Open a prepared non-fork resume at its destination, chosen and
@@ -876,11 +929,15 @@ impl LyrelApp {
             scope: Some(request.scope.clone()),
             fork: false,
         });
-        if resume
-            .as_ref()
-            .is_some_and(|resume| self.focus_history_session(resume, window, cx))
-        {
-            return;
+        if let Some(resume) = resume.as_ref() {
+            match self.focus_history_session(resume, window, cx) {
+                FocusHistoryOutcome::Focused => return,
+                FocusHistoryOutcome::Unconfirmed => {
+                    notify_unconfirmed_session(resume, window, cx);
+                    return;
+                }
+                FocusHistoryOutcome::NoMatch => {}
+            }
         }
         let source = host.clone();
         lyrel_ui_base::host_ops::HostOps::run_in(
@@ -907,14 +964,20 @@ impl LyrelApp {
                     }
                     match placement {
                         SessionPlacement::NewTab => app.open_prepared_session(prepared, window, cx),
-                        SessionPlacement::History => {
-                            if !resume
-                                .as_ref()
-                                .is_some_and(|resume| app.focus_history_session(resume, window, cx))
-                            {
+                        SessionPlacement::History => match resume
+                            .as_ref()
+                            .map(|resume| app.focus_history_session(resume, window, cx))
+                        {
+                            Some(FocusHistoryOutcome::Focused) => {}
+                            Some(FocusHistoryOutcome::Unconfirmed) => {
+                                if let Some(resume) = resume.as_ref() {
+                                    notify_unconfirmed_session(resume, window, cx);
+                                }
+                            }
+                            Some(FocusHistoryOutcome::NoMatch) | None => {
                                 app.open_history_resumed_session(prepared, window, cx);
                             }
-                        }
+                        },
                     }
                 }
                 Err(error) => app.notify_session_error(error, placement, window, cx),

@@ -492,6 +492,7 @@ l10n_keys! {
     SearchSectionSessionsRecent,
     AppSessionNotResumable,
     AppSessionDirectoryGone,
+    AppSessionOpenUnconfirmed,
     SearchSessionActions,
     SessionActionsHint,
     SessionActionResume,
