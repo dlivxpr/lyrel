@@ -699,6 +699,10 @@ impl LyrelApp {
             false => t(L10nKey::PanelSessionsWorktrees),
         };
         let shown: gpui_kit::SharedString = crate::ui::home::display_path(dir, home).into();
+        let full_path: gpui_kit::SharedString =
+            lyrel_ui_base::path_display::readable_path(&dir.to_string_lossy())
+                .into_owned()
+                .into();
         let worktrees: Vec<(PathBuf, gpui_kit::SharedString)> = self
             .session_history
             .worktrees
@@ -740,13 +744,15 @@ impl LyrelApp {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .truncate()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis_start()
                                 .text_size(rems(TEXT))
                                 .text_color(fg)
                                 .child(shown.clone()),
                         )
-                        .accessibility_label(shown.clone())
-                        .tooltip(shown)
+                        .accessibility_label(full_path.clone())
+                        .tooltip(full_path)
                         .dropdown_menu_with_anchor(
                             gpui_kit::Anchor::BottomLeft,
                             move |menu, window, _cx| {
@@ -1249,8 +1255,8 @@ mod tests {
     /// Managed-remote scope fencing through the real transport: the remote
     /// Host's own scan lists what lives on the far machine, binds the
     /// sessions to the remote identity, and reports the sources it could not
-    /// list (e.g. Hermes, which is local-only) as errors instead of dropping
-    /// what did list. Seeding runs against the fixture's disposable remote
+    /// list (e.g. an unavailable provider launcher) as errors while keeping
+    /// the successful records. Seeding runs against the fixture's disposable remote
     /// home through the production SFTP Host.
     #[gpui_kit::test]
     #[ignore = "requires isolated pinned native SSH/SFTP, same-commit server, and explicit LYREL_TEST_SSH_* endpoint; run alone"]
