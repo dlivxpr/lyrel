@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::{h_flex, tooltip::Tooltip, v_flex};
+use gpui_kit::component::{tooltip::Tooltip, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, Global, IntoElement, Render, WeakEntity, Window, div,
     prelude::*, px, rems,
@@ -456,35 +456,12 @@ impl LyrelApp {
             .p(px(8.))
             .gap(px(6.))
             .rounded(px(7.))
-            .bg(theme.muted.opacity(0.18))
+            .bg(theme.muted.opacity(0.5))
             .child(
-                h_flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .text_size(rems(11. / 16.))
-                            .text_color(theme.info)
-                            .child(t(L10nKey::MonitorColDisk)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_size(rems(11. / 16.))
-                            .text_color(theme.muted_foreground)
-                            .child(t(L10nKey::MonitorDiskHint)),
-                    )
-                    .when_some(readout.status, |row, status| {
-                        row.child(
-                            div()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .text_size(rems(11. / 16.))
-                                .text_color(theme.muted_foreground)
-                                .child(status),
-                        )
-                    }),
+                div()
+                    .text_size(rems(11. / 16.))
+                    .text_color(theme.muted_foreground)
+                    .child(t(L10nKey::MonitorColDisk)),
             )
             .child(
                 div()
@@ -494,6 +471,16 @@ impl LyrelApp {
                     .text_size(rems(17. / 16.))
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(gpui_kit::SharedString::from(value)),
+            )
+            .child(
+                div()
+                    .text_size(rems(11. / 16.))
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        readout
+                            .status
+                            .unwrap_or_else(|| t(L10nKey::MonitorDiskHint).into()),
+                    ),
             )
             .when_some(readout.directory, |tile, directory| {
                 tile.child(

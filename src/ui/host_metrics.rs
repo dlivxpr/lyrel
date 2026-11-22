@@ -1017,7 +1017,7 @@ fn monitor_tile(
         .p(px(8.))
         .gap(px(6.))
         .rounded(px(7.))
-        .bg(theme.muted.opacity(0.18))
+        .bg(theme.muted.opacity(0.5))
         .child(
             h_flex()
                 .items_center()
@@ -1025,7 +1025,7 @@ fn monitor_tile(
                 .child(
                     div()
                         .text_size(rems(11. / 16.))
-                        .text_color(color)
+                        .text_color(theme.muted_foreground)
                         .child(label),
                 )
                 .when_some(readout.status_for(series), |row, status| {
@@ -1065,7 +1065,7 @@ fn monitor_tile(
                 }),
         )
         .when(readout.ready(), |tile| {
-            tile.child(trend_chart(
+            tile.child(div().mt_auto().child(trend_chart(
                 format!("{id}-chart"),
                 buckets,
                 series,
@@ -1073,7 +1073,7 @@ fn monitor_tile(
                 100.,
                 108.,
                 24.,
-            ))
+            )))
         })
         .into_any_element()
 }
@@ -1251,7 +1251,7 @@ fn monitor_network_tile(
         .p(px(8.))
         .gap(px(6.))
         .rounded(px(7.))
-        .bg(theme.muted.opacity(0.18))
+        .bg(theme.muted.opacity(0.5))
         .child(
             h_flex()
                 .items_center()
@@ -1300,14 +1300,14 @@ fn monitor_network_tile(
                 ),
         )
         .when(readout.network_ready(), |tile| {
-            tile.child(network_trend_chart(
+            tile.child(div().mt_auto().child(network_trend_chart(
                 format!("{id}-chart"),
                 buckets,
                 rx_color,
                 tx_color,
                 108.,
                 24.,
-            ))
+            )))
         })
         .into_any_element()
 }
