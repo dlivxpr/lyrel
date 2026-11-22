@@ -506,8 +506,15 @@ fn resume_refuses_an_unconfirmed_open_session_instead_of_a_second_writer(cx: &mu
     })))
     .encode(&mut stream)
     .unwrap();
-    pump_until("the agent report lands", || {
-        view.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
+    pump_until("the native session identity lands", || {
+        view.read_with(&mut vcx, |view, _| {
+            view.agent() == Some(CLIAgent::Pi)
+                && view
+                    .agent_session()
+                    .and_then(|state| state.session_id)
+                    .as_deref()
+                    == Some(SESSION_ID)
+        })
     });
     let tabs_before = tab_count(&app, &mut vcx);
     let panes_before = pane_count(&app, &mut vcx);

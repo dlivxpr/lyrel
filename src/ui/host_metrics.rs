@@ -688,12 +688,9 @@ impl MetricReadout {
         }
     }
 
-    /// The monitor tile's used/total pair, e.g. `13.1 GB / 32 GB`.
-    fn memory_pair_text(&self) -> String {
-        match self.memory_total_bytes {
-            Some(total) => format!("{} / {} GB", self.memory_text(), gb(total)),
-            None => self.memory_text(),
-        }
+    fn memory_total_text(&self) -> Option<String> {
+        self.memory_total_bytes
+            .map(|total| format!("/ {} GB", gb(total)))
     }
 
     fn gpu_text(&self) -> String {
@@ -835,81 +832,89 @@ fn trend_chart(
         .id(id)
         .test_support()
         .w(px(width))
+        .max_w_full()
         .h(px(height))
         .flex_none()
-        .child(gpui_kit::canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                let width_px = bounds.size.width.as_f32().min(width);
-                let height_px = bounds.size.height.as_f32().min(height);
-                if width_px <= 0. || height_px <= 0. {
-                    return;
-                }
-                let slot = width_px / BUCKET_COUNT as f32;
-                let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
-                let y = |v: f32| {
-                    bounds.origin.y + px(height_px - (v.clamp(0., scale) / scale) * height_px)
-                };
-                if line {
-                    let stroke = 1.5_f32.min(slot * 0.4).max(1.);
-                    let mut prev: Option<(usize, f32)> = None;
-                    for (ix, bucket) in buckets.iter().enumerate() {
-                        // A blank slot, or a slot whose samples carry no
-                        // value for this series, breaks the run — a gap
-                        // stays a gap either way.
-                        let Some(bucket) = bucket else {
-                            prev = None;
-                            continue;
-                        };
-                        let Some(v) = value(bucket) else {
-                            prev = None;
-                            continue;
-                        };
-                        let point = (ix, v);
-                        if let Some((pix, pv)) = prev {
-                            let (x0, x1) = (x(pix), x(ix));
-                            let (y0, y1) = (y(pv), y(v));
-                            let run = (x1 - x0).max(px(stroke));
-                            window.paint_quad(fill(
-                                gpui_kit::Bounds {
-                                    origin: gpui_kit::point(x0, y0 - px(stroke / 2.)),
-                                    size: gpui_kit::size(run, px(stroke)),
-                                },
-                                color,
-                            ));
-                            let rise = y1 - y0;
-                            if rise.abs() > px(stroke) {
+        .child(
+            gpui_kit::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let width_px = bounds.size.width.as_f32().min(width);
+                    let height_px = bounds.size.height.as_f32().min(height);
+                    if width_px <= 0. || height_px <= 0. {
+                        return;
+                    }
+                    let slot = width_px / BUCKET_COUNT as f32;
+                    let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
+                    let y = |v: f32| {
+                        bounds.origin.y + px(height_px - (v.clamp(0., scale) / scale) * height_px)
+                    };
+                    if line {
+                        let stroke = 1.5_f32.min(slot * 0.4).max(1.);
+                        let mut prev: Option<(usize, f32)> = None;
+                        for (ix, bucket) in buckets.iter().enumerate() {
+                            // A blank slot, or a slot whose samples carry no
+                            // value for this series, breaks the run — a gap
+                            // stays a gap either way.
+                            let Some(bucket) = bucket else {
+                                prev = None;
+                                continue;
+                            };
+                            let Some(v) = value(bucket) else {
+                                prev = None;
+                                continue;
+                            };
+                            let point = (ix, v);
+                            if let Some((pix, pv)) = prev {
+                                let (x0, x1) = (x(pix), x(ix));
+                                let (y0, y1) = (y(pv), y(v));
+                                let run = (x1 - x0).max(px(stroke));
                                 window.paint_quad(fill(
                                     gpui_kit::Bounds {
-                                        origin: gpui_kit::point(x1 - px(stroke / 2.), y0.min(y1)),
-                                        size: gpui_kit::size(px(stroke), rise.abs()),
+                                        origin: gpui_kit::point(x0, y0 - px(stroke / 2.)),
+                                        size: gpui_kit::size(run, px(stroke)),
                                     },
                                     color,
                                 ));
+                                let rise = y1 - y0;
+                                if rise.abs() > px(stroke) {
+                                    window.paint_quad(fill(
+                                        gpui_kit::Bounds {
+                                            origin: gpui_kit::point(
+                                                x1 - px(stroke / 2.),
+                                                y0.min(y1),
+                                            ),
+                                            size: gpui_kit::size(px(stroke), rise.abs()),
+                                        },
+                                        color,
+                                    ));
+                                }
                             }
+                            prev = Some(point);
                         }
-                        prev = Some(point);
+                    } else {
+                        let bar_w = (slot * 0.6).max(1.);
+                        for (ix, bucket) in buckets.iter().enumerate() {
+                            let Some(bucket) = bucket else { continue };
+                            let Some(v) = value(bucket) else { continue };
+                            let bar_h = ((v.clamp(0., scale) / scale) * height_px).max(1.);
+                            window.paint_quad(fill(
+                                gpui_kit::Bounds {
+                                    origin: gpui_kit::point(
+                                        bounds.origin.x
+                                            + px(ix as f32 * slot + (slot - bar_w) / 2.),
+                                        bounds.origin.y + px(height_px - bar_h),
+                                    ),
+                                    size: gpui_kit::size(px(bar_w), px(bar_h)),
+                                },
+                                color,
+                            ));
+                        }
                     }
-                } else {
-                    let bar_w = (slot * 0.6).max(1.);
-                    for (ix, bucket) in buckets.iter().enumerate() {
-                        let Some(bucket) = bucket else { continue };
-                        let Some(v) = value(bucket) else { continue };
-                        let bar_h = ((v.clamp(0., scale) / scale) * height_px).max(1.);
-                        window.paint_quad(fill(
-                            gpui_kit::Bounds {
-                                origin: gpui_kit::point(
-                                    bounds.origin.x + px(ix as f32 * slot + (slot - bar_w) / 2.),
-                                    bounds.origin.y + px(height_px - bar_h),
-                                ),
-                                size: gpui_kit::size(px(bar_w), px(bar_h)),
-                            },
-                            color,
-                        ));
-                    }
-                }
-            },
-        ))
+                },
+            )
+            .size_full(),
+        )
         .into_any_element()
 }
 
@@ -991,16 +996,23 @@ fn monitor_tile(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
-    let value = match series {
-        TrendSeries::Cpu => readout.cpu_text(),
-        TrendSeries::Memory => readout.memory_pair_text(),
-        TrendSeries::Gpu => readout.gpu_text(),
+    let (value, total) = match series {
+        TrendSeries::Cpu => (readout.cpu_text(), None),
+        TrendSeries::Memory => (readout.memory_text(), readout.memory_total_text()),
+        TrendSeries::Gpu => (readout.gpu_text(), None),
+    };
+    let label_text = match &total {
+        Some(total) => format!("{value} {total}"),
+        None => value.clone(),
     };
     v_flex()
         .id(id)
         .aria_label(gpui_kit::SharedString::from(readout.detail.clone()))
         .test_support()
         .flex_1()
+        .when(matches!(series, TrendSeries::Memory), |tile| {
+            tile.flex_grow(1.5)
+        })
         .min_w_0()
         .p(px(8.))
         .gap(px(6.))
@@ -1028,13 +1040,29 @@ fn monitor_tile(
                 }),
         )
         .child(
-            div()
+            h_flex()
                 .id(format!("{id}-value"))
-                .aria_label(gpui_kit::SharedString::from(value.clone()))
+                .aria_label(gpui_kit::SharedString::from(label_text))
                 .test_support()
-                .text_size(rems(17. / 16.))
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(gpui_kit::SharedString::from(value)),
+                .items_baseline()
+                .flex_wrap()
+                .gap_x(px(4.))
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .text_size(rems(17. / 16.))
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(value),
+                )
+                .when_some(total, |row, total| {
+                    row.child(
+                        div()
+                            .whitespace_nowrap()
+                            .text_size(rems(11. / 16.))
+                            .text_color(theme.muted_foreground)
+                            .child(total),
+                    )
+                }),
         )
         .when(readout.ready(), |tile| {
             tile.child(trend_chart(
@@ -1077,88 +1105,95 @@ fn network_trend_chart(
         .id(id)
         .test_support()
         .w(px(width))
+        .max_w_full()
         .h(px(height))
         .flex_none()
-        .child(gpui_kit::canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                let width_px = bounds.size.width.as_f32().min(width);
-                let height_px = bounds.size.height.as_f32().min(height);
-                if width_px <= 0. || height_px <= 0. {
-                    return;
-                }
-                let slot = width_px / BUCKET_COUNT as f32;
-                let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
-                let y = |v: f32| {
-                    bounds.origin.y + px(height_px - (v.clamp(0., peak) / peak) * height_px)
-                };
-                let stroke = 1.5_f32.min(slot * 0.4).max(1.);
-
-                // One shared geometry for both step series; the painter is
-                // what differs (solid vs dashed).
-                struct StepSeries {
-                    color: gpui_kit::Hsla,
-                    dashed: bool,
-                }
-                for series in [
-                    StepSeries {
-                        color: rx_color,
-                        dashed: false,
-                    },
-                    StepSeries {
-                        color: tx_color,
-                        dashed: true,
-                    },
-                ] {
-                    let value = |bucket: &TrendBucket| {
-                        if series.dashed {
-                            bucket.network_tx
-                        } else {
-                            bucket.network_rx
-                        }
-                    };
-                    let mut prev: Option<(usize, f32)> = None;
-                    for (ix, bucket) in buckets.iter().enumerate() {
-                        let Some(bucket) = bucket else {
-                            prev = None;
-                            continue;
-                        };
-                        let v = value(bucket);
-                        if !v.is_finite() {
-                            prev = None;
-                            continue;
-                        }
-                        if let Some((pix, pv)) = prev {
-                            let (x0, x1) = (x(pix), x(ix));
-                            let (y0, y1) = (y(pv), y(v));
-                            if series.dashed {
-                                paint_dashed_h(window, x0, x1, y0, stroke, series.color);
-                            } else {
-                                let run = (x1 - x0).max(px(stroke));
-                                window.paint_quad(fill(
-                                    gpui_kit::Bounds {
-                                        origin: gpui_kit::point(x0, y0 - px(stroke / 2.)),
-                                        size: gpui_kit::size(run, px(stroke)),
-                                    },
-                                    series.color,
-                                ));
-                            }
-                            let rise = y1 - y0;
-                            if rise.abs() > px(stroke) {
-                                window.paint_quad(fill(
-                                    gpui_kit::Bounds {
-                                        origin: gpui_kit::point(x1 - px(stroke / 2.), y0.min(y1)),
-                                        size: gpui_kit::size(px(stroke), rise.abs()),
-                                    },
-                                    series.color,
-                                ));
-                            }
-                        }
-                        prev = Some((ix, v));
+        .child(
+            gpui_kit::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let width_px = bounds.size.width.as_f32().min(width);
+                    let height_px = bounds.size.height.as_f32().min(height);
+                    if width_px <= 0. || height_px <= 0. {
+                        return;
                     }
-                }
-            },
-        ))
+                    let slot = width_px / BUCKET_COUNT as f32;
+                    let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
+                    let y = |v: f32| {
+                        bounds.origin.y + px(height_px - (v.clamp(0., peak) / peak) * height_px)
+                    };
+                    let stroke = 1.5_f32.min(slot * 0.4).max(1.);
+
+                    // One shared geometry for both step series; the painter is
+                    // what differs (solid vs dashed).
+                    struct StepSeries {
+                        color: gpui_kit::Hsla,
+                        dashed: bool,
+                    }
+                    for series in [
+                        StepSeries {
+                            color: rx_color,
+                            dashed: false,
+                        },
+                        StepSeries {
+                            color: tx_color,
+                            dashed: true,
+                        },
+                    ] {
+                        let value = |bucket: &TrendBucket| {
+                            if series.dashed {
+                                bucket.network_tx
+                            } else {
+                                bucket.network_rx
+                            }
+                        };
+                        let mut prev: Option<(usize, f32)> = None;
+                        for (ix, bucket) in buckets.iter().enumerate() {
+                            let Some(bucket) = bucket else {
+                                prev = None;
+                                continue;
+                            };
+                            let v = value(bucket);
+                            if !v.is_finite() {
+                                prev = None;
+                                continue;
+                            }
+                            if let Some((pix, pv)) = prev {
+                                let (x0, x1) = (x(pix), x(ix));
+                                let (y0, y1) = (y(pv), y(v));
+                                if series.dashed {
+                                    paint_dashed_h(window, x0, x1, y0, stroke, series.color);
+                                } else {
+                                    let run = (x1 - x0).max(px(stroke));
+                                    window.paint_quad(fill(
+                                        gpui_kit::Bounds {
+                                            origin: gpui_kit::point(x0, y0 - px(stroke / 2.)),
+                                            size: gpui_kit::size(run, px(stroke)),
+                                        },
+                                        series.color,
+                                    ));
+                                }
+                                let rise = y1 - y0;
+                                if rise.abs() > px(stroke) {
+                                    window.paint_quad(fill(
+                                        gpui_kit::Bounds {
+                                            origin: gpui_kit::point(
+                                                x1 - px(stroke / 2.),
+                                                y0.min(y1),
+                                            ),
+                                            size: gpui_kit::size(px(stroke), rise.abs()),
+                                        },
+                                        series.color,
+                                    ));
+                                }
+                            }
+                            prev = Some((ix, v));
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
         .into_any_element()
 }
 
@@ -1241,11 +1276,14 @@ fn monitor_network_tile(
             h_flex()
                 .items_end()
                 .justify_between()
+                .flex_wrap()
+                .gap_x(px(4.))
                 .child(
                     div()
                         .id(format!("{id}-rx"))
                         .aria_label(gpui_kit::SharedString::from(readout.network_rx_text()))
                         .test_support()
+                        .whitespace_nowrap()
                         .text_size(rems(13. / 16.))
                         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                         .child(gpui_kit::SharedString::from(readout.network_rx_text())),
@@ -1254,6 +1292,7 @@ fn monitor_network_tile(
                     div()
                         .id(format!("{id}-tx"))
                         .aria_label(gpui_kit::SharedString::from(readout.network_tx_text()))
+                        .whitespace_nowrap()
                         .test_support()
                         .text_size(rems(11. / 16.))
                         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
@@ -1507,6 +1546,7 @@ impl LyrelApp {
             .test_support()
             .px(px(crate::ui::window_chrome::CONTENT_INSET))
             .gap(px(8.))
+            .items_stretch()
             .child(monitor_tile(
                 "monitor-tile-cpu",
                 t(L10nKey::MonitorColCpu),
@@ -1546,6 +1586,7 @@ impl LyrelApp {
             .test_support()
             .px(px(crate::ui::window_chrome::CONTENT_INSET))
             .gap(px(8.))
+            .items_stretch()
             .child(monitor_network_tile(
                 "monitor-tile-network",
                 t(L10nKey::MonitorColNetwork),
@@ -1565,7 +1606,7 @@ impl LyrelApp {
             .child(heading)
             .child(tiles)
             .child(network_tiles)
-            .child(self.render_lyrel_usage(cx))
+            .child(self.render_lyrel_usage(window, cx))
             .into_any_element()
     }
 }

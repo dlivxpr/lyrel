@@ -44,12 +44,10 @@ use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 /// between asks while the monitor shows, nothing at all when it does not.
 const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Cell widths, aligned with the process table's columns below so the
-/// expanded rows read on one grid.
-const CPU_W: f32 = 40.;
-const MEM_W: f32 = 52.;
-const GPU_W: f32 = 36.;
-const NET_W: f32 = 84.;
+/// Expanded detail columns at the default interface scale. The header and
+/// every row use the same widths.
+const USAGE_COLUMN_WIDTHS: [f32; 4] = [40., 58., 36., 100.];
+const USAGE_CELL_GAP: f32 = 4.;
 
 /// The answer from one daemon-shaped source: the local daemon or the remote
 /// Lyrel server. Both speak through the same `HostMetrics` response, so one
@@ -367,7 +365,7 @@ fn network_pair_text(rx: f64, tx: f64) -> String {
     format!("{rx} / {tx}")
 }
 
-/// One right-aligned value cell, the width the process-table columns use.
+/// One right-aligned value cell in the expanded usage grid.
 fn usage_cell(text: String, width: f32, mono: gpui_kit::SharedString) -> gpui_kit::Div {
     div()
         .w(px(width))
@@ -431,7 +429,11 @@ impl LyrelApp {
     }
 
     /// The expandable Lyrel summary row under the monitor's resource tiles.
-    pub(crate) fn render_lyrel_usage(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_lyrel_usage(
+        &mut self,
+        window: &gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(view) = self.lyrel_usage_view.clone() else {
             return div().id("lyrel-usage").test_support().into_any_element();
         };
@@ -602,8 +604,18 @@ impl LyrelApp {
             return body.into_any_element();
         }
 
-        // The expanded grid: one column pair per metric, the same right-aligned
-        // widths the process table uses, so the whole monitor reads on one grid.
+        let scale = window.rem_size().as_f32() / 16.;
+        let available =
+            self.right_panel_px(window, cx) - 2. * crate::ui::window_chrome::CONTENT_INSET;
+        let wide = USAGE_COLUMN_WIDTHS.map(|width| width * scale);
+        let full_width = wide.iter().sum::<f32>();
+        let compact = available < full_width + 4. * USAGE_CELL_GAP + 96. * scale;
+        let [cpu_width, mem_width, gpu_width, net_width] = if compact {
+            let column_space = available - 3. * USAGE_CELL_GAP;
+            wide.map(|width| width / full_width * column_space)
+        } else {
+            wide
+        };
         let title = |label: &'static str, width: f32| {
             div()
                 .w(px(width))
@@ -615,12 +627,12 @@ impl LyrelApp {
         };
         let header = h_flex()
             .pb(px(2.))
-            .gap(px(4.))
-            .child(div().flex_1().min_w_0())
-            .child(title("CPU", CPU_W))
-            .child(title("RAM", MEM_W))
-            .child(title("GPU", GPU_W))
-            .child(title(t(L10nKey::LyrelProcessNetwork), NET_W));
+            .gap(px(USAGE_CELL_GAP))
+            .when(!compact, |row| row.child(div().flex_1().min_w_0()))
+            .child(title("CPU", cpu_width))
+            .child(title("RAM", mem_width))
+            .child(title("GPU", gpu_width))
+            .child(title(t(L10nKey::LyrelProcessNetwork), net_width));
         body = body.child(header);
 
         let group = |title: String| {
@@ -667,37 +679,31 @@ impl LyrelApp {
                 _ if cell.pending => t(L10nKey::LyrelUsageWaiting).to_string(),
                 _ => t(L10nKey::LyrelUsageUnavailable).to_string(),
             };
-            h_flex()
-                .id(id)
+            let name = div()
+                .id(format!("{id}-name"))
                 .test_support()
+                .when(!compact, |name| name.flex_1())
+                .min_w_0()
+                .text_ellipsis()
+                .text_size(rems(11. / 16.))
+                .child(label);
+            let values = h_flex()
                 .items_center()
-                .gap(px(4.))
-                .cursor_default()
-                .aria_label(gpui_kit::SharedString::from(detail))
+                .gap(px(USAGE_CELL_GAP))
                 .child(
-                    div()
-                        .id(format!("{id}-name"))
-                        .test_support()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(rems(11. / 16.))
-                        .child(label),
-                )
-                .child(
-                    usage_cell(cpu.clone(), CPU_W, mono.clone())
+                    usage_cell(cpu.clone(), cpu_width, mono.clone())
                         .id(format!("{id}-cpu"))
                         .aria_label(gpui_kit::SharedString::from(cpu))
                         .test_support(),
                 )
                 .child(
-                    usage_cell(mem.clone(), MEM_W, mono.clone())
+                    usage_cell(mem.clone(), mem_width, mono.clone())
                         .id(format!("{id}-mem"))
                         .aria_label(gpui_kit::SharedString::from(mem))
                         .test_support(),
                 )
                 .child(
-                    usage_cell(gpu_text, GPU_W, mono.clone())
+                    usage_cell(gpu_text, gpu_width, mono.clone())
                         .id(format!("{id}-gpu"))
                         .aria_label(gpui_kit::SharedString::from(gpu_detail.clone()))
                         .test_support()
@@ -706,15 +712,24 @@ impl LyrelApp {
                         }),
                 )
                 .child(
-                    usage_cell(network_text, NET_W, mono.clone())
+                    usage_cell(network_text, net_width, mono.clone())
                         .id(format!("{id}-network"))
                         .aria_label(gpui_kit::SharedString::from(network_detail.clone()))
                         .test_support()
                         .tooltip(move |window, cx| {
                             Tooltip::new(network_detail.clone()).build(window, cx)
                         }),
-                )
-                .into_any_element()
+                );
+            let row = div()
+                .id(id)
+                .test_support()
+                .aria_label(gpui_kit::SharedString::from(detail));
+            let layout = if compact {
+                v_flex().py_0p5().child(name).child(values)
+            } else {
+                h_flex().gap(px(USAGE_CELL_GAP)).child(name).child(values)
+            };
+            row.child(layout).into_any_element()
         };
 
         body = body

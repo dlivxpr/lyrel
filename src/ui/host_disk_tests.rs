@@ -191,7 +191,7 @@ fn disk_scan_recovers_for_the_same_directory_after_connection_loss(cx: &mut Test
     open_monitor(&app, &mut vcx);
     wait_value(
         &mut vcx,
-        |v| v.as_deref().is_some_and(|s| s.starts_with("0 /")),
+        |v| v.as_deref().is_some_and(|s| s.starts_with("0 GB /")),
         "empty directory",
     );
 
@@ -202,7 +202,7 @@ fn disk_scan_recovers_for_the_same_directory_after_connection_loss(cx: &mut Test
     vcx.update(|_, cx| LocalLink::install_client_for_test(cx, second.client.clone()));
     wait_value(
         &mut vcx,
-        |v| v.as_deref().is_some_and(|s| s.starts_with("0.6 /")),
+        |v| v.as_deref().is_some_and(|s| s.starts_with("0.6 GB /")),
         "reconnected directory",
     );
 }

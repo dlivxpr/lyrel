@@ -996,6 +996,18 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
             _ => panic!("row b should be eligible"),
         }
     });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        for (element, expected) in [
+            ("sessions-delete-target-0-0", "a"),
+            ("sessions-delete-target-0-1", "a.child"),
+            ("sessions-delete-target-1-0", "b"),
+        ] {
+            let observed = window.find(element);
+            assert!(observed.visible(), "confirmation hides {expected}");
+            assert_eq!(observed.label(), Some(expected));
+        }
+    });
 
     let (events, _subscription) = crate::ui::settings::test_window::record_events(&settings, cx);
     // 同意清单：两项都勾选才能确认。execute 的回复先入队，确认即消费。

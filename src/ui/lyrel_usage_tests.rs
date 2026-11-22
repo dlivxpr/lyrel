@@ -182,6 +182,12 @@ fn monitor_lyrel_row_collapses_summarizes_and_expands_by_host(cx: &mut TestAppCo
         assert!(local.visible());
         let desktop = window.find("lyrel-usage-desktop");
         let daemon = window.find("lyrel-usage-daemon");
+        let name = window.find("lyrel-usage-daemon-name").bounds();
+        let cpu = window.find("lyrel-usage-daemon-cpu").bounds();
+        assert!(
+            name.size.width > cpu.size.width && name.bottom() <= cpu.top(),
+            "the full process name has its own line in a narrow panel"
+        );
         assert!(
             desktop
                 .label()

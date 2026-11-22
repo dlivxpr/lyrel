@@ -1966,7 +1966,7 @@ impl SettingsWindow {
 
     /// 删除确认／结果弹层。Preparing 显示重新核验进度；Ready 按
     /// prepare 的重新核验结果列出来源（存储组）、目标（标题）、影响
-    /// 范围（精确原生级联数）与被排除的逐条原因，同意清单两项都勾选
+    /// 范围（确切原生记录）与被排除的逐条原因，同意清单两项都勾选
     /// 才能确认；Executing 只读；Done 聚合报告 deleted/skipped/failed
     /// 并逐条给出原因。执行中不可关闭 —— 原生操作已在飞行，结果必须
     /// 被看到。
@@ -2004,7 +2004,19 @@ impl SettingsWindow {
                 );
             }
             SessionDeletePhase::Ready => {
+                let host = flow.host.id();
+                let host_label = self
+                    .agent_hooks_machines(cx)
+                    .into_iter()
+                    .find(|machine| machine.host == host)
+                    .map_or_else(|| format!("{host:?}"), |machine| machine.label);
                 body = body
+                    .child(
+                        div()
+                            .text_size(fs(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("{} · {host_label}", t(L10nKey::SettingsHost))),
+                    )
                     .child(
                         div()
                             .id("sessions-delete-status")
@@ -2148,6 +2160,8 @@ impl SettingsWindow {
             560.,
             cx,
         )
+        .max_w_full()
+        .max_h_full()
         .child(crate::ui::dialog::header(
             t(L10nKey::SessionsDeleteConfirmTitle),
             cx,
@@ -2156,7 +2170,10 @@ impl SettingsWindow {
             div()
                 .id("sessions-delete-body")
                 .test_support()
+                .min_h_0()
                 .overflow_y_scroll()
+                .px_3()
+                .py_2()
                 .child(body),
         )
         .child(crate::ui::dialog::footer(cx).child(footer));
@@ -2213,7 +2230,7 @@ impl SettingsWindow {
     }
 
     /// 弹层里的逐条清单：被排除的行给客户端原因；prepare 后 eligible
-    /// 的行显示存储组与精确原生级联数，ineligible 显示原生原因；
+    /// 的行显示存储位置与确切原生记录，ineligible 显示原生原因。
     /// Done 后显示每行的 deleted/skipped/failed。
     fn sessions_delete_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let tk = Tk::of(cx);
@@ -2295,46 +2312,69 @@ impl SettingsWindow {
                 .group
                 .map(|group| flow.groups[group].store_label.clone())
                 .unwrap_or_default();
-            list = list.child(
-                h_flex()
-                    .id(format!("sessions-delete-row-{ix}"))
-                    .test_support()
-                    .w_full()
-                    .items_center()
-                    .gap(px(8.))
-                    .py(px(3.))
-                    .child(
+            let mut entry = v_flex()
+                .id(format!("sessions-delete-row-{ix}"))
+                .test_support()
+                .w_full()
+                .gap_1()
+                .py(px(3.))
+                .child(
+                    h_flex()
+                        .items_start()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(1.))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(fs(12.))
+                                        .text_color(tk.fg)
+                                        .child(row.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .whitespace_normal()
+                                        .text_size(fs(11.))
+                                        .text_color(tk.k45)
+                                        .child(store),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(gpui_kit::relative(0.45))
+                                .whitespace_normal()
+                                .text_size(fs(11.))
+                                .text_color(color)
+                                .child(note),
+                        ),
+                );
+            if let (
+                SessionDeletePhase::Ready,
+                None,
+                Some(SessionDeletePlan::Eligible { delete_ids }),
+            ) = (&flow.phase, &row.excluded, &row.plan)
+            {
+                for (target, id) in delete_ids.iter().enumerate() {
+                    entry = entry.child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(1.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(fs(12.))
-                                    .text_color(tk.fg)
-                                    .child(row.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(fs(11.))
-                                    .text_color(tk.k45)
-                                    .child(store),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(gpui_kit::relative(0.45))
-                            .truncate()
+                            .id(format!("sessions-delete-target-{ix}-{target}"))
+                            .aria_label(gpui_kit::SharedString::from(id.clone()))
+                            .test_support()
+                            .whitespace_normal()
+                            .pl_2()
                             .text_size(fs(11.))
-                            .text_color(color)
-                            .child(note),
-                    ),
-            );
+                            .text_color(tk.fg)
+                            .child(id.clone()),
+                    );
+                }
+            }
+            list = list.child(entry);
         }
         list.into_any_element()
     }

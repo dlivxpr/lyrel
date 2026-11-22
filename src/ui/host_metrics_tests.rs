@@ -753,7 +753,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     assert!(app.read_with(&vcx, |app, cx| {
         app.tabs[app.tabs.active_index()].pip_slot(cx).is_none()
     }));
-    for (width, font) in [(1440., 16.), (720., 20.)] {
+    for (width, font) in [(1440., 16.), (760., 20.)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |_, _, cx| {
             cx.global_mut::<lyrel_ui_base::config::Config>()
@@ -1042,16 +1042,17 @@ fn the_titlebar_budget_drops_charts_then_the_whole_strip() {
 #[test]
 fn titlebar_ram_and_monitor_pair_carry_their_unit() {
     let gib = 1_073_741_824_u64;
-    let state = State::Ready(
-        serde_json::from_value(serde_json::json!({
-            "cpu_percent": 12.0,
-            "memory_used_bytes": (13.1_f64 * gib as f64) as u64,
-            "memory_total_bytes": 32 * gib,
-            "sampled_at_millis": 1_700_000_000_000_u64,
-        }))
-        .unwrap(),
-    );
+    let state = State::Ready(HostMetrics::new(
+        "metrics-host",
+        "metrics-daemon",
+        MetricsState::Sample(HostSample::new(
+            12.,
+            (13.1_f64 * gib as f64) as u64,
+            32 * gib,
+            1_700_000_000_000,
+        )),
+    ));
     let reading = readout(&state, false);
     assert_eq!(reading.memory_text(), "13.1 GB");
-    assert_eq!(reading.memory_pair_text(), "13.1 GB / 32 GB");
+    assert_eq!(reading.memory_total_text().as_deref(), Some("/ 32 GB"));
 }
