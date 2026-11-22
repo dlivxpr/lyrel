@@ -1329,6 +1329,7 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             CommandGroup::View,
             t(L10nKey::CmdRightPanelSessions).to_string(),
         ),
+        ),
         "FocusRightPanelNavigation" => (
             CommandGroup::View,
             t(L10nKey::CmdFocusRightPanelNavigation).to_string(),

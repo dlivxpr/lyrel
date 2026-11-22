@@ -218,16 +218,6 @@ mod tests {
         );
     }
 
-    fn proc(pid: u32, rss: Option<u64>, cpu_ns: Option<u64>) -> ProcEntry {
-        ProcEntry {
-            pid,
-            rss,
-            cpu_ns,
-            started: Some(7),
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn totals_sum_what_was_reported() {
         let t0 = Instant::now();

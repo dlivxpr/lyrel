@@ -60,6 +60,8 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 5] = [
         L10nKey::PanelSessionsTitle,
         "icons/list-flat.svg",
     ),
+    (
+    ),
 ];
 
 // Inspector chrome stays compact and leaves the width to the tools. At the
@@ -74,12 +76,12 @@ const TOOL_DIVIDER_OPACITY: f32 = 0.09;
 
 /// What the host renders for `tab`: label key and icon path. Only ever
 /// called with the layout's identities — Search has already folded into
-/// Files — so it spells the five real tools.
+/// Files — so it spells the six real tools.
 fn tool_spec(tab: RightPanelTab) -> (RightPanelTab, L10nKey, &'static str) {
     TOOL_HOST_TOOLS
         .into_iter()
         .find(|(tool, _, _)| *tool == tab)
-        .expect("a layout identity is one of the five tools")
+        .expect("a layout identity is one of the six tools")
 }
 
 /// The stable element id of `tab`'s tool tab.

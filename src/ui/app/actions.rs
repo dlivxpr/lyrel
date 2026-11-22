@@ -260,6 +260,7 @@ impl LyrelApp {
                 cx,
             )
         }))
+        }))
         .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(
             cx.listener(|this, _: &ToggleDiffViewMode, _window, cx| this.toggle_diff_view_mode(cx)),
