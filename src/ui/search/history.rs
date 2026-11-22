@@ -42,10 +42,7 @@ impl SessionHistory {
     }
 
     pub(crate) fn cached_items(&self, cx: &App) -> (Vec<Item>, usize) {
-        self.items(
-            crate::ui::session_history::cached_sessions(self.host),
-            cx,
-        )
+        self.items(crate::ui::session_history::cached_sessions(self.host), cx)
     }
 
     pub(super) fn items(&self, found: Vec<PastSession>, cx: &App) -> (Vec<Item>, usize) {

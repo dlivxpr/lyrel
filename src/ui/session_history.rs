@@ -20,8 +20,8 @@ use gpui_kit::base::actions::{Confirm, SelectDown, SelectUp};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, Focusable as _, MouseButton, Window, anchored, deferred,
-    div, prelude::*, px, rems,
+    AnyElement, App, Context, Entity, Focusable as _, MouseButton, Window, anchored, deferred, div,
+    prelude::*, px, rems,
 };
 
 use lyrel_core::core::agent_history::PastSession;
@@ -475,8 +475,7 @@ impl LyrelApp {
             self.session_history.listing = SessionListing::default();
             return;
         };
-        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, wanted.host)
-        else {
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, wanted.host) else {
             // The host is gone from under the workspace: say disconnected
             // instead of waiting on a scan that has nobody to run on.
             self.session_history.bound = wanted;
@@ -627,7 +626,11 @@ impl LyrelApp {
                 .into_any_element(),
             SessionHealth::Ready | SessionHealth::Partial => {
                 // Clamp a selection left over from a taller list.
-                if self.session_history.selected.is_some_and(|s| s >= rows.len()) {
+                if self
+                    .session_history
+                    .selected
+                    .is_some_and(|s| s >= rows.len())
+                {
                     self.session_history.selected = rows.len().checked_sub(1);
                 }
                 let selected = self.session_history.selected;
@@ -646,19 +649,17 @@ impl LyrelApp {
                     .on_action(cx.listener(|this, _: &Confirm, window, cx| {
                         this.confirm_history_selection(window, cx);
                     }))
-                    .on_key_down(cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                        if crate::ui::search::is_edit_gesture(&ev.keystroke) {
-                            this.open_history_actions(window, cx);
-                            cx.stop_propagation();
-                        }
-                    }));
+                    .on_key_down(
+                        cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                            if crate::ui::search::is_edit_gesture(&ev.keystroke) {
+                                this.open_history_actions(window, cx);
+                                cx.stop_propagation();
+                            }
+                        }),
+                    );
                 for (ix, session) in rows.iter().enumerate() {
-                    list = list.child(self.session_history_row(
-                        ix,
-                        session,
-                        selected == Some(ix),
-                        cx,
-                    ));
+                    list =
+                        list.child(self.session_history_row(ix, session, selected == Some(ix), cx));
                 }
                 let mut body = v_flex().child(selector).child(list);
                 if health == SessionHealth::Partial {
@@ -700,8 +701,7 @@ impl LyrelApp {
             true => t(L10nKey::PanelSessionsFollowCwd),
             false => t(L10nKey::PanelSessionsWorktrees),
         };
-        let shown: gpui_kit::SharedString =
-            crate::ui::home::display_path(dir, home).into();
+        let shown: gpui_kit::SharedString = crate::ui::home::display_path(dir, home).into();
         let worktrees: Vec<(PathBuf, gpui_kit::SharedString)> = self
             .session_history
             .worktrees
@@ -725,12 +725,7 @@ impl LyrelApp {
             .h(px(SCOPE_ROW_H))
             .pl(px(CONTENT_INSET))
             .pr(px(CONTENT_INSET))
-            .child(
-                div()
-                    .text_size(rems(META))
-                    .text_color(muted)
-                    .child(label),
-            )
+            .child(div().text_size(rems(META)).text_color(muted).child(label))
             .child(
                 gpui_kit::component::button::Button::new("panel-sessions-directory")
                     .ghost()
@@ -752,24 +747,26 @@ impl LyrelApp {
                                 .min_w(px(200.))
                                 .item(PopupMenuItem::label(menu_follow).checked(follow));
                             if !worktrees.is_empty() {
-                                menu = menu
-                                    .separator()
-                                    .item(PopupMenuItem::label(menu_section));
+                                menu = menu.separator().item(PopupMenuItem::label(menu_section));
                                 for (path, display) in &worktrees {
                                     let path = path.clone();
                                     let checked = pinned.as_deref() == Some(path.as_path());
                                     menu = menu.item(
-                                        PopupMenuItem::new(display.clone()).checked(checked).on_click({
-                                            let app = app.clone();
-                                            move |_, _window, cx| {
-                                                let _ = app.update(cx, |this, cx| {
-                                                    this.pick_session_directory(
-                                                        SessionDirectory::Worktree(path.clone()),
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
+                                        PopupMenuItem::new(display.clone())
+                                            .checked(checked)
+                                            .on_click({
+                                                let app = app.clone();
+                                                move |_, _window, cx| {
+                                                    let _ = app.update(cx, |this, cx| {
+                                                        this.pick_session_directory(
+                                                            SessionDirectory::Worktree(
+                                                                path.clone(),
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
                                     );
                                 }
                             }
@@ -944,35 +941,33 @@ impl LyrelApp {
         );
         if session.agent.fork_label().is_some() {
             let fork_session = session.clone();
-            menu = menu.item(
-                PopupMenuItem::new(t(L10nKey::CmdForkSession)).on_click({
-                    let app = app.clone();
-                    move |_, window, cx| {
-                        let session = fork_session.clone();
-                        let _ = app.update(cx, |this, cx| {
-                            this.resume_session(
-                                crate::ui::agent_launch::ResumeSessionRequest {
-                                    agent: session.agent,
-                                    session_id: session.id.clone(),
-                                    cwd: session.cwd.clone(),
-                                    host_id: host,
-                                    scope: session.scope.clone(),
-                                    fork: true,
-                                },
-                                window,
-                                cx,
-                            );
-                        });
-                    }
-                }),
-            );
+            menu = menu.item(PopupMenuItem::new(t(L10nKey::CmdForkSession)).on_click({
+                let app = app.clone();
+                move |_, window, cx| {
+                    let session = fork_session.clone();
+                    let _ = app.update(cx, |this, cx| {
+                        this.resume_session(
+                            crate::ui::agent_launch::ResumeSessionRequest {
+                                agent: session.agent,
+                                session_id: session.id.clone(),
+                                cwd: session.cwd.clone(),
+                                host_id: host,
+                                scope: session.scope.clone(),
+                                fork: true,
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                }
+            }));
         }
         let copy_id = session.id.clone();
-        menu = menu.item(
-            PopupMenuItem::new(t(L10nKey::CmdCopySessionId)).on_click(move |_, _, cx| {
+        menu = menu.item(PopupMenuItem::new(t(L10nKey::CmdCopySessionId)).on_click(
+            move |_, _, cx| {
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copy_id.clone()));
-            }),
-        );
+            },
+        ));
         let hide_agent = session.agent;
         let hide_id = session.id.clone();
         menu.item(PopupMenuItem::new(t(L10nKey::SessionActionHide)).on_click({
@@ -981,7 +976,9 @@ impl LyrelApp {
                 let _ = app.update(cx, |this, cx| {
                     this.update_config(cx, |cfg| {
                         cfg.hidden_agent_sessions
-                            .insert(crate::core::agent_history::session_key(hide_agent, &hide_id));
+                            .insert(crate::core::agent_history::session_key(
+                                hide_agent, &hide_id,
+                            ));
                     });
                 });
             }
@@ -1117,12 +1114,24 @@ mod tests {
     #[test]
     fn health_distinguishes_empty_disconnected_unsupported_and_partial() {
         let ready = SessionListing {
-            sessions: vec![ PastSession { agent: CLIAgent::Pi, id: "a".into(), cwd: None, title: String::new(), branch: None, updated: 0, scope: None } ],
+            sessions: vec![PastSession {
+                agent: CLIAgent::Pi,
+                id: "a".into(),
+                cwd: None,
+                title: String::new(),
+                branch: None,
+                updated: 0,
+                scope: None,
+            }],
             errors: vec![],
             host_reachable: true,
         };
         assert_eq!(ready.health(1), SessionHealth::Ready);
-        assert_eq!(ready.health(0), SessionHealth::Empty, "a filter can empty a ready listing");
+        assert_eq!(
+            ready.health(0),
+            SessionHealth::Empty,
+            "a filter can empty a ready listing"
+        );
 
         let partial = SessionListing {
             sessions: ready.sessions.clone(),
@@ -1187,8 +1196,8 @@ mod tests {
     /// rollback cost Search had.
     #[test]
     fn sessions_config_key_round_trips() {
-        let json = serde_json::to_string(&lyrel_core::core::config::RightPanelTab::Sessions)
-            .unwrap();
+        let json =
+            serde_json::to_string(&lyrel_core::core::config::RightPanelTab::Sessions).unwrap();
         assert_eq!(json, "\"sessions\"");
         let back: lyrel_core::core::config::RightPanelTab = serde_json::from_str(&json).unwrap();
         assert_eq!(back, lyrel_core::core::config::RightPanelTab::Sessions);
@@ -1203,10 +1212,16 @@ mod tests {
             .filter(|(tab, _, _)| *tab == RightPanelTab::Sessions)
             .collect();
         assert_eq!(entries.len(), 1, "the tool is registered exactly once");
-        let mut ids: Vec<_> = [RightPanelTab::Info, RightPanelTab::Files, RightPanelTab::Scm, RightPanelTab::GitHub, RightPanelTab::Sessions]
-            .into_iter()
-            .map(crate::ui::right_panel::tool_tab_id)
-            .collect();
+        let mut ids: Vec<_> = [
+            RightPanelTab::Info,
+            RightPanelTab::Files,
+            RightPanelTab::Scm,
+            RightPanelTab::GitHub,
+            RightPanelTab::Sessions,
+        ]
+        .into_iter()
+        .map(crate::ui::right_panel::tool_tab_id)
+        .collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 5, "every tool's tab id is distinct");
@@ -1246,7 +1261,14 @@ mod tests {
         // answer, and Hermes — local-only by design — must surface as a
         // per-source error, not empty the listing.
         let scan = cx.update(|cx| {
-            plan_scan(host.id(), &[], &CLIAgent::ALL, &remote_home, &agent_launch, cx)
+            plan_scan(
+                host.id(),
+                &[],
+                &CLIAgent::ALL,
+                &remote_home,
+                &agent_launch,
+                cx,
+            )
         });
         let listing = collect_sessions(&*host, scan);
         let found = listing
@@ -1260,7 +1282,10 @@ mod tests {
             Some(std::path::Path::new("/tmp/remote-project"))
         );
         assert!(
-            listing.errors.iter().any(|e| e.kind == SessionErrorKind::Unsupported),
+            listing
+                .errors
+                .iter()
+                .any(|e| e.kind == SessionErrorKind::Unsupported),
             "a source the remote cannot list is reported, not swallowed"
         );
         assert_eq!(
@@ -1273,7 +1298,14 @@ mod tests {
         let mut fixture = fixture;
         fixture.restart_router();
         let scan = cx.update(|cx| {
-            plan_scan(host.id(), &[], &CLIAgent::ALL, &remote_home, &agent_launch, cx)
+            plan_scan(
+                host.id(),
+                &[],
+                &CLIAgent::ALL,
+                &remote_home,
+                &agent_launch,
+                cx,
+            )
         });
         let listing = collect_sessions(&*host, scan);
         assert_eq!(listing.health(0), SessionHealth::Disconnected);
