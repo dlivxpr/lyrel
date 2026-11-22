@@ -30,9 +30,8 @@ pub(crate) struct SettingsContext {
     /// The host of the workspace that opened this settings window — the
     /// Sessions page's initial host.
     pub active_host: lyrel_ui_base::host_ops::HostId,
-    /// The agent sessions that workspace currently has open, by the same
-    /// identity the session listings use — what marks a listed session
-    /// "running" in the Sessions page's batch summary.
+    /// The open sessions across workbench windows, using the native
+    /// identity also used by the Sessions settings listing.
     pub live_sessions: Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,
     /// The planned host-scoped session-store scan for the Sessions page —
     /// the same plan the Session History tool and Search Everywhere run,

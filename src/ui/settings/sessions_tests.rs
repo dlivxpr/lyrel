@@ -186,6 +186,7 @@ fn custom_range_is_inclusive_on_both_ends() {
     let day = |offset: i64| {
         chrono::DateTime::from_timestamp((NOW as i64) + offset * DAY_SECS as i64, 0)
             .unwrap()
+            .with_timezone(&chrono::Local)
             .date_naive()
     };
     let rows = filtered_sessions(
@@ -218,6 +219,25 @@ fn custom_range_is_inclusive_on_both_ends() {
         NOW,
     );
     assert_eq!(open.len(), 4);
+}
+
+#[test]
+fn custom_range_follows_the_displayed_local_day() {
+    use chrono::TimeZone as _;
+
+    let timezone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    let local_midnight = timezone.with_ymd_and_hms(2026, 11, 20, 0, 0, 0).unwrap();
+    let day = local_midnight.date_naive();
+    let range = (Some(day), Some(day));
+    let start = local_midnight.timestamp() as u64;
+    assert!(!matches_calendar_dates(start - 1, range, &timezone));
+    assert!(matches_calendar_dates(start, range, &timezone));
+    assert!(matches_calendar_dates(
+        start + DAY_SECS - 1,
+        range,
+        &timezone
+    ));
+    assert!(!matches_calendar_dates(start + DAY_SECS, range, &timezone));
 }
 
 #[test]
@@ -321,7 +341,7 @@ fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext
         );
     });
     // Populate the real page before measuring the narrow layout.
-    settings.update_in(&mut vcx, |settings, _, _| {
+    settings.update_in(&mut vcx, |settings, _, cx| {
         let state = settings.active_settings_mut().expect("settings open");
         state.sessions.listing = listing(vec![
             session(CLIAgent::Pi, "a", "/w", NOW),
@@ -329,6 +349,7 @@ fn sessions_page_defaults_to_workspace_host_and_lays_out(cx: &mut TestAppContext
         ]);
         state.sessions.landed = true;
         state.sessions.bound = Some(HostId::LOCAL);
+        state.sessions.connection = HostRegistry::lookup(cx, HostId::LOCAL);
     });
     vcx.simulate_resize(size(px(720.), px(560.)));
     vcx.run_until_parked();
@@ -388,6 +409,12 @@ fn host_tab_and_filter_moves_clear_selection(cx: &mut TestAppContext) {
         );
 
         state.sessions.set_row_selected("pi:a".into(), true);
+        let prior = listing(vec![session(CLIAgent::Pi, "old-host", "/w", NOW)]);
+        state.sessions.listing = prior.clone();
+        state.sessions.landed = true;
+        state.sessions.bound = Some(HostId::LOCAL);
+        let prior_generation = state.sessions.generation;
+        let prior_session = state.navigation.session();
         state.sessions.select_host(HostId(u64::MAX));
         assert!(state.sessions.selected.is_empty(), "host switch clears");
         assert!(
@@ -395,6 +422,15 @@ fn host_tab_and_filter_moves_clear_selection(cx: &mut TestAppContext) {
             "the resident detail belongs to the previous host's listing"
         );
         assert_eq!(state.sessions.host, HostId(u64::MAX));
+        assert!(state.sessions.directory.is_none());
+        settings.sessions_settings_landed(
+            prior_session,
+            prior_generation,
+            HostId::LOCAL,
+            prior,
+            cx,
+        );
+        assert!(settings.sessions_source().0.is_empty());
     });
 }
 
@@ -413,11 +449,12 @@ fn hide_and_unhide_round_trip_through_the_visibility_key(cx: &mut TestAppContext
     listed_b.scope = Some(store_scope("/store/b"));
     let identity_a = SessionIdentity::of(HostId::LOCAL, &listed_a);
     let identity_b = SessionIdentity::of(HostId::LOCAL, &listed_b);
-    settings.update_in(&mut vcx, |settings, _, _| {
+    settings.update_in(&mut vcx, |settings, _, cx| {
         let state = settings.active_settings_mut().expect("settings open");
         state.sessions.listing = listing(vec![listed_a.clone(), listed_b.clone()]);
         state.sessions.landed = true;
         state.sessions.bound = Some(HostId::LOCAL);
+        state.sessions.connection = HostRegistry::lookup(cx, HostId::LOCAL);
     });
     vcx.run_until_parked();
     settings.update_in(&mut vcx, |settings, _, cx| {
@@ -485,6 +522,7 @@ fn legacy_hide_redisplays_one_row_without_exposing_same_id_siblings(cx: &mut Tes
         state.sessions.listing = listing(vec![listed_a, listed_b]);
         state.sessions.landed = true;
         state.sessions.bound = Some(HostId::LOCAL);
+        state.sessions.connection = HostRegistry::lookup(cx, HostId::LOCAL);
     });
     vcx.run_until_parked();
     settings.update_in(&mut vcx, |settings, _, cx| {
@@ -880,6 +918,7 @@ fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext
             listing(vec![listed_a.clone(), listed_b.clone(), listed_c.clone()]);
         state.sessions.landed = true;
         state.sessions.bound = Some(HostId::LOCAL);
+        state.sessions.connection = Some(host.clone());
         for key in &keys {
             state.sessions.selected.insert(key.clone());
         }

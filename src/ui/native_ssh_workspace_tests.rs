@@ -398,3 +398,143 @@ fn native_ssh_history_resumes_in_its_own_directory_and_preserves_the_busy_pane(
         "the original pane's program remains running"
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "requires a pinned Linux SSH fixture with a disposable managed Hermes store"]
+fn native_ssh_hermes_batch_keeps_the_confirmed_store_scope(_: &mut TestAppContext) {
+    use lyrel_core::core::cli_agent::CLIAgent;
+    use lyrel_core::host::Host as _;
+    use lyrel_core::host::session_operations::{SessionErrorKind, SessionScope, batch::*};
+
+    let binary = PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").unwrap());
+    let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
+    let host = fixture.connect_control();
+    let installation = format!("{}/lyrel-363-hermes-runtime", fixture.remote_home());
+    let store = format!("{installation}/home");
+    let launcher = format!("{installation}/bin/hermes");
+    let root = std::env::var("LYREL_TEST_SSH_HERMES_BATCH_ROOT").unwrap();
+    assert!(root.starts_with("lyrel-fixture-"));
+    assert!(
+        root.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    );
+    let child = format!("{root}-delegate");
+    let branch = format!("{root}-branch");
+    let artifact = |id: &str| PathBuf::from(format!("{store}/sessions/{id}.jsonl"));
+    for id in [&root, &child, &branch] {
+        assert!(
+            host.exists(&artifact(id)),
+            "missing disposable Hermes artifact {id}"
+        );
+    }
+
+    let mut scope = SessionScope::default();
+    scope
+        .environment
+        .insert("HERMES_HOME".into(), store.clone());
+    scope.environment.insert(
+        "HERMES_RUNTIME_DIR".into(),
+        format!("{installation}/runtime"),
+    );
+    let group = SessionBatchPrepareGroup {
+        cwd: PathBuf::from(fixture.remote_home()),
+        launch_argv: vec![launcher, "chat".into(), "--cli".into()],
+        scope,
+        source_ids: vec![root.clone()],
+    };
+    let prepare = |expected_host| {
+        SessionBatchRequest::Prepare(Box::new(SessionBatchPrepare {
+            expected_host,
+            agent: CLIAgent::Hermes,
+            groups: vec![group.clone()],
+        }))
+    };
+    assert_eq!(
+        host.session_batch(&prepare(0)).unwrap_err().kind,
+        SessionErrorKind::WrongHost
+    );
+    let planned = host.session_batch(&prepare(host.id().0)).unwrap();
+    let plan = &planned.group_results()[0].items[0];
+    assert_eq!(plan.status, SessionBatchStatus::Eligible, "{plan:?}");
+    assert_eq!(plan.delete_ids, [root.clone(), child.clone()]);
+
+    let execute = |expected_delete_ids| {
+        host.session_batch(&SessionBatchRequest::Execute(Box::new(
+            SessionBatchExecute {
+                expected_host: host.id().0,
+                agent: CLIAgent::Hermes,
+                groups: vec![SessionBatchExecuteGroup {
+                    cwd: group.cwd.clone(),
+                    launch_argv: group.launch_argv.clone(),
+                    scope: group.scope.clone(),
+                    confirmations: vec![SessionBatchConfirmation {
+                        source_id: root.clone(),
+                        expected_delete_ids,
+                    }],
+                }],
+            },
+        )))
+        .unwrap()
+    };
+    let stale = execute(vec![root.clone()]);
+    assert_eq!(
+        stale.group_results()[0].items[0].status,
+        SessionBatchStatus::Skipped
+    );
+    assert!(host.exists(&artifact(&root)));
+    let deleted = execute(plan.delete_ids.clone());
+    let item = &deleted.group_results()[0].items[0];
+    assert_eq!(item.status, SessionBatchStatus::Deleted, "{item:?}");
+    assert!(!host.exists(&artifact(&root)));
+    assert!(!host.exists(&artifact(&child)));
+    assert!(host.exists(&artifact(&branch)));
+}
+
+#[gpui_kit::test]
+#[ignore = "requires an isolated pinned Linux SSH fixture and matching servers"]
+fn native_ssh_lyrel_usage_identifies_the_remote_daemon(_: &mut TestAppContext) {
+    use lyrel_core::host::{
+        Host as _,
+        lyrel_usage::{LyrelUsageState, ProcessMetricUnavailable},
+    };
+
+    let binary = PathBuf::from(std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").unwrap());
+    let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
+    let host = fixture.connect_control();
+    let ReplyOk::Status(status) = host.client().call(ControlRequest::Status).unwrap() else {
+        panic!("the SSH daemon did not return its identity");
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let metrics = host.host_metrics().unwrap();
+        let usage = metrics
+            .lyrel_usage()
+            .expect("remote Lyrel usage capability");
+        assert_eq!(usage.instance(), host.peer().instance);
+        assert_eq!(usage.hostname(), metrics.hostname());
+        match usage.state() {
+            LyrelUsageState::Sample(sample) => {
+                let server = sample.server();
+                assert_eq!(server.pid(), status.pid);
+                assert!(server.memory_used_bytes() > 0);
+                assert_eq!(
+                    server.gpu(),
+                    Some(Err(ProcessMetricUnavailable::Unsupported))
+                );
+                assert_eq!(
+                    server.network(),
+                    Some(Err(ProcessMetricUnavailable::Unsupported))
+                );
+                break;
+            }
+            LyrelUsageState::Waiting => {
+                assert!(
+                    Instant::now() < deadline,
+                    "remote process sampler did not prime"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            LyrelUsageState::Unavailable(reason) => panic!("Lyrel usage unavailable: {reason}"),
+        }
+    }
+}

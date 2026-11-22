@@ -1,6 +1,7 @@
 //! 工作区与独立设置窗口的接线：工作区保留 pane、文件和焦点操作，设置只发送明确意图。
 use super::*;
 use crate::ui::settings_window::{SessionSources, SettingsContext, SettingsEvent, SettingsWindow};
+use crate::ui::windows::WindowRegistry;
 
 type SettingsFollowUp =
     Box<dyn FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>)>;
@@ -76,10 +77,15 @@ impl LyrelApp {
             }),
             active_host: self.spawn_host(cx),
             live_sessions: Rc::new(move |cx| {
-                live_sessions
-                    .upgrade()
-                    .map(|app| app.read(cx).settings_live_sessions(cx))
-                    .unwrap_or_default()
+                let owner = live_sessions.upgrade();
+                let mut sessions = Vec::new();
+                for app in WindowRegistry::live_apps(cx).filter(|app| Some(app) != owner.as_ref()) {
+                    app.read(cx).collect_live_sessions(cx, &mut sessions);
+                }
+                if let Some(owner) = owner {
+                    owner.read(cx).collect_live_sessions(cx, &mut sessions);
+                }
+                sessions
             }),
             session_scan: Rc::new(move |host, cx| {
                 session_scan
@@ -143,11 +149,17 @@ impl LyrelApp {
     /// The agent sessions open in this workspace's panes, named by the same
     /// identity the session listings use — the settings Sessions page marks a
     /// listed session "running" through this, never by reading the pane tree.
-    fn settings_live_sessions(&self, cx: &App) -> Vec<crate::ui::session_history::SessionIdentity> {
+    fn collect_live_sessions(
+        &self,
+        cx: &App,
+        out: &mut Vec<crate::ui::session_history::SessionIdentity>,
+    ) {
         use crate::ui::session_history::SessionIdentity;
-        let mut out = Vec::new();
         for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
             let pane = leaf.read(cx);
+            if pane.terminal.exited {
+                continue;
+            }
             let Some(agent) = pane.agent() else {
                 continue;
             };
@@ -165,7 +177,6 @@ impl LyrelApp {
                 scope: state.readout.session_scope.clone(),
             });
         }
-        out
     }
 
     /// The host-scoped scan plan for the settings Sessions page: the same

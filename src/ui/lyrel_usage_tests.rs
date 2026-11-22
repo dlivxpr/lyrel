@@ -139,6 +139,13 @@ fn monitor_lyrel_row_collapses_summarizes_and_expands_by_host(cx: &mut TestAppCo
                 .unwrap()
                 .starts_with("RAM ")
         );
+        assert!(
+            window
+                .find("lyrel-usage-gpu")
+                .label()
+                .unwrap()
+                .starts_with("GPU ")
+        );
         assert!(window.try_find("lyrel-usage-desktop").is_none());
         assert!(window.try_find("lyrel-usage-group-remote").is_none());
         assert!(window.try_find("lyrel-usage-includes-remote").is_none());
@@ -204,6 +211,25 @@ fn monitor_lyrel_row_collapses_summarizes_and_expands_by_host(cx: &mut TestAppCo
                 .ends_with('%')
         );
         assert!(window.find("lyrel-usage-daemon-mem").label().is_some());
+        for device in ["desktop", "daemon"] {
+            let gpu = window.find(format!("lyrel-usage-{device}-gpu").as_str());
+            assert!(gpu.label().unwrap().starts_with("GPU"));
+            let network = window.find(format!("lyrel-usage-{device}-network").as_str());
+            let label = network.label().unwrap();
+            #[cfg(not(target_os = "macos"))]
+            assert_eq!(
+                label,
+                unavailable_detail(
+                    t(L10nKey::MonitorColNetwork),
+                    Some(ProcessMetricUnavailable::Unsupported)
+                )
+            );
+            #[cfg(target_os = "macos")]
+            assert!(
+                label.starts_with(t(L10nKey::LyrelProcessNetwork))
+                    || label.starts_with(t(L10nKey::MonitorColNetwork))
+            );
+        }
         assert!(window.try_find("lyrel-usage-server").is_none());
     });
 
@@ -404,6 +430,12 @@ fn a_sample_from_another_daemon_instance_is_dropped_to_priming() {
         ),
         Slot::Gone
     );
+}
+
+#[test]
+fn network_pair_shares_units_only_when_they_match() {
+    assert_eq!(network_pair_text(52_000., 8_000.), "52 / 8 KB/s");
+    assert_eq!(network_pair_text(52_000., 8.), "52 KB/s / 8 B/s");
 }
 
 #[test]

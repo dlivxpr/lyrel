@@ -88,6 +88,7 @@ pub(crate) struct SessionsState {
     /// 当前列表所属的主机：`None` 到首次扫描认领前。与 `host` 不一致就
     /// 说明主机刚切走，下一轮 render 会重新扫描。
     bound: Option<HostId>,
+    connection: Option<lyrel_ui_base::host_ops::SharedHost>,
     listing: SessionListing,
     generation: u64,
     scanning: bool,
@@ -188,6 +189,31 @@ impl SessionDeleteFlow {
             && self.consent_checked
             && self.eligible() > 0
     }
+
+    fn exclude_open_sessions(&mut self, live: &[SessionIdentity]) -> bool {
+        if live.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for row in &mut self.rows {
+            let Some(SessionDeletePlan::Eligible { delete_ids }) = &row.plan else {
+                continue;
+            };
+            let store = session_history::store_group_key(&row.identity);
+            if live.iter().any(|open| {
+                open.host == row.identity.host
+                    && open.agent == row.identity.agent
+                    && delete_ids.iter().any(|id| open.id == *id)
+                    && (open.store() == SessionStore::Unconfirmed
+                        || session_history::store_group_key(open) == store)
+            }) {
+                row.excluded = Some(SessionBlocker::Running);
+                row.plan = None;
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 const DAY_SECS: u64 = 86_400;
@@ -201,6 +227,7 @@ impl SessionsState {
         Self {
             host,
             bound: None,
+            connection: None,
             listing: SessionListing::default(),
             generation: 0,
             scanning: false,
@@ -266,7 +293,18 @@ impl SessionsState {
             return;
         }
         self.host = host;
+        self.directory = None;
+        self.reset_listing();
         self.clear_scope(true);
+    }
+
+    fn reset_listing(&mut self) {
+        self.bound = None;
+        self.connection = None;
+        self.listing = SessionListing::default();
+        self.generation += 1;
+        self.scanning = false;
+        self.landed = false;
     }
 
     fn set_tab(&mut self, tab: SessionsTab) {
@@ -382,18 +420,23 @@ fn match_activity(
         SessionActivity::OlderThanThirtyDays => {
             updated > 0 && now.saturating_sub(updated) > 30 * DAY_SECS
         }
-        SessionActivity::Custom => {
-            let after_start = custom
-                .0
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .map_or(true, |start| updated >= start.and_utc().timestamp() as u64);
-            let before_end = custom
-                .1
-                .and_then(|d| d.and_hms_opt(23, 59, 59))
-                .map_or(true, |end| updated <= end.and_utc().timestamp() as u64);
-            after_start && before_end
-        }
+        SessionActivity::Custom => matches_calendar_dates(updated, custom, &chrono::Local),
     }
+}
+
+fn matches_calendar_dates(
+    updated: u64,
+    (start, end): (Option<chrono::NaiveDate>, Option<chrono::NaiveDate>),
+    timezone: &impl chrono::TimeZone,
+) -> bool {
+    let date = i64::try_from(updated)
+        .ok()
+        .filter(|seconds| *seconds > 0)
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|utc| utc.with_timezone(timezone).date_naive());
+    date.is_some_and(|date| {
+        start.is_none_or(|start| date >= start) && end.is_none_or(|end| date <= end)
+    })
 }
 
 /// 三态复选框的当前状态：全选当前结果 / 部分勾选 / 没有勾选。
@@ -504,31 +547,46 @@ impl SettingsWindow {
             return;
         }
         let host = settings.sessions.host;
-        if settings.sessions.scanning && settings.sessions.bound == Some(host) {
+        let shared = HostRegistry::lookup(cx, host).filter(|host| host.is_connected());
+        let same_connection = match (&settings.sessions.connection, &shared) {
+            (Some(previous), Some(current)) => std::sync::Arc::ptr_eq(previous, current),
+            (None, None) => true,
+            _ => false,
+        };
+        if settings.sessions.bound == Some(host)
+            && same_connection
+            && (settings.sessions.scanning || settings.sessions.landed)
+        {
             return;
         }
-        if settings.sessions.bound == Some(host) && settings.sessions.landed {
-            return;
-        }
-        // 计划与工作区读取都在认领 bound 之前完成，认领只改自己的状态。
-        let shared = HostRegistry::lookup(cx, host);
-        let scan = (self.workspace.session_scan)(host, cx);
+        let scan = shared
+            .as_ref()
+            .and_then(|_| (self.workspace.session_scan)(host, cx));
         let Some(settings) = self.active_settings_mut() else {
             return;
         };
+        settings.sessions.reset_listing();
+        settings.sessions.selected.clear();
+        settings.sessions.detail = None;
+        settings.sessions.connection = shared.clone();
         settings.sessions.bound = Some(host);
         settings.sessions.scanning = true;
-        settings.sessions.generation += 1;
         let generation = settings.sessions.generation;
+        let session = settings.navigation.session();
         match (shared, scan) {
             (Some(shared), Some(scan)) => {
+                let owner = shared.clone();
                 HostOps::run_in(
                     shared,
                     window,
                     cx,
                     move |host| session_history::collect_sessions(host, scan),
                     move |this, listing, _window, cx| {
-                        this.sessions_settings_landed(generation, host, listing, cx);
+                        if HostRegistry::lookup(cx, host).is_some_and(|current| {
+                            current.is_connected() && std::sync::Arc::ptr_eq(&owner, &current)
+                        }) {
+                            this.sessions_settings_landed(session, generation, host, listing, cx);
+                        }
                     },
                 );
             }
@@ -561,6 +619,7 @@ impl SettingsWindow {
 
     fn sessions_settings_landed(
         &mut self,
+        session: gpui_kit::EntityId,
         generation: u64,
         host: HostId,
         listing: SessionListing,
@@ -569,7 +628,10 @@ impl SettingsWindow {
         let Some(settings) = self.active_settings_mut() else {
             return;
         };
-        if settings.sessions.generation != generation {
+        if !settings.navigation.accepts(session)
+            || settings.sessions.generation != generation
+            || settings.sessions.host != host
+        {
             return;
         }
         session_history::remember_sessions(host, listing.sessions.clone());
@@ -765,7 +827,7 @@ fn build_delete_plan(
 }
 
 impl SettingsWindow {
-    /// 页面数据：扫描未落地时先用共享缓存， landed 后才谈健康状态。
+    /// 只显示当前连接已经返回的列表。旧连接的缓存不参与选择或删除。
     fn sessions_source(&self) -> (Vec<PastSession>, Option<SessionListing>) {
         let Some(settings) = self.active_settings() else {
             return (Vec::new(), None);
@@ -774,7 +836,7 @@ impl SettingsWindow {
         if state.landed {
             (state.listing.sessions.clone(), Some(state.listing.clone()))
         } else {
-            (session_history::cached_sessions(state.host), None)
+            (Vec::new(), None)
         }
     }
 
@@ -853,6 +915,7 @@ impl SettingsWindow {
         >,
         cx: &mut Context<Self>,
     ) {
+        let live = (self.workspace.live_sessions)(cx);
         let Some(settings) = self.active_settings_mut() else {
             return;
         };
@@ -889,6 +952,7 @@ impl SettingsWindow {
                         });
                     }
                 }
+                flow.exclude_open_sessions(&live);
                 flow.phase = SessionDeletePhase::Ready;
             }
             Ok(_) => {
@@ -916,6 +980,18 @@ impl SettingsWindow {
     /// 确认清单通过：Execute 只携带 prepare 判为 eligible 的行，每行
     /// 绑定它prepare 时算出的精确原生级联；分组与顺序和 prepare 完全一致。
     fn confirm_session_delete(&mut self, cx: &mut Context<Self>) {
+        let live = (self.workspace.live_sessions)(cx);
+        if let Some(flow) = self
+            .active_settings_mut()
+            .and_then(|settings| settings.sessions.delete.as_mut())
+            && flow.can_confirm()
+            && flow.exclude_open_sessions(&live)
+        {
+            flow.consent_irreversible = false;
+            flow.consent_checked = false;
+            cx.notify();
+            return;
+        }
         let Some(settings) = self.active_settings() else {
             return;
         };
@@ -1043,9 +1119,7 @@ impl SettingsWindow {
         };
         let state = &mut settings.sessions;
         state.selected.clear();
-        state.bound = None;
-        state.scanning = false;
-        state.landed = false;
+        state.reset_listing();
         cx.notify();
     }
 

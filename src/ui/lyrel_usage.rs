@@ -355,6 +355,18 @@ fn format_cpu(cpu: f32) -> String {
     }
 }
 
+fn network_pair_text(rx: f64, tx: f64) -> String {
+    let rx = super::host_metrics::rate_text(rx);
+    let tx = super::host_metrics::rate_text(tx);
+    if let (Some((received, rx_unit)), Some((_, tx_unit))) =
+        (rx.rsplit_once(' '), tx.rsplit_once(' '))
+        && rx_unit == tx_unit
+    {
+        return format!("{received} / {tx}");
+    }
+    format!("{rx} / {tx}")
+}
+
 /// One right-aligned value cell, the width the process-table columns use.
 fn usage_cell(text: String, width: f32, mono: gpui_kit::SharedString) -> gpui_kit::Div {
     div()
@@ -634,11 +646,9 @@ impl LyrelApp {
                 _ => marker.into(),
             };
             let network_text = match net {
-                Some(Ok(rate)) => format!(
-                    "{} / {}",
-                    super::host_metrics::rate_text(rate.rx_bytes_per_sec()),
-                    super::host_metrics::rate_text(rate.tx_bytes_per_sec())
-                ),
+                Some(Ok(rate)) => {
+                    network_pair_text(rate.rx_bytes_per_sec(), rate.tx_bytes_per_sec())
+                }
                 _ => marker.into(),
             };
             let gpu_detail = match gpu {
@@ -698,7 +708,6 @@ impl LyrelApp {
                 .child(
                     usage_cell(network_text, NET_W, mono.clone())
                         .id(format!("{id}-network"))
-                        .overflow_hidden()
                         .aria_label(gpui_kit::SharedString::from(network_detail.clone()))
                         .test_support()
                         .tooltip(move |window, cx| {
