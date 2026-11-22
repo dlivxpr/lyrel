@@ -25,7 +25,11 @@ pub struct LyrelUsage {
 
 impl LyrelUsage {
     /// One stamped answer; the only way to set the fields is to sample.
-    pub fn new(hostname: impl Into<String>, instance: impl Into<String>, state: LyrelUsageState) -> Self {
+    pub fn new(
+        hostname: impl Into<String>,
+        instance: impl Into<String>,
+        state: LyrelUsageState,
+    ) -> Self {
         Self {
             hostname: hostname.into(),
             instance: instance.into(),
@@ -92,10 +96,8 @@ impl LyrelSample {
     }
 }
 
-/// CPU and RAM attributed to exactly one Lyrel process.
-///
-/// Later resource tickets extend this with per-component GPU and network
-/// fields; appending serde-default fields keeps old peers decoding.
+/// Resource readings for one Lyrel process. A missing optional field means
+/// the peer has no reading yet or predates the corresponding sampler.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ComponentUsage {
     pid: u32,
@@ -107,6 +109,17 @@ pub struct ComponentUsage {
     cpu_percent: f32,
     /// Resident set size as the host OS reports it.
     memory_used_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gpu: Option<Result<Vec<(String, f32)>, ProcessMetricUnavailable>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<Result<super::metrics::NetworkThroughput, ProcessMetricUnavailable>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMetricUnavailable {
+    Unsupported,
+    CounterReadFailed,
 }
 
 impl ComponentUsage {
@@ -116,6 +129,8 @@ impl ComponentUsage {
             started_secs,
             cpu_percent,
             memory_used_bytes,
+            gpu: None,
+            network: None,
         }
     }
 
@@ -133,6 +148,36 @@ impl ComponentUsage {
 
     pub fn memory_used_bytes(&self) -> u64 {
         self.memory_used_bytes
+    }
+
+    /// Percentages keyed by the owning host's physical engine identity.
+    /// An empty successful reading means no engine recorded any work.
+    pub fn gpu(&self) -> Option<Result<&[(String, f32)], ProcessMetricUnavailable>> {
+        self.gpu
+            .as_ref()
+            .map(|result| result.as_deref().map_err(|reason| *reason))
+    }
+
+    pub fn with_gpu(
+        mut self,
+        reading: Result<Vec<(String, f32)>, ProcessMetricUnavailable>,
+    ) -> Self {
+        self.gpu = Some(reading);
+        self
+    }
+
+    pub fn network(
+        &self,
+    ) -> Option<Result<super::metrics::NetworkThroughput, ProcessMetricUnavailable>> {
+        self.network
+    }
+
+    pub fn with_network(
+        mut self,
+        reading: Result<super::metrics::NetworkThroughput, ProcessMetricUnavailable>,
+    ) -> Self {
+        self.network = Some(reading);
+        self
     }
 }
 

@@ -1013,6 +1013,71 @@ impl Host for RemoteHost {
         }
     }
 
+    /// The bounded batch runs on the data-owning Host: the route, the
+    /// connection and the negotiated capability are revalidated here, and a
+    /// peer without `session-batch-v1` sees an explicit Unsupported instead
+    /// of a request it cannot decode taking the link down.
+    fn session_batch(
+        &self,
+        request: &crate::host::session_operations::batch::SessionBatchRequest,
+    ) -> Result<
+        crate::host::session_operations::batch::SessionBatchReply,
+        crate::host::session_operations::SessionOperationError,
+    > {
+        use crate::host::session_operations::{SessionErrorKind, SessionOperationError};
+        let error = |kind, message: &str| SessionOperationError {
+            kind,
+            message: message.into(),
+            retained: None,
+        };
+        if request.expected_host() != self.id.0 {
+            return Err(error(
+                SessionErrorKind::WrongHost,
+                "session batch belongs to another Host",
+            ));
+        }
+        if !self.is_connected() {
+            return Err(error(
+                SessionErrorKind::Connection,
+                "session batch Host is disconnected",
+            ));
+        }
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SESSION_BATCH)
+        {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                "update lyrel-server for session-batch-v1",
+            ));
+        }
+        let mut wire = request.clone();
+        match &mut wire {
+            crate::host::session_operations::batch::SessionBatchRequest::Prepare(request) => {
+                request.expected_host = 0;
+            }
+            crate::host::session_operations::batch::SessionBatchRequest::Execute(request) => {
+                request.expected_host = 0;
+            }
+        }
+        match self
+            .call(ControlRequest::SessionBatch {
+                request: Box::new(wire),
+            })
+            .map_err(|e| {
+                error(
+                    SessionErrorKind::Connection,
+                    &format!("session batch connection failed: {e}"),
+                )
+            })? {
+            ReplyOk::SessionBatch(result) => *result,
+            _ => Err(error(
+                SessionErrorKind::Identity,
+                "session batch Host returned an incompatible response",
+            )),
+        }
+    }
+
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
         let id = match self.call(ControlRequest::WatchOpen {
             dirs: wire_paths(dirs),

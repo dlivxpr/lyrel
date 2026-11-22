@@ -18,7 +18,7 @@ log.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 # CPU and memory for host and component sampling; already locked through the desktop stack.
-sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system", "network"] }
 
 # SSH connection-manager data layer (`core::ssh_profile` / `core::keychain`) and
 # workspace identity (`core::session`). `uuid` mints stable ids (v4) and

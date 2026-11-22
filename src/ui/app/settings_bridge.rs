@@ -283,6 +283,14 @@ impl LyrelApp {
                         );
                     }
                     SettingsEvent::RebindKeymap => crate::ui::keymap::rebind(cx),
+                    SettingsEvent::SessionsDeleted { host, agent, ids } => {
+                        let host = *host;
+                        let agent = *agent;
+                        let ids = ids.clone();
+                        cx.defer_in(window, move |this, _window, cx| {
+                            this.note_sessions_deleted(host, agent, &ids, cx);
+                        });
+                    }
                     SettingsEvent::ApplyTheme {
                         persist,
                         refresh_windows,

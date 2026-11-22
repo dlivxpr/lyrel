@@ -373,6 +373,19 @@ fn scoped_store_key(scope: Option<&lyrel_core::host::session_operations::Session
     }
 }
 
+/// The store-grouping key for the batch delete flow: agent, owning host and
+/// the durable store selectors — everything `SessionIdentity::key()` carries
+/// except the native id. A selection's rows group by this; two rows in one
+/// group share one exact native store, and Execute can never widen a group.
+pub(crate) fn store_group_key(identity: &SessionIdentity) -> String {
+    format!(
+        "{}@{}|{}",
+        identity.agent.slug(),
+        identity.host.0,
+        scoped_store_key(identity.scope.as_ref())
+    )
+}
+
 /// Percent-escape every byte outside the unreserved set, so two adjacent key
 /// components can never blur into each other whatever a native id, a profile
 /// name, or a remote path happens to contain.
@@ -547,6 +560,38 @@ pub(crate) fn plan_scan(
         opencode: opencode_scopes,
         hermes: hermes_scopes,
         hermes_errors,
+    }
+}
+
+impl SessionScan {
+    /// The launch context a batch delete should reuse for this agent/scope:
+    /// the same request the scan planned, so the deletion resolves the exact
+    /// store and runtime the listing came from. `None` when the scan kept no
+    /// such request (a fixture, or a scope only a now-closed pane observed).
+    pub(crate) fn batch_context(
+        &self,
+        agent: CLIAgent,
+        scope: &lyrel_core::host::session_operations::SessionScope,
+    ) -> Option<(
+        PathBuf,
+        Vec<String>,
+        lyrel_core::host::session_operations::SessionScope,
+    )> {
+        let requests = match agent {
+            CLIAgent::Hermes => &self.hermes,
+            CLIAgent::OpenCode => &self.opencode,
+            _ => return None,
+        };
+        requests
+            .iter()
+            .find(|request| request.scope == *scope)
+            .map(|request| {
+                (
+                    request.cwd.clone(),
+                    request.launch_argv.clone(),
+                    request.scope.clone(),
+                )
+            })
     }
 }
 
@@ -813,6 +858,22 @@ pub(crate) fn remember_sessions(host: HostId, found: Vec<PastSession>) {
         .insert(host, found);
 }
 
+/// Drop the just-deleted ids from the shared unscoped cache so Search
+/// Everywhere's placeholder never keeps offering a removed record between
+/// the deletion and the next full scan. Ids match per agent: two providers
+/// can reuse one id for unrelated sessions, and the cache must not drop the
+/// unrelated one.
+pub(crate) fn forget_sessions(host: HostId, agent: CLIAgent, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let mut cache = LAST_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(found) = cache.get_mut(&host) else {
+        return;
+    };
+    found.retain(|session| session.agent != agent || !ids.iter().any(|id| *id == session.id));
+}
+
 /// Which directory the tool lists: following the context pane, or pinned to
 /// one checkout of its repository.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -880,6 +941,12 @@ pub(crate) struct SessionHistoryPanel {
     /// on. `None` while following the context pane.
     pin_origin: Option<PinOrigin>,
     bound: SessionBound,
+    /// Bumped when a verified native batch delete lands on this panel's
+    /// host: the listing on screen no longer describes the store, so the
+    /// next sync rebinds and rescans even though the directory never moved.
+    deletions: u64,
+    /// The deletion revision the current bound was taken at.
+    bound_deletions: u64,
     listing: SessionListing,
     generation: u64,
     scanning: bool,
@@ -975,16 +1042,20 @@ impl LyrelApp {
             repo,
             dir,
         };
-        if self.session_history.bound == wanted {
+        if self.session_history.bound == wanted
+            && self.session_history.bound_deletions == self.session_history.deletions
+        {
             return;
         }
-        // The bound moved: the listing on screen belongs to the old scope,
-        // so it comes down now — only the current generation may paint —
-        // and the fast native landing puts the new scope's rows up.
+        // The bound moved — or the store underneath it was deleted from:
+        // either way the listing on screen belongs to the old scope, so it
+        // comes down now — only the current generation may paint — and the
+        // fast native landing puts the new scope's rows up.
         self.session_history.listing = SessionListing::default();
         self.session_history.landed = false;
         self.session_history.selected = None;
         self.session_history.close_actions(cx);
+        self.session_history.bound_deletions = self.session_history.deletions;
         // No directory (no pane yet): nothing to match, and scanning a
         // made-up home would list sessions the tool cannot scope.
         let Some(dir) = wanted.dir.clone() else {
@@ -1052,6 +1123,24 @@ impl LyrelApp {
                 );
             },
         );
+    }
+
+    /// A verified native batch delete landed (from Sessions settings): the
+    /// shared placeholder cache drops the removed ids at once, and this
+    /// tool's next sync rebinds and rescans its directory even though the
+    /// context never moved.
+    pub(crate) fn note_sessions_deleted(
+        &mut self,
+        host: HostId,
+        agent: CLIAgent,
+        ids: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        forget_sessions(host, agent, ids);
+        if self.session_history.bound.host == host {
+            self.session_history.deletions += 1;
+        }
+        cx.notify();
     }
 
     /// The native portion landed: it paints at once — the panel stays

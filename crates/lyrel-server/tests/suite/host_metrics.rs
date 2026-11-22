@@ -116,6 +116,12 @@ fn a_real_daemon_reports_its_whole_host_and_stops_answering_after_disconnect() {
     );
     assert!(!first.hostname().is_empty());
     assert_eq!(first.instance(), client.hello().instance);
+    assert!(
+        client
+            .hello()
+            .has_feature(lyrel_core::daemon::control::feature::HOST_NETWORK_METRICS),
+        "a real daemon on a supported desktop negotiates the network capability"
+    );
     let hostname = first.hostname().to_owned();
     loop {
         let metrics = client.host_metrics().unwrap();
@@ -128,6 +134,14 @@ fn a_real_daemon_reports_its_whole_host_and_stops_answering_after_disconnect() {
                 assert!(sample.memory_total_bytes() > 0);
                 assert!(sample.memory_used_bytes() <= sample.memory_total_bytes());
                 assert!(sample.sampled_at_millis() > 0);
+                // The negotiated sample carries off-host rates derived from
+                // the real interfaces: possibly idle zeros, never absent,
+                // never negative, never non-finite.
+                let network = sample
+                    .network()
+                    .expect("the negotiated sample carries a network reading");
+                assert!(network.rx_bytes_per_sec().is_finite() && network.rx_bytes_per_sec() >= 0.);
+                assert!(network.tx_bytes_per_sec().is_finite() && network.tx_bytes_per_sec() >= 0.);
                 break;
             }
             MetricsState::Waiting => {
@@ -228,6 +242,79 @@ fn remote_metrics_keep_their_daemon_identity_across_hosts_disconnect_and_reconne
     );
     reconnected.client().close();
     b.client().close();
+}
+
+#[test]
+fn real_interface_traffic_appears_in_the_transmit_series() {
+    let profile = tempfile::tempdir().unwrap();
+    let (stdout, stdin, closer) = stdio_connection(profile.path());
+    let client = ControlClient::connect_with(
+        stdout,
+        stdin,
+        Some(closer),
+        &ControlHello::host_rpc("metrics-network-traffic", "consumer"),
+        Box::new(|_| {}),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "metrics control handshake failed: {error}\n{}",
+            diagnostics(profile.path())
+        )
+    });
+
+    // Warm the sampler until the first genuine sample and record the idle
+    // transmit rate the machine had before the burst.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let idle_tx = loop {
+        match client.host_metrics().unwrap().state() {
+            MetricsState::Sample(sample) => {
+                break sample
+                    .network()
+                    .map(|network| network.tx_bytes_per_sec())
+                    .unwrap_or(0.);
+            }
+            MetricsState::Waiting => {
+                assert!(
+                    Instant::now() < deadline,
+                    "host never completed its initial sample"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            MetricsState::Unavailable(reason) => panic!("native host sampling failed: {reason}"),
+        }
+    };
+
+    // Multicast datagrams egress the real interface — never loopback — so a
+    // sustained burst must lift the daemon's transmit rate while it samples.
+    // No listener is needed; the NIC counts what leaves it. The client link
+    // itself rides stdio pipes and never touches an interface counter.
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+    let payload = vec![0x5A_u8; 65_507];
+    let mut peak_tx = idle_tx;
+    let mut sent = 0_u64;
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(4) {
+        for _ in 0..32 {
+            socket.send_to(&payload, ("224.0.0.251", 5353)).unwrap();
+            sent += payload.len() as u64;
+        }
+        if let Ok(metrics) = client.host_metrics()
+            && let MetricsState::Sample(sample) = metrics.state()
+            && let Some(network) = sample.network()
+        {
+            peak_tx = peak_tx.max(network.tx_bytes_per_sec());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    client.close();
+    assert!(
+        sent >= 100_000_000,
+        "the burst itself must move real bytes: {sent}"
+    );
+    assert!(
+        peak_tx >= idle_tx + 512_000.,
+        "a ~{sent}-byte multicast burst must lift the transmit rate well above the idle {idle_tx} B/s (peak {peak_tx} B/s)"
+    );
 }
 
 #[test]

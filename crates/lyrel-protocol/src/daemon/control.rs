@@ -86,7 +86,8 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// monitor stays read-only instead.
 /// v21 adds `DirectoryScan` and the `disk-usage-v1` feature. The owning
 /// host scans the directory under a work bound and reports its volume size.
-pub const CONTROL_VERSION: u32 = 21;
+/// v22 adds the bounded native session `SessionBatch` request/reply pair.
+pub const CONTROL_VERSION: u32 = 22;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -223,6 +224,10 @@ pub mod feature {
     pub const AGENT_STATE_AGE: &str = "agent-state-age";
     pub const HERMES_STATISTICS: &str = "hermes-statistics-v1";
     pub const OPENCODE_STATISTICS: &str = "opencode-statistics-v1";
+    /// The peer can prepare and execute a bounded native session batch.
+    pub const SESSION_BATCH: &str = "session-batch-v1";
+    /// Whole-host samples include receive and transmit rates when available.
+    pub const HOST_NETWORK_METRICS: &str = "host-network-metrics-v1";
 }
 
 pub use crate::host::{
@@ -356,6 +361,9 @@ pub enum ControlRequest {
     },
     HermesStatistics {
         request: Box<crate::host::session_operations::SessionOperation>,
+    },
+    SessionBatch {
+        request: Box<crate::host::session_operations::batch::SessionBatchRequest>,
     },
 
     WatchOpen {
@@ -700,6 +708,7 @@ impl ControlRequest {
             SearchContent { .. } => Duration::from_secs(30),
             Shells | AgentSessions { .. } => Duration::from_secs(20),
             SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } | HermesStatistics { .. } => Duration::from_secs(120),
+            SessionBatch { .. } => Duration::from_secs(180),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
@@ -822,6 +831,14 @@ pub enum ReplyOk {
     ),
     HermesStatistics(
         Box<Result<serde_json::Value, crate::host::session_operations::SessionOperationError>>,
+    ),
+    SessionBatch(
+        Box<
+            Result<
+                crate::host::session_operations::batch::SessionBatchReply,
+                crate::host::session_operations::SessionOperationError,
+            >,
+        >,
     ),
     Attached {
         took_over_from: Option<String>,

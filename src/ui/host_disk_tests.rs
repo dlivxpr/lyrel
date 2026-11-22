@@ -172,10 +172,11 @@ fn a_directory_change_rescans_and_never_polls_on_the_metrics_cadence(cx: &mut Te
         LocalLink::install_client_for_test(cx, server.client.clone());
     });
 
-    let select_tab = |app: &gpui_kit::Entity<LyrelApp>, vcx: &mut VisualTestContext, index: usize| {
-        vcx.update(|_, cx| app.update(cx, |app, _| app.tabs.select(index)));
-        settle(vcx);
-    };
+    let select_tab =
+        |app: &gpui_kit::Entity<LyrelApp>, vcx: &mut VisualTestContext, index: usize| {
+            vcx.update(|_, cx| app.update(cx, |app, _| app.tabs.select(index)));
+            settle(vcx);
+        };
 
     let first = tempfile::tempdir().unwrap();
     sized_file(first.path(), "one.bin", 600_000_000);

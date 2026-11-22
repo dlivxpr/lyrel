@@ -722,7 +722,42 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SessionsBlockerRunning => "Session running",
         L10nKey::SessionsBlockerSourceUnsupported => "Source does not support deletion",
         L10nKey::SessionsBlockerStoreUnconfirmed => "Storage could not be confirmed",
+        L10nKey::SessionsBlockerOpenCodeCascade => {
+            "Native delete interrupts active sessions and cascades without a verifiable target set"
+        }
+        L10nKey::SessionsBlockerKimiUnfenced => {
+            "Native delete has no expected-identity fence and can fail open"
+        }
+        L10nKey::SessionsBlockerPiNoLease => "Native delete has no cross-process write lease",
+        L10nKey::SessionsBlockerOmpNoLease => {
+            "Native delete has no write lease; recursive artifact scope is configurable"
+        }
         L10nKey::SessionsDetailEmpty => "Select a session title to see its details.",
+        L10nKey::SessionsDeleteSelectedFmt => "Delete {count}",
+        L10nKey::SessionsDeletePreparing => "Rechecking targets on their owning host…",
+        L10nKey::SessionsDeleteConfirmTitle => "Confirm session deletion",
+        L10nKey::SessionsDeleteConfirmScope => {
+            "The confirmed targets and their native cascades will be removed on the owning host. This cannot be undone."
+        }
+        L10nKey::SessionsDeleteConsentIrreversible => {
+            "I understand these native records are removed permanently and cannot be undone"
+        }
+        L10nKey::SessionsDeleteConsentStore => {
+            "I have checked the listed sources, targets and affected native records"
+        }
+        L10nKey::SessionsDeleteConfirmFmt => "Delete {count}",
+        L10nKey::SessionsDeleteCascadeFmt => "{count} native records",
+        L10nKey::SessionsDeleteExcluded => "Excluded from deletion",
+        L10nKey::SessionsDeleteReasonActive => "Held by an active writer",
+        L10nKey::SessionsDeleteReasonStale => "Changed or no longer exists",
+        L10nKey::SessionsDeleteReasonProvider => "Provider operation failed",
+        L10nKey::SessionsDeleteExecuting => "Deleting confirmed targets…",
+        L10nKey::SessionsDeleteResultTitle => "Deletion result",
+        L10nKey::SessionsDeleteResultFmt => {
+            "Deleted {deleted} · Skipped {skipped} · Failed {failed}"
+        }
+        L10nKey::SessionsDeleteDone => "Done",
+        L10nKey::SessionsDeleteFailed => "The deletion could not run",
         L10nKey::UsageSearchKeywords => {
             "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo balance plan Credits quota reset API key accounts rename refresh credentials usage private platform session cookie browser profile LocalStorage userToken access_token enhancement Firefox Safari Keychain Full Disk Access DPAPI App-Bound Encryption"
         }
@@ -2611,6 +2646,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorColCpu => "CPU",
         L10nKey::MonitorColMemory => "Memory",
         L10nKey::MonitorColGpu => "GPU",
+        L10nKey::MonitorColNetwork => "Network",
         L10nKey::MonitorSortTree => "Tree order",
         L10nKey::MonitorSortCpu => "By CPU",
         L10nKey::MonitorSortMemory => "By memory",
@@ -2998,6 +3034,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
         L10nKey::HostMetricsError => "Host sampling failed",
         L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
+        L10nKey::HostMetricsNetworkSample => "{host} · Network receive {rx} · transmit {tx}",
         L10nKey::HostMetricsRam => "RAM",
         L10nKey::LyrelUsageLocal => "Local",
         L10nKey::LyrelUsageRemote => "Remote · {host}",
@@ -3009,8 +3046,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::LyrelUsageCollapse => "Collapse Lyrel usage",
         L10nKey::LyrelUsageWaiting => "Waiting for Lyrel sample",
         L10nKey::LyrelUsageUnavailable => "Lyrel usage unavailable",
-        L10nKey::LyrelUsageSample => "{host} · Lyrel CPU {cpu} · RAM {mem}",
+        L10nKey::LyrelUsageSample => "{host} · Lyrel CPU {cpu} · RAM {mem} · GPU {gpu}",
         L10nKey::LyrelUsageComponent => "{name} · CPU {cpu} · RAM {mem}",
+        L10nKey::LyrelProcessNetwork => "Net ↓ / ↑",
+        L10nKey::LyrelProcessMetricUnsupported => {
+            "This host cannot attribute this metric to a process"
+        }
+        L10nKey::LyrelProcessMetricFailed => "Could not read the process counters",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {

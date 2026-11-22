@@ -8,6 +8,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 use lyrel_core::core::config::RightPanelTab;
 use lyrel_core::daemon::control::{ControlClient, ControlHello};
+use lyrel_core::host::metrics::NetworkThroughput;
 
 use crate::ui::app::test_window::harness_with_tabs;
 use lyrel_ui_base::actions::{
@@ -141,17 +142,21 @@ fn a_new_daemon_instance_drops_the_predecessors_samples() {
 fn gpu_readout_shows_a_percent_a_reason_or_an_honest_dash() {
     let snapshot = |sample| HostMetrics::new("gpu-host", "instance", MetricsState::Sample(sample));
 
-    let ready = readout(&State::Ready(snapshot(
-        sample_at(0, 10., 8, 16).with_gpu(42.25),
-    )));
+    let ready = readout(
+        &State::Ready(snapshot(sample_at(0, 10., 8, 16).with_gpu(42.25))),
+        false,
+    );
     assert_eq!(ready.gpu_text(), "42%");
     assert_eq!(ready.gpu_status(), None);
 
     // The platform could not supply a reading: the value is the down marker
     // and the slot's state word is the sampler's own reason.
-    let unavailable = readout(&State::Ready(snapshot(
-        sample_at(0, 10., 8, 16).with_gpu_unavailable("no GPU engine performance counters"),
-    )));
+    let unavailable = readout(
+        &State::Ready(snapshot(
+            sample_at(0, 10., 8, 16).with_gpu_unavailable("no GPU engine performance counters"),
+        )),
+        false,
+    );
     assert_eq!(unavailable.gpu_text(), "—");
     assert_eq!(
         unavailable.gpu_status().map(|status| status.to_string()),
@@ -161,12 +166,12 @@ fn gpu_readout_shows_a_percent_a_reason_or_an_honest_dash() {
 
     // A daemon that predates GPU sampling still parses: the slot shows the
     // down marker without inventing a reason.
-    let legacy = readout(&State::Ready(snapshot(sample_at(0, 10., 8, 16))));
+    let legacy = readout(&State::Ready(snapshot(sample_at(0, 10., 8, 16))), false);
     assert_eq!(legacy.gpu_text(), "—");
     assert_eq!(legacy.gpu_status(), None);
 
     // Whole-sample pending words are shared with the GPU slot.
-    let waiting = readout(&State::Waiting);
+    let waiting = readout(&State::Waiting, false);
     assert_eq!(waiting.gpu_text(), "…");
     assert!(waiting.gpu_status().is_some());
 }
@@ -177,30 +182,135 @@ fn history_buckets_keep_gpu_peaks_and_blank_slots_without_gpu() {
     history.push(sample_at(0, 5., 8, 16).with_gpu(30.), "instance-a");
     history.push(sample_at(0, 50., 8, 16).with_gpu(90.), "instance-a");
     history.push(sample_at(0, 60., 8, 16), "instance-a");
+    let anchor = history.latest().unwrap().arrived_millis;
+    let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
+    assert_eq!(buckets[BUCKET_COUNT - 1].unwrap().gpu, Some(90.));
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 5., 8, 16), "instance-a");
+    let anchor = history.latest().unwrap().arrived_millis;
+    let buckets = history.buckets(MetricsRange::TwoMinutes, anchor);
+    assert_eq!(buckets[BUCKET_COUNT - 1].unwrap().gpu, None);
+}
+
+#[test]
+fn history_keeps_network_peaks_without_letting_missing_readings_zero_them() {
+    let mut history = SampleHistory::default();
+    history.push(
+        sample_at(0, 5., 8, 16).with_network(NetworkThroughput::new(1_000., 500.)),
+        "instance-a",
+    );
+    // A second reading out-peaks the first.
+    history.push(
+        sample_at(0, 95., 8, 16).with_network(NetworkThroughput::new(3_000., 1_500.)),
+        "instance-a",
+    );
+    // A CPU/RAM-only sample — a tick whose network reading was missing — must
+    // not zero the peaks the real readings set.
+    history.push(sample_at(0, 50., 8, 16), "instance-a");
     let anchor = history
         .latest()
         .map(|arrival| arrival.arrived_millis)
         .unwrap();
     let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
-    let last = buckets[BUCKET_COUNT - 1].expect("the readings land in the last slot");
-    assert_eq!(last.cpu, 60.);
+    let peak_rx = buckets
+        .iter()
+        .flatten()
+        .map(|bucket| bucket.network_rx)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let peak_tx = buckets
+        .iter()
+        .flatten()
+        .map(|bucket| bucket.network_tx)
+        .fold(f32::NEG_INFINITY, f32::max);
     assert_eq!(
-        last.gpu,
-        Some(90.),
-        "a long view keeps the GPU peak, not the average"
+        peak_rx, 3_000.,
+        "the network peak survives a tick whose reading was missing"
+    );
+    assert_eq!(peak_tx, 1_500.);
+    // The network-less tick is still a kept sample: only its network field
+    // was missing, not the CPU/RAM reading it carried.
+    assert_eq!(history.arrivals.len(), 3);
+}
+
+#[test]
+fn rate_text_uses_link_rate_units_and_trims_the_decimal() {
+    assert_eq!(rate_text(0.), "0 B/s");
+    assert_eq!(rate_text(512.), "512 B/s");
+    assert_eq!(rate_text(240_000.), "240 KB/s");
+    assert_eq!(rate_text(56_500.), "56.5 KB/s");
+    assert_eq!(rate_text(2_100_000.), "2.1 MB/s");
+    assert_eq!(rate_text(3.5e9), "3.5 GB/s");
+}
+
+/// A ready snapshot whose sample may carry the negotiated network field.
+fn sample_state(with_network: bool) -> State {
+    let mut sample = serde_json::json!({
+        "cpu_percent": 12.0,
+        "memory_used_bytes": 8,
+        "memory_total_bytes": 16,
+        "sampled_at_millis": 1_700_000_000_000_u64,
+    });
+    if with_network {
+        sample["network"] = serde_json::json!({
+            "rx_bytes_per_sec": 2_100_000.0,
+            "tx_bytes_per_sec": 240_000.0,
+        });
+    }
+    State::Ready(
+        serde_json::from_value(serde_json::json!({
+            "hostname": "metrics-network-test",
+            "instance": "metrics-network-instance",
+            "state": {"sample": sample},
+        }))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn network_rates_render_per_state_and_never_as_quiet_zeros() {
+    // A supporting peer with a reading: both rates formatted, no state word,
+    // and the hover detail names the host with both values.
+    let ready = readout(&sample_state(true), true);
+    assert!(ready.network_ready());
+    assert_eq!(ready.network_rx_text(), "↓ 2.1 MB/s");
+    assert_eq!(ready.network_tx_text(), "↑ 240 KB/s");
+    assert_eq!(ready.network_status, None);
+    assert!(
+        ready.network_detail.contains("metrics-network-test")
+            && ready.network_detail.contains("2.1 MB/s")
+            && ready.network_detail.contains("240 KB/s"),
+        "the hover detail carries host and both rates: {}",
+        ready.network_detail
     );
 
-    // A sample without a GPU reading leaves earlier slots blank rather than
-    // painting a quiet zero.
-    let mut history = SampleHistory::default();
-    history.push(sample_at(0, 5., 8, 16), "instance-a");
-    let anchor = history
-        .latest()
-        .map(|arrival| arrival.arrived_millis)
-        .unwrap();
-    let buckets = history.buckets(MetricsRange::TwoMinutes, anchor);
-    let last = buckets[BUCKET_COUNT - 1].expect("the reading lands in the last slot");
-    assert_eq!(last.gpu, None, "no GPU data is a gap, not a zero");
+    // Supporting peer, reading missing (fresh baseline, counter reset): the
+    // waiting family, explicitly not a zero.
+    let waiting = readout(&sample_state(false), true);
+    assert!(!waiting.network_ready());
+    assert_eq!(waiting.network_rx_text(), "↓ …");
+    assert_eq!(waiting.network_tx_text(), "↑ …");
+    assert_eq!(waiting.network_status, Some(t(L10nKey::HostMetricsWaiting)));
+
+    // A peer without the capability never carries the field: unsupported,
+    // not an endless wait.
+    let unsupported = readout(&sample_state(false), false);
+    assert!(!unsupported.network_ready());
+    assert_eq!(unsupported.network_rx_text(), "↓ —");
+    assert_eq!(unsupported.network_tx_text(), "↑ —");
+    assert_eq!(
+        unsupported.network_status,
+        Some(t(L10nKey::HostMetricsUnavailable))
+    );
+
+    // Whole-sampler states drag both series into their marker family.
+    let pending = readout(&State::Connecting, false);
+    assert_eq!(pending.network_rx_text(), "↓ …");
+    let down = readout(&State::Disconnected, true);
+    assert_eq!(down.network_rx_text(), "↓ —");
+    assert_eq!(
+        down.network_status,
+        Some(t(L10nKey::HostMetricsDisconnected))
+    );
 }
 
 fn has_titlebar_sample(vcx: &mut VisualTestContext) -> bool {
@@ -323,6 +433,84 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
         1,
         "title bar and monitor share the one live sampler — no competing loops"
     );
+}
+
+#[gpui_kit::test]
+fn monitor_network_tile_groups_receive_and_send_on_the_shared_samples(cx: &mut TestAppContext) {
+    let server = HostServer::new();
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
+    wait_sample(&mut vcx, true);
+
+    // The real daemon negotiates the network capability, and its genuine
+    // sample carries off-host rates (possibly idle zeros, never absent).
+    let client = server.client.clone();
+    let (hostname, wire) = std::thread::spawn(move || {
+        let metrics = client.host_metrics().unwrap();
+        let hostname = metrics.hostname().to_owned();
+        let wire = match metrics.state() {
+            MetricsState::Sample(sample) => sample
+                .network()
+                .map(|network| (network.rx_bytes_per_sec(), network.tx_bytes_per_sec())),
+            other => panic!("the wired sample never arrived: {other:?}"),
+        };
+        (hostname, wire)
+    })
+    .join()
+    .unwrap();
+    let wire = wire.expect("the negotiated sample carries a network reading");
+    assert!(
+        wire.0.is_finite() && wire.0 >= 0. && wire.1.is_finite() && wire.1 >= 0.,
+        "genuine off-host rates: {wire:?}"
+    );
+
+    vcx.update(|window, cx| window.click("titlebar-metric-cpu", cx));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.find("monitor-tile-cpu").visible());
+        assert!(
+            window.find("monitor-tile-network").visible(),
+            "the network tile renders in the resource section"
+        );
+        assert!(
+            window
+                .find("monitor-tile-network")
+                .label()
+                .unwrap()
+                .contains(&hostname),
+            "the network tile names the context pane's host"
+        );
+        // Both series are on screen with rate formatting, and the overlay
+        // chart is present because a genuine reading exists.
+        let rx = window
+            .find("monitor-tile-network-rx")
+            .label()
+            .unwrap()
+            .to_owned();
+        let tx = window
+            .find("monitor-tile-network-tx")
+            .label()
+            .unwrap()
+            .to_owned();
+        assert!(rx.starts_with('↓') && rx.ends_with("/s"), "rx reads {rx:?}");
+        assert!(tx.starts_with('↑') && tx.ends_with("/s"), "tx reads {tx:?}");
+        assert!(window.find("monitor-tile-network-chart").visible());
+        // The distinct waiting/unsupported words stay off screen while a
+        // real reading is present.
+        assert_ne!(
+            window.find("monitor-tile-network").label(),
+            Some(i18n::t(L10nKey::HostMetricsUnavailable))
+        );
+    });
 }
 
 #[gpui_kit::test]

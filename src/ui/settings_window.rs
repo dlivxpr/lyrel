@@ -61,6 +61,14 @@ pub(crate) enum SettingsEvent {
     LocaleChanged,
     /// A keybinding edit was persisted; the shell rebinds the app-wide keymap.
     RebindKeymap,
+    /// A verified native session batch delete landed in the settings window:
+    /// the owning app drops the removed ids from the shared cache and lets
+    /// the Session History tool rebind/rescan on its next sync.
+    SessionsDeleted {
+        host: lyrel_ui_base::host_ops::HostId,
+        agent: crate::core::cli_agent::CLIAgent,
+        ids: Vec<String>,
+    },
     /// Repaint theme and menus for the current in-memory `Config`. The theme
     /// picker and theme editor pass `persist: false` for live previews, which
     /// must repaint without writing `config.json`; committed changes pass

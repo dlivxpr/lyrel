@@ -274,7 +274,8 @@ fn blockers_name_running_unsupported_and_unconfirmed() {
     );
     assert_eq!(
         session_blockers(&listed, &[open]),
-        vec![SessionBlocker::Running]
+        vec![SessionBlocker::Running, SessionBlocker::PiNoWriteLease],
+        "a live pane blocks first; the provider's own gap stays visible beside it"
     );
 
     let opencode = SessionIdentity::of(
@@ -292,8 +293,8 @@ fn blockers_name_running_unsupported_and_unconfirmed() {
     );
     assert_eq!(
         session_blockers(&opencode, &[]),
-        vec![SessionBlocker::SourceUnsupported],
-        "a confirmed OpenCode store still has no deletion path"
+        vec![SessionBlocker::OpenCodeCascadeUnfenced],
+        "OpenCode deletes interrupt active sessions and cascade without a fenceable set"
     );
 
     let bare = SessionIdentity::of(host, &session(CLIAgent::Hermes, "bare", "/w", NOW));
@@ -626,5 +627,501 @@ fn storage_label_shows_the_confirmed_actual_location() {
         storage_label(&bare, None),
         t(L10nKey::SessionsDefaultProfile),
         "nothing confirmed falls back to the default-profile wording"
+    );
+}
+
+// ---- 批量原生删除（#367）：分组、资格门槛与 prepare/execute 全流程 ----
+
+use lyrel_core::host::session_operations::batch::{
+    SessionBatchExecuteResult, SessionBatchGroupResult, SessionBatchItem,
+    SessionBatchPrepareResult, SessionBatchReason, SessionBatchReasonKind, SessionBatchReply,
+    SessionBatchRequest, SessionBatchStatus, SessionBatchTotals,
+};
+
+fn hermes_session(id: &str, home: &str, cwd: &str) -> PastSession {
+    let mut scope = lyrel_core::host::session_operations::SessionScope::default();
+    if !home.is_empty() {
+        scope.environment.insert("HERMES_HOME".into(), home.into());
+    }
+    PastSession {
+        agent: CLIAgent::Hermes,
+        id: id.into(),
+        cwd: Some(PathBuf::from(cwd)),
+        title: format!("title-{id}"),
+        branch: None,
+        updated: NOW,
+        scope: Some(scope),
+    }
+}
+
+fn candidate(session: &PastSession, live: &[SessionIdentity]) -> SessionDeleteCandidate {
+    let identity = SessionIdentity::of(HostId::LOCAL, session);
+    SessionDeleteCandidate {
+        blocked: session_blockers(&identity, live),
+        title: session.title.clone().into(),
+        identity,
+        cwd: session.cwd.clone(),
+    }
+}
+
+#[test]
+fn delete_gate_only_hermes_with_confirmed_store() {
+    let listed = hermes_session("h", "/store/hermes", "/w");
+    let identity = SessionIdentity::of(HostId::LOCAL, &listed);
+    assert!(
+        session_blockers(&identity, &[]).is_empty(),
+        "a Hermes row with a confirmed store reads deletable"
+    );
+    assert_eq!(
+        session_blockers(&identity, &[identity.clone()]),
+        [SessionBlocker::Running],
+        "a live pane at the same identity blocks first"
+    );
+
+    let kimi = session(CLIAgent::Kimi, "k", "/w", NOW);
+    let kimi_identity = SessionIdentity::of(HostId::LOCAL, &kimi);
+    assert_eq!(
+        session_blockers(&kimi_identity, &[]),
+        [SessionBlocker::KimiDeleteUnfenced],
+        "Kimi ACP delete can fail open without an expected identity fence"
+    );
+
+    let bare = hermes_session("bare", "", "/w");
+    let bare_identity = SessionIdentity::of(HostId::LOCAL, &bare);
+    assert_eq!(
+        session_blockers(&bare_identity, &[]),
+        [SessionBlocker::StoreUnconfirmed],
+        "a Hermes row whose store cannot be named is not deletable"
+    );
+}
+
+#[test]
+fn delete_plan_groups_by_store_and_keeps_selection_order() {
+    let candidates = vec![
+        candidate(&hermes_session("a", "/store/one", "/w"), &[]),
+        candidate(&hermes_session("b", "/store/two", "/w"), &[]),
+        candidate(&hermes_session("c", "/store/one", "/w2"), &[]),
+        SessionDeleteCandidate {
+            blocked: vec![SessionBlocker::Running],
+            ..candidate(&hermes_session("run", "/store/one", "/w"), &[])
+        },
+    ];
+    let (rows, groups) = build_delete_plan(&candidates, None, None, &Default::default());
+    assert_eq!(groups.len(), 2, "two distinct stores, two groups");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        rows[0].group,
+        Some(0),
+        "first store claimed the first group in selection order"
+    );
+    assert_eq!(rows[1].group, Some(1));
+    assert_eq!(
+        rows[2].group,
+        Some(0),
+        "the same store reuses its group however the selection interleaves"
+    );
+    assert_eq!(rows[3].group, None, "a blocked row joins no group");
+    assert_eq!(
+        rows[3].excluded,
+        Some(SessionBlocker::Running),
+        "the blocked row keeps its actionable reason"
+    );
+    assert_eq!(
+        groups[0]
+            .scope
+            .environment
+            .get("HERMES_HOME")
+            .map(String::as_str),
+        Some("/store/one")
+    );
+}
+
+/// The owning Host behind the batch flow: records what was asked and
+/// answers what the test queued, so the whole settings flow runs through
+/// the real prepare/execute wiring without touching a native store.
+struct BatchHost {
+    inner: lyrel_core::host::SharedHost,
+    seen: std::sync::Mutex<Vec<SessionBatchRequest>>,
+    queue: std::sync::Mutex<Vec<SessionBatchReply>>,
+}
+
+impl BatchHost {
+    fn new(inner: lyrel_core::host::SharedHost) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            inner,
+            seen: std::sync::Mutex::new(Vec::new()),
+            queue: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    fn push(&self, reply: SessionBatchReply) {
+        self.queue.lock().unwrap().push(reply);
+    }
+
+    fn seen(&self) -> Vec<SessionBatchRequest> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl lyrel_core::host::Host for BatchHost {
+    fn id(&self) -> HostId {
+        self.inner.id()
+    }
+    fn separator(&self) -> char {
+        self.inner.separator()
+    }
+    fn is_absolute(&self, p: &Path) -> bool {
+        self.inner.is_absolute(p)
+    }
+    fn read_dir(
+        &self,
+        dir: &Path,
+        root: Option<&Path>,
+    ) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
+        self.inner.read_dir(dir, root)
+    }
+    fn stat(&self, p: &Path) -> std::io::Result<lyrel_core::host::Meta> {
+        self.inner.stat(p)
+    }
+    fn read_file(&self, p: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+        self.inner.read_file(p, max)
+    }
+    fn canonicalize(&self, p: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(p)
+    }
+    fn search(
+        &self,
+        roots: &[PathBuf],
+        query: &str,
+        limit: usize,
+        dirs: usize,
+        hidden: bool,
+    ) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> {
+        self.inner.search(roots, query, limit, dirs, hidden)
+    }
+    fn search_content(
+        &self,
+        roots: &[PathBuf],
+        query: &lyrel_core::host::ContentQuery,
+        limits: &lyrel_core::host::ContentLimits,
+    ) -> std::io::Result<lyrel_core::host::ContentResults> {
+        self.inner.search_content(roots, query, limits)
+    }
+    fn write_file(&self, p: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> {
+        self.inner.write_file(p, bytes)
+    }
+    fn create_file_new(&self, p: &Path) -> std::io::Result<()> {
+        self.inner.create_file_new(p)
+    }
+    fn create_dir(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+        self.inner.create_dir(p, recursive)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn remove(&self, p: &Path, recursive: bool) -> std::io::Result<()> {
+        self.inner.remove(p, recursive)
+    }
+    fn repo_root(&self, p: &Path) -> std::io::Result<Option<PathBuf>> {
+        self.inner.repo_root(p)
+    }
+    fn git(&self, cwd: &Path, args: &[&str]) -> std::io::Result<lyrel_core::host::Output> {
+        self.inner.git(cwd, args)
+    }
+    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> {
+        self.inner.shells()
+    }
+    fn watch(&self, dirs: &[PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
+        self.inner.watch(dirs)
+    }
+    fn session_batch(
+        &self,
+        request: &SessionBatchRequest,
+    ) -> Result<SessionBatchReply, lyrel_core::host::session_operations::SessionOperationError>
+    {
+        self.seen.lock().unwrap().push(request.clone());
+        let mut queue = self.queue.lock().unwrap();
+        match queue.is_empty() {
+            true => Err(
+                lyrel_core::host::session_operations::SessionOperationError {
+                    kind: lyrel_core::host::session_operations::SessionErrorKind::Unsupported,
+                    message: "no canned answer".into(),
+                    retained: None,
+                },
+            ),
+            false => Ok(queue.remove(0)),
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn batch_delete_flow_prepare_confirm_execute_and_refresh(cx: &mut TestAppContext) {
+    let (settings, mut vcx) = harness(cx);
+    lyrel_ui_base::config::pin_test_config_dir();
+    let host = BatchHost::new(lyrel_core::host::local::shared());
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.open_settings_section(SettingsSection::Sessions, window, cx);
+    });
+    vcx.run_until_parked();
+    settings.update_in(&mut vcx, |_, _window, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
+    });
+
+    let listed_a = hermes_session("a", "/store/one", "/w");
+    let listed_b = hermes_session("b", "/store/two", "/w");
+    let listed_c = hermes_session("c", "/store/one", "/w2");
+    let keys: Vec<String> = [&listed_a, &listed_b, &listed_c]
+        .iter()
+        .map(|session| SessionIdentity::of(HostId::LOCAL, session).key())
+        .collect();
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        let state = settings.active_settings_mut().expect("settings open");
+        state.sessions.listing =
+            listing(vec![listed_a.clone(), listed_b.clone(), listed_c.clone()]);
+        state.sessions.landed = true;
+        state.sessions.bound = Some(HostId::LOCAL);
+        for key in &keys {
+            state.sessions.selected.insert(key.clone());
+        }
+        cx.update_global::<Config, _>(|cfg, _| {
+            cfg.agent_launch.insert("hermes".into(), "hermes".into());
+        });
+    });
+
+    host.push(SessionBatchReply::Prepare(SessionBatchPrepareResult {
+        groups: vec![
+            SessionBatchGroupResult {
+                items: vec![
+                    SessionBatchItem::eligible("a".into(), vec!["a".into(), "a.child".into()]),
+                    SessionBatchItem::eligible("c".into(), vec!["c".into()]),
+                ],
+            },
+            SessionBatchGroupResult {
+                items: vec![SessionBatchItem::eligible("b".into(), vec!["b".into()])],
+            },
+        ],
+    }));
+    let candidates = vec![
+        candidate(&listed_a, &[]),
+        candidate(&listed_b, &[]),
+        candidate(&listed_c, &[]),
+    ];
+    settings.update_in(&mut vcx, |settings, window, cx| {
+        settings.start_session_delete(window, candidates, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        vcx.run_until_parked();
+        if settings.update_in(&mut vcx, |settings, _, _| {
+            settings
+                .active_settings()
+                .and_then(|state| state.sessions.delete.as_ref())
+                .is_some_and(|flow| !matches!(flow.phase, SessionDeletePhase::Preparing))
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "prepare did not land");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let flow = settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .delete
+            .as_ref()
+            .expect("flow opened");
+        assert!(
+            matches!(flow.phase, SessionDeletePhase::Ready),
+            "the canned prepare answer landed"
+        );
+        assert_eq!(flow.eligible(), 3);
+        assert_eq!(flow.groups.len(), 2);
+        let plans: Vec<Option<&SessionDeletePlan>> =
+            flow.rows.iter().map(|row| row.plan.as_ref()).collect();
+        match plans[0] {
+            Some(SessionDeletePlan::Eligible { delete_ids }) => assert_eq!(
+                delete_ids.as_slice(),
+                ["a", "a.child"],
+                "the exact native cascade is bound to the row"
+            ),
+            _ => panic!("row a should be eligible"),
+        }
+        match plans[1] {
+            Some(SessionDeletePlan::Eligible { delete_ids }) => assert_eq!(
+                delete_ids.as_slice(),
+                ["b"],
+                "each row carries only its own cascade"
+            ),
+            _ => panic!("row b should be eligible"),
+        }
+    });
+
+    // 同意清单：两项都勾选才能确认。execute 的回复先入队，确认即消费。
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.confirm_session_delete(cx);
+        assert!(matches!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .delete
+                .as_ref()
+                .unwrap()
+                .phase,
+            SessionDeletePhase::Ready
+        ));
+        settings.set_session_delete_consent(0, true, cx);
+        settings.confirm_session_delete(cx);
+        assert!(matches!(
+            settings
+                .active_settings()
+                .unwrap()
+                .sessions
+                .delete
+                .as_ref()
+                .unwrap()
+                .phase,
+            SessionDeletePhase::Ready
+        ));
+        settings.set_session_delete_consent(1, true, cx);
+    });
+    host.push(SessionBatchReply::Execute(SessionBatchExecuteResult {
+        groups: vec![
+            SessionBatchGroupResult {
+                items: vec![
+                    SessionBatchItem {
+                        source_id: "a".into(),
+                        status: SessionBatchStatus::Deleted,
+                        delete_ids: vec!["a".into(), "a.child".into()],
+                        reason: None,
+                    },
+                    SessionBatchItem::refused(
+                        "c".into(),
+                        SessionBatchStatus::Skipped,
+                        SessionBatchReason::new(SessionBatchReasonKind::Active, "guarded"),
+                    ),
+                ],
+            },
+            SessionBatchGroupResult {
+                items: vec![SessionBatchItem::refused(
+                    "b".into(),
+                    SessionBatchStatus::Failed,
+                    SessionBatchReason::new(SessionBatchReasonKind::Provider, "native error"),
+                )],
+            },
+        ],
+    }));
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
+        settings.confirm_session_delete(cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        vcx.run_until_parked();
+        if settings.update_in(&mut vcx, |settings, _, _| {
+            settings
+                .active_settings()
+                .and_then(|state| state.sessions.delete.as_ref())
+                .is_some_and(|flow| !matches!(flow.phase, SessionDeletePhase::Executing))
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "execute did not land; requests={}",
+            host.seen().len()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let requests = host.seen();
+    assert_eq!(requests.len(), 2, "prepare then execute");
+    let execute = &requests[1];
+    let SessionBatchRequest::Execute(execute) = execute else {
+        panic!("the second request is the execute");
+    };
+    assert_eq!(execute.agent, CLIAgent::Hermes);
+    assert_eq!(
+        execute.groups.len(),
+        2,
+        "execute keeps the prepare grouping — it cannot widen a store"
+    );
+    assert_eq!(
+        execute.groups[0]
+            .confirmations
+            .iter()
+            .map(|confirmation| confirmation.source_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "c"],
+        "group order and row order survive from the selection"
+    );
+    assert_eq!(
+        execute.groups[0].confirmations[0].expected_delete_ids,
+        ["a", "a.child"],
+        "the confirmation binds the exact cascade prepare computed"
+    );
+    assert_eq!(
+        execute.groups[1].confirmations[0].expected_delete_ids,
+        ["b"]
+    );
+
+    settings.update_in(&mut vcx, |settings, _, _| {
+        let flow = settings
+            .active_settings()
+            .unwrap()
+            .sessions
+            .delete
+            .as_ref()
+            .expect("flow still open while executing");
+        assert!(
+            matches!(flow.phase, SessionDeletePhase::Done(_)),
+            "the canned execute answer landed"
+        );
+        let SessionDeletePhase::Done(result) = &flow.phase else {
+            unreachable!();
+        };
+        let SessionBatchTotals {
+            deleted,
+            skipped,
+            failed,
+        } = result.totals();
+        assert_eq!(
+            (deleted, skipped, failed),
+            (1, 1, 1),
+            "partial outcomes aggregate accurately across groups"
+        );
+        assert_eq!(result.deleted_ids(), ["a", "a.child"]);
+    });
+
+    // 收尾：勾选清空、本页重扫挂起、删除事件交给工作区刷新历史视图。
+    let (events, _subscription) = crate::ui::settings::test_window::record_events(&settings, cx);
+    settings.update_in(&mut vcx, |settings, _, cx| {
+        settings.finish_session_delete(cx);
+        let state = &settings.active_settings().unwrap().sessions;
+        assert!(state.delete.is_none(), "the flow closed");
+        assert!(state.selected.is_empty(), "the selection cleared");
+        assert!(
+            state.bound.is_none() && !state.landed,
+            "the page rebinds and rescans on the next render"
+        );
+    });
+    vcx.run_until_parked();
+    let events = events.borrow();
+    let deleted_event = events.iter().find_map(|event| match event {
+        crate::ui::settings_window::SettingsEvent::SessionsDeleted { host, agent, ids } => {
+            Some((*host, *agent, ids.clone()))
+        }
+        _ => None,
+    });
+    assert_eq!(
+        deleted_event,
+        Some((
+            HostId::LOCAL,
+            CLIAgent::Hermes,
+            vec!["a".into(), "a.child".into()]
+        )),
+        "the workspace learns which native ids actually went away"
     );
 }

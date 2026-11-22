@@ -23,14 +23,14 @@ use std::sync::{Arc, Mutex};
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::{Icon, IconName, h_flex, v_flex};
+use gpui_kit::component::{Icon, IconName, h_flex, tooltip::Tooltip, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, IntoElement, ParentElement as _, Render, Styled as _, div,
     prelude::*, px, rems,
 };
 use lyrel_core::host::{
     Host as _, HostId,
-    lyrel_usage::{ComponentUsage, LyrelUsage, LyrelUsageState, Sampler},
+    lyrel_usage::{ComponentUsage, LyrelUsage, LyrelUsageState, ProcessMetricUnavailable, Sampler},
     metrics::HostMetrics,
     remote::RemoteHost,
 };
@@ -48,6 +48,8 @@ const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// expanded rows read on one grid.
 const CPU_W: f32 = 40.;
 const MEM_W: f32 = 52.;
+const GPU_W: f32 = 36.;
+const NET_W: f32 = 84.;
 
 /// The answer from one daemon-shaped source: the local daemon or the remote
 /// Lyrel server. Both speak through the same `HostMetrics` response, so one
@@ -65,6 +67,18 @@ enum Slot {
     /// The source's link is down; readings stop rather than age on screen.
     Gone,
     Failed(String),
+}
+
+impl Slot {
+    fn component(&self) -> Option<&ComponentUsage> {
+        let Self::Ready(usage) = self else {
+            return None;
+        };
+        match usage.state() {
+            LyrelUsageState::Sample(sample) => Some(sample.server()),
+            _ => None,
+        }
+    }
 }
 
 /// The desktop application's own reading. `Priming` is the CPU baseline
@@ -366,6 +380,23 @@ fn cell_text(cell: &Cell) -> (String, String, &'static str) {
     )
 }
 
+fn busiest_gpu(desktop: &[(String, f32)], daemon: &[(String, f32)]) -> f32 {
+    let mut engines = std::collections::HashMap::<&str, f32>::new();
+    for (engine, percent) in desktop.iter().chain(daemon) {
+        *engines.entry(engine).or_default() += percent;
+    }
+    engines.into_values().fold(0., f32::max).min(100.)
+}
+
+fn unavailable_detail(metric: &'static str, reason: Option<ProcessMetricUnavailable>) -> String {
+    let detail = t(match reason {
+        Some(ProcessMetricUnavailable::Unsupported) => L10nKey::LyrelProcessMetricUnsupported,
+        Some(ProcessMetricUnavailable::CounterReadFailed) => L10nKey::LyrelProcessMetricFailed,
+        None => L10nKey::LyrelUsageUnavailable,
+    });
+    format!("{metric} · {detail}")
+}
+
 impl LyrelApp {
     /// Keep exactly one Lyrel usage sampler alive for the host the monitor
     /// shows, and release it when the monitor leaves the screen. Called from
@@ -405,9 +436,24 @@ impl LyrelApp {
             .as_ref()
             .map(|(_, slot)| Cell::of_slot(slot))
             .unwrap_or_else(Cell::down);
+        let desktop_component = match &desktop {
+            Desktop::Ready(component) => Some(component),
+            _ => None,
+        };
+        let summary_gpu = match (
+            desktop_component.and_then(ComponentUsage::gpu),
+            local.component().and_then(ComponentUsage::gpu),
+        ) {
+            (Some(Ok(ui)), Some(Ok(daemon))) => format_cpu(busiest_gpu(ui, daemon)),
+            _ if local_total.pending => "…".into(),
+            _ => "—".into(),
+        };
 
         let (cpu_text, mem_text, _) = cell_text(&local_total);
-        let (remote_cpu, remote_mem, _) = cell_text(&remote_cell);
+        let local_name = match &local {
+            Slot::Ready(usage) => usage.hostname(),
+            _ => t(L10nKey::LyrelUsageLocal),
+        };
         let remote_host = remote
             .as_ref()
             .and_then(|(_, slot)| match slot {
@@ -418,20 +464,15 @@ impl LyrelApp {
         let has_remote = remote.is_some();
         let includes_remote = has_remote && (remote_cell.cpu.is_some() || remote_cell.pending);
 
-        let summary_detail = match &remote {
-            Some((_, Slot::Ready(usage))) => t_fmt(
-                L10nKey::LyrelUsageSample,
-                &[
-                    ("host", usage.hostname()),
-                    ("cpu", &remote_cpu),
-                    ("mem", &remote_mem),
-                ],
-            ),
-            _ => t_fmt(
-                L10nKey::LyrelUsageSample,
-                &[("host", "local"), ("cpu", &cpu_text), ("mem", &mem_text)],
-            ),
-        };
+        let summary_detail = t_fmt(
+            L10nKey::LyrelUsageSample,
+            &[
+                ("host", local_name),
+                ("cpu", &cpu_text),
+                ("mem", &mem_text),
+                ("gpu", &summary_gpu),
+            ],
+        );
 
         let summary = h_flex()
             .id("lyrel-usage-summary")
@@ -511,6 +552,15 @@ impl LyrelApp {
                             .font_family(mono.clone())
                             .aria_label(gpui_kit::SharedString::from(format!("RAM {mem_text}")))
                             .child(gpui_kit::SharedString::from(format!("RAM {mem_text}"))),
+                    )
+                    .child(
+                        div()
+                            .id("lyrel-usage-gpu")
+                            .test_support()
+                            .text_size(rems(11. / 16.))
+                            .font_family(mono.clone())
+                            .aria_label(gpui_kit::SharedString::from(format!("GPU {summary_gpu}")))
+                            .child(format!("GPU {summary_gpu}")),
                     ),
             )
             .when(includes_remote, |row| {
@@ -542,31 +592,23 @@ impl LyrelApp {
 
         // The expanded grid: one column pair per metric, the same right-aligned
         // widths the process table uses, so the whole monitor reads on one grid.
+        let title = |label: &'static str, width: f32| {
+            div()
+                .w(px(width))
+                .flex_none()
+                .text_right()
+                .text_size(rems(10. / 16.))
+                .text_color(muted)
+                .child(label)
+        };
         let header = h_flex()
-            .pl(px(16.))
-            .pr(px(0.))
             .pb(px(2.))
-            .items_center()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(div().flex_1().min_w_0())
-            .child(
-                div()
-                    .w(px(CPU_W))
-                    .flex_none()
-                    .text_right()
-                    .text_size(rems(10. / 16.))
-                    .text_color(muted)
-                    .child(t(L10nKey::MonitorColCpu)),
-            )
-            .child(
-                div()
-                    .w(px(MEM_W))
-                    .flex_none()
-                    .text_right()
-                    .text_size(rems(10. / 16.))
-                    .text_color(muted)
-                    .child(t(L10nKey::MonitorColMemory)),
-            );
+            .child(title("CPU", CPU_W))
+            .child(title("RAM", MEM_W))
+            .child(title("GPU", GPU_W))
+            .child(title(t(L10nKey::LyrelProcessNetwork), NET_W));
         body = body.child(header);
 
         let group = |title: String| {
@@ -580,8 +622,33 @@ impl LyrelApp {
         };
         let local_group_title = t(L10nKey::LyrelUsageLocal).to_string();
         let remote_group_title = t_fmt(L10nKey::LyrelUsageRemote, &[("host", &remote_host)]);
-        let row = |id: &'static str, label: String, cell: Cell| {
-            let (cpu, mem, _) = cell_text(&cell);
+        let row = |id: &'static str,
+                   label: String,
+                   cell: Cell,
+                   component: Option<&ComponentUsage>| {
+            let (cpu, mem, marker) = cell_text(&cell);
+            let gpu = component.and_then(ComponentUsage::gpu);
+            let net = component.and_then(ComponentUsage::network);
+            let gpu_text = match gpu {
+                Some(Ok(engines)) => format_cpu(busiest_gpu(engines, &[])),
+                _ => marker.into(),
+            };
+            let network_text = match net {
+                Some(Ok(rate)) => format!(
+                    "{} / {}",
+                    super::host_metrics::rate_text(rate.rx_bytes_per_sec()),
+                    super::host_metrics::rate_text(rate.tx_bytes_per_sec())
+                ),
+                _ => marker.into(),
+            };
+            let gpu_detail = match gpu {
+                Some(Ok(_)) => format!("GPU {gpu_text}"),
+                _ => unavailable_detail("GPU", gpu.and_then(Result::err)),
+            };
+            let network_detail = match net {
+                Some(Ok(_)) => format!("{} {network_text}", t(L10nKey::LyrelProcessNetwork)),
+                _ => unavailable_detail(t(L10nKey::MonitorColNetwork), net.and_then(Result::err)),
+            };
             let detail = match (&cell.cpu, &cell.memory) {
                 (Some(_), Some(_)) => t_fmt(
                     L10nKey::LyrelUsageComponent,
@@ -593,9 +660,8 @@ impl LyrelApp {
             h_flex()
                 .id(id)
                 .test_support()
-                .pl(px(16.))
                 .items_center()
-                .gap(px(6.))
+                .gap(px(4.))
                 .cursor_default()
                 .aria_label(gpui_kit::SharedString::from(detail))
                 .child(
@@ -620,6 +686,25 @@ impl LyrelApp {
                         .aria_label(gpui_kit::SharedString::from(mem))
                         .test_support(),
                 )
+                .child(
+                    usage_cell(gpu_text, GPU_W, mono.clone())
+                        .id(format!("{id}-gpu"))
+                        .aria_label(gpui_kit::SharedString::from(gpu_detail.clone()))
+                        .test_support()
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(gpu_detail.clone()).build(window, cx)
+                        }),
+                )
+                .child(
+                    usage_cell(network_text, NET_W, mono.clone())
+                        .id(format!("{id}-network"))
+                        .overflow_hidden()
+                        .aria_label(gpui_kit::SharedString::from(network_detail.clone()))
+                        .test_support()
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(network_detail.clone()).build(window, cx)
+                        }),
+                )
                 .into_any_element()
         };
 
@@ -634,11 +719,13 @@ impl LyrelApp {
                         "lyrel-usage-desktop",
                         t(L10nKey::LyrelUsageDesktop).to_string(),
                         desktop_cell,
+                        desktop_component,
                     ))
                     .child(row(
                         "lyrel-usage-daemon",
                         t(L10nKey::LyrelUsageDaemon).to_string(),
                         local_cell,
+                        local.component(),
                     )),
             )
             .when(has_remote, |body| {
@@ -652,6 +739,7 @@ impl LyrelApp {
                             "lyrel-usage-server",
                             t(L10nKey::LyrelUsageServer).to_string(),
                             remote_cell,
+                            remote.as_ref().and_then(|(_, slot)| slot.component()),
                         )),
                 )
             });

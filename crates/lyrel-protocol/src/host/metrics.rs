@@ -3,10 +3,8 @@
 //! The sampler itself — the `sysinfo`-backed platform work — lives in
 //! `lyrel-core`, which injects it into the local Host at construction; this
 //! module owns only the values that cross the wire, so a peer and its client
-//! read one schema. Requests share one sampler per server process: only the
-//! CPU and RAM APIs are refreshed; process enumeration is never enabled. A
-//! request worker performs the blocking platform work at most once a second,
-//! without a sampling thread or polling work when no client wants metrics.
+//! read one schema. The native sampler refreshes host CPU, RAM, GPU and
+//! network counters on demand without enumerating the system process table.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,6 +82,8 @@ pub struct HostSample {
     // them as absent, and peers without a GPU reading send them unset.
     gpu_percent: Option<f32>,
     gpu_unavailable_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<NetworkThroughput>,
 }
 
 impl HostSample {
@@ -101,6 +101,7 @@ impl HostSample {
             sampled_at_millis,
             gpu_percent: None,
             gpu_unavailable_reason: None,
+            network: None,
         }
     }
 
@@ -114,6 +115,15 @@ impl HostSample {
     pub fn with_gpu_unavailable(mut self, reason: impl Into<String>) -> Self {
         self.gpu_unavailable_reason = Some(reason.into());
         self
+    }
+
+    pub fn with_network(mut self, network: NetworkThroughput) -> Self {
+        self.network = Some(network);
+        self
+    }
+
+    pub fn network(&self) -> Option<&NetworkThroughput> {
+        self.network.as_ref()
     }
 
     /// Whole-machine busy time, normalized to 0–100 across all logical CPUs.
@@ -145,9 +155,50 @@ impl HostSample {
     }
 }
 
+/// Host receive and transmit rates in bytes per second, excluding loopback.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetworkThroughput {
+    rx_bytes_per_sec: f64,
+    tx_bytes_per_sec: f64,
+}
+
+impl NetworkThroughput {
+    pub fn new(rx_bytes_per_sec: f64, tx_bytes_per_sec: f64) -> Self {
+        Self {
+            rx_bytes_per_sec,
+            tx_bytes_per_sec,
+        }
+    }
+
+    pub fn rx_bytes_per_sec(&self) -> f64 {
+        self.rx_bytes_per_sec
+    }
+
+    pub fn tx_bytes_per_sec(&self) -> f64 {
+        self.tx_bytes_per_sec
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_field_round_trips_and_stays_ignorable() {
+        let sample = HostSample::new(12.5, 8, 16, 1_700_000_000_000);
+        let legacy = serde_json::to_value(&sample).unwrap();
+        assert!(legacy.get("network").is_none());
+        assert!(
+            serde_json::from_value::<HostSample>(legacy)
+                .unwrap()
+                .network()
+                .is_none()
+        );
+        let measured = sample.with_network(NetworkThroughput::new(2_100_000., 240_000.));
+        let decoded: HostSample =
+            serde_json::from_value(serde_json::to_value(&measured).unwrap()).unwrap();
+        assert_eq!(decoded, measured);
+    }
 
     #[test]
     fn gpu_fields_are_optional_on_the_wire() {

@@ -290,6 +290,10 @@ fn run_request(
             ReplyOk::HermesStatistics(Box::new(h.hermes_statistics(&request))),
             Vec::new(),
         ),
+        ControlRequest::SessionBatch { request } => (
+            ReplyOk::SessionBatch(Box::new(h.session_batch(&request))),
+            Vec::new(),
+        ),
 
         ControlRequest::WatchOpen { dirs } => {
             let id = conn.watches.open(&conn.host, req_id, &paths(&dirs))?;

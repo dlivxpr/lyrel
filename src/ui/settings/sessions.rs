@@ -1,7 +1,8 @@
 //! 设置 → 会话：A 版布局 —— 顶部筛选工具栏，左侧「会话／已隐藏」页签与复选框列表，
 //! 右侧常驻单条详情或批量选中清单。发现层复用
 //! [`crate::ui::session_history`] 的 plan/collect 与可见身份模型；原生删除
-//! 界面归 #367，本页只给出真实的批量选择与不可删除原因接口。
+//! 走 Host 契约的批量 prepare/execute（#367 起 Hermes 可删，#368–370 复用
+//! 同一对契约），本页负责真实选择、逐条原因、确认清单与结果呈现。
 use super::kit::{self, Tk, fs};
 use super::shell::{MenuEntry, SearchOption};
 use super::*;
@@ -9,6 +10,11 @@ use chrono::{Datelike as _, Timelike as _};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use lyrel_core::core::agent_history::PastSession;
+use lyrel_core::host::session_operations::batch::{
+    SessionBatchConfirmation, SessionBatchExecute, SessionBatchExecuteGroup,
+    SessionBatchExecuteResult, SessionBatchItem, SessionBatchPrepare, SessionBatchPrepareGroup,
+    SessionBatchReasonKind, SessionBatchReply, SessionBatchRequest, SessionBatchStatus,
+};
 use lyrel_ui_base::host_ops::HostOps;
 use lyrel_ui_base::host_registry::HostRegistry;
 use lyrel_ui_base::i18n::L10nKey;
@@ -46,19 +52,29 @@ pub(crate) enum SessionBlocker {
     /// 本工作区有一个窗格正按同一身份（主机、智能体、存储作用域、原生
     /// ID）运行这条会话。
     Running,
-    /// 该来源没有删除路径：OpenCode 会话住在服务存储里，协议尚无删除
-    /// 操作。
-    SourceUnsupported,
     /// 扫描没有保留下可指认的存储位置，一次精确删除无法证明它删的是什么。
     StoreUnconfirmed,
+    /// OpenCode v2.2.0：原生删除会打断活动会话，且递归级联不提供可确认
+    /// 的目标集 —— 在上游给出预期集合围栏前保持不可资格。
+    OpenCodeCascadeUnfenced,
+    /// Kimi Code ACP v2.6：删除有租约但可能放行、且没有预期身份围栏，
+    /// 无法证明删的就是确认的那条。
+    KimiDeleteUnfenced,
+    /// pi v1.4/1.6：原生删除没有跨进程写入租约，活动写入者无法被证明。
+    PiNoWriteLease,
+    /// Oh My Pi v19.1：原生 drop 没有写入租约，递归产物范围随配置变化。
+    OmpNoWriteLease,
 }
 
 impl SessionBlocker {
     fn label(self) -> gpui_kit::SharedString {
         let key = match self {
             SessionBlocker::Running => L10nKey::SessionsBlockerRunning,
-            SessionBlocker::SourceUnsupported => L10nKey::SessionsBlockerSourceUnsupported,
             SessionBlocker::StoreUnconfirmed => L10nKey::SessionsBlockerStoreUnconfirmed,
+            SessionBlocker::OpenCodeCascadeUnfenced => L10nKey::SessionsBlockerOpenCodeCascade,
+            SessionBlocker::KimiDeleteUnfenced => L10nKey::SessionsBlockerKimiUnfenced,
+            SessionBlocker::PiNoWriteLease => L10nKey::SessionsBlockerPiNoLease,
+            SessionBlocker::OmpNoWriteLease => L10nKey::SessionsBlockerOmpNoLease,
         };
         t(key).into()
     }
@@ -91,6 +107,9 @@ pub(crate) struct SessionsState {
     list_scroll: gpui_kit::ScrollHandle,
     /// 右栏常驻详情对应的会话 key；筛选项变化不影响它，列表里没有了才放下。
     detail: Option<String>,
+    /// 进行中的批量原生删除（确认清单/执行中/结果）；选择或筛选变化时
+    /// 由 `clear_scope` 连带取消。
+    delete: Option<SessionDeleteFlow>,
 }
 
 /// 一条列表行渲染所需的全部数据：会话本身、勾选状态、详情常驻状态。
@@ -98,6 +117,77 @@ struct SessionRow {
     session: PastSession,
     key: String,
     blocked: Vec<SessionBlocker>,
+}
+
+/// 删除确认清单里的一行：选中顺序保留，组号指回 `groups`，prepare 后
+/// 填上原生核验结果。被排除的行（客户端已知不可删）不带组号。
+struct SessionDeleteRow {
+    identity: SessionIdentity,
+    title: gpui_kit::SharedString,
+    group: Option<usize>,
+    excluded: Option<SessionBlocker>,
+    /// Prepare 的原生答案。
+    plan: Option<SessionDeletePlan>,
+}
+
+/// Prepare 对单行的核验结果。
+#[derive(Clone)]
+enum SessionDeletePlan {
+    /// 存储身份与级联已重新核验；`delete_ids` 是确认清单里要展示的
+    /// 精确原生影响范围，Execute 也只允许删这个集合。
+    Eligible { delete_ids: Vec<String> },
+    /// 原生侧给出的不可删原因。
+    Ineligible {
+        kind: SessionBatchReasonKind,
+        message: gpui_kit::SharedString,
+    },
+}
+
+/// 一个待删除的存储组：组内所有行共享同一原生存储身份（agent、
+/// 主机、scope、cwd、launch argv），整组只发一个 prepare/execute 组。
+struct SessionDeleteGroup {
+    cwd: PathBuf,
+    launch_argv: Vec<String>,
+    scope: lyrel_core::host::session_operations::SessionScope,
+    /// 组在清单里的展示名：确认到的存储位置。
+    store_label: gpui_kit::SharedString,
+}
+
+/// 批量删除的相位机。Preparing/Executing 期间窗口仍可渲染，但所有
+/// 按钮都不可再点；Done 之后由用户点「完成」收尾刷新。
+enum SessionDeletePhase {
+    Preparing,
+    Ready,
+    Failed(gpui_kit::SharedString),
+    Executing,
+    Done(SessionBatchExecuteResult),
+}
+
+/// 一次批量删除的全部状态；`None` 表示没有进行中的删除。
+pub(crate) struct SessionDeleteFlow {
+    rows: Vec<SessionDeleteRow>,
+    groups: Vec<SessionDeleteGroup>,
+    host: lyrel_core::host::SharedHost,
+    phase: SessionDeletePhase,
+    /// 桌面同意清单：两项都勾选才允许按下确认删除。
+    consent_irreversible: bool,
+    consent_checked: bool,
+}
+
+impl SessionDeleteFlow {
+    fn eligible(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| matches!(row.plan, Some(SessionDeletePlan::Eligible { .. })))
+            .count()
+    }
+
+    fn can_confirm(&self) -> bool {
+        matches!(self.phase, SessionDeletePhase::Ready)
+            && self.consent_irreversible
+            && self.consent_checked
+            && self.eligible() > 0
+    }
 }
 
 const DAY_SECS: u64 = 86_400;
@@ -127,6 +217,7 @@ impl SessionsState {
             selected: BTreeSet::new(),
             list_scroll: gpui_kit::ScrollHandle::new(),
             detail: None,
+            delete: None,
         }
     }
 
@@ -160,9 +251,11 @@ impl SessionsState {
     }
 
     /// 勾选集的作用域变化（主机、页签、任一筛选）时调用：勾选清空，
-    /// 详情随主机走。
+    /// 详情随主机走；进行中的删除清单一并取消 —— 它绑定的就是旧作用域
+    /// 里的选中集。
     fn clear_scope(&mut self, host_moved: bool) {
         self.selected.clear();
+        self.delete = None;
         if host_moved {
             self.detail = None;
         }
@@ -323,17 +416,27 @@ fn select_all_state(selected: &BTreeSet<String>, rows: &[SessionRow]) -> SelectA
     }
 }
 
-/// 一条已选会话当前已知的不可删除原因。运行中最优先；OpenCode 的服务
-/// 存储没有删除路径；其余来源需要扫描保留下可指认的存储位置。
+/// 一条已选会话当前已知的不可删除原因。运行中最优先。只有 Hermes 已有
+/// 经验证的原生删除路径（#367）：预期目标集在原生写事务内围栏、活动写
+/// 入租约在同一事务里拒绝。其余来源各自的原生删除目前都缺一项可验证
+/// 保证（见各变体注释），在各自的适配器把缺口补上之前保持显式不可资
+/// 格 —— 没有一个「通用写回退」会把不可验证的来源伪装成可删。扫描没
+/// 保留下可指认存储位置的 Hermes 行再补「无法确认存储来源」。
 fn session_blockers(identity: &SessionIdentity, live: &[SessionIdentity]) -> Vec<SessionBlocker> {
     let mut out = Vec::new();
     if live.iter().any(|open| open.same_session(identity)) {
         out.push(SessionBlocker::Running);
     }
-    if identity.agent == CLIAgent::OpenCode {
-        out.push(SessionBlocker::SourceUnsupported);
-    } else if identity.store() == SessionStore::Unconfirmed {
-        out.push(SessionBlocker::StoreUnconfirmed);
+    match identity.agent {
+        CLIAgent::Hermes => {
+            if identity.store() == SessionStore::Unconfirmed {
+                out.push(SessionBlocker::StoreUnconfirmed);
+            }
+        }
+        CLIAgent::OpenCode => out.push(SessionBlocker::OpenCodeCascadeUnfenced),
+        CLIAgent::Kimi => out.push(SessionBlocker::KimiDeleteUnfenced),
+        CLIAgent::Pi => out.push(SessionBlocker::PiNoWriteLease),
+        CLIAgent::OhMyPi => out.push(SessionBlocker::OmpNoWriteLease),
     }
     out
 }
@@ -585,7 +688,83 @@ impl SettingsWindow {
         }
         cx.notify();
     }
+}
 
+/// 一次删除按钮点击携带的候选行：选中顺序、可见身份与客户端已知
+/// 的不可删原因。
+#[derive(Clone)]
+pub(crate) struct SessionDeleteCandidate {
+    identity: SessionIdentity,
+    title: gpui_kit::SharedString,
+    blocked: Vec<SessionBlocker>,
+    cwd: Option<PathBuf>,
+}
+
+/// 把候选行分成「精确原生存储组」：组键是 agent＋主机＋存储选择子，
+/// 同组的行共享一个 prepare/execute 组，顺序保持选中的先后；带阻
+/// 挡原因的行进清单但不进任何组。launch 上下文优先复用本次扫描
+/// 计划的同一请求（同一可执行文件与同一 home/profile），扫描不
+/// 可达时退回该 agent 的默认启动命令。
+fn build_delete_plan(
+    candidates: &[SessionDeleteCandidate],
+    scan: Option<&session_history::SessionScan>,
+    home: Option<&Path>,
+    agent_launch: &std::collections::HashMap<String, String>,
+) -> (Vec<SessionDeleteRow>, Vec<SessionDeleteGroup>) {
+    use std::collections::HashMap;
+    let mut rows = Vec::with_capacity(candidates.len());
+    let mut groups: Vec<SessionDeleteGroup> = Vec::new();
+    let mut group_ix: HashMap<String, usize> = HashMap::new();
+    for candidate in candidates {
+        if let Some(blocker) = candidate.blocked.first().copied() {
+            rows.push(SessionDeleteRow {
+                identity: candidate.identity.clone(),
+                title: candidate.title.clone(),
+                group: None,
+                excluded: Some(blocker),
+                plan: None,
+            });
+            continue;
+        }
+        let agent = candidate.identity.agent;
+        let scope = candidate.identity.scope.clone().unwrap_or_default();
+        let ix = *group_ix
+            .entry(session_history::store_group_key(&candidate.identity))
+            .or_insert_with(|| {
+                let (cwd, launch_argv, scope) = scan
+                    .and_then(|scan| scan.batch_context(agent, &scope))
+                    .unwrap_or_else(|| {
+                        let cwd = candidate
+                            .cwd
+                            .clone()
+                            .or_else(|| home.map(|home| home.to_path_buf()))
+                            .unwrap_or_default();
+                        let launch_argv = crate::core::cli_agent::parse_command_argv(
+                            &agent.launch_command(agent_launch),
+                        )
+                        .unwrap_or_default();
+                        (cwd, launch_argv, scope.clone())
+                    });
+                groups.push(SessionDeleteGroup {
+                    cwd,
+                    launch_argv,
+                    scope,
+                    store_label: storage_label(&candidate.identity, home),
+                });
+                groups.len() - 1
+            });
+        rows.push(SessionDeleteRow {
+            identity: candidate.identity.clone(),
+            title: candidate.title.clone(),
+            group: Some(ix),
+            excluded: None,
+            plan: None,
+        });
+    }
+    (rows, groups)
+}
+
+impl SettingsWindow {
     /// 页面数据：扫描未落地时先用共享缓存， landed 后才谈健康状态。
     fn sessions_source(&self) -> (Vec<PastSession>, Option<SessionListing>) {
         let Some(settings) = self.active_settings() else {
@@ -597,6 +776,277 @@ impl SettingsWindow {
         } else {
             (session_history::cached_sessions(state.host), None)
         }
+    }
+
+    /// 删除按钮按下：把当前选中分成精确存储组，先在所属主机上
+    /// prepare（重新核验存储身份、活动写入与原生级联），再打开确认
+    /// 清单。客户端已知不可删的行只进清单不进组。
+    fn start_session_delete(
+        &mut self,
+        window: &mut Window,
+        candidates: Vec<SessionDeleteCandidate>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings() else {
+            return;
+        };
+        let host = settings.sessions.host;
+        let home = crate::ui::desktop_lookups::home_for_host(cx, host);
+        let scan = (self.workspace.session_scan)(host, cx);
+        let agent_launch = cx.global::<Config>().agent_launch.clone();
+        let (rows, groups) =
+            build_delete_plan(&candidates, scan.as_ref(), home.as_deref(), &agent_launch);
+        if groups.is_empty() {
+            return;
+        }
+        let Some(shared) = HostRegistry::lookup(cx, host) else {
+            return;
+        };
+        let wire_groups: Vec<SessionBatchPrepareGroup> = groups
+            .iter()
+            .enumerate()
+            .map(|(ix, group)| SessionBatchPrepareGroup {
+                cwd: group.cwd.clone(),
+                launch_argv: group.launch_argv.clone(),
+                scope: group.scope.clone(),
+                source_ids: rows
+                    .iter()
+                    .filter(|row| row.group == Some(ix))
+                    .map(|row| row.identity.id.clone())
+                    .collect(),
+            })
+            .collect();
+        let request = SessionBatchRequest::Prepare(Box::new(SessionBatchPrepare {
+            expected_host: host.0,
+            agent: CLIAgent::Hermes,
+            groups: wire_groups,
+        }));
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        settings.sessions.delete = Some(SessionDeleteFlow {
+            rows,
+            groups,
+            host: shared.clone(),
+            phase: SessionDeletePhase::Preparing,
+            consent_irreversible: false,
+            consent_checked: false,
+        });
+        HostOps::run_in(
+            shared,
+            window,
+            cx,
+            move |host| host.session_batch(&request),
+            move |this, reply, _window, cx| {
+                this.session_delete_prepare_landed(reply, cx);
+            },
+        );
+    }
+
+    /// Prepare 落地：按组序把每行的核验结果写回清单；硬错误（传输、
+    /// 拒绝）整体转为 Failed，清单仍可关闭。
+    fn session_delete_prepare_landed(
+        &mut self,
+        reply: Result<
+            SessionBatchReply,
+            lyrel_core::host::session_operations::SessionOperationError,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        let Some(flow) = settings.sessions.delete.as_mut() else {
+            return;
+        };
+        match reply {
+            Ok(SessionBatchReply::Prepare(result)) => {
+                for (ix, group_result) in result.groups.iter().enumerate() {
+                    for item in &group_result.items {
+                        let row = flow
+                            .rows
+                            .iter_mut()
+                            .find(|row| row.group == Some(ix) && row.identity.id == item.source_id);
+                        let Some(row) = row else {
+                            continue;
+                        };
+                        row.plan = Some(match item.status {
+                            SessionBatchStatus::Eligible => SessionDeletePlan::Eligible {
+                                delete_ids: item.delete_ids.clone(),
+                            },
+                            _ => {
+                                let reason = item.reason.clone().unwrap_or(
+                                    lyrel_core::host::session_operations::batch::SessionBatchReason::new(
+                                        SessionBatchReasonKind::Provider,
+                                        "unexpected prepare answer",
+                                    ),
+                                );
+                                SessionDeletePlan::Ineligible {
+                                    kind: reason.kind,
+                                    message: reason.message.into(),
+                                }
+                            }
+                        });
+                    }
+                }
+                flow.phase = SessionDeletePhase::Ready;
+            }
+            Ok(_) => {
+                flow.phase = SessionDeletePhase::Failed("unexpected batch reply".into());
+            }
+            Err(error) => {
+                flow.phase = SessionDeletePhase::Failed(error.message.into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn set_session_delete_consent(&mut self, which: usize, checked: bool, cx: &mut Context<Self>) {
+        if let Some(settings) = self.active_settings_mut()
+            && let Some(flow) = settings.sessions.delete.as_mut()
+        {
+            match which {
+                0 => flow.consent_irreversible = checked,
+                _ => flow.consent_checked = checked,
+            }
+        }
+        cx.notify();
+    }
+
+    /// 确认清单通过：Execute 只携带 prepare 判为 eligible 的行，每行
+    /// 绑定它prepare 时算出的精确原生级联；分组与顺序和 prepare 完全一致。
+    fn confirm_session_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(settings) = self.active_settings() else {
+            return;
+        };
+        let host = settings.sessions.host;
+        let Some(flow) = settings.sessions.delete.as_ref() else {
+            return;
+        };
+        if !flow.can_confirm() {
+            return;
+        }
+        let mut execute_groups: Vec<SessionBatchExecuteGroup> = Vec::new();
+        for (ix, group) in flow.groups.iter().enumerate() {
+            let confirmations: Vec<SessionBatchConfirmation> = flow
+                .rows
+                .iter()
+                .filter(|row| row.group == Some(ix))
+                .filter_map(|row| match &row.plan {
+                    Some(SessionDeletePlan::Eligible { delete_ids }) => {
+                        Some(SessionBatchConfirmation {
+                            source_id: row.identity.id.clone(),
+                            expected_delete_ids: delete_ids.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !confirmations.is_empty() {
+                execute_groups.push(SessionBatchExecuteGroup {
+                    cwd: group.cwd.clone(),
+                    launch_argv: group.launch_argv.clone(),
+                    scope: group.scope.clone(),
+                    confirmations,
+                });
+            }
+        }
+        let request = SessionBatchRequest::Execute(Box::new(SessionBatchExecute {
+            expected_host: host.0,
+            agent: CLIAgent::Hermes,
+            groups: execute_groups,
+        }));
+        let owner = flow.host.clone();
+        let same_host = HostRegistry::lookup(cx, host)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(&owner, &current));
+        let Some(flow) = self
+            .active_settings_mut()
+            .and_then(|settings| settings.sessions.delete.as_mut())
+        else {
+            return;
+        };
+        if !same_host {
+            flow.phase = SessionDeletePhase::Failed(t(L10nKey::PanelSessionsDisconnected).into());
+            cx.notify();
+            return;
+        }
+        flow.phase = SessionDeletePhase::Executing;
+        cx.notify();
+        HostOps::run(
+            owner,
+            cx,
+            move |host| host.session_batch(&request),
+            |this, reply, cx| this.session_delete_execute_landed(reply, cx),
+        );
+    }
+
+    /// Execute 落地：整组结果进结果页；硬错误转 Failed，清单仍可关闭。
+    fn session_delete_execute_landed(
+        &mut self,
+        reply: Result<
+            SessionBatchReply,
+            lyrel_core::host::session_operations::SessionOperationError,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        let Some(flow) = settings.sessions.delete.as_mut() else {
+            return;
+        };
+        match reply {
+            Ok(SessionBatchReply::Execute(result)) => {
+                flow.phase = SessionDeletePhase::Done(result);
+            }
+            Ok(_) => {
+                flow.phase = SessionDeletePhase::Failed("unexpected batch reply".into());
+            }
+            Err(error) => {
+                flow.phase = SessionDeletePhase::Failed(error.message.into());
+            }
+        }
+        cx.notify();
+    }
+
+    /// 收尾：清掉选择与删除流，强制本页重扫，并把实际删掉的 id 交给
+    /// 工作区刷新共享缓存与 Session History 工具。
+    fn finish_session_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        let host = settings.sessions.host;
+        let Some(flow) = settings.sessions.delete.take() else {
+            return;
+        };
+        let deleted: Vec<String> = match &flow.phase {
+            SessionDeletePhase::Done(result) => result
+                .deleted_ids()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let state = &mut settings.sessions;
+        state.selected.clear();
+        state.bound = None;
+        state.scanning = false;
+        state.landed = false;
+        if !deleted.is_empty() {
+            cx.emit(crate::ui::settings_window::SettingsEvent::SessionsDeleted {
+                host,
+                agent: CLIAgent::Hermes,
+                ids: deleted,
+            });
+        }
+        cx.notify();
+    }
+
+    fn cancel_session_delete(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = self.active_settings_mut() {
+            settings.sessions.delete = None;
+        }
+        cx.notify();
     }
 
     pub(crate) fn render_settings_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1398,10 +1848,427 @@ impl SettingsWindow {
             .on_click(cx.listener(move |this, _, _window, cx| {
                 this.set_sessions_hidden(hiding, identities.clone(), cx);
             }));
+        // 删除按钮显示「当前已知可删」的数量：无客户端阻挡原因的行。
+        // 点击后先走所属主机的 prepare 重新核验，真正的删除只发生在
+        // 确认清单之后。
+        let candidates: Vec<SessionDeleteCandidate> = selected_rows
+            .iter()
+            .map(|row| SessionDeleteCandidate {
+                identity: SessionIdentity::of(host, &row.session),
+                title: row.session.title.clone().into(),
+                blocked: row.blocked.clone(),
+                cwd: row.session.cwd.clone(),
+            })
+            .collect();
+        let deletable = candidates
+            .iter()
+            .filter(|candidate| candidate.blocked.is_empty())
+            .count();
+        let start = candidates.clone();
+        let busy = state.delete.is_some();
+        let delete = kit::button(
+            "sessions-delete-selected",
+            t_fmt(
+                L10nKey::SessionsDeleteSelectedFmt,
+                &[("count", &deletable.to_string())],
+            ),
+            kit::BtnKind::Danger,
+        )
+        .disabled(deletable == 0 || busy)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.start_session_delete(window, start.clone(), cx);
+        }));
         body.child(list)
-            .child(h_flex().pt(px(4.)).child(hide))
+            .child(h_flex().pt(px(4.)).gap(px(8.)).child(hide).child(delete))
             .into_any_element()
     }
+
+    /// 删除确认／结果弹层。Preparing 显示重新核验进度；Ready 按
+    /// prepare 的重新核验结果列出来源（存储组）、目标（标题）、影响
+    /// 范围（精确原生级联数）与被排除的逐条原因，同意清单两项都勾选
+    /// 才能确认；Executing 只读；Done 聚合报告 deleted/skipped/failed
+    /// 并逐条给出原因。执行中不可关闭 —— 原生操作已在飞行，结果必须
+    /// 被看到。
+    pub(crate) fn render_sessions_delete_overlay(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let settings = self.active_settings()?;
+        let flow = settings.sessions.delete.as_ref()?;
+        let tk = Tk::of(cx);
+        let phase = &flow.phase;
+
+        let mut body = v_flex().w_full().min_h_0().gap(px(10.));
+        let mut footer = h_flex().w_full().items_center().gap(px(8.));
+
+        match phase {
+            SessionDeletePhase::Preparing => {
+                body = body.child(
+                    div()
+                        .id("sessions-delete-status")
+                        .test_support()
+                        .text_size(fs(12.))
+                        .text_color(tk.k45)
+                        .child(t(L10nKey::SessionsDeletePreparing)),
+                );
+                footer = footer.child(
+                    kit::button(
+                        "sessions-delete-cancel",
+                        t(L10nKey::SessionsCancelSelection),
+                        kit::BtnKind::Link,
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.cancel_session_delete(cx);
+                    })),
+                );
+            }
+            SessionDeletePhase::Ready => {
+                body = body
+                    .child(
+                        div()
+                            .id("sessions-delete-status")
+                            .test_support()
+                            .text_size(fs(12.))
+                            .text_color(tk.k45)
+                            .child(t(L10nKey::SessionsDeleteConfirmScope)),
+                    )
+                    .child(self.sessions_delete_rows(cx))
+                    .child(
+                        v_flex()
+                            .id("sessions-delete-consent")
+                            .test_support()
+                            .gap(px(6.))
+                            .pt(px(2.))
+                            .child(self.sessions_delete_consent_row(
+                                0,
+                                flow.consent_irreversible,
+                                L10nKey::SessionsDeleteConsentIrreversible,
+                                cx,
+                            ))
+                            .child(self.sessions_delete_consent_row(
+                                1,
+                                flow.consent_checked,
+                                L10nKey::SessionsDeleteConsentStore,
+                                cx,
+                            )),
+                    );
+                let eligible = flow.eligible();
+                let can_confirm = flow.can_confirm();
+                footer = footer
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(fs(11.5))
+                            .text_color(tk.k45)
+                            .child(t_fmt(
+                                L10nKey::SessionsDeleteSelectedFmt,
+                                &[("count", &eligible.to_string())],
+                            )),
+                    )
+                    .child(
+                        kit::button(
+                            "sessions-delete-cancel",
+                            t(L10nKey::SessionsCancelSelection),
+                            kit::BtnKind::Link,
+                        )
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.cancel_session_delete(cx);
+                        })),
+                    )
+                    .child(
+                        kit::button(
+                            "sessions-delete-confirm",
+                            t_fmt(
+                                L10nKey::SessionsDeleteConfirmFmt,
+                                &[("count", &eligible.to_string())],
+                            ),
+                            kit::BtnKind::Danger,
+                        )
+                        .disabled(!can_confirm)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_session_delete(cx);
+                        })),
+                    );
+            }
+            SessionDeletePhase::Failed(message) => {
+                body = body
+                    .child(
+                        div()
+                            .id("sessions-delete-status")
+                            .test_support()
+                            .text_size(fs(12.))
+                            .text_color(tk.danger)
+                            .child(format!("{}: {message}", t(L10nKey::SessionsDeleteFailed))),
+                    )
+                    .child(self.sessions_delete_rows(cx));
+                footer = footer.child(
+                    kit::button(
+                        "sessions-delete-cancel",
+                        t(L10nKey::SessionsCancelSelection),
+                        kit::BtnKind::Link,
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.cancel_session_delete(cx);
+                    })),
+                );
+            }
+            SessionDeletePhase::Executing => {
+                body = body.child(
+                    div()
+                        .id("sessions-delete-status")
+                        .test_support()
+                        .text_size(fs(12.))
+                        .text_color(tk.k45)
+                        .child(t(L10nKey::SessionsDeleteExecuting)),
+                );
+            }
+            SessionDeletePhase::Done(result) => {
+                let totals = result.totals();
+                body = body
+                    .child(
+                        h_flex()
+                            .id("sessions-delete-totals")
+                            .test_support()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().size(px(6.)).rounded_full().bg(tk.fg))
+                            .child(
+                                div()
+                                    .text_size(fs(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(t_fmt(
+                                        L10nKey::SessionsDeleteResultFmt,
+                                        &[
+                                            ("deleted", &totals.deleted.to_string()),
+                                            ("skipped", &totals.skipped.to_string()),
+                                            ("failed", &totals.failed.to_string()),
+                                        ],
+                                    )),
+                            ),
+                    )
+                    .child(self.sessions_delete_rows(cx));
+                footer = footer.child(div().flex_1()).child(
+                    kit::button(
+                        "sessions-delete-done",
+                        t(L10nKey::SessionsDeleteDone),
+                        kit::BtnKind::Primary,
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.finish_session_delete(cx);
+                    })),
+                );
+            }
+        }
+
+        let dismissable = !matches!(phase, SessionDeletePhase::Executing);
+        let card = crate::ui::dialog::card(
+            "sessions-delete-dialog",
+            t(L10nKey::SessionsDeleteConfirmTitle),
+            560.,
+            cx,
+        )
+        .child(crate::ui::dialog::header(
+            t(L10nKey::SessionsDeleteConfirmTitle),
+            cx,
+        ))
+        .child(
+            div()
+                .id("sessions-delete-body")
+                .test_support()
+                .overflow_y_scroll()
+                .child(body),
+        )
+        .child(crate::ui::dialog::footer(cx).child(footer));
+        Some(
+            div()
+                .id("sessions-delete-overlay")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_3()
+                .bg(crate::ui::theme::overlay_background(cx))
+                .when(dismissable, |overlay| {
+                    overlay.on_key_down(cx.listener(
+                        |this, event: &gpui_kit::KeyDownEvent, _window, cx| {
+                            if event.keystroke.key == "escape" {
+                                this.cancel_session_delete(cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                })
+                .child(card)
+                .into_any_element(),
+        )
+    }
+
+    /// 弹层里的同意清单一行。
+    fn sessions_delete_consent_row(
+        &self,
+        which: usize,
+        checked: bool,
+        label: L10nKey,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .id(format!("sessions-delete-consent-{which}"))
+            .test_support()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                Checkbox::new(format!("sessions-delete-consent-check-{which}"))
+                    .checked(checked)
+                    .small()
+                    .on_click(cx.listener(move |this, on, _window, cx| {
+                        this.set_session_delete_consent(which, *on, cx);
+                    })),
+            )
+            .child(div().flex_1().min_w_0().text_size(fs(12.)).child(t(label)))
+            .into_any_element()
+    }
+
+    /// 弹层里的逐条清单：被排除的行给客户端原因；prepare 后 eligible
+    /// 的行显示存储组与精确原生级联数，ineligible 显示原生原因；
+    /// Done 后显示每行的 deleted/skipped/failed。
+    fn sessions_delete_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tk = Tk::of(cx);
+        let Some(settings) = self.active_settings() else {
+            return div().into_any_element();
+        };
+        let Some(flow) = settings.sessions.delete.as_ref() else {
+            return div().into_any_element();
+        };
+        let outcomes: std::collections::HashMap<(usize, String), SessionBatchItem> =
+            match &flow.phase {
+                SessionDeletePhase::Done(result) => result
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ix, group)| {
+                        group
+                            .items
+                            .iter()
+                            .map(move |item| ((ix, item.source_id.clone()), item.clone()))
+                    })
+                    .collect(),
+                _ => Default::default(),
+            };
+        let mut list = v_flex()
+            .id("sessions-delete-rows")
+            .test_support()
+            .w_full()
+            .gap(px(2.));
+        for (ix, row) in flow.rows.iter().enumerate() {
+            let status = row
+                .group
+                .and_then(|group| outcomes.get(&(group, row.identity.id.clone())).cloned());
+            let (note, color) = match &flow.phase {
+                SessionDeletePhase::Done(_) => match &status {
+                    Some(item) if item.status == SessionBatchStatus::Deleted => {
+                        (t(L10nKey::SessionsDeleteDone).into(), tk.fg)
+                    }
+                    Some(item) => {
+                        let kind = item
+                            .reason
+                            .as_ref()
+                            .map(|reason| reason.kind)
+                            .unwrap_or(SessionBatchReasonKind::Provider);
+                        let message = item
+                            .reason
+                            .as_ref()
+                            .map(|reason| reason.message.clone())
+                            .unwrap_or_default();
+                        (
+                            format!("{} · {message}", session_batch_reason_label(kind)).into(),
+                            if item.status == SessionBatchStatus::Failed {
+                                tk.danger
+                            } else {
+                                tk.warn_text
+                            },
+                        )
+                    }
+                    None => ("".into(), tk.k45),
+                },
+                _ => match (&row.excluded, &row.plan) {
+                    (Some(blocker), _) => (blocker.label(), tk.k45),
+                    (None, Some(SessionDeletePlan::Eligible { delete_ids })) => (
+                        t_fmt(
+                            L10nKey::SessionsDeleteCascadeFmt,
+                            &[("count", &delete_ids.len().to_string())],
+                        )
+                        .into(),
+                        tk.k45,
+                    ),
+                    (None, Some(SessionDeletePlan::Ineligible { kind, message })) => (
+                        format!("{} · {message}", session_batch_reason_label(*kind)).into(),
+                        tk.warn_text,
+                    ),
+                    (None, None) => ("".into(), tk.k45),
+                },
+            };
+            let store = row
+                .group
+                .map(|group| flow.groups[group].store_label.clone())
+                .unwrap_or_default();
+            list = list.child(
+                h_flex()
+                    .id(format!("sessions-delete-row-{ix}"))
+                    .test_support()
+                    .w_full()
+                    .items_center()
+                    .gap(px(8.))
+                    .py(px(3.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(fs(12.))
+                                    .text_color(tk.fg)
+                                    .child(row.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(fs(11.))
+                                    .text_color(tk.k45)
+                                    .child(store),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(gpui_kit::relative(0.45))
+                            .truncate()
+                            .text_size(fs(11.))
+                            .text_color(color)
+                            .child(note),
+                    ),
+            );
+        }
+        list.into_any_element()
+    }
+}
+
+/// 批量删除里原生原因的一行话；与选中清单的客户端阻挡共用措辞。
+fn session_batch_reason_label(kind: SessionBatchReasonKind) -> gpui_kit::SharedString {
+    let key = match kind {
+        SessionBatchReasonKind::Active => L10nKey::SessionsDeleteReasonActive,
+        SessionBatchReasonKind::Stale => L10nKey::SessionsDeleteReasonStale,
+        SessionBatchReasonKind::UnsupportedProvider => L10nKey::SessionsBlockerSourceUnsupported,
+        SessionBatchReasonKind::UnconfirmedStore => L10nKey::SessionsBlockerStoreUnconfirmed,
+        SessionBatchReasonKind::Provider => L10nKey::SessionsDeleteReasonProvider,
+    };
+    t(key).into()
 }
 
 #[cfg(test)]

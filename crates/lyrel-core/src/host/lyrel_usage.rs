@@ -16,6 +16,9 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
 pub use lyrel_protocol::host::lyrel_usage::*;
 
+#[cfg(target_os = "macos")]
+mod network;
+
 /// How often a caller who wants a reading may get a fresh one; the daemon's
 /// request worker shares one sampler per process, so concurrent consumers
 /// collapse onto a single platform read per interval.
@@ -39,6 +42,10 @@ pub struct Sampler {
     /// was reused, so the reading is discarded.
     started_secs: u64,
     primed: bool,
+    #[cfg(windows)]
+    gpu: super::metrics::gpu::GpuSampler,
+    #[cfg(target_os = "macos")]
+    network: network::Sampler,
 }
 
 impl Sampler {
@@ -57,6 +64,10 @@ impl Sampler {
             pid,
             started_secs,
             primed: false,
+            #[cfg(windows)]
+            gpu: super::metrics::gpu::GpuSampler::open(),
+            #[cfg(target_os = "macos")]
+            network: network::Sampler::default(),
         })
     }
 
@@ -86,6 +97,9 @@ impl Sampler {
                 "the sampled pid was reused by another process",
             ));
         }
+        let pid = self.pid.as_u32();
+        #[cfg(target_os = "macos")]
+        let network = self.network.sample(pid);
         if !self.primed {
             self.primed = true;
             return Ok(None);
@@ -98,12 +112,19 @@ impl Sampler {
                 "the host OS did not return valid process CPU/RAM data",
             ));
         }
-        Ok(Some(ComponentUsage::new(
-            self.pid.as_u32(),
-            self.started_secs,
-            cpu,
-            memory,
-        )))
+        #[cfg(windows)]
+        let gpu = self.gpu.process_engines(pid);
+        #[cfg(not(windows))]
+        let gpu = Err(ProcessMetricUnavailable::Unsupported);
+        let component = ComponentUsage::new(pid, self.started_secs, cpu, memory).with_gpu(gpu);
+        #[cfg(target_os = "macos")]
+        let component = match network {
+            Some(reading) => component.with_network(reading),
+            None => component,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let component = component.with_network(Err(ProcessMetricUnavailable::Unsupported));
+        Ok(Some(component))
     }
 }
 

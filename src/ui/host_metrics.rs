@@ -1,4 +1,5 @@
-//! Shared whole-host CPU/RAM sampling for the title bar and Activity Monitor (#373).
+//! Shared whole-host CPU/RAM/network sampling for the title bar and Activity
+//! Monitor (#373, #375).
 //!
 //! Sampling is demand-driven, exactly like the daemon side: a weak per-host
 //! view polls only while some consumer shows the host, and stops when every
@@ -6,7 +7,10 @@
 //! run-scoped history keyed by `HostId`, so switching or closing a view can
 //! neither destroy the current-run trend nor keep polling a host nobody
 //! watches. The title-bar strip and the monitor's resource tiles read the
-//! same history; unsampled stretches stay blank.
+//! same history; unsampled stretches stay blank. The network series is
+//! negotiated per peer (`host-network-metrics-v1`): an absent field means
+//! unsupported on a peer without the name and a missing reading on one with
+//! it — never a quiet zero.
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -135,6 +139,20 @@ impl MetricsSource {
         }
     }
 
+    /// Whether the peer negotiated `host-network-metrics-v1`. An old or
+    /// non-native peer never carries the network field, and the network tile
+    /// must read that as unsupported rather than wait for it.
+    fn supports_network(&self) -> bool {
+        match self {
+            Self::Local(client) => client
+                .hello()
+                .has_feature(lyrel_core::daemon::control::feature::HOST_NETWORK_METRICS),
+            Self::Remote(host) => host
+                .peer()
+                .has_feature(lyrel_core::daemon::control::feature::HOST_NETWORK_METRICS),
+        }
+    }
+
     pub(crate) fn is_connected(&self) -> bool {
         match self {
             Self::Local(client) => client.is_connected(),
@@ -218,13 +236,14 @@ impl MetricsRange {
 /// One aggregated display slot: the peak of every sample that fell into it,
 /// so long windows compress without flattening spikes. `None` is a slot no
 /// sample reached — an unsampled stretch stays blank rather than reading as
-/// a quiet zero. `gpu` is `None` within a reached slot when none of its
-/// samples carried a GPU reading.
+/// a quiet zero. GPU and network can be absent within populated slots.
 #[derive(Clone, Copy)]
 pub(crate) struct TrendBucket {
     pub(crate) cpu: f32,
     pub(crate) memory: f32,
     pub(crate) gpu: Option<f32>,
+    pub(crate) network_rx: f32,
+    pub(crate) network_tx: f32,
 }
 
 /// One kept reading, stamped with the GUI-side arrival time. The wire's own
@@ -297,19 +316,35 @@ impl SampleHistory {
             let cpu = sample.cpu_percent().clamp(0., 100.);
             let memory = (sample.memory_percent() as f32).clamp(0., 100.);
             let gpu = sample.gpu_percent().map(|gpu| gpu.clamp(0., 100.));
+            // A sample without a network reading leaves the slot's network
+            // fields at negative infinity — a missing tick is a gap the
+            // network chart skips, not a zero rate dragging on the peak.
+            let (network_rx, network_tx) = sample
+                .network()
+                .map(|network| {
+                    (
+                        network.rx_bytes_per_sec() as f32,
+                        network.tx_bytes_per_sec() as f32,
+                    )
+                })
+                .unwrap_or((f32::NEG_INFINITY, f32::NEG_INFINITY));
             out[ix] = Some(match out[ix] {
-                None => TrendBucket { cpu, memory, gpu },
+                None => TrendBucket {
+                    cpu,
+                    memory,
+                    gpu,
+                    network_rx,
+                    network_tx,
+                },
                 Some(prev) => TrendBucket {
                     cpu: prev.cpu.max(cpu),
                     memory: prev.memory.max(memory),
-                    // A slot's GPU peak keeps the busiest GPU reading that
-                    // reached it; slots with no GPU data stay `None`.
                     gpu: match (prev.gpu, gpu) {
                         (Some(a), Some(b)) => Some(a.max(b)),
-                        (Some(a), None) => Some(a),
-                        (None, Some(b)) => Some(b),
-                        (None, None) => None,
+                        (a, b) => a.or(b),
                     },
+                    network_rx: prev.network_rx.max(network_rx),
+                    network_tx: prev.network_tx.max(network_tx),
                 },
             });
         }
@@ -452,26 +487,57 @@ impl Render for HostMetricsView {
 
 /// The freshest reading as presentation-ready text, plus the distinct state
 /// word tiles show while there is nothing trustworthy to chart.
-fn readout(state: &State) -> MetricReadout {
+/// `network_supported` is the negotiated peer capability: it decides whether
+/// an absent network field means an unsupported source ("—") or a sample
+/// that will carry one shortly ("…").
+fn readout(state: &State, network_supported: bool) -> MetricReadout {
     match state {
         State::Ready(snapshot) => match snapshot.state() {
-            MetricsState::Sample(sample) => MetricReadout {
-                cpu: Some(sample.cpu_percent()),
-                memory_used_bytes: Some(sample.memory_used_bytes()),
-                memory_total_bytes: Some(sample.memory_total_bytes()),
-                gpu: sample.gpu_percent(),
-                gpu_reason: sample.gpu_unavailable_reason().map(str::to_owned),
-                marker: None,
-                status: None,
-                detail: t_fmt(
-                    L10nKey::HostMetricsSample,
-                    &[
-                        ("host", snapshot.hostname()),
-                        ("used", &gb(sample.memory_used_bytes())),
-                        ("total", &gb(sample.memory_total_bytes())),
-                    ],
-                ),
-            },
+            MetricsState::Sample(sample) => {
+                let network = sample.network();
+                MetricReadout {
+                    cpu: Some(sample.cpu_percent()),
+                    memory_used_bytes: Some(sample.memory_used_bytes()),
+                    memory_total_bytes: Some(sample.memory_total_bytes()),
+                    gpu: sample.gpu_percent(),
+                    gpu_reason: sample.gpu_unavailable_reason().map(str::to_owned),
+                    marker: None,
+                    status: None,
+                    detail: t_fmt(
+                        L10nKey::HostMetricsSample,
+                        &[
+                            ("host", snapshot.hostname()),
+                            ("used", &gb(sample.memory_used_bytes())),
+                            ("total", &gb(sample.memory_total_bytes())),
+                        ],
+                    ),
+                    network_supported,
+                    network_rx_bytes_per_sec: network.map(|rate| rate.rx_bytes_per_sec()),
+                    network_tx_bytes_per_sec: network.map(|rate| rate.tx_bytes_per_sec()),
+                    // A missing network field on a supporting peer is the
+                    // waiting family (fresh baseline, counter reset); on a
+                    // peer without the capability it never arrives at all.
+                    network_status: if network.is_some() {
+                        None
+                    } else if network_supported {
+                        Some(t(L10nKey::HostMetricsWaiting))
+                    } else {
+                        Some(t(L10nKey::HostMetricsUnavailable))
+                    },
+                    network_detail: match network {
+                        Some(rate) => t_fmt(
+                            L10nKey::HostMetricsNetworkSample,
+                            &[
+                                ("host", snapshot.hostname()),
+                                ("rx", &rate_text(rate.rx_bytes_per_sec())),
+                                ("tx", &rate_text(rate.tx_bytes_per_sec())),
+                            ],
+                        ),
+                        None if network_supported => t(L10nKey::HostMetricsWaiting).to_owned(),
+                        None => t(L10nKey::HostMetricsUnavailable).to_owned(),
+                    },
+                }
+            }
             MetricsState::Waiting => MetricReadout::pending(t(L10nKey::HostMetricsWaiting)),
             MetricsState::Unavailable(reason) => MetricReadout::down(
                 t(L10nKey::HostMetricsUnavailable),
@@ -515,6 +581,17 @@ struct MetricReadout {
     status: Option<gpui_kit::SharedString>,
     /// The hover detail: host, used and total memory.
     detail: String,
+    /// Whether the peer negotiated `host-network-metrics-v1`.
+    network_supported: bool,
+    /// Off-host receive/transmit rates of the freshest sample; both or
+    /// neither. `None` is a missing reading, never a quiet interface.
+    network_rx_bytes_per_sec: Option<f64>,
+    network_tx_bytes_per_sec: Option<f64>,
+    /// The state word the network tile shows beside its label: absent while
+    /// a real reading is on screen.
+    network_status: Option<&'static str>,
+    /// The network tile's hover detail: host, receive and transmit rates.
+    network_detail: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -534,6 +611,11 @@ impl MetricReadout {
             marker: Some(MetricMarker::Pending),
             status: Some(status.into()),
             detail: status.to_owned(),
+            network_supported: false,
+            network_rx_bytes_per_sec: None,
+            network_tx_bytes_per_sec: None,
+            network_status: Some(status),
+            network_detail: status.to_owned(),
         }
     }
 
@@ -547,11 +629,20 @@ impl MetricReadout {
             marker: Some(MetricMarker::Down),
             status: Some(status.into()),
             detail,
+            network_supported: false,
+            network_rx_bytes_per_sec: None,
+            network_tx_bytes_per_sec: None,
+            network_status: Some(status),
+            network_detail: status.to_owned(),
         }
     }
 
     fn ready(&self) -> bool {
         self.cpu.is_some()
+    }
+
+    fn network_ready(&self) -> bool {
+        self.network_rx_bytes_per_sec.is_some() && self.network_tx_bytes_per_sec.is_some()
     }
 
     fn marker_text(&self) -> &'static str {
@@ -603,6 +694,53 @@ impl MetricReadout {
             _ => self.status.clone(),
         }
     }
+    /// `↓ 2.1 MB/s`, or the marker family while nothing trustworthy is on
+    /// screen: "…" while waiting on a supporting peer, "—" where the peer
+    /// will never carry one (or the whole sampler is down).
+    fn network_rx_text(&self) -> String {
+        self.network_text(self.network_rx_bytes_per_sec, "↓")
+    }
+
+    /// The transmit half of [`Self::network_rx_text`], drawn dashed in the chart.
+    fn network_tx_text(&self) -> String {
+        self.network_text(self.network_tx_bytes_per_sec, "↑")
+    }
+
+    fn network_text(&self, rate: Option<f64>, arrow: &str) -> String {
+        if let Some(rate) = rate {
+            return format!("{arrow} {}", rate_text(rate));
+        }
+        // Without a rate the marker family speaks: the whole-sampler states
+        // carry their own marker; a ready sample either waits on a
+        // supporting peer ("…") or will never carry a reading ("—").
+        match (self.marker, self.network_supported) {
+            (Some(MetricMarker::Down), _) => format!("{arrow} —"),
+            (Some(MetricMarker::Pending), _) => format!("{arrow} …"),
+            (None, true) => format!("{arrow} …"),
+            (None, false) => format!("{arrow} —"),
+        }
+    }
+}
+
+/// Bytes per second in the SI units link rates use (1 KB/s = 1000 B/s), one
+/// decimal trimmed the way [`gb`] trims it: `512 B/s`, `240 KB/s`, `2.1 MB/s`.
+pub(super) fn rate_text(bytes_per_sec: f64) -> String {
+    const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let mut value = bytes_per_sec.max(0.);
+    let mut unit = 0;
+    while value >= 1000. && unit < UNITS.len() - 1 {
+        value /= 1000.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0} {}", UNITS[0])
+    } else {
+        format!(
+            "{} {}",
+            format!("{value:.1}").trim_end_matches(".0"),
+            UNITS[unit]
+        )
+    }
 }
 
 fn gb(bytes: u64) -> String {
@@ -618,7 +756,8 @@ fn now_millis() -> u64 {
 }
 
 /// Which series a chart draws. Later resource tickets add their fields to
-/// [`TrendBucket`] and their series here.
+/// [`TrendBucket`] and their series here; the network tile instead paints its
+/// two series together in [`network_trend_chart`], so it needs no variant.
 #[derive(Clone, Copy)]
 enum TrendSeries {
     Cpu,
@@ -648,12 +787,15 @@ impl TrendSeries {
 }
 
 /// A sparkline drawn straight into a canvas: one quad per bar or step
-/// segment, nothing for a blank slot, so gaps read as gaps.
+/// segment, nothing for a blank slot, so gaps read as gaps. `scale` is the
+/// value that maps to the full height — 100 for utilization percentages, the
+/// window peak for throughput series.
 fn trend_chart(
     id: impl Into<gpui_kit::ElementId>,
     buckets: Vec<Option<TrendBucket>>,
     series: TrendSeries,
     color: gpui_kit::Hsla,
+    scale: f32,
     width: f32,
     height: f32,
 ) -> AnyElement {
@@ -676,7 +818,7 @@ fn trend_chart(
                 let slot = width_px / BUCKET_COUNT as f32;
                 let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
                 let y = |v: f32| {
-                    bounds.origin.y + px(height_px - (v.clamp(0., 100.) / 100.) * height_px)
+                    bounds.origin.y + px(height_px - (v.clamp(0., scale) / scale) * height_px)
                 };
                 if line {
                     let stroke = 1.5_f32.min(slot * 0.4).max(1.);
@@ -723,7 +865,7 @@ fn trend_chart(
                     for (ix, bucket) in buckets.iter().enumerate() {
                         let Some(bucket) = bucket else { continue };
                         let Some(v) = value(bucket) else { continue };
-                        let bar_h = ((v.clamp(0., 100.) / 100.) * height_px).max(1.);
+                        let bar_h = ((v.clamp(0., scale) / scale) * height_px).max(1.);
                         window.paint_quad(fill(
                             gpui_kit::Bounds {
                                 origin: gpui_kit::point(
@@ -788,6 +930,7 @@ fn titlebar_metric(
                 buckets,
                 series,
                 color,
+                100.,
                 40.,
                 14.,
             ))
@@ -872,6 +1015,230 @@ fn monitor_tile(
                 buckets,
                 series,
                 color,
+                100.,
+                108.,
+                24.,
+            ))
+        })
+        .into_any_element()
+}
+
+/// The network tile's two series in one canvas, per the approved figure:
+/// receive as a solid step line and transmit as a dashed step line, both
+/// scaled to the shared window peak so heights stay comparable. A blank slot
+/// or a slot no network reading reached breaks both lines; a genuine zero
+/// flattens them at the floor — idle and missing never look the same.
+fn network_trend_chart(
+    id: impl Into<gpui_kit::ElementId>,
+    buckets: Vec<Option<TrendBucket>>,
+    rx_color: gpui_kit::Hsla,
+    tx_color: gpui_kit::Hsla,
+    width: f32,
+    height: f32,
+) -> AnyElement {
+    // A slot that never saw a network reading carries negative infinity; it
+    // never wins the peak and the painters skip it, so unsampled time stays
+    // blank rather than dragging the scale.
+    let peak = buckets
+        .iter()
+        .flatten()
+        .flat_map(|bucket| [bucket.network_rx, bucket.network_tx])
+        .filter(|value| value.is_finite())
+        .fold(0_f32, f32::max)
+        .max(1.);
+    div()
+        .id(id)
+        .test_support()
+        .w(px(width))
+        .h(px(height))
+        .flex_none()
+        .child(gpui_kit::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let width_px = bounds.size.width.as_f32().min(width);
+                let height_px = bounds.size.height.as_f32().min(height);
+                if width_px <= 0. || height_px <= 0. {
+                    return;
+                }
+                let slot = width_px / BUCKET_COUNT as f32;
+                let x = |ix: usize| bounds.origin.x + px((ix as f32 + 0.5) * slot);
+                let y = |v: f32| {
+                    bounds.origin.y + px(height_px - (v.clamp(0., peak) / peak) * height_px)
+                };
+                let stroke = 1.5_f32.min(slot * 0.4).max(1.);
+
+                // One shared geometry for both step series; the painter is
+                // what differs (solid vs dashed).
+                struct StepSeries {
+                    color: gpui_kit::Hsla,
+                    dashed: bool,
+                }
+                for series in [
+                    StepSeries {
+                        color: rx_color,
+                        dashed: false,
+                    },
+                    StepSeries {
+                        color: tx_color,
+                        dashed: true,
+                    },
+                ] {
+                    let value = |bucket: &TrendBucket| {
+                        if series.dashed {
+                            bucket.network_tx
+                        } else {
+                            bucket.network_rx
+                        }
+                    };
+                    let mut prev: Option<(usize, f32)> = None;
+                    for (ix, bucket) in buckets.iter().enumerate() {
+                        let Some(bucket) = bucket else {
+                            prev = None;
+                            continue;
+                        };
+                        let v = value(bucket);
+                        if !v.is_finite() {
+                            prev = None;
+                            continue;
+                        }
+                        if let Some((pix, pv)) = prev {
+                            let (x0, x1) = (x(pix), x(ix));
+                            let (y0, y1) = (y(pv), y(v));
+                            if series.dashed {
+                                paint_dashed_h(window, x0, x1, y0, stroke, series.color);
+                            } else {
+                                let run = (x1 - x0).max(px(stroke));
+                                window.paint_quad(fill(
+                                    gpui_kit::Bounds {
+                                        origin: gpui_kit::point(x0, y0 - px(stroke / 2.)),
+                                        size: gpui_kit::size(run, px(stroke)),
+                                    },
+                                    series.color,
+                                ));
+                            }
+                            let rise = y1 - y0;
+                            if rise.abs() > px(stroke) {
+                                window.paint_quad(fill(
+                                    gpui_kit::Bounds {
+                                        origin: gpui_kit::point(x1 - px(stroke / 2.), y0.min(y1)),
+                                        size: gpui_kit::size(px(stroke), rise.abs()),
+                                    },
+                                    series.color,
+                                ));
+                            }
+                        }
+                        prev = Some((ix, v));
+                    }
+                }
+            },
+        ))
+        .into_any_element()
+}
+
+/// Paint one horizontal run of the dashed transmit series: `DASH` on, `GAP`
+/// off, measured along the run, clipping the tail. Runs shorter than a gap
+/// vanish inside it exactly like a real dashed stroke; the vertical risers
+/// stay solid so the step shape survives at small widths.
+fn paint_dashed_h(
+    window: &mut gpui_kit::Window,
+    x0: gpui_kit::Pixels,
+    x1: gpui_kit::Pixels,
+    y: gpui_kit::Pixels,
+    stroke: f32,
+    color: gpui_kit::Hsla,
+) {
+    const DASH: f32 = 3.;
+    const GAP: f32 = 2.;
+    let mut cursor = x0;
+    while cursor < x1 {
+        let dash_end = cursor + px(DASH);
+        let end = if dash_end < x1 { dash_end } else { x1 };
+        window.paint_quad(fill(
+            gpui_kit::Bounds {
+                origin: gpui_kit::point(cursor, y - px(stroke / 2.)),
+                size: gpui_kit::size(end - cursor, px(stroke)),
+            },
+            color,
+        ));
+        cursor = end + px(GAP);
+    }
+}
+
+/// The Activity Monitor's network tile (#375): one tile grouping the host's
+/// receive and send series per the approved figure — a label with the
+/// distinct state word while nothing trustworthy is on screen, one row with
+/// the ↓ receive and ↑ send rates, and both trends overlaid underneath.
+/// Unsupported peers and missing readings keep their distinct markers
+/// instead of reading as a quiet zero.
+fn monitor_network_tile(
+    id: &'static str,
+    label: &'static str,
+    readout: &MetricReadout,
+    buckets: Vec<Option<TrendBucket>>,
+    rx_color: gpui_kit::Hsla,
+    tx_color: gpui_kit::Hsla,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    v_flex()
+        .id(id)
+        .aria_label(gpui_kit::SharedString::from(readout.network_detail.clone()))
+        .test_support()
+        .flex_1()
+        .min_w_0()
+        .p(px(8.))
+        .gap(px(6.))
+        .rounded(px(7.))
+        .bg(theme.muted.opacity(0.18))
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(rems(11. / 16.))
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .when_some(readout.network_status, |row, status| {
+                    row.child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_color(theme.muted_foreground)
+                            .child(status),
+                    )
+                }),
+        )
+        .child(
+            h_flex()
+                .items_end()
+                .justify_between()
+                .child(
+                    div()
+                        .id(format!("{id}-rx"))
+                        .aria_label(gpui_kit::SharedString::from(readout.network_rx_text()))
+                        .test_support()
+                        .text_size(rems(13. / 16.))
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(gpui_kit::SharedString::from(readout.network_rx_text())),
+                )
+                .child(
+                    div()
+                        .id(format!("{id}-tx"))
+                        .aria_label(gpui_kit::SharedString::from(readout.network_tx_text()))
+                        .test_support()
+                        .text_size(rems(11. / 16.))
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(gpui_kit::SharedString::from(readout.network_tx_text())),
+                ),
+        )
+        .when(readout.network_ready(), |tile| {
+            tile.child(network_trend_chart(
+                format!("{id}-chart"),
+                buckets,
+                rx_color,
+                tx_color,
                 108.,
                 24.,
             ))
@@ -928,7 +1295,9 @@ impl LyrelApp {
     }
 
     /// The shared readout and trend for `host`, from the one live sampler
-    /// and the retained history.
+    /// and the retained history. The network series rides the same sample;
+    /// its unsupported-vs-waiting distinction comes from the peer's
+    /// negotiated capability, not from the sample itself.
     fn metric_presentation(
         &self,
         host: HostId,
@@ -943,9 +1312,10 @@ impl LyrelApp {
             Some(view) => view.update(cx, |view, cx| view.effective_state(cx)),
             None => missing_source(host, cx),
         };
+        let network_supported = MetricsSource::get(host, cx).is_some_and(|s| s.supports_network());
         let history = cx.default_global::<MetricsHistories>().0.get(&host);
         (
-            readout(&state),
+            readout(&state, network_supported),
             HostMetricsView::trend(history, &state, range),
         )
     }
@@ -1124,11 +1494,33 @@ impl LyrelApp {
                 "monitor-tile-gpu",
                 t(L10nKey::MonitorColGpu),
                 &readout,
-                buckets,
+                buckets.clone(),
                 TrendSeries::Gpu,
                 gpu_color,
                 cx,
             ))
+            .into_any_element();
+
+        // The approved figure puts the network tile in the second row, beside
+        // the disk tile. The network series ride the same samples and range
+        // selector; receive draws solid and transmit dashed per the figure's
+        // palette (the accent family for receive, the warning family for
+        // transmit).
+        let network_tiles = h_flex()
+            .id("monitor-resource-tiles-secondary")
+            .test_support()
+            .px(px(crate::ui::window_chrome::CONTENT_INSET))
+            .gap(px(8.))
+            .child(monitor_network_tile(
+                "monitor-tile-network",
+                t(L10nKey::MonitorColNetwork),
+                &readout,
+                buckets,
+                theme.accent,
+                theme.warning,
+                cx,
+            ))
+            .child(self.render_disk_tile(window, cx))
             .into_any_element();
 
         v_flex()
@@ -1137,16 +1529,7 @@ impl LyrelApp {
             .flex_none()
             .child(heading)
             .child(tiles)
-            .child(
-                h_flex()
-                    .id("monitor-resource-tiles-secondary")
-                    .test_support()
-                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                    .gap(px(8.))
-                    .child(self.render_disk_tile(window, cx)),
-            )
-            // #377: the collapsed Lyrel summary and its expanded per-component
-            // rows; everything it needs lives in `ui::lyrel_usage`.
+            .child(network_tiles)
             .child(self.render_lyrel_usage(cx))
             .into_any_element()
     }

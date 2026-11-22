@@ -45,8 +45,6 @@ impl GpuSampler {
 #[cfg(windows)]
 mod windows {
     use std::collections::HashMap;
-    use std::io;
-    use std::sync::{LazyLock, Mutex};
 
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Performance::{
@@ -57,6 +55,7 @@ mod windows {
     };
 
     use super::GpuReading;
+    use lyrel_protocol::host::lyrel_usage::ProcessMetricUnavailable;
 
     /// `GPU Engine(*)\Utilization Percentage` in the English counter
     /// database, so the sampler works on localized Windows too.
@@ -87,21 +86,40 @@ mod windows {
             }
         }
 
-        pub(crate) fn sample(&mut self) -> GpuReading {
-            let Some(query) = &mut self.query else {
-                return GpuReading::Unavailable(
-                    self.unsupported
-                        .clone()
-                        .unwrap_or_else(|| "GPU sampling is unavailable".into()),
-                );
-            };
-            match query.collect() {
-                Ok(()) => match query.rows() {
-                    Ok(rows) => GpuReading::Busy(busiest_engine(&rows)),
-                    Err(reason) => GpuReading::Unavailable(reason),
-                },
+        pub(crate) fn sample(&self) -> GpuReading {
+            match self.rows() {
+                Ok(rows) => GpuReading::Busy(busiest_engine(&rows)),
                 Err(reason) => GpuReading::Unavailable(reason),
             }
+        }
+
+        fn rows(&self) -> Result<Vec<EngineRow>, String> {
+            let query = self.query.as_ref().ok_or_else(|| {
+                self.unsupported
+                    .clone()
+                    .unwrap_or_else(|| "GPU sampling is unavailable".into())
+            })?;
+            query.collect()?;
+            query.rows()
+        }
+
+        pub(crate) fn process_engines(
+            &self,
+            pid: u32,
+        ) -> Result<Vec<(String, f32)>, ProcessMetricUnavailable> {
+            if self.query.is_none() {
+                return Err(ProcessMetricUnavailable::Unsupported);
+            }
+            let rows = self
+                .rows()
+                .map_err(|_| ProcessMetricUnavailable::CounterReadFailed)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|row| {
+                    (row.pid == pid && row.percent > 0.)
+                        .then(|| (row.engine, row.percent.clamp(0., 100.) as f32))
+                })
+                .collect())
         }
     }
 
@@ -124,12 +142,6 @@ mod windows {
         let split = rest.find('_')?;
         let pid = rest[..split].parse().ok()?;
         Some((pid, &rest[split + 1..]))
-    }
-
-    /// The `engtype_…` tail of a physical engine key: `3d`, `compute`,
-    /// `copy`, `security_1`, `videodecode`, …
-    fn engine_type(engine: &str) -> &str {
-        engine.rsplit("engtype_").next().unwrap_or(engine)
     }
 
     /// Fold per-process rows the way Task Manager's headline GPU number does:
@@ -344,69 +356,6 @@ mod windows {
         String::from_utf16_lossy(units)
     }
 
-    /// One per-process GPU engine utilization reading, straight from the
-    /// same counter rows the whole-host fold reads. The Lyrel per-process
-    /// detail (#378) reuses this; consumers fold rows per process or per
-    /// engine as their presentation needs.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct ProcessGpuSample {
-        pid: u32,
-        engine_type: String,
-        utilization_percent: f32,
-    }
-
-    impl ProcessGpuSample {
-        /// The process that owns this engine share.
-        pub fn pid(&self) -> u32 {
-            self.pid
-        }
-        /// The engine kind: `3d`, `compute`, `copy`, `security_1`, …
-        pub fn engine_type(&self) -> &str {
-            &self.engine_type
-        }
-        /// This process's percentage of the engine.
-        pub fn utilization_percent(&self) -> f32 {
-            self.utilization_percent
-        }
-    }
-
-    /// Sample per-process GPU engine utilization right now.
-    ///
-    /// This shares the whole-host acquisition — same counter, same parsing
-    /// and validation — through its own process-wide query, so callers don't
-    /// join the host-metrics demand cycle. An empty `Ok` vector means the
-    /// host genuinely has no GPU work in flight; `Err` with
-    /// [`io::ErrorKind::Unsupported`] means this platform cannot supply
-    /// per-process GPU readings.
-    pub fn sample_processes() -> io::Result<Vec<ProcessGpuSample>> {
-        static QUERY: LazyLock<Mutex<Option<Query>>> = LazyLock::new(|| Mutex::new(None));
-        let mut guard = QUERY
-            .lock()
-            .map_err(|_| io::Error::other("the per-process GPU sampler failed"))?;
-        if guard.is_none() {
-            let query = Query::open().map_err(|error| match error {
-                OpenError::Unsupported(reason) => {
-                    io::Error::new(io::ErrorKind::Unsupported, reason)
-                }
-                OpenError::Failed(reason) => io::Error::other(reason),
-            })?;
-            *guard = Some(query);
-        }
-        let query = guard
-            .as_ref()
-            .expect("the per-process GPU query was just opened");
-        query.collect().map_err(io::Error::other)?;
-        let rows = query.rows().map_err(io::Error::other)?;
-        Ok(rows
-            .iter()
-            .map(|row| ProcessGpuSample {
-                pid: row.pid,
-                engine_type: engine_type(&row.engine).to_owned(),
-                utilization_percent: row.percent.clamp(0.0, 100.0) as f32,
-            })
-            .collect())
-    }
-
     /// Real-device probe for the GPU fold: prints the busiest-engine host
     /// reading and the hottest per-process rows from the actual counters.
     /// Not a CI case — CI hosts may have no GPU — run it explicitly on
@@ -417,32 +366,18 @@ mod windows {
         // The utilization counter is a delta: like the production sampler,
         // give the priming collect a real second of engine time before
         // reading a value.
-        let mut sampler = GpuSampler::open();
+        let sampler = GpuSampler::open();
         std::thread::sleep(std::time::Duration::from_millis(1_100));
         let reading = sampler.sample();
         let GpuReading::Busy(host) = reading else {
             panic!("this machine should expose GPU engine counters: {reading:?}");
         };
-        // The process-wide query primes on its first call; the second call,
-        // a real second later, reads genuine per-process deltas.
-        let _ = sample_processes();
-        std::thread::sleep(std::time::Duration::from_millis(1_100));
-        let processes = sample_processes().expect("per-process GPU sampling");
-        let mut rows = processes.clone();
-        rows.sort_by(|a, b| {
-            b.utilization_percent()
-                .partial_cmp(&a.utilization_percent())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let mut rows = sampler.rows().expect("native process GPU rows");
+        rows.sort_by(|a, b| b.percent.total_cmp(&a.percent));
         eprintln!("host GPU utilization: {host}%");
         eprintln!("per-process rows: {}", rows.len());
         for row in rows.iter().take(10) {
-            eprintln!(
-                "pid={} engine={} {:.2}%",
-                row.pid(),
-                row.engine_type(),
-                row.utilization_percent()
-            );
+            eprintln!("pid={} engine={} {:.2}%", row.pid, row.engine, row.percent);
         }
     }
 
@@ -473,7 +408,7 @@ mod windows {
                 split_instance("pid_4_luid_0x00000000_0x00016ef1_phys_0_eng_15_engtype_security_1")
                     .expect("an underscored engine type still splits");
             assert_eq!(pid, 4);
-            assert_eq!(engine_type(engine), "security_1");
+            assert!(engine.ends_with("engtype_security_1"));
             assert_eq!(split_instance("total"), None);
             assert_eq!(
                 split_instance("pid_notanumber_luid_0_phys_0_eng_0_engtype_3d"),
@@ -512,5 +447,3 @@ mod windows {
 
 #[cfg(windows)]
 pub(crate) use windows::GpuSampler;
-#[cfg(windows)]
-pub use windows::{ProcessGpuSample, sample_processes};

@@ -807,6 +807,21 @@ pub trait Host: Send + Sync + 'static {
         session_operations::hermes::statistics(request)
     }
 
+    /// Bounded native session deletion on this Host: Prepare revalidates each
+    /// group's store identity and computes the exact native cascade per
+    /// target; Execute removes exactly the confirmed target sets inside the
+    /// provider's own write transaction and reports per-target outcomes.
+    /// GUI callers use HostOps; the operation never opens or replaces a pane.
+    fn session_batch(
+        &self,
+        request: &session_operations::batch::SessionBatchRequest,
+    ) -> Result<
+        session_operations::batch::SessionBatchReply,
+        session_operations::SessionOperationError,
+    > {
+        session_operations::batch::run(self, request)
+    }
+
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub>;
 
     fn is_connected(&self) -> bool {
