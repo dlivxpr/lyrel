@@ -139,7 +139,10 @@ impl SessionsState {
     }
 
     /// 当前主机已发现的全部目录，排序后供目录选择器搜索。
-    fn discovered_directories(&self, home: Option<&Path>) -> Vec<(PathBuf, gpui_kit::SharedString)> {
+    fn discovered_directories(
+        &self,
+        home: Option<&Path>,
+    ) -> Vec<(PathBuf, gpui_kit::SharedString)> {
         let mut dirs: Vec<PathBuf> = self
             .listing
             .sessions
@@ -228,6 +231,7 @@ impl SessionsState {
 }
 
 /// 页签与筛选落地后的可见行：隐藏按可见性模型拆分，其余条件依次收紧。
+/// 目录比较走所选主机的分隔符语义 —— 客户端平台永远不解析远程路径。
 /// 纯函数 —— render 与测试共用同一答案。
 #[allow(clippy::too_many_arguments)]
 fn filtered_sessions(
@@ -238,6 +242,7 @@ fn filtered_sessions(
     agent: Option<CLIAgent>,
     activity: SessionActivity,
     directory: Option<&Path>,
+    host_separator: char,
     search: &str,
     custom: (Option<chrono::NaiveDate>, Option<chrono::NaiveDate>),
     now: u64,
@@ -253,7 +258,13 @@ fn filtered_sessions(
             }
         })
         .filter(|s| agent.is_none_or(|wanted| s.agent == wanted))
-        .filter(|s| directory.is_none_or(|dir| s.cwd.as_deref() == Some(dir)))
+        .filter(|s| {
+            directory.is_none_or(|dir| {
+                s.cwd.as_deref().is_some_and(|cwd| {
+                    crate::core::agent_history::directory_matches_with(cwd, dir, host_separator)
+                })
+            })
+        })
         .filter(|s| match_activity(s.updated, activity, custom, now))
         .filter(|s| {
             query.is_empty()
@@ -301,7 +312,10 @@ enum SelectAllState {
 }
 
 fn select_all_state(selected: &BTreeSet<String>, rows: &[SessionRow]) -> SelectAllState {
-    let checked = rows.iter().filter(|row| selected.contains(&row.key)).count();
+    let checked = rows
+        .iter()
+        .filter(|row| selected.contains(&row.key))
+        .count();
     match checked {
         0 => SelectAllState::None,
         n if n == rows.len() => SelectAllState::All,
@@ -324,35 +338,32 @@ fn session_blockers(identity: &SessionIdentity, live: &[SessionIdentity]) -> Vec
     out
 }
 
-/// 存储来源一行话：原生存储写 profile（缺省为默认 profile），OpenCode
-/// 写它确认到的存储选择器或连接。
-fn storage_label(identity: &SessionIdentity) -> gpui_kit::SharedString {
-    let Some(scope) = &identity.scope else {
-        return t(L10nKey::SessionsDefaultProfile).into();
-    };
-    if let Some(opencode) = &scope.opencode {
-        let storage = scope
-            .environment
-            .get("OPENCODE_DB")
-            .or_else(|| scope.environment.get("XDG_DATA_HOME"))
-            .or_else(|| scope.environment.get("HOME"))
-            .or_else(|| scope.environment.get("USERPROFILE"));
-        if let Some(storage) = storage {
-            return storage.clone().into();
+/// 存储来源一行话：有精确文件时写文件的实际位置；否则写它确认到的
+/// 提供方存储选择子——OpenCode 的存储选择器或已保存连接，其它来源的
+/// 显式 Hermes home、OMP 配置根等非默认 profile／存储根（缺省仍是默认
+/// profile）。
+fn storage_label(identity: &SessionIdentity, home: Option<&Path>) -> gpui_kit::SharedString {
+    match identity.store() {
+        SessionStore::File(path) => crate::ui::home::display_path(&path, home).into(),
+        SessionStore::Named {
+            profile,
+            root,
+            dir,
+            connection,
+        } => {
+            let address = root
+                .or(connection)
+                .or_else(|| dir.map(|dir| dir.to_string_lossy().into_owned()));
+            match (address, profile.as_deref()) {
+                (Some(address), Some(profile)) if profile != "default" => {
+                    format!("{profile} · {address}").into()
+                }
+                (Some(address), _) => address.into(),
+                (None, Some(profile)) if profile != "default" => profile.into(),
+                _ => t(L10nKey::SessionsDefaultProfile).into(),
+            }
         }
-        let connection = opencode
-            .server
-            .as_ref()
-            .map(|server| server.urls.join(", "))
-            .unwrap_or_else(|| opencode.connection_argv.join(" "));
-        if connection.is_empty() {
-            return identity.agent.display_name().into();
-        }
-        return connection.into();
-    }
-    match scope.profile.as_deref() {
-        Some(profile) if profile != "default" => profile.into(),
-        _ => t(L10nKey::SessionsDefaultProfile).into(),
+        SessionStore::Unconfirmed => t(L10nKey::SessionsDefaultProfile).into(),
     }
 }
 
@@ -420,15 +431,16 @@ impl SettingsWindow {
             }
             (None, _) => {
                 // 主机在扫描前就没了：直接给出断连的答案，而不是等一趟没有的旅程。
-                settings.sessions.listing = SessionListing {
-                    sessions: Vec::new(),
-                    errors: vec![lyrel_core::host::session_operations::SessionOperationError {
+                settings.sessions.listing =
+                    SessionListing {
+                        sessions: Vec::new(),
+                        errors: vec![lyrel_core::host::session_operations::SessionOperationError {
                         kind: lyrel_core::host::session_operations::SessionErrorKind::Connection,
                         message: "sessions settings host is disconnected".into(),
                         retained: None,
                     }],
-                    host_reachable: false,
-                };
+                        host_reachable: false,
+                    };
                 settings.sessions.scanning = false;
                 settings.sessions.landed = true;
                 cx.notify();
@@ -546,17 +558,24 @@ impl SettingsWindow {
     }
 
     /// 在 Lyrel 中隐藏／重新显示：只写可见性偏好，不触碰智能体自己的存储。
-    /// 行随勾选状态移动页签，勾选随之清空。
-    fn set_sessions_hidden(&mut self, hide: bool, keys: Vec<String>, cx: &mut Context<Self>) {
-        if keys.is_empty() {
+    /// 行随勾选状态移动页签，勾选随之清空。作用域键精确到行；重新显示一
+    /// 条旧版 `slug:id` 隐藏的行时写它的精确作用域覆盖，而不是删掉旧版
+    /// 键 —— 那会连带暴露其它同名行。
+    fn set_sessions_hidden(
+        &mut self,
+        hide: bool,
+        identities: Vec<SessionIdentity>,
+        cx: &mut Context<Self>,
+    ) {
+        if identities.is_empty() {
             return;
         }
         self.update_config(cx, |cfg| {
-            for key in keys {
+            for identity in identities {
                 if hide {
-                    cfg.hidden_agent_sessions.insert(key);
+                    session_history::hide_session(cfg, &identity);
                 } else {
-                    cfg.hidden_agent_sessions.remove(&key);
+                    session_history::show_session(cfg, &identity);
                 }
             }
         });
@@ -573,15 +592,9 @@ impl SettingsWindow {
         };
         let state = &settings.sessions;
         if state.landed {
-            (
-                state.listing.sessions.clone(),
-                Some(state.listing.clone()),
-            )
+            (state.listing.sessions.clone(), Some(state.listing.clone()))
         } else {
-            (
-                session_history::cached_sessions(state.host),
-                None,
-            )
+            (session_history::cached_sessions(state.host), None)
         }
     }
 
@@ -599,6 +612,11 @@ impl SettingsWindow {
         let (source, landed_listing) = self.sessions_source();
         let search = state.search.read(cx).value();
         let custom = state.custom_window(cx);
+        // The directory filter judges this host's records by this host's
+        // path semantics (a remote Linux host stays case-sensitive even
+        // under a Windows client), not by the settings window's platform.
+        let host_separator = HostRegistry::lookup(cx, host)
+            .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
         let filtered = filtered_sessions(
             &source,
             host,
@@ -607,6 +625,7 @@ impl SettingsWindow {
             state.agent,
             state.activity,
             state.directory.as_deref(),
+            host_separator,
             &search,
             custom,
             now,
@@ -624,11 +643,23 @@ impl SettingsWindow {
             .collect();
 
         let toolbar = self.sessions_toolbar(state, host, home.as_deref(), cx);
-        let mut left = v_flex().flex_1().min_w_0().min_h_0().gap(px(8.)).child(toolbar);
+        let mut left = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap(px(8.))
+            .child(toolbar);
         if state.activity == SessionActivity::Custom {
             left = left.child(self.sessions_custom_range(state));
         }
-        left = left.child(self.sessions_list(state, &rows, landed_listing.as_ref(), now, home.as_deref(), cx));
+        left = left.child(self.sessions_list(
+            state,
+            &rows,
+            landed_listing.as_ref(),
+            now,
+            home.as_deref(),
+            cx,
+        ));
         let side = self.sessions_side(state, &rows, host, home.as_deref(), cx);
 
         h_flex()
@@ -687,8 +718,7 @@ impl SettingsWindow {
                 })
             })
             .collect();
-        let host_menu =
-            self.settings_dropdown("sessions-host", host_label, None, host_entries, cx);
+        let host_menu = self.settings_dropdown("sessions-host", host_label, None, host_entries, cx);
 
         let agent_label = state
             .agent
@@ -706,13 +736,8 @@ impl SettingsWindow {
                 })
             })
             .collect();
-        let agent_menu = self.settings_dropdown(
-            "sessions-agent",
-            agent_label,
-            None,
-            agent_entries,
-            cx,
-        );
+        let agent_menu =
+            self.settings_dropdown("sessions-agent", agent_label, None, agent_entries, cx);
 
         let activity_key = match state.activity {
             SessionActivity::Any => L10nKey::SessionsActivityAny,
@@ -739,9 +764,13 @@ impl SettingsWindow {
         ]
         .into_iter()
         .map(|(activity, key)| {
-            MenuEntry::item(t(key), state.activity == activity, move |this, _window, cx| {
-                this.select_sessions_activity(activity, cx);
-            })
+            MenuEntry::item(
+                t(key),
+                state.activity == activity,
+                move |this, _window, cx| {
+                    this.select_sessions_activity(activity, cx);
+                },
+            )
         })
         .collect();
         let activity_menu = self.settings_dropdown(
@@ -770,7 +799,8 @@ impl SettingsWindow {
                 })
                 .collect::<Vec<_>>(),
         );
-        let pick_dirs: Rc<Vec<PathBuf>> = Rc::new(dirs.iter().map(|(dir, _)| dir.clone()).collect());
+        let pick_dirs: Rc<Vec<PathBuf>> =
+            Rc::new(dirs.iter().map(|(dir, _)| dir.clone()).collect());
         let picked = pick_dirs.clone();
         let directory_menu = self.settings_search_dropdown(
             "sessions-directory",
@@ -804,10 +834,7 @@ impl SettingsWindow {
     }
 
     /// 自定义范围的两个日期输入，改动即收紧筛选（勾选已随改动清空）。
-    fn sessions_custom_range(
-        &self,
-        state: &SessionsState,
-    ) -> AnyElement {
+    fn sessions_custom_range(&self, state: &SessionsState) -> AnyElement {
         h_flex()
             .id("sessions-custom-range")
             .test_support()
@@ -907,39 +934,33 @@ impl SettingsWindow {
                     .child(t(L10nKey::SessionsSelectAll)),
             );
 
-        let mut list = v_flex()
-            .w_full()
-            .min_h_0()
-            .gap(px(2.));
+        let mut list = v_flex().w_full().min_h_0().gap(px(2.));
         for (ix, row) in rows.iter().enumerate() {
             list = list.child(self.session_row(state, ix, row, now, home, cx));
         }
         let body: AnyElement = match (rows.is_empty(), landed) {
-            (true, None) => self
-                .sessions_empty_notice(t(L10nKey::SessionsScanning), None, &tk),
-            (true, Some(listing)) => {
-                match listing.health(0) {
-                    crate::ui::session_history::SessionHealth::Disconnected => self
-                        .sessions_empty_notice(
-                            t(L10nKey::PanelSessionsDisconnected),
-                            Some(t(L10nKey::PanelSessionsDisconnectedHint).into()),
-                            &tk,
-                        ),
-                    crate::ui::session_history::SessionHealth::Unsupported => self
-                        .sessions_empty_notice(
-                            t(L10nKey::PanelSessionsUnsupported),
-                            Some(t(L10nKey::PanelSessionsUnsupportedHint).into()),
-                            &tk,
-                        ),
-                    _ => {
-                        let title = match state.tab {
-                            SessionsTab::Visible => t(L10nKey::SessionsEmpty),
-                            SessionsTab::Hidden => t(L10nKey::SessionsEmptyHidden),
-                        };
-                        self.sessions_empty_notice(title, None, &tk)
-                    }
+            (true, None) => self.sessions_empty_notice(t(L10nKey::SessionsScanning), None, &tk),
+            (true, Some(listing)) => match listing.health(0) {
+                crate::ui::session_history::SessionHealth::Disconnected => self
+                    .sessions_empty_notice(
+                        t(L10nKey::PanelSessionsDisconnected),
+                        Some(t(L10nKey::PanelSessionsDisconnectedHint).into()),
+                        &tk,
+                    ),
+                crate::ui::session_history::SessionHealth::Unsupported => self
+                    .sessions_empty_notice(
+                        t(L10nKey::PanelSessionsUnsupported),
+                        Some(t(L10nKey::PanelSessionsUnsupportedHint).into()),
+                        &tk,
+                    ),
+                _ => {
+                    let title = match state.tab {
+                        SessionsTab::Visible => t(L10nKey::SessionsEmpty),
+                        SessionsTab::Hidden => t(L10nKey::SessionsEmptyHidden),
+                    };
+                    self.sessions_empty_notice(title, None, &tk)
                 }
-            }
+            },
             (false, _) => div()
                 .id("sessions-rows")
                 .test_support()
@@ -976,23 +997,14 @@ impl SettingsWindow {
         hint: Option<gpui_kit::SharedString>,
         tk: &Tk,
     ) -> AnyElement {
-        let mut note = v_flex()
-            .w_full()
-            .py(px(24.))
-            .gap(px(4.))
-            .child(
-                div()
-                    .text_size(fs(12.5))
-                    .text_color(tk.k45)
-                    .child(title.into()),
-            );
+        let mut note = v_flex().w_full().py(px(24.)).gap(px(4.)).child(
+            div()
+                .text_size(fs(12.5))
+                .text_color(tk.k45)
+                .child(title.into()),
+        );
         if let Some(hint) = hint {
-            note = note.child(
-                div()
-                    .text_size(fs(11.5))
-                    .text_color(tk.k35)
-                    .child(hint),
-            );
+            note = note.child(div().text_size(fs(11.5)).text_color(tk.k35).child(hint));
         }
         note.into_any_element()
     }
@@ -1102,12 +1114,10 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !state.selected.is_empty() {
-            return self.sessions_selection(state, rows, cx);
+            return self.sessions_selection(state, rows, host, cx);
         }
-        let by_key: std::collections::HashMap<&str, &SessionRow> = rows
-            .iter()
-            .map(|row| (row.key.as_str(), row))
-            .collect();
+        let by_key: std::collections::HashMap<&str, &SessionRow> =
+            rows.iter().map(|row| (row.key.as_str(), row)).collect();
         let detail = state
             .detail
             .as_deref()
@@ -1175,7 +1185,7 @@ impl SettingsWindow {
             (_, true) => t(L10nKey::SessionsUnhide),
             _ => t(L10nKey::SessionsHide),
         };
-        let hide_keys = vec![row.key.clone()];
+        let hide_identities = vec![SessionIdentity::of(host, session)];
         let hide = kit::button(
             "sessions-hide",
             hide_label,
@@ -1186,7 +1196,7 @@ impl SettingsWindow {
             },
         )
         .on_click(cx.listener(move |this, _, _window, cx| {
-            this.set_sessions_hidden(!hidden, hide_keys.clone(), cx);
+            this.set_sessions_hidden(!hidden, hide_identities.clone(), cx);
         }));
         v_flex()
             .id("sessions-detail")
@@ -1220,7 +1230,7 @@ impl SettingsWindow {
                     ))
                     .child(field(
                         L10nKey::SessionsDetailStorage,
-                        storage_label(&identity),
+                        storage_label(&identity, home),
                         true,
                     ))
                     .child(
@@ -1250,11 +1260,13 @@ impl SettingsWindow {
                                     t(L10nKey::SessionsCopyId),
                                     kit::BtnKind::Link,
                                 )
-                                .on_click(cx.listener(move |_, _, _window, cx| {
-                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                        session_id.clone(),
-                                    ));
-                                })),
+                                .on_click(cx.listener(
+                                    move |_, _, _window, cx| {
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                            session_id.clone(),
+                                        ));
+                                    },
+                                )),
                             ),
                     ),
             )
@@ -1268,6 +1280,7 @@ impl SettingsWindow {
         &self,
         state: &SessionsState,
         rows: &[SessionRow],
+        host: HostId,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tk = Tk::of(cx);
@@ -1306,9 +1319,11 @@ impl SettingsWindow {
                             t(L10nKey::SessionsCancelSelection),
                             kit::BtnKind::Link,
                         )
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            this.clear_session_selection(cx);
-                        })),
+                        .on_click(cx.listener(
+                            move |this, _, _window, cx| {
+                                this.clear_session_selection(cx);
+                            },
+                        )),
                     ),
             );
         if blocked > 0 {
@@ -1364,14 +1379,17 @@ impl SettingsWindow {
             SessionsTab::Visible => t(L10nKey::SessionsHide),
             SessionsTab::Hidden => t(L10nKey::SessionsUnhide),
         };
-        let keys: Vec<String> = state.selected.iter().cloned().collect();
+        let identities: Vec<SessionIdentity> = selected_rows
+            .iter()
+            .map(|row| SessionIdentity::of(host, &row.session))
+            .collect();
         let hiding = match state.tab {
             SessionsTab::Visible => true,
             SessionsTab::Hidden => false,
         };
         let hide = kit::button("sessions-hide-selected", hide_label, kit::BtnKind::Primary)
             .on_click(cx.listener(move |this, _, _window, cx| {
-                this.set_sessions_hidden(hiding, keys.clone(), cx);
+                this.set_sessions_hidden(hiding, identities.clone(), cx);
             }));
         body.child(list)
             .child(h_flex().pt(px(4.)).child(hide))

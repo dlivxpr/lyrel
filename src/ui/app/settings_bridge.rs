@@ -149,10 +149,7 @@ impl LyrelApp {
     /// The agent sessions open in this workspace's panes, named by the same
     /// identity the session listings use — the settings Sessions page marks a
     /// listed session "running" through this, never by reading the pane tree.
-    fn settings_live_sessions(
-        &self,
-        cx: &App,
-    ) -> Vec<crate::ui::session_history::SessionIdentity> {
+    fn settings_live_sessions(&self, cx: &App) -> Vec<crate::ui::session_history::SessionIdentity> {
         use crate::ui::session_history::SessionIdentity;
         let mut out = Vec::new();
         for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
@@ -195,8 +192,7 @@ impl LyrelApp {
         // No context-pane access from the settings window: the default scope
         // validates against the host's home, the same fallback Search's
         // session query uses.
-        let default_cwd =
-            crate::ui::desktop_lookups::home_for_host(cx, host).unwrap_or_default();
+        let default_cwd = crate::ui::desktop_lookups::home_for_host(cx, host).unwrap_or_default();
         crate::ui::session_history::plan_scan(
             host,
             &panes,

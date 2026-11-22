@@ -131,11 +131,85 @@ pub(crate) enum SessionStore {
     /// The exact session file the scan located (the native pi/Oh My Pi/Kimi
     /// stores name one).
     File(PathBuf),
-    /// The store the scope names — a profile and/or a store-root selector —
-    /// without an exact file.
-    Named { profile: Option<String>, root: Option<String> },
+    /// The store the scope names without an exact file: the agent profile,
+    /// the provider-specific store root, the session directory when known,
+    /// and OpenCode's saved connection selector when it alone addresses the
+    /// store.
+    Named {
+        profile: Option<String>,
+        root: Option<String>,
+        dir: Option<PathBuf>,
+        connection: Option<String>,
+    },
     /// The listing preserved nothing addressable.
     Unconfirmed,
+}
+
+/// Environment keys that locate an agent's store. Terminal and rendering
+/// selectors (`TERM_PROGRAM`, `KITTY_WINDOW_ID`, image protocol flags, ...)
+/// never do: two panes in different terminals share one store. Kept inside
+/// `durable_scope`'s allow-list — everything here is durable.
+const STORE_ROOT_ENV: &[&str] = &[
+    "PI_CODING_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR",
+    "PI_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "KIMI_CODE_HOME",
+    "OPENCODE_DB",
+    "HERMES_HOME",
+    "HERMES_RUNTIME_DIR",
+    "HOME",
+    "USERPROFILE",
+];
+
+/// The provider-specific store root this scope carries, most exact first:
+/// an explicit Hermes home or OMP config root beats a generic HOME, and the
+/// generic fallback only applies to providers whose store lives under it.
+fn store_root(
+    agent: CLIAgent,
+    scope: &lyrel_core::host::session_operations::SessionScope,
+) -> Option<String> {
+    let env = &scope.environment;
+    let pick = |keys: &[&str]| keys.iter().find_map(|key| env.get(*key).cloned());
+    match agent {
+        CLIAgent::Hermes => pick(&["HERMES_HOME", "HERMES_RUNTIME_DIR", "HOME", "USERPROFILE"]),
+        CLIAgent::OhMyPi => pick(&[
+            "PI_CODING_AGENT_DIR",
+            "PI_CONFIG_DIR",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "HOME",
+            "USERPROFILE",
+        ]),
+        CLIAgent::Pi => pick(&["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "HOME"]),
+        CLIAgent::Kimi => pick(&["KIMI_CODE_HOME", "HOME", "USERPROFILE"]),
+        CLIAgent::OpenCode => pick(&["OPENCODE_DB", "XDG_DATA_HOME", "HOME", "USERPROFILE"]),
+    }
+}
+
+/// The durable selectors that decide store identity — profile, store-root
+/// environment, and OpenCode's saved connection — with live bridges dropped.
+/// Terminal/rendering environment and the shell program deliberately stay
+/// out: they describe a pane, not a store, and comparing them would miss a
+/// live writer running in another terminal.
+fn store_selectors(
+    scope: &lyrel_core::host::session_operations::SessionScope,
+) -> (Option<String>, Vec<(String, String)>, Vec<String>) {
+    let scope = lyrel_core::host::session_operations::durable_scope(scope);
+    let roots = scope
+        .environment
+        .iter()
+        .filter(|(key, _)| STORE_ROOT_ENV.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let connection = scope
+        .opencode
+        .map(|opencode| opencode.connection_argv)
+        .unwrap_or_default();
+    (scope.profile, roots, connection)
 }
 
 impl SessionIdentity {
@@ -149,11 +223,34 @@ impl SessionIdentity {
         }
     }
 
-    /// The config key every consumer has always written: agent slug and the
-    /// agent-unique session id, nothing else. Hiding stays global across
-    /// hosts, exactly as before Sessions settings existed.
+    /// The scoped spelling every hide writer persists: agent slug, owning
+    /// host, the exact durable native store when the scan preserved one, and
+    /// the native id. Two same-id sessions on different hosts or stores keep
+    /// distinct keys, so a hide never reaches past the row it named.
     pub(crate) fn key(&self) -> String {
+        format!(
+            "{}@{}|{}:{}",
+            self.agent.slug(),
+            self.host.0,
+            scoped_store_key(self.scope.as_ref()),
+            escape_key_component(&self.id),
+        )
+    }
+
+    /// The pre-settings spelling — `<agent slug>:<session id>`. Read-only
+    /// backward compatibility: entries already in `hidden_agent_sessions`
+    /// keep matching every same-id row until they are removed or an exact
+    /// scope override (`show_key()`) re-shows one of them.
+    pub(crate) fn legacy_key(&self) -> String {
         crate::core::agent_history::session_key(self.agent, &self.id)
+    }
+
+    /// The exact-scope visibility override: `!` + `key()`. Written only when
+    /// a row hidden by the legacy `slug:id` spelling is re-shown — removing
+    /// the legacy entry would re-show every same-id row, so this marker
+    /// names the one identity that reads as visible again.
+    pub(crate) fn show_key(&self) -> String {
+        format!("!{}", self.key())
     }
 
     /// Whether two identities name the same stored session on the same host.
@@ -168,7 +265,10 @@ impl SessionIdentity {
             && same_store_scope(self.scope.as_ref(), other.scope.as_ref())
     }
 
-    /// The most exact store the scan preserved for this session.
+    /// The most exact store the scan preserved for this session: the session
+    /// file when one was located, otherwise the provider-specific durable
+    /// selectors (profile, store root, session directory, OpenCode
+    /// connection) the scope names.
     pub(crate) fn store(&self) -> SessionStore {
         let Some(scope) = &self.scope else {
             return SessionStore::Unconfirmed;
@@ -176,52 +276,134 @@ impl SessionIdentity {
         if let Some(file) = &scope.session_file {
             return SessionStore::File(file.clone());
         }
-        let root = scope
-            .environment
-            .get("OPENCODE_DB")
-            .or_else(|| scope.environment.get("XDG_DATA_HOME"))
-            .or_else(|| scope.environment.get("PI_CODING_AGENT_DIR"))
-            .or_else(|| scope.environment.get("KIMI_CODE_HOME"))
-            .or_else(|| scope.environment.get("HOME"))
-            .or_else(|| scope.environment.get("USERPROFILE"))
-            .cloned();
-        match (scope.profile.clone(), root) {
-            (None, None) => SessionStore::Unconfirmed,
-            (profile, root) => SessionStore::Named { profile, root },
+        let root = store_root(self.agent, scope);
+        let dir = scope.session_dir.clone();
+        let connection = scope
+            .opencode
+            .as_ref()
+            .filter(|_| self.agent == CLIAgent::OpenCode)
+            .filter(|opencode| !opencode.connection_argv.is_empty())
+            .map(|opencode| opencode.connection_argv.join(" "));
+        match (scope.profile.clone(), root, dir, connection) {
+            (None, None, None, None) => SessionStore::Unconfirmed,
+            (profile, root, dir, connection) => SessionStore::Named {
+                profile,
+                root,
+                dir,
+                connection,
+            },
         }
     }
 }
 
-/// Scope equality by durable store selectors: what the store answers from,
-/// not the live bridge or the exact session file. Two `None`s name the same
-/// default store; a missing side against a present side does not.
+/// Store identity by durable selectors only — profile, store-root
+/// environment, OpenCode's saved connection. The exact file and session
+/// directory never decide: the scan's scope points at the file it read
+/// while a running pane's readout names the store, and terminal/rendering
+/// environment plus the shell program describe a pane, not a store. Two
+/// `None`s name the same default store; a missing side against a present
+/// side does not.
 fn same_store_scope(
     a: Option<&lyrel_core::host::session_operations::SessionScope>,
     b: Option<&lyrel_core::host::session_operations::SessionScope>,
 ) -> bool {
-    use lyrel_core::host::session_operations::durable_scope;
     match (a, b) {
         (None, None) => true,
-        (Some(a), Some(b)) => {
-            let mut a = durable_scope(a);
-            let mut b = durable_scope(b);
-            // The scan's scope points at the file it read; a running pane's
-            // readout names the store, not the file. The file must not make
-            // the same store read as a different one.
-            a.session_file = None;
-            b.session_file = None;
-            a.session_dir = None;
-            b.session_dir = None;
-            a == b
-        }
+        (Some(a), Some(b)) => store_selectors(a) == store_selectors(b),
         _ => false,
     }
 }
 
+/// The durable-store component of a scoped key: the session directory, the
+/// exact file when the scan located one, and the same provider selectors
+/// that decide store identity (profile, store-root environment, OpenCode
+/// connection). Terminal and rendering environment stays out so the key is
+/// stable across scans from different terminals. `none` when the listing
+/// retained no scope — the key still distinguishes hosts and ids.
+fn scoped_store_key(scope: Option<&lyrel_core::host::session_operations::SessionScope>) -> String {
+    let Some(scope) = scope else {
+        return "none".into();
+    };
+    let (profile, roots, connection) = store_selectors(scope);
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(profile) = &profile {
+        parts.push(format!("p={}", escape_key_component(profile)));
+    }
+    if let Some(dir) = &scope.session_dir {
+        parts.push(format!(
+            "d={}",
+            escape_key_component(&dir.to_string_lossy())
+        ));
+    }
+    if let Some(file) = &scope.session_file {
+        parts.push(format!(
+            "f={}",
+            escape_key_component(&file.to_string_lossy())
+        ));
+    }
+    for (key, value) in &roots {
+        parts.push(format!(
+            "e={}={}",
+            escape_key_component(key),
+            escape_key_component(value)
+        ));
+    }
+    if !connection.is_empty() {
+        let argv = connection
+            .iter()
+            .map(|arg| escape_key_component(arg))
+            .collect::<Vec<_>>()
+            .join(";");
+        parts.push(format!("o={argv}"));
+    }
+    match parts.is_empty() {
+        true => "none".into(),
+        false => parts.join(","),
+    }
+}
+
+/// Percent-escape every byte outside the unreserved set, so two adjacent key
+/// components can never blur into each other whatever a native id, a profile
+/// name, or a remote path happens to contain.
+fn escape_key_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(byte))
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// Whether Lyrel's lists forget this session: the one predicate Session
 /// History, Search Everywhere and Sessions settings all filter through.
+/// Hidden when the scoped key is present, or when the legacy `slug:id`
+/// spelling is present without this identity's exact-scope override.
 pub(crate) fn is_session_hidden(cfg: &Config, identity: &SessionIdentity) -> bool {
-    cfg.hidden_agent_sessions.contains(&identity.key())
+    let hidden = &cfg.hidden_agent_sessions;
+    hidden.contains(&identity.key())
+        || (hidden.contains(&identity.legacy_key()) && !hidden.contains(&identity.show_key()))
+}
+
+/// Persist one hide: the scoped key names the exact row; a stale override
+/// marker for the same identity is dropped so the row stays hidden.
+pub(crate) fn hide_session(cfg: &mut Config, identity: &SessionIdentity) {
+    cfg.hidden_agent_sessions.insert(identity.key());
+    cfg.hidden_agent_sessions.remove(&identity.show_key());
+}
+
+/// Persist one redisplay. A scoped hide is simply removed; a legacy
+/// `slug:id` hide covers every same-id row on every host, so re-showing only
+/// this identity writes its exact-scope override instead of dropping the
+/// legacy entry and exposing its siblings.
+pub(crate) fn show_session(cfg: &mut Config, identity: &SessionIdentity) {
+    cfg.hidden_agent_sessions.remove(&identity.key());
+    if cfg.hidden_agent_sessions.contains(&identity.legacy_key()) {
+        cfg.hidden_agent_sessions.insert(identity.show_key());
+    }
 }
 
 /// The per-provider requests one scan runs: OpenCode and Hermes each answer
@@ -1537,6 +1719,349 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 5, "every tool's tab id is distinct");
+    }
+
+    fn identity(agent: CLIAgent, id: &str, host: HostId, store: Option<&str>) -> SessionIdentity {
+        let scope = store.map(|root| {
+            let mut scope = lyrel_core::host::session_operations::SessionScope::default();
+            scope.session_dir = Some(PathBuf::from(root));
+            scope
+                .environment
+                .insert("PI_CODING_AGENT_DIR".into(), root.into());
+            scope
+        });
+        SessionIdentity {
+            host,
+            agent,
+            id: id.into(),
+            cwd: None,
+            scope,
+        }
+    }
+
+    /// One native id can name sessions on two hosts and in two stores. The
+    /// scoped key carries host + exact durable store + id, so hiding one row
+    /// never collapses its same-id siblings.
+    #[test]
+    fn scoped_key_distinguishes_same_id_across_hosts_and_stores() {
+        let local = identity(CLIAgent::Pi, "same", HostId::LOCAL, Some("/store/a"));
+        let other_host = identity(
+            CLIAgent::Pi,
+            "same",
+            HostId::from_connection_key("ssh-direct:me@box:22"),
+            Some("/store/a"),
+        );
+        let other_store = identity(CLIAgent::Pi, "same", HostId::LOCAL, Some("/store/b"));
+        let no_store = identity(CLIAgent::Pi, "same", HostId::LOCAL, None);
+
+        let keys = [
+            local.key(),
+            other_host.key(),
+            other_store.key(),
+            no_store.key(),
+        ];
+        let mut unique = keys.to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 4, "every scope keeps its own key: {keys:?}");
+        assert!(keys.iter().all(|key| key.contains(":same")));
+        // The legacy spelling is read-only compatibility, never written.
+        assert_eq!(local.legacy_key(), "pi:same");
+
+        let mut cfg = Config::default();
+        hide_session(&mut cfg, &local);
+        assert!(is_session_hidden(&cfg, &local));
+        assert!(
+            !is_session_hidden(&cfg, &other_host),
+            "a same-id row on another host stays visible"
+        );
+        assert!(
+            !is_session_hidden(&cfg, &other_store),
+            "a same-id row in another store stays visible"
+        );
+        assert!(
+            !is_session_hidden(&cfg, &no_store),
+            "a same-id row with no confirmed store stays visible"
+        );
+    }
+
+    /// The persisted key keeps the durable store selectors but never live
+    /// bridges or credential-carrying environment: a running OpenCode
+    /// service readout collapses to its connection selector.
+    #[test]
+    fn scoped_key_never_persists_live_bridge_or_credentials() {
+        let mut scope = lyrel_core::host::session_operations::SessionScope::default();
+        scope.opencode = Some(
+            lyrel_core::host::session_operations::opencode::OpenCodeScope {
+                connection_argv: vec!["opencode".into(), "--config".into(), "/srv/oc.json".into()],
+                launch_argv: vec!["--port".into(), "4096".into()],
+                server: Some(
+                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                        pid: 42,
+                        urls: vec!["http://127.0.0.1:4096".into()],
+                    },
+                ),
+                bridge: None,
+                session: None,
+            },
+        );
+        scope
+            .environment
+            .insert("OPENCODE_DB".into(), "/srv/oc.db".into());
+        scope
+            .environment
+            .insert("OPENAI_API_KEY".into(), "secret-token".into());
+        let identity = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::OpenCode,
+            id: "svc".into(),
+            cwd: None,
+            scope: Some(scope),
+        };
+        let key = identity.key();
+        assert!(key.contains("OPENCODE_DB"), "durable selectors stay: {key}");
+        assert!(
+            key.contains("srv%2Foc.json"),
+            "the connection selector stays: {key}"
+        );
+        assert!(
+            !key.contains("secret-token") && !key.contains("4096"),
+            "no credential or live token is persisted: {key}"
+        );
+    }
+
+    /// A legacy `slug:id` entry — written before Sessions settings existed —
+    /// is the backward-compatible default: every same-id row on every host
+    /// stays hidden until the entry is removed.
+    #[test]
+    fn legacy_hide_is_the_backward_compatible_default() {
+        let local = identity(CLIAgent::Pi, "same", HostId::LOCAL, Some("/store/a"));
+        let other_host = identity(
+            CLIAgent::Pi,
+            "same",
+            HostId::from_connection_key("ssh-direct:me@box:22"),
+            Some("/store/a"),
+        );
+
+        let mut cfg = Config::default();
+        cfg.hidden_agent_sessions.insert(local.legacy_key());
+        assert!(is_session_hidden(&cfg, &local));
+        assert!(
+            is_session_hidden(&cfg, &other_host),
+            "one legacy hide keeps covering same-id rows on other hosts"
+        );
+    }
+
+    /// Re-showing one legacy-hidden row writes the exact-scope override
+    /// instead of deleting the legacy key: the named row comes back, its
+    /// same-id siblings stay hidden, and re-hiding it clears the override.
+    #[test]
+    fn exact_scope_override_redisplays_one_legacy_hidden_row() {
+        let local = identity(CLIAgent::Pi, "same", HostId::LOCAL, Some("/store/a"));
+        let sibling = identity(CLIAgent::Pi, "same", HostId::LOCAL, Some("/store/b"));
+
+        let mut cfg = Config::default();
+        cfg.hidden_agent_sessions.insert(local.legacy_key());
+
+        show_session(&mut cfg, &local);
+        assert!(
+            cfg.hidden_agent_sessions.contains(&local.legacy_key()),
+            "the legacy entry survives so its siblings stay hidden"
+        );
+        assert!(
+            cfg.hidden_agent_sessions.contains(&local.show_key()),
+            "the exact-scope override is persisted: {}",
+            local.show_key()
+        );
+        assert!(
+            !is_session_hidden(&cfg, &local),
+            "the re-shown row reads visible again"
+        );
+        assert!(
+            is_session_hidden(&cfg, &sibling),
+            "the same-id sibling stays hidden"
+        );
+
+        hide_session(&mut cfg, &local);
+        assert!(
+            !cfg.hidden_agent_sessions.contains(&local.show_key()),
+            "re-hiding drops the stale override"
+        );
+        assert!(is_session_hidden(&cfg, &local));
+        assert!(is_session_hidden(&cfg, &sibling));
+    }
+
+    /// Hiding and re-showing a row that only carries a scoped key is a plain
+    /// insert/remove round trip — no legacy entry, no override marker.
+    #[test]
+    fn hide_show_round_trip_through_the_scoped_key() {
+        let identity = identity(CLIAgent::OhMyPi, "row", HostId::LOCAL, None);
+        let mut cfg = Config::default();
+        hide_session(&mut cfg, &identity);
+        assert!(cfg.hidden_agent_sessions.contains(&identity.key()));
+        assert!(
+            !cfg.hidden_agent_sessions.contains(&identity.legacy_key()),
+            "new hides never write the legacy spelling"
+        );
+        show_session(&mut cfg, &identity);
+        assert!(cfg.hidden_agent_sessions.is_empty());
+        assert!(!is_session_hidden(&cfg, &identity));
+    }
+
+    /// Terminal and rendering environment describes a pane, not a store: it
+    /// never enters the persisted key, so a hide survives rescans from a
+    /// different terminal, and never defeats the live-writer overlap check.
+    #[test]
+    fn terminal_environment_neither_keys_nor_splits_store_identity() {
+        let mut scan_scope = lyrel_core::host::session_operations::SessionScope::default();
+        scan_scope.session_dir = Some(PathBuf::from("/store/pi"));
+        scan_scope
+            .environment
+            .insert("PI_CODING_AGENT_DIR".into(), "/store/pi".into());
+        scan_scope
+            .environment
+            .insert("TERM_PROGRAM".into(), "WezTerm".into());
+        scan_scope.shell_program = Some("wezterm".into());
+
+        let mut rescan_scope = scan_scope.clone();
+        rescan_scope
+            .environment
+            .insert("TERM_PROGRAM".into(), "kitty".into());
+        rescan_scope
+            .environment
+            .insert("KITTY_WINDOW_ID".into(), "7".into());
+        rescan_scope.shell_program = Some("bash".into());
+
+        let scanned = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::Pi,
+            id: "row".into(),
+            cwd: None,
+            scope: Some(scan_scope.clone()),
+        };
+        let rescanned = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::Pi,
+            id: "row".into(),
+            cwd: None,
+            scope: Some(rescan_scope.clone()),
+        };
+        assert_eq!(
+            scanned.key(),
+            rescanned.key(),
+            "the persisted key is stable across terminal environment"
+        );
+
+        // A running pane's readout names the store without the exact
+        // directory: it must still read as the same session.
+        let mut readout_scope = rescan_scope;
+        readout_scope.session_dir = None;
+        let live = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::Pi,
+            id: "row".into(),
+            cwd: None,
+            scope: Some(readout_scope),
+        };
+        assert!(
+            scanned.same_session(&live),
+            "a live writer in another terminal still reads as the same session"
+        );
+
+        let mut other_store = scan_scope;
+        other_store
+            .environment
+            .insert("PI_CODING_AGENT_DIR".into(), "/other/store".into());
+        let elsewhere = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::Pi,
+            id: "row".into(),
+            cwd: None,
+            scope: Some(other_store),
+        };
+        assert_ne!(scanned.key(), elsewhere.key());
+        assert!(
+            !scanned.same_session(&elsewhere),
+            "a genuinely different store is still distinguished"
+        );
+    }
+
+    /// The confirmed store names the provider's own selectors: an explicit
+    /// Hermes home, an OMP config root, the session directory, and OpenCode's
+    /// saved connection when it alone addresses the store.
+    #[test]
+    fn store_names_provider_specific_durable_selectors() {
+        let mut hermes_scope = lyrel_core::host::session_operations::SessionScope::default();
+        hermes_scope
+            .environment
+            .insert("HERMES_HOME".into(), "/srv/hermes".into());
+        let hermes = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::Hermes,
+            id: "h".into(),
+            cwd: None,
+            scope: Some(hermes_scope),
+        };
+        assert_eq!(
+            hermes.store(),
+            SessionStore::Named {
+                profile: None,
+                root: Some("/srv/hermes".into()),
+                dir: None,
+                connection: None,
+            },
+            "an explicit Hermes home is the confirmed store"
+        );
+
+        let mut omp_scope = lyrel_core::host::session_operations::SessionScope::default();
+        omp_scope
+            .environment
+            .insert("PI_CONFIG_DIR".into(), "/srv/omp/config".into());
+        omp_scope.session_dir = Some(PathBuf::from("/srv/omp/sessions"));
+        let omp = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::OhMyPi,
+            id: "o".into(),
+            cwd: None,
+            scope: Some(omp_scope),
+        };
+        assert_eq!(
+            omp.store(),
+            SessionStore::Named {
+                profile: None,
+                root: Some("/srv/omp/config".into()),
+                dir: Some(PathBuf::from("/srv/omp/sessions")),
+                connection: None,
+            },
+            "the OMP config root and session directory ride along"
+        );
+
+        let oc_scope = lyrel_core::host::session_operations::SessionScope {
+            opencode: Some(
+                lyrel_core::host::session_operations::opencode::OpenCodeScope {
+                    connection_argv: vec!["opencode".into(), "--as".into(), "svc".into()],
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+        let opencode = SessionIdentity {
+            host: HostId::LOCAL,
+            agent: CLIAgent::OpenCode,
+            id: "svc".into(),
+            cwd: None,
+            scope: Some(oc_scope),
+        };
+        assert_eq!(
+            opencode.store(),
+            SessionStore::Named {
+                profile: None,
+                root: None,
+                dir: None,
+                connection: Some("opencode --as svc".into()),
+            },
+            "a connection-only OpenCode scope is still a confirmed store"
+        );
     }
 
     /// Managed-remote scope fencing through the real transport: the remote

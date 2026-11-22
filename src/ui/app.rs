@@ -4878,9 +4878,21 @@ impl LyrelApp {
                 cx,
             ),
             CopySessionId(id) => cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(id)),
-            HideSession { agent, session_id } => self.update_config(cx, |cfg| {
-                cfg.hidden_agent_sessions
-                    .insert(crate::core::agent_history::session_key(agent, &session_id));
+            HideSession {
+                agent,
+                session_id,
+                cwd,
+                host,
+                scope,
+            } => self.update_config(cx, |cfg| {
+                let identity = crate::ui::session_history::SessionIdentity {
+                    host,
+                    agent,
+                    id: session_id,
+                    cwd,
+                    scope,
+                };
+                crate::ui::session_history::hide_session(cfg, &identity);
             }),
         }
     }

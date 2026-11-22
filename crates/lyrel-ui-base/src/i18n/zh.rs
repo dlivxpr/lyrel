@@ -603,9 +603,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
         L10nKey::SettingsNavSessions => "会话",
-        L10nKey::SessionsSettingsKeywords => {
-            "智能体 会话 历史 隐藏 删除 目录 存储 原生 ID 恢复"
-        }
+        L10nKey::SessionsSettingsKeywords => "智能体 会话 历史 隐藏 删除 目录 存储 原生 ID 恢复",
         L10nKey::SessionsOpen => "打开会话",
         L10nKey::SessionsSubtitle => "浏览并隐藏／重新显示已保存的智能体会话",
         L10nKey::SessionsSearchPlaceholder => "搜索标题或 ID",

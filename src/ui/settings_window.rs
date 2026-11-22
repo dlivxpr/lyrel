@@ -33,8 +33,7 @@ pub(crate) struct SettingsContext {
     /// The agent sessions that workspace currently has open, by the same
     /// identity the session listings use — what marks a listed session
     /// "running" in the Sessions page's batch summary.
-    pub live_sessions:
-        Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,
+    pub live_sessions: Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,
     /// The planned host-scoped session-store scan for the Sessions page —
     /// the same plan the Session History tool and Search Everywhere run,
     /// built from that workspace's open panes and offered agents.

@@ -933,12 +933,21 @@ impl SearchView {
                     Some(Row::More { tab, .. }) => self.set_tab(tab, None, window, cx),
                     Some(Row::Item(item)) => match item.kind {
                         CommandKind::OpenThemePicker => self.open_themes(window, cx),
-                        CommandKind::HideSession { agent, session_id } => {
+                        CommandKind::HideSession {
+                            agent,
+                            session_id,
+                            cwd,
+                            host,
+                            scope,
+                        } => {
                             self.drop_session(agent, &session_id);
                             self.close_sub_list(window, cx);
                             cx.emit(SearchEvent::RunInPlace(CommandKind::HideSession {
                                 agent,
                                 session_id,
+                                cwd,
+                                host,
+                                scope,
                             }));
                         }
                         // What was typed found this row; it is not an address.
@@ -1900,11 +1909,21 @@ mod tests {
             matches!(&left[0], CommandKind::ResumeSession { session_id, .. } if session_id == "b")
         );
         app.read_with(&vcx, |_, cx| {
+            let hidden = &cx
+                .global::<lyrel_ui_base::config::Config>()
+                .hidden_agent_sessions;
+            let identity = crate::ui::session_history::SessionIdentity {
+                host: lyrel_ui_base::host_ops::HostId::LOCAL,
+                agent: crate::core::cli_agent::CLIAgent::OhMyPi,
+                id: "a".into(),
+                cwd: None,
+                scope: None,
+            };
             assert!(
-                cx.global::<lyrel_ui_base::config::Config>()
-                    .hidden_agent_sessions
-                    .contains("omp:a")
+                hidden.contains(&identity.key()),
+                "the scoped key is persisted, not the legacy spelling: {hidden:?}"
             );
+            assert!(!hidden.contains(&identity.legacy_key()));
         });
     }
 
