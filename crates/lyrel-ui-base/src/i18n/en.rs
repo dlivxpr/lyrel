@@ -2788,6 +2788,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserHostLocal => "This machine",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "Loading page",
+        L10nKey::BrowserConcealedHint => {
+            "Hidden while an overlay is open. The page keeps its content, scroll position and draft."
+        }
         L10nKey::BrowserSurfaceAutomated => {
             "the browser surface is not started by automated tests"
         }

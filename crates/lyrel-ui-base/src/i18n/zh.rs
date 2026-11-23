@@ -2496,6 +2496,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserHostLocal => "本机",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "正在加载页面",
+        L10nKey::BrowserConcealedHint => {
+            "浮层打开期间已隐藏；页面内容、滚动位置和草稿都会保留。"
+        }
         L10nKey::BrowserSurfaceAutomated => "自动化测试不启动浏览器表面",
         L10nKey::BrowserSurfaceNoDataDir => "该主机暂无浏览器数据目录",
         L10nKey::PanelNoSession => "没有活动会话。",

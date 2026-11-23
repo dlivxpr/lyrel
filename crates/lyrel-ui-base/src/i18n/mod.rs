@@ -2152,6 +2152,9 @@ l10n_keys! {
     BrowserHostRemote,
     // The page frame while its native surface is not up.
     BrowserStarting,
+    /// The bounded still frame that stands in while a workbench overlay
+    /// covers the live page.
+    BrowserConcealedHint,
     BrowserSurfaceAutomated,
     BrowserSurfaceNoDataDir,
     PanelNoSession,

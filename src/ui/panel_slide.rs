@@ -133,6 +133,15 @@ impl LyrelApp {
             };
             if settled_open != slide.opening {
                 self.panel_slides.active[boundary.slot()] = None;
+                if boundary == PanelBoundary::Right {
+                    // A direct open/close superseded the travelling seam; the
+                    // transition cover must not outlive the slide it belonged
+                    // to. The caller's layout write already resynced the
+                    // surfaces.
+                    self.surface_coordinator.uncover(
+                        crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
+                    );
+                }
             }
         }
     }
@@ -156,6 +165,17 @@ impl LyrelApp {
             opening,
             generation,
         });
+        if boundary == PanelBoundary::Right {
+            // The native page cannot travel with the panel's clipped seam: it
+            // would sit at its settled bounds while the panel slides, so it
+            // gives way for the transition and returns at the settled edge
+            // (#403).
+            self.set_surface_cover(
+                crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
+                true,
+                cx,
+            );
+        }
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(PANEL_SLIDE_MS))
@@ -166,6 +186,13 @@ impl LyrelApp {
                     .is_some_and(|slide| slide.generation == generation)
                 {
                     app.panel_slides.active[slot] = None;
+                    if boundary == PanelBoundary::Right {
+                        app.set_surface_cover(
+                            crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
+                            false,
+                            cx,
+                        );
+                    }
                     cx.notify();
                 }
             });

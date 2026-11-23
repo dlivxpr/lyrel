@@ -172,6 +172,13 @@ impl Host {
         }
     }
 
+    /// WKWebView keeps its first responder across `setHidden:`/`setVisible:`
+    /// on macOS, so the panel has nothing to hand back; the platform focuses
+    /// the page itself when it is shown again.
+    pub fn has_focus(&self) -> bool {
+        false
+    }
+
     pub fn command(&mut self, command: BrowserCommand) -> Result<(), BrowserSurfaceError> {
         if lock(&self.shared).closed {
             return Err(BrowserSurfaceError::Platform(

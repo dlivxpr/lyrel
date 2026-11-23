@@ -117,6 +117,12 @@ pub enum ParkedDeckEvent {
     /// 再解析真实 Host/daemon 身份；不得直接把 token 传给 daemon 或创建/重启不存在的会话。
     Restore(u64),
     Dismiss,
+    /// The fan, preview, overflow list, drop target or their closing aura is
+    /// on screen and must take precedence over the window's native surfaces.
+    CoverageChanged {
+        fan: bool,
+        drop_target: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -175,6 +181,9 @@ pub struct ParkedDeck {
     aura_from: f32,
     aura_to: f32,
     aura_start: Instant,
+    /// The last coverage state reported to the App, so a repaint only emits
+    /// when the fan, drop target or their closing aura crosses the line.
+    coverage: (bool, bool),
     frame: Rc<RefCell<Rc<Frame>>>,
     paint_error: Rc<RefCell<Option<String>>>,
 }
@@ -210,6 +219,7 @@ impl ParkedDeck {
             aura_from: 0.,
             aura_to: 0.,
             aura_start: Instant::now(),
+            coverage: (false, false),
             frame: Rc::new(RefCell::new(Rc::default())),
             paint_error: Rc::new(RefCell::new(None)),
         }
@@ -223,6 +233,7 @@ impl ParkedDeck {
         self.tab = tab;
         self.cards.clear();
         self.clear_interaction();
+        self.refresh_coverage(Instant::now(), cx.reduce_motion(), cx);
         cx.notify();
     }
 
@@ -301,7 +312,7 @@ impl ParkedDeck {
         if selection_removed || self.cards.is_empty() {
             self.dismiss(window, cx);
         } else {
-            self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+            self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
             cx.notify();
         }
         // 关闭的 pane 不能在下一次绘制前通过旧 frame 被点击。
@@ -335,7 +346,35 @@ impl ParkedDeck {
             self.overflow_open = false;
             self.keyboard = false;
         }
+        self.refresh_coverage(Instant::now(), cx.reduce_motion(), cx);
         cx.notify();
+    }
+
+    /// Whether the deck currently paints anything that must win over a native
+    /// child surface: the fan, a preview, the overflow list, the warm drop
+    /// target, or the fan's closing aura.
+    pub(crate) fn covers_native_surface(&self, cx: &App) -> bool {
+        self.drop_target
+            || (!self.cards.is_empty()
+                && (self.pointer_fan
+                    || self.keyboard
+                    || self.selected.is_some()
+                    || self.overflow_open
+                    || self.aura(Instant::now(), cx.reduce_motion()) > 0.001))
+    }
+
+    fn refresh_coverage(&mut self, now: Instant, reduced: bool, cx: &mut Context<Self>) {
+        let fan = !self.cards.is_empty()
+            && (self.pointer_fan
+                || self.keyboard
+                || self.selected.is_some()
+                || self.overflow_open
+                || self.aura(now, reduced) > 0.001);
+        let drop_target = self.drop_target;
+        if self.coverage != (fan, drop_target) {
+            self.coverage = (fan, drop_target);
+            cx.emit(ParkedDeckEvent::CoverageChanged { fan, drop_target });
+        }
     }
 
     /// Whether `position` is inside the painted half-ellipse: releasing there
@@ -373,7 +412,7 @@ impl ParkedDeck {
             return;
         }
         self.pointer_fan = true;
-        self.update_targets(cx.reduce_motion(), false);
+        self.update_targets(cx.reduce_motion(), false, cx);
         cx.notify();
     }
 
@@ -391,7 +430,7 @@ impl ParkedDeck {
             return;
         }
         self.pointer_fan = false;
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         cx.notify();
     }
 
@@ -408,7 +447,7 @@ impl ParkedDeck {
         self.retain_trigger(trigger, window, cx);
         self.keyboard = true;
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -426,7 +465,7 @@ impl ParkedDeck {
         self.active = Some(pane);
         self.selected = Some(pane);
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -464,7 +503,7 @@ impl ParkedDeck {
                 trigger.focus(window, cx);
             }
         }
-        self.update_targets(cx.reduce_motion(), false);
+        self.update_targets(cx.reduce_motion(), false, cx);
         if was_open {
             cx.emit(ParkedDeckEvent::Dismiss);
         }
@@ -488,7 +527,7 @@ impl ParkedDeck {
         }
     }
 
-    fn update_targets(&mut self, reduced: bool, focused: bool) {
+    fn update_targets(&mut self, reduced: bool, focused: bool, cx: &mut Context<Self>) {
         let now = Instant::now();
         let keyboard = self.keyboard && focused;
         let fan = self.pointer_fan || keyboard || self.selected.is_some();
@@ -538,6 +577,7 @@ impl ParkedDeck {
                 };
             }
         }
+        self.refresh_coverage(now, reduced, cx);
     }
 
     fn navigate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -557,7 +597,7 @@ impl ParkedDeck {
         self.hovered = None;
         self.keyboard = true;
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -601,7 +641,7 @@ impl ParkedDeck {
             "tab" if self.selected.is_some() => {
                 // 翻面预览只有一个主操作，Tab 保持在它的 keyboard/AX owner；Escape 可退出。
                 self.keyboard = true;
-                self.update_targets(cx.reduce_motion(), true);
+                self.update_targets(cx.reduce_motion(), true, cx);
                 cx.notify();
             }
             _ => return,
@@ -629,7 +669,7 @@ impl ParkedDeck {
         self.hovered = hit;
         self.pointer_fan = fan;
         self.keyboard = false;
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         cx.notify();
     }
 
@@ -673,7 +713,7 @@ impl ParkedDeck {
         }
         self.hovered = None;
         self.pointer_fan = false;
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         cx.notify();
     }
 
@@ -686,7 +726,7 @@ impl ParkedDeck {
             .position(|card| Some(card.model.pane) == self.active)
             .unwrap_or(0);
         self.scroll.scroll_to_item(ix, ScrollStrategy::Top);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -934,7 +974,7 @@ impl Render for ParkedDeck {
         if self.focus.is_focused(window) && window.last_input_was_keyboard() {
             self.keyboard = true;
         }
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         if self
             .cards
             .iter()
