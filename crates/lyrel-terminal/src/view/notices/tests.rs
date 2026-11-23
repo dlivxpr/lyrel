@@ -792,7 +792,7 @@ fn poll_agent(
     pane: &gpui_kit::Entity<TerminalView>,
     cx: &mut TestAppContext,
 ) {
-    cx.update_window(window.into(), |_, window, cx| {
+    cx.update_window((*window).into(), |_, window, cx| {
         pane.update(cx, |pane, cx| {
             pane.poll_agent_status(true, window, cx);
         })

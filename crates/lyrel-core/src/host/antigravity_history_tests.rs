@@ -299,7 +299,7 @@ fn a_missing_or_unreadable_store_keeps_other_sources_usable() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let host = crate::host::local::new();
-    let request = request(
+    let missing_request = request(
         &*host,
         home.path(),
         project.path(),
@@ -307,7 +307,7 @@ fn a_missing_or_unreadable_store_keeps_other_sources_usable() {
         SessionOperationKind::Resume,
     );
 
-    let absent = antigravity::sessions(&*host, None, &request).unwrap();
+    let absent = antigravity::sessions(&*host, None, &missing_request).unwrap();
     assert!(
         absent.is_empty(),
         "Antigravity never used on this Host is an empty source, not an error"

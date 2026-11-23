@@ -388,9 +388,6 @@ pub(crate) struct RightPanelState {
     /// web selection is never clobbered by the reconciliation legacy tool
     /// writers rely on.
     stored_mirror: Option<(RightPanelTab, Option<String>, bool)>,
-    /// The browser surfaces' watchdog task, spawned with the first page and
-    /// outliving them all (a stopped loop is cheaper than a restarted one).
-    pub(crate) browser_watchdog: Option<gpui_kit::Task<()>>,
     tool_switch: ToolSwitchMotion,
 }
 
@@ -1295,30 +1292,6 @@ impl LyrelApp {
         // the paint set; this frame re-anchors it and paints the still frame
         // (or lifts it) on the same turn the cover changed.
         cx.notify();
-    }
-
-    /// The browser surfaces' watchdog, started with the first page that
-    /// needs it: while any page exists, a quiet half-second tick hides the
-    /// native children whose paint went stale (tab switch, panel collapse,
-    /// workspace switch, a covering overlay) and keeps live pages in the
-    /// paint set. Pages are never navigated or destroyed here.
-    pub(crate) fn ensure_browser_watchdog(&mut self, cx: &mut Context<Self>) {
-        if self.right_panel.browser_watchdog.is_some() {
-            return;
-        }
-        self.right_panel.browser_watchdog = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(500))
-                    .await;
-                if this
-                    .update(cx, |app, cx| app.sync_browser_surfaces(cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
     }
 
     /// Enter the panel's tab list from terminal or editor content, landing on
@@ -3846,23 +3819,12 @@ fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        InfoRow, InfoValue, PanelTab, ToolLayout, WebTab, format_rtt, forwards_port, shown_tab,
-    };
+    use super::{InfoRow, InfoValue, PanelTab, ToolLayout, format_rtt, forwards_port, shown_tab};
     use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
     use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm, Search};
 
     fn tool(tab: lyrel_core::core::config::RightPanelTab) -> PanelTab {
         PanelTab::Tool(tab)
-    }
-
-    fn web(id: &str) -> PanelTab {
-        PanelTab::Web(WebTab {
-            id: id.to_string(),
-            address: format!("http://{id}.test"),
-            title: String::new(),
-            host: None,
-        })
     }
 
     /// A workspace's first layout: only Info prepared, behind a collapsed

@@ -220,6 +220,7 @@ impl WebPage {
 
     /// Whether the page should paint the bounded still frame instead of its
     /// live native surface.
+    #[cfg(test)]
     pub(crate) fn still_frame(&self) -> bool {
         !self.surface_visible && self.surface.is_some()
     }

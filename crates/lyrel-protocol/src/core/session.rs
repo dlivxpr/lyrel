@@ -1005,7 +1005,7 @@ mod tests {
 
     #[test]
     fn tool_layout_round_trips_on_its_workspace_and_older_builds_ignore_it() {
-        use crate::core::config::RightPanelTab::{Files, Info, Scm};
+        use crate::core::config::RightPanelTab::{Info, Scm};
         let state = ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
             order: vec![

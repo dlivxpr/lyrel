@@ -66,7 +66,7 @@ pub fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<Ent
 /// the sound plays asynchronously.
 pub fn play_activity_sound() {
     #[cfg(test)]
-    TEST_SOUNDS.with(|count| *count.borrow_mut() += 1);
+    TEST_SOUNDS.with(|count| count.set(count.get() + 1));
     #[cfg(not(test))]
     {
         #[cfg(target_os = "macos")]
@@ -80,8 +80,7 @@ pub fn play_activity_sound() {
     }
 }
 
-/// How many sounds the current test asked for; each test reads its own slot,
-/// so parallel `#[gpui_kit::test]`s cannot pollute one another.
+// Each test thread tracks its own requested sounds.
 #[cfg(test)]
 thread_local! {
     static TEST_SOUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

@@ -3199,8 +3199,8 @@ mod tests {
     #[test]
     fn antigravity_history_reads_the_peer_index_through_the_read_only_browser() {
         use crate::host::sqlite::{
-            SqliteColumns, SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage, SqliteQuery,
-            SqliteReply, SqliteRequest, SqliteValue,
+            SqliteColumns, SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage, SqliteReply,
+            SqliteRequest, SqliteValue,
         };
         fn text(value: &str) -> SqliteValue {
             SqliteValue::Text {
