@@ -37,6 +37,14 @@ fn frame(vcx: &mut VisualTestContext) {
     vcx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+fn finish_tab_switch(vcx: &mut VisualTestContext) {
+    vcx.run_until_parked();
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    vcx.run_until_parked();
+    frame(vcx);
+}
+
 fn open_page(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, address: &str) -> String {
     let id = app.update_in(vcx, |app, window, cx| {
         register_window(app, window, cx);
@@ -45,7 +53,7 @@ fn open_page(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, address: &str)
         app.attach_test_browser_surface(&id, cx);
         id
     });
-    frame(vcx);
+    finish_tab_switch(vcx);
     assert_eq!(
         app.read_with(vcx, |app, _| visibility(app, &id)),
         Some(true)
@@ -107,7 +115,7 @@ fn overlapping_covers_lift_one_at_a_time_and_a_tab_switch_uses_the_new_page(
     app.update_in(&mut vcx, |app, window, cx| {
         select_page(app, &first, window, cx)
     });
-    frame(&mut vcx);
+    finish_tab_switch(&mut vcx);
 
     app.update_in(&mut vcx, |app, _, cx| {
         app.set_surface_cover(CoverSource::SearchEverywhere, true, cx);
@@ -129,7 +137,7 @@ fn overlapping_covers_lift_one_at_a_time_and_a_tab_switch_uses_the_new_page(
     app.update_in(&mut vcx, |app, window, cx| {
         select_page(app, &second, window, cx)
     });
-    frame(&mut vcx);
+    finish_tab_switch(&mut vcx);
     app.read_with(&vcx, |app, _| {
         assert_eq!(visibility(app, &first), Some(false));
         assert_eq!(visibility(app, &second), Some(false));
@@ -160,10 +168,10 @@ fn overlapping_covers_lift_one_at_a_time_and_a_tab_switch_uses_the_new_page(
 #[gpui_kit::test]
 fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|window, cx| crate::ui::theme::apply_theme(Some(window), cx));
     let tab = open_page(&app, &mut vcx, "https://example.test/table");
     let panel = app.update_in(&mut vcx, |app, window, cx| app.right_panel_px(window, cx));
     vcx.update(|window, cx| {
-        crate::ui::theme::apply_theme(Some(window), cx);
         assert_eq!(
             gpui_kit::component::Theme::global(cx)
                 .notification
