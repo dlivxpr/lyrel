@@ -706,6 +706,12 @@ fn register_window(app: &Entity<crate::ui::app::LyrelApp>, window: &mut VisualTe
 /// Drive one pane's agent state through its real daemon stream, then let the
 /// production foreground poll turn the report into the pane's own status
 /// events — the same seam the caffeine consumer tests use.
+///
+/// The wait is non-rich: Pending projects any observed Waiting pane, while a
+/// rich wait is also an eligible history event. These tests are about live
+/// attention, so they keep the inbox's record count out of the picture; rich
+/// waits and their history entries are covered by the terminal notice
+/// consumers.
 fn report_agent(
     app: &Entity<crate::ui::app::LyrelApp>,
     window: &mut VisualTestContext,
@@ -720,7 +726,7 @@ fn report_agent(
     let state = AgentSessionState {
         status,
         since_ms: Some(lyrel_core::core::config::unix_now().saturating_mul(1000)),
-        rich: true,
+        rich: false,
         turns: 1,
         ..Default::default()
     };

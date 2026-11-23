@@ -521,6 +521,8 @@ fn render_pending_item(
                 div()
                     .id(format!("{id}-age"))
                     .test_support()
+                    .role(gpui_kit::Role::Label)
+                    .aria_label(waited.clone())
                     .flex_none()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)

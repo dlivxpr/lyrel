@@ -1171,7 +1171,9 @@ impl RemoteTerminal {
     }
 
     /// Of `notes` about to be shown, the ones this pane's [`NoteBudget`] lets
-    /// through, and whether notes it dropped earlier are due to be said.
+    /// through, and whether any were dropped — either now, so the view can say
+    /// the rest were not shown while the flood is still arriving, or earlier
+    /// and due to be said once the window turns over.
     pub fn pace_osc_notes(
         &self,
         mut notes: Vec<Note>,
@@ -1180,9 +1182,10 @@ impl RemoteTerminal {
         let Ok(mut budget) = self.note_budget.lock() else {
             return (notes, false);
         };
-        let (show, dropped) = budget.admit(now, notes.len());
+        let wanted = notes.len();
+        let (show, due) = budget.admit(now, wanted);
         notes.truncate(show);
-        (notes, dropped)
+        (notes, due || show < wanted)
     }
 
     pub fn pop_clipboard_write(&self) -> Option<lyrel_core::core::clipboard::ClipboardWrite> {
