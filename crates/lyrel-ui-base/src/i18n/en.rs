@@ -27,6 +27,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::NotificationInfo => "Information",
         L10nKey::NotificationWarning => "Warning",
         L10nKey::NotificationError => "Error",
+        L10nKey::NotificationPending => "Pending",
+        L10nKey::NotificationFilterAll => "All",
+        L10nKey::NotificationMarkAllRead => "Mark all as read",
+        L10nKey::NotificationGoToSource => "Go to source",
+        L10nKey::NotificationNoUnread => "No unread notifications.",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."

@@ -343,6 +343,11 @@ impl Snapshot {
                 .records
                 .iter_mut()
                 .for_each(|record| record.unread = false),
+            Operation::ReadOne(id) => {
+                if let Some(record) = self.records.iter_mut().find(|record| record.id == id) {
+                    record.unread = false;
+                }
+            }
             Operation::Source(id, source) => {
                 if let Some(record) = self.records.iter_mut().find(|record| record.id == id) {
                     record.source = Some(source);
@@ -356,6 +361,7 @@ enum Operation {
     Append(Record),
     Clear,
     Read,
+    ReadOne(uuid::Uuid),
     Source(uuid::Uuid, Source),
 }
 enum Write {
@@ -485,6 +491,22 @@ impl Inbox {
             .iter_mut()
             .for_each(|record| record.unread = false);
         self.send(Operation::Read);
+    }
+    /// Acknowledge one record — its details were opened or its source was
+    /// navigated to. Unresolved live attention (Pending) is not a record and
+    /// is never touched here.
+    pub fn acknowledge(&mut self, id: uuid::Uuid) {
+        if let Some(record) = self
+            .snapshot
+            .records
+            .iter_mut()
+            .find(|record| record.id == id)
+        {
+            if record.unread {
+                record.unread = false;
+                self.send(Operation::ReadOne(id));
+            }
+        }
     }
     #[cfg(feature = "test-guards")]
     pub fn flush(&self) {

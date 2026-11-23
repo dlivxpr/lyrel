@@ -25,6 +25,51 @@ pub use lyrel_ui_base::notification_history::{
     NotificationSourceResolver, install_notification_source_resolver,
 };
 
+/// One pane that needs the user right now, projected from live observation.
+/// Pending is never persisted: stale history can never assert a current
+/// blocker, and a restart starts with an empty Pending list.
+pub(crate) struct PendingItem {
+    pub(crate) source: Source,
+    pub(crate) since_ms: Option<u64>,
+}
+
+/// The live Pending rows across every open window: every pane whose agent is
+/// currently Waiting. Records stay in the inbox; this is the other half of
+/// "unresolved attention", read fresh on each render.
+pub(crate) fn pending(cx: &App) -> Vec<PendingItem> {
+    let mut items = Vec::new();
+    for app in crate::ui::windows::WindowRegistry::live_apps(cx) {
+        app.read(cx).collect_pending(&mut items, cx);
+    }
+    items
+}
+
+/// Stable element identity for a Pending row: the Host-scoped tab, pane and
+/// owner it navigates to — never the row's list position.
+pub(crate) fn pending_element_id(source: &Source) -> String {
+    let owner = match source.pane_owner {
+        Some(lyrel_core::core::pane_sidecar::PaneOwner::Workspace) => "workspace",
+        Some(lyrel_core::core::pane_sidecar::PaneOwner::ClientLocal) => "local",
+        None => "unknown",
+    };
+    format!(
+        "notification-pending-{}-{}-{owner}",
+        source.tab.map(|tab| tab.to_string()).unwrap_or_default(),
+        source.pane.map(|pane| pane.to_string()).unwrap_or_default(),
+    )
+}
+
+/// Bumped on every Working/Waiting/Done transition in any window so open
+/// inbox views re-project Pending. The projection itself is a live read; the
+/// epoch only schedules the re-render, the way Caffeine's signal does.
+#[derive(Default)]
+pub(crate) struct PendingEpoch(pub(crate) u64);
+impl gpui_kit::Global for PendingEpoch {}
+
+pub(crate) fn note_agent_status_changed(cx: &mut App) {
+    cx.default_global::<PendingEpoch>().0 += 1;
+}
+
 /// Install the shell's source resolver: the deferred source query that used to
 /// live inside `notify_app`, kept here because it reads the window registry,
 /// the machine mirrors and the app entity.
@@ -150,6 +195,58 @@ impl LyrelApp {
             pane_owner: None,
             label: format!("{} · {workspace}", self.remote_machine_label(cx)),
         }
+    }
+
+    /// Every currently waiting pane in this window — the live Pending half of
+    /// the inbox. Exited terminals and settled states drop out at read time,
+    /// so a row can only exist while its blocker is real.
+    pub(crate) fn collect_pending(&self, items: &mut Vec<PendingItem>, cx: &App) {
+        use crate::core::cli_agent::AgentStatus;
+        for tab in &self.tabs {
+            for leaf in tab.pane.terminals() {
+                let view = leaf.read(cx);
+                if view.terminal.exited {
+                    continue;
+                }
+                let Some(session) = view.agent_session() else {
+                    continue;
+                };
+                if session.status != AgentStatus::Waiting {
+                    continue;
+                }
+                let Some(pane) =
+                    crate::ui::pane_sidecar::scoped_pane(&PaneSlot::Ready(leaf.clone()), cx)
+                else {
+                    continue;
+                };
+                items.push(PendingItem {
+                    source: self.notification_source_for_leaf(tab, pane, cx),
+                    since_ms: session.since_ms,
+                });
+            }
+        }
+    }
+
+    /// The source a Pending row navigates to: same label ladder as
+    /// `notification_source_for_pane`, but names the observed leaf without
+    /// needing that leaf's window.
+    pub(crate) fn notification_source_for_leaf(
+        &self,
+        tab: &crate::ui::tab::Tab,
+        pane: lyrel_core::core::pane_sidecar::ScopedPane,
+        cx: &App,
+    ) -> Source {
+        let mut source = self.notification_workspace_source(cx);
+        let title = tab.leaf_title(None, cx);
+        if !title.is_empty() {
+            source.label.push_str(" · ");
+            source.label.push_str(&title);
+        }
+        source.label.push_str(&format!(" · #{}", pane.pane()));
+        source.tab = Some(tab.id());
+        source.pane = Some(pane.pane());
+        source.pane_owner = Some(pane.owner());
+        source
     }
 
     pub(crate) fn notification_target(
