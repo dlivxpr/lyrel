@@ -229,6 +229,19 @@ fn settle(vcx: &mut VisualTestContext, deadline_msg: &str, mut done: impl FnMut(
     }
 }
 
+fn wait_for_scoped_session(view: &Entity<TerminalView>, vcx: &mut VisualTestContext) {
+    // The daemon delivers agent detection and session identity in separate frames.
+    pump_until("the scoped session report lands", || {
+        view.read_with(vcx, |view, _| {
+            view.agent() == Some(CLIAgent::Pi)
+                && view.agent_session().is_some_and(|state| {
+                    state.session_id.as_deref() == Some(SESSION_ID)
+                        && state.readout.session_scope.is_some()
+                })
+        })
+    });
+}
+
 fn context_view(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Entity<TerminalView> {
     app.update(vcx, |app, _| app.tabs[0].pane.terminals()[0].clone())
 }
@@ -355,9 +368,7 @@ fn resume_focuses_an_open_exact_session_without_a_second_writer(cx: &mut TestApp
     .encode(&mut stream)
     .unwrap();
 
-    pump_until("the agent report lands", || {
-        first.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
-    });
+    wait_for_scoped_session(&first, &mut vcx);
     // Focus sits in a second, non-matching pane so the focus move is visible.
     let (second, mut _second_stream) = app.update_in(&mut vcx, |app, window, cx| {
         let (view, stream) = lyrel_terminal::view::quiet_test_pane(77, window, cx);
@@ -434,9 +445,7 @@ fn resume_focuses_an_open_session_with_an_equivalent_store(cx: &mut TestAppConte
     })))
     .encode(&mut stream)
     .unwrap();
-    pump_until("the agent report lands", || {
-        first.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
-    });
+    wait_for_scoped_session(&first, &mut vcx);
 
     // Focus sits in a second, non-matching pane so the focus move is visible.
     let (second, mut _second_stream) = app.update_in(&mut vcx, |app, window, cx| {
@@ -556,8 +565,8 @@ fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
     let first = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
 
     // A second pane holds focus, so the dispatch's focus move is observable.
-    app.update_in(&mut vcx, |app, window, cx| {
-        let (view, _stream) = lyrel_terminal::view::quiet_test_pane(79, window, cx);
+    let (second, _second_stream) = app.update_in(&mut vcx, |app, window, cx| {
+        let (view, stream) = lyrel_terminal::view::quiet_test_pane(79, window, cx);
         LyrelApp::watch_terminal(&view, window, cx);
         app.tabs
             .push(crate::ui::tab::Tab::new(crate::ui::pane::Pane::leaf(
@@ -567,7 +576,13 @@ fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
         let focus = view.read(cx).focus_handle(cx).clone();
         window.focus(&focus, cx);
         cx.notify();
+        (view, stream)
     });
+    let second_focus = second.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    assert_eq!(
+        vcx.update(|window, cx| window.focused(cx)),
+        Some(second_focus)
+    );
     let panes_before = pane_count(&app, &mut vcx);
 
     let (release, gate) = std::sync::mpsc::channel();
@@ -608,15 +623,13 @@ fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
     })))
     .encode(&mut stream)
     .unwrap();
-    pump_until("the late agent report lands", || {
-        first.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
-    });
+    wait_for_scoped_session(&first, &mut vcx);
 
     release.send(()).unwrap();
     let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        vcx.background_executor.run_until_parked();
+        vcx.run_until_parked();
         if vcx.update(|window, cx| window.focused(cx)) == Some(first_focus.clone()) {
             break;
         }
