@@ -130,8 +130,10 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
 /// so the width floor is set by the body, not by the open tabs.
 pub(crate) const MIN_WIDTH: f32 = 240.;
 
-/// Height of the SFTP browser's own action band below the tool header.
-const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
+/// Height of the row beneath the tool header: the SFTP browser's path row
+/// (breadcrumb lane plus the fixed Refresh and More tiles) and the titles of
+/// the other tools share it.
+pub(crate) const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
 
 /// How wide a panel edge is to grab. Both edges a window can drag — the tab
 /// sidebar's and this panel's — are the same target, so they are one number.
@@ -3132,9 +3134,8 @@ impl LyrelApp {
 
     fn render_panel_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let remote = self.remote_files_pane(window, cx);
-        let host = remote.as_ref().map(|(_, host)| host.clone());
         if self.sftp_sync_pane(remote.map(|(id, _)| id), window, cx) {
-            return self.render_panel_sftp(host.unwrap_or_default(), window, cx);
+            return self.render_panel_sftp(cx);
         }
 
         if std::mem::take(&mut self.panel_search.focus_pending) {

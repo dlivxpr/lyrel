@@ -1295,6 +1295,7 @@ l10n_keys! {
     SftpMenuNewFile,
     SftpMenuUploadFiles,
     SftpMenuUploadFolders,
+    SftpMenuGotoPath,
     SftpMenuGotoShellCwd,
     SftpMenuHideTransferHistory,
     SftpMenuTransferHistory,

@@ -21,9 +21,9 @@ use crate::daemon::protocol::{
 use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
 use crate::ui::app::LyrelApp;
 use crate::ui::right_panel::{
-    HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
+    HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TAB_ROW_HEIGHT, TEXT, TEXT_INSET,
 };
-use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM, tile_trailing_inset};
 use lyrel_terminal::RemoteTerminal;
 use lyrel_terminal::sftp_client::SftpClient;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
@@ -38,6 +38,9 @@ mod cwd_tests;
 
 #[cfg(test)]
 mod live_refresh_tests;
+
+#[cfg(test)]
+mod path_row_tests;
 
 /// A remote directory row: the local file tree's 26px row, on the panel's
 /// `ROW_FILL_RADIUS`, so the Files tab keeps its rhythm whichever machine it
@@ -56,6 +59,7 @@ enum SftpMenuAction {
     NewFile,
     UploadFiles,
     UploadFolders,
+    GotoPath,
     GotoShellCwd,
     ToggleHistory,
 }
@@ -126,6 +130,14 @@ pub(crate) struct SftpPanelState {
     /// Files-page visibility changes retire only quiet listings, not navigation.
     refresh_gen: u64,
     scroll: gpui_kit::ScrollHandle,
+    /// The path row's breadcrumb lane scrolls horizontally; its tail — the
+    /// current directory — is re-revealed there on navigation and resize.
+    path_scroll: gpui_kit::ScrollHandle,
+    /// Lane width the breadcrumb reveal last ran against. A different width
+    /// means a resize or panel change clipped (or will clip) the tail.
+    path_lane_width: Option<gpui_kit::Pixels>,
+    /// The cwd the breadcrumb reveal last ran against.
+    revealed_cwd: Option<String>,
     transfers_scroll: gpui_kit::ScrollHandle,
     _subs: Vec<Subscription>,
 }
@@ -179,6 +191,9 @@ impl SftpPanelState {
             poll_gen: 0,
             refresh_gen: 0,
             scroll: gpui_kit::ScrollHandle::new(),
+            path_scroll: gpui_kit::ScrollHandle::new(),
+            path_lane_width: None,
+            revealed_cwd: None,
             transfers_scroll: gpui_kit::ScrollHandle::new(),
             _subs: vec![sub],
         }
@@ -1294,21 +1309,8 @@ impl LyrelApp {
         .detach();
     }
 
-    pub(crate) fn render_panel_sftp(
-        &mut self,
-        host: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let controls = self.sftp_controls(cx);
-        let title = self.panel_title(
-            t(L10nKey::SftpPanelTitleFiles),
-            Some(host),
-            Some(controls),
-            window,
-            cx,
-        );
-        let breadcrumb = self.render_sftp_breadcrumb(cx);
+    pub(crate) fn render_panel_sftp(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let path_row = self.render_sftp_path_row(cx);
         let filter = div()
             .id("panel-sftp-filter")
             .child(self.panel_search(&self.sftp_panel.filter_input.clone(), cx))
@@ -1326,8 +1328,7 @@ impl LyrelApp {
             .id("panel-sftp")
             .flex_1()
             .min_h_0()
-            .child(title)
-            .child(breadcrumb)
+            .child(path_row)
             .child(filter)
             .children(form)
             .child(lyrel_ui_base::scrollbar::with_vertical_scrollbar(
@@ -1361,6 +1362,7 @@ impl LyrelApp {
         };
 
         h_flex()
+            .flex_none()
             .items_center()
             .gap(px(2.))
             .child(
@@ -1396,6 +1398,7 @@ impl LyrelApp {
                                     t(L10nKey::SftpMenuUploadFolders),
                                     SftpMenuAction::UploadFolders,
                                 ),
+                                (t(L10nKey::SftpMenuGotoPath), SftpMenuAction::GotoPath),
                                 (
                                     t(L10nKey::SftpMenuGotoShellCwd),
                                     SftpMenuAction::GotoShellCwd,
@@ -1447,6 +1450,13 @@ impl LyrelApp {
             SftpMenuAction::NewFile => self.sftp_begin_new_file(window, cx),
             SftpMenuAction::UploadFiles => self.sftp_pick_upload(false, None, window, cx),
             SftpMenuAction::UploadFolders => self.sftp_pick_upload(true, None, window, cx),
+            // The menu dismisses after this handler and hands focus back to
+            // its trigger; open the editor a beat later so it keeps the caret.
+            SftpMenuAction::GotoPath => {
+                cx.defer_in(window, |this, window, cx| {
+                    this.sftp_begin_edit_path(window, cx)
+                })
+            }
             SftpMenuAction::GotoShellCwd => {
                 if let Some(pane_id) = self.sftp_panel.open_pane_id
                     && let Some(cwd) = self.pane_shell_cwd(pane_id, window, cx)
@@ -1458,40 +1468,106 @@ impl LyrelApp {
         }
     }
 
-    fn render_sftp_breadcrumb(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        if let Some(input) = &self.sftp_panel.editing_path {
+    /// The first row beneath the tool tabs. The breadcrumb scrolls in its own
+    /// lane while Refresh and More stay fixed beside it; Go to Path and the
+    /// double-click gesture swap the whole row for a full-width editor in the
+    /// same slot, and the actions come back when editing ends.
+    fn render_sftp_path_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(input) = self.sftp_panel.editing_path.clone() {
             return h_flex()
-                .id("sftp-path-edit")
+                .id("sftp-path-row")
+                .map(|element| {
+                    #[cfg(test)]
+                    {
+                        use gpui_kit::test::TestSupportExt;
+                        element.test_support()
+                    }
+                    #[cfg(not(test))]
+                    {
+                        element
+                    }
+                })
+                .items_center()
+                .gap(px(2.))
+                .h(rems(TAB_ROW_HEIGHT / 16.))
                 .px(px(CONTENT_INSET))
-                .pb(px(2.))
-                .child(Input::new(input).xsmall())
+                .child(
+                    div()
+                        .id("sftp-path-edit")
+                        .map(|element| {
+                            #[cfg(test)]
+                            {
+                                use gpui_kit::test::TestSupportExt;
+                                element.test_support()
+                            }
+                            #[cfg(not(test))]
+                            {
+                                element
+                            }
+                        })
+                        .flex_1()
+                        .min_w_0()
+                        .child(Input::new(&input).xsmall()),
+                )
                 .on_key_down(
                     cx.listener(|this, ev: &gpui_kit::KeyDownEvent, _window, cx| {
                         if ev.keystroke.key == "escape" {
                             this.sftp_cancel_edit_path(cx);
                         }
                     }),
-                );
+                )
+                .into_any_element();
         }
 
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
-        let mut row = h_flex()
+        let cwd = self.sftp_panel.cwd.clone();
+        let segments = breadcrumb_segments(&cwd);
+        // The lane's children alternate segment and separator, so the current
+        // directory — always the last segment — sits at `2 * (len - 1)`.
+        // Navigation lands asynchronously, so the reveal keys off the cwd on
+        // screen rather than the request that produced it; the pending reveal
+        // applies at the next prepaint, against the fresh children.
+        let tail_ix = (segments.len() - 1) * 2;
+        let lane_width = self.sftp_panel.path_scroll.bounds().size.width;
+        let reveal = self.sftp_panel.revealed_cwd.as_deref() != Some(cwd.as_str())
+            || self.sftp_panel.path_lane_width != Some(lane_width);
+        if reveal {
+            self.sftp_panel.path_scroll.scroll_to_item(tail_ix);
+            self.sftp_panel.revealed_cwd = Some(cwd);
+            self.sftp_panel.path_lane_width = Some(lane_width);
+        }
+
+        let mut lane = h_flex()
             .id("sftp-breadcrumb")
-            .flex_wrap()
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            })
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .items_center()
             .gap_0p5()
-            // Text, not a row: on the panel's text column.
-            .px(px(TEXT_INSET))
-            .pb(px(4.))
+            // The lane starts where the rows below start: `CONTENT_INSET`
+            // plus a row's own inset, the panel's text column.
+            .pl(px(ROW_INSET))
+            .overflow_x_scroll()
+            .track_scroll(&self.sftp_panel.path_scroll)
             .on_double_click(
                 cx.listener(|this, _, window, cx| this.sftp_begin_edit_path(window, cx)),
             );
-        let segments = breadcrumb_segments(&self.sftp_panel.cwd);
         let last = segments.len().saturating_sub(1);
         for (i, (label, path)) in segments.into_iter().enumerate() {
             if i > 0 {
-                row = row.child(div().text_xs().text_color(muted).child("›"));
+                lane = lane.child(div().flex_none().text_xs().text_color(muted).child("›"));
             }
             let is_current = i == last;
             let label = if i == 0 { "/".to_string() } else { label };
@@ -1502,9 +1578,10 @@ impl LyrelApp {
             };
             let color = if is_current { foreground } else { muted };
             let seg_id = SharedString::from(format!("sftp-crumb-{path}"));
-            row = row.child(
+            lane = lane.child(
                 div()
                     .id(seg_id)
+                    .flex_none()
                     .text_xs()
                     .font_weight(weight)
                     .text_color(color)
@@ -1516,7 +1593,39 @@ impl LyrelApp {
                     ),
             );
         }
-        row.child(div().flex_1().min_w(px(20.)).h(px(16.)))
+
+        h_flex()
+            .id("sftp-path-row")
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            })
+            .flex_none()
+            .items_center()
+            .gap(px(2.))
+            .h(rems(TAB_ROW_HEIGHT / 16.))
+            .pl(rems(CONTENT_INSET / 16.))
+            .pr(rems(tile_trailing_inset() / 16.))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(lane)
+                    .child(gpui_kit::base::ScrollableMask::vertical_wheel(
+                        &self.sftp_panel.path_scroll,
+                    )),
+            )
+            .child(self.sftp_controls(cx))
+            .into_any_element()
     }
 
     fn render_sftp_edit_form(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
