@@ -33,6 +33,7 @@ pub mod shells;
 pub mod ssh_profile;
 pub mod tab_view;
 pub mod term_modes;
+pub mod web;
 pub mod window_state;
 pub mod worktree;
 pub mod xtgettcap;
