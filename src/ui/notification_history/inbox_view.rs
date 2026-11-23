@@ -132,11 +132,10 @@ impl InboxView {
         });
         let machine_watch =
             cx.observe_global::<crate::ui::machine_mirror::MachineMirrors>(|_, cx| cx.notify());
-        let windows_watch =
-            cx.observe_global::<crate::ui::windows::WindowRegistry>(|this, cx| {
-                this.watch_apps(cx);
-                cx.notify();
-            });
+        let windows_watch = cx.observe_global::<crate::ui::windows::WindowRegistry>(|this, cx| {
+            this.watch_apps(cx);
+            cx.notify();
+        });
         let pending_watch = cx.observe_global::<super::PendingEpoch>(|_, cx| cx.notify());
         let mut this = Self {
             inbox,
@@ -166,7 +165,8 @@ impl InboxView {
         // each app needs it mutably.
         let apps: Vec<_> = crate::ui::windows::WindowRegistry::live_apps(cx).collect();
         for app in apps {
-            self._app_watches.push(cx.observe(&app, |_, _, cx| cx.notify()));
+            self._app_watches
+                .push(cx.observe(&app, |_, _, cx| cx.notify()));
         }
     }
 
@@ -371,9 +371,11 @@ impl Render for InboxView {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t(L10nKey::NotificationPending)),
                         )
-                        .children(pending_items.iter().map(|item| {
-                            render_pending_item(item, view.clone(), window, cx)
-                        })),
+                        .children(
+                            pending_items
+                                .iter()
+                                .map(|item| render_pending_item(item, view.clone(), window, cx)),
+                        ),
                 )
             })
             .when(count == 0, |column| {
