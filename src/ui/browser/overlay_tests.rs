@@ -57,6 +57,10 @@ fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut
     app.update_in(&mut vcx, |app, window, cx| {
         register_window(app, window, cx);
         let tab = open_page(app, "https://example.test/form", window, cx);
+        fn page_surface<'a>(app: &'a LyrelApp, tab: &str) -> &'a BrowserSurfaceHost {
+            app.right_panel.web_pages[tab].surface.as_ref().unwrap()
+        }
+        page_surface(app, &tab).test_take_focus();
 
         app.open_search(SearchTab::All, "", window, cx);
         window.draw(cx).clear(cx);
