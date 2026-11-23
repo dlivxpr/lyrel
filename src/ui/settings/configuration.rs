@@ -216,8 +216,7 @@ impl SettingsWindow {
     ) {
         use lyrel_core::core::config::ActivityState;
         self.update_config(cx, |cfg| {
-            let row = |channels: &mut lyrel_core::core::config::ActivityChannels| match channel
-            {
+            let row = |channels: &mut lyrel_core::core::config::ActivityChannels| match channel {
                 ActivityChannel::Tab => channels.tab = on,
                 ActivityChannel::Desktop => channels.desktop = on,
                 ActivityChannel::Sound => channels.sound = on,
@@ -403,32 +402,26 @@ impl SettingsWindow {
             L10nKey::SettingsNotifyThreshold => {
                 self.set_notify_threshold(defaults.notify_threshold_secs, cx)
             }
-            L10nKey::SettingsCommandDesktop => {
-                self.set_terminal_notification(
-                    TerminalNotificationChannel::CommandDesktop,
-                    defaults.terminal_notifications.command_desktop,
-                    cx,
-                )
-            }
-            L10nKey::SettingsOscDesktop => {
-                self.set_terminal_notification(
-                    TerminalNotificationChannel::OscDesktop,
-                    defaults.terminal_notifications.osc_desktop,
-                    cx,
-                )
-            }
+            L10nKey::SettingsCommandDesktop => self.set_terminal_notification(
+                TerminalNotificationChannel::CommandDesktop,
+                defaults.terminal_notifications.command_desktop,
+                cx,
+            ),
+            L10nKey::SettingsOscDesktop => self.set_terminal_notification(
+                TerminalNotificationChannel::OscDesktop,
+                defaults.terminal_notifications.osc_desktop,
+                cx,
+            ),
             L10nKey::SettingsProgramActivity => {
                 self.update_config(cx, |cfg| cfg.program_activity = defaults.program_activity);
                 crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             }
-            L10nKey::ActivityRowRunning => {
-                self.set_activity_channel(
-                    lyrel_core::core::config::ActivityState::Running,
-                    ActivityChannel::Tab,
-                    defaults.program_activity.running.tab,
-                    cx,
-                )
-            }
+            L10nKey::ActivityRowRunning => self.set_activity_channel(
+                lyrel_core::core::config::ActivityState::Running,
+                ActivityChannel::Tab,
+                defaults.program_activity.running.tab,
+                cx,
+            ),
             L10nKey::ActivityRowWaiting => {
                 self.update_config(cx, |cfg| {
                     cfg.program_activity.waiting = defaults.program_activity.waiting
@@ -725,4 +718,3 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::RestartDaemon);
     }
 }
-

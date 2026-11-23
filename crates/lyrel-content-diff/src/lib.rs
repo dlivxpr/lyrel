@@ -205,7 +205,10 @@ fn line_index(text: &str) -> LineIndex {
             starts.push((ix + 1) as u32);
         }
     }
-    LineIndex { starts, text_len: text.len() }
+    LineIndex {
+        starts,
+        text_len: text.len(),
+    }
 }
 
 /// One structural item before matching.
@@ -240,7 +243,9 @@ impl RawItem {
 fn extract_items(spec: &LangSpec, text: &str) -> Result<Vec<RawItem>, ContentError> {
     let mut parser = tree_sitter::Parser::new();
     let language: tree_sitter::Language = (spec.language)();
-    parser.set_language(&language).map_err(|_| ContentError::Unsupported)?;
+    parser
+        .set_language(&language)
+        .map_err(|_| ContentError::Unsupported)?;
     // The input is already capped at `MAX_FILE_BYTES`; tree-sitter's binding
     // no longer exposes a parse timeout, and the byte and line budgets are
     // what bound the work.
@@ -289,7 +294,12 @@ fn item_nodes<'tree>(
         let specs: Vec<_> = node
             .named_children(&mut cursor)
             .into_iter()
-            .filter(|n| matches!(n.kind(), "type_spec" | "type_alias" | "const_spec" | "var_spec"))
+            .filter(|n| {
+                matches!(
+                    n.kind(),
+                    "type_spec" | "type_alias" | "const_spec" | "var_spec"
+                )
+            })
             .collect();
         if !specs.is_empty() {
             return specs;
@@ -366,7 +376,10 @@ fn read_name(kind: &KindSpec, text: &str, node: tree_sitter::Node) -> Option<Str
             None
         }
         NameRule::FirstLine => {
-            let first = text[node.start_byte()..node.end_byte()].lines().next()?.trim();
+            let first = text[node.start_byte()..node.end_byte()]
+                .lines()
+                .next()?
+                .trim();
             (!first.is_empty()).then(|| first.to_string())
         }
         NameRule::Header => {
@@ -460,30 +473,52 @@ fn inner_edits(old_text: &str, new_text: &str, old_base: u32, new_base: u32) -> 
         match op {
             Op::Equal { len, .. } => {
                 for _ in 0..len {
-                    edits.push(Edit { old: Some(old_no), new: Some(new_no), kind: EditKind::Context });
+                    edits.push(Edit {
+                        old: Some(old_no),
+                        new: Some(new_no),
+                        kind: EditKind::Context,
+                    });
                     old_no += 1;
                     new_no += 1;
                 }
             }
             Op::Delete { old_len, .. } => {
                 for _ in 0..old_len {
-                    edits.push(Edit { old: Some(old_no), new: None, kind: EditKind::Removed });
+                    edits.push(Edit {
+                        old: Some(old_no),
+                        new: None,
+                        kind: EditKind::Removed,
+                    });
                     old_no += 1;
                 }
             }
             Op::Insert { new_len, .. } => {
                 for _ in 0..new_len {
-                    edits.push(Edit { old: None, new: Some(new_no), kind: EditKind::Added });
+                    edits.push(Edit {
+                        old: None,
+                        new: Some(new_no),
+                        kind: EditKind::Added,
+                    });
                     new_no += 1;
                 }
             }
-            Op::Replace { old_len, new_len, .. } => {
+            Op::Replace {
+                old_len, new_len, ..
+            } => {
                 for _ in 0..old_len {
-                    edits.push(Edit { old: Some(old_no), new: None, kind: EditKind::Removed });
+                    edits.push(Edit {
+                        old: Some(old_no),
+                        new: None,
+                        kind: EditKind::Removed,
+                    });
                     old_no += 1;
                 }
                 for _ in 0..new_len {
-                    edits.push(Edit { old: None, new: Some(new_no), kind: EditKind::Added });
+                    edits.push(Edit {
+                        old: None,
+                        new: Some(new_no),
+                        kind: EditKind::Added,
+                    });
                     new_no += 1;
                 }
             }
@@ -512,7 +547,10 @@ fn identity(item: &RawItem) -> (&'static str, Option<&str>) {
 }
 
 /// How many untaken items on one side carry each identity.
-fn identity_counts<'a>(items: &'a [RawItem], taken: &[bool]) -> HashMap<(&'static str, Option<&'a str>), usize> {
+fn identity_counts<'a>(
+    items: &'a [RawItem],
+    taken: &[bool],
+) -> HashMap<(&'static str, Option<&'a str>), usize> {
     let mut counts: HashMap<(&'static str, Option<&'a str>), usize> = HashMap::new();
     for (ix, item) in items.iter().enumerate() {
         if !taken[ix] {
@@ -559,9 +597,10 @@ fn assemble(
         let Some(candidates) = new_by_text.get(old.text.as_str()) else {
             continue;
         };
-        let hit = candidates.iter().copied().find(|&n| {
-            !new_taken[n] && new_items[n].span(new_index) == old_span
-        });
+        let hit = candidates
+            .iter()
+            .copied()
+            .find(|&n| !new_taken[n] && new_items[n].span(new_index) == old_span);
         if let Some(new_ix) = hit {
             old_taken[old_ix] = true;
             new_taken[new_ix] = true;
@@ -779,4 +818,3 @@ impl SortKey {
         SortKey { line }
     }
 }
-
