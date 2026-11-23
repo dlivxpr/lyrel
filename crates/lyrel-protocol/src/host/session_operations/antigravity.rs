@@ -197,11 +197,7 @@ pub fn sessions<H: Host + ?Sized>(
         };
         if directory.is_some_and(|dir| {
             !session.cwd.as_deref().is_some_and(|cwd| {
-                crate::core::agent_history::directory_matches_with(
-                    cwd,
-                    dir,
-                    host.separator(),
-                )
+                crate::core::agent_history::directory_matches_with(cwd, dir, host.separator())
             })
         }) {
             continue;
@@ -376,9 +372,7 @@ fn find_summary<H: Host + ?Sized>(
             "selected Antigravity conversation no longer exists in this store",
         ));
     };
-    let mut matches = rows
-        .into_iter()
-        .filter(|row| row.id.as_deref() == Some(id));
+    let mut matches = rows.into_iter().filter(|row| row.id.as_deref() == Some(id));
     let Some(raw) = matches.next() else {
         return Err(failure(
             SessionErrorKind::Identity,
@@ -406,7 +400,10 @@ fn find_summary<H: Host + ?Sized>(
             ));
         }
     }
-    if raw.parent.as_deref().is_some_and(|parent| !parent.is_empty())
+    if raw
+        .parent
+        .as_deref()
+        .is_some_and(|parent| !parent.is_empty())
         || raw.nesting.is_some_and(|depth| depth > 0)
     {
         return Err(failure(
@@ -445,19 +442,13 @@ fn validate_cwd<H: Host + ?Sized>(
     let stored = host.canonicalize(stored).map_err(|error| {
         failure(
             SessionErrorKind::Directory,
-            format!(
-                "the Antigravity conversation workspace is unavailable: {error}"
-            ),
+            format!("the Antigravity conversation workspace is unavailable: {error}"),
         )
     })?;
     let requested = host
         .canonicalize(requested)
         .map_err(|error| failure(SessionErrorKind::Directory, error.to_string()))?;
-    if !crate::core::agent_history::directory_matches_with(
-        &stored,
-        &requested,
-        host.separator(),
-    ) {
+    if !crate::core::agent_history::directory_matches_with(&stored, &requested, host.separator()) {
         return Err(failure(
             SessionErrorKind::Identity,
             "the Antigravity conversation workspace differs from the selected directory",
@@ -608,7 +599,10 @@ fn read_index<H: Host + ?Sized>(
     }
     let query = crate::host::sqlite::SqliteQuery {
         table: INDEX_TABLE.into(),
-        columns: INDEX_COLUMNS.iter().map(|name| (*name).to_string()).collect(),
+        columns: INDEX_COLUMNS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect(),
         order: Vec::new(),
         search: search.to_string(),
         // `last_modified_time` is the fourth requested column.
@@ -759,8 +753,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year_of_era = year - era * 400;
     let month_prime = (i64::from(month) + 9) % 12;
     let day_of_year = (153 * month_prime + 2) / 5 + i64::from(day) - 1;
-    let day_of_era =
-        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
 }
 
@@ -769,7 +762,11 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 /// different conversation or a non-interactive run.
 fn launch_arguments(argv: &[String]) -> Result<Vec<String>, SessionOperationError> {
     let fallback = ["agy".to_string()];
-    let argv = if argv.is_empty() { fallback.as_slice() } else { argv };
+    let argv = if argv.is_empty() {
+        fallback.as_slice()
+    } else {
+        argv
+    };
     let named = (0..argv.len())
         .find(|index| CLIAgent::detect_from_argv(&argv[..=*index]) == Some(CLIAgent::Antigravity))
         .ok_or_else(|| {
@@ -786,17 +783,12 @@ fn launch_arguments(argv: &[String]) -> Result<Vec<String>, SessionOperationErro
         if STALE_ACTIONS.contains(&key) {
             index += 1;
             if ACTIONS_WITH_VALUE.contains(&key) && !argument.contains('=') {
-                if argv
-                    .get(index)
-                    .is_some_and(|value| !value.starts_with('-'))
-                {
+                if argv.get(index).is_some_and(|value| !value.starts_with('-')) {
                     index += 1;
                 }
             } else if OPTIONAL_PROMPT_ACTIONS.contains(&key)
                 && !argument.contains('=')
-                && argv
-                    .get(index)
-                    .is_some_and(|value| !value.starts_with('-'))
+                && argv.get(index).is_some_and(|value| !value.starts_with('-'))
             {
                 index += 1;
             }
@@ -863,10 +855,7 @@ mod tests {
             parse_time("2026-11-18 09:32:12.5207842+00:00"),
             Some(1_794_994_332)
         );
-        assert_eq!(
-            parse_time("2026-11-18 17:32:12+08:00"),
-            Some(1_794_994_332)
-        );
+        assert_eq!(parse_time("2026-11-18 17:32:12+08:00"), Some(1_794_994_332));
         assert_eq!(parse_time("2026-11-18 09:32:12Z"), Some(1_794_994_332));
         assert_eq!(parse_time("0001-01-01 00:00:00+00:00"), None);
         assert_eq!(parse_time("not a timestamp"), None);
@@ -907,9 +896,7 @@ mod tests {
 
     #[test]
     fn unknown_launch_options_fail_closed() {
-        let argv = ["agy", "--mystery", "value"]
-            .map(str::to_string)
-            .to_vec();
+        let argv = ["agy", "--mystery", "value"].map(str::to_string).to_vec();
         let error = launch_arguments(&argv).unwrap_err();
         assert_eq!(error.kind, SessionErrorKind::Unsupported);
         assert!(error.message.contains("--mystery"));
