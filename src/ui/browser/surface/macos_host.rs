@@ -140,11 +140,12 @@ impl Host {
         }
     }
 
-    /// WKWebView keeps its first responder across `setHidden:`/`setVisible:`
-    /// on macOS, so the panel has nothing to hand back; the platform focuses
-    /// the page itself when it is shown again.
     pub fn has_focus(&self) -> bool {
-        false
+        self.webview
+            .window()
+            .and_then(|window| window.firstResponder())
+            .and_then(|responder| responder.downcast::<NSView>().ok())
+            .is_some_and(|view| view.isDescendantOf(&self.webview))
     }
 
     pub fn command(&mut self, command: BrowserCommand) -> Result<(), BrowserSurfaceError> {

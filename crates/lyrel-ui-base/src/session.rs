@@ -640,10 +640,14 @@ mod tests {
             std::env::temp_dir().join(format!("lyrel-session-test-{}", std::process::id())),
         );
         use lyrel_protocol::core::config::RightPanelTab::{Files, Info, Scm};
+        use lyrel_protocol::core::session::{TabEntryState, TabSelectionState};
         let layout = lyrel_protocol::core::session::ToolLayoutState {
             version: lyrel_protocol::core::session::ToolLayoutState::CURRENT_VERSION,
-            order: vec![Info, Files, Scm],
-            active: Files,
+            order: [Info, Files, Scm]
+                .into_iter()
+                .map(TabEntryState::Tool)
+                .collect(),
+            active: TabSelectionState::Tool(Files),
             last_used: Scm,
             open: true,
         };

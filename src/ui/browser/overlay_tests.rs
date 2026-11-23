@@ -83,6 +83,7 @@ fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut
             Some(true),
             "closing the overlay restores the live page"
         );
+        assert_eq!(page_surface(app, &tab).test_focus_requests(), 1);
         assert!(
             app.browser_surface_commands(&tab).is_empty(),
             "concealment never navigates or reloads the page"

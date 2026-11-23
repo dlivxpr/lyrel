@@ -131,9 +131,21 @@ impl Drop for NativeSurfaceCoverGuard {
 mod tests {
     use super::*;
 
+    struct EmptyView;
+
+    impl gpui_kit::Render for EmptyView {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            _: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            gpui_kit::div()
+        }
+    }
+
     #[gpui_kit::test]
     fn covers_count_per_window_and_release_once(cx: &mut gpui_kit::TestAppContext) {
-        let (_, mut window) = cx.add_window_view(|_, _| gpui_kit::div());
+        let (_, mut window) = cx.add_window_view(|_, _| EmptyView);
         window.update(|window, cx| {
             let id = window.window_handle().window_id();
             assert!(!is_covered(id, cx));
@@ -153,7 +165,7 @@ mod tests {
         use std::rc::Rc;
 
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let (_, mut window) = cx.add_window_view(|_, _| gpui_kit::div());
+        let (_, mut window) = cx.add_window_view(|_, _| EmptyView);
         window.update(|window, cx| {
             let seen = seen.clone();
             on_change(cx, move |id, _| seen.borrow_mut().push(id));

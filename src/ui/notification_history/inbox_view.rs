@@ -71,22 +71,6 @@ impl NotificationBell {
     pub(crate) fn is_open(&self) -> bool {
         self.open
     }
-
-    #[cfg(test)]
-    pub(crate) fn set_open_for_test(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.open == open {
-            return;
-        }
-        self.open = open;
-        if open {
-            self.view.update(cx, |view, cx| {
-                view.detail = None;
-                cx.notify();
-            });
-        }
-        cx.emit(NotificationBellEvent::OpenChanged(open));
-        cx.notify();
-    }
 }
 
 impl Render for NotificationBell {

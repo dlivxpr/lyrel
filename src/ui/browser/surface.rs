@@ -216,7 +216,7 @@ impl BrowserParentWindow {
 #[cfg(any(test, feature = "test-support"))]
 pub struct BrowserTestSurface {
     pub commands: std::cell::RefCell<Vec<BrowserCommand>>,
-    pub events: Sender<BrowserEvent>,
+    _events: Sender<BrowserEvent>,
     /// The last visibility the panel asked for, so a consumer can prove the
     /// overlay path hid the page and brought it back.
     pub visible: std::cell::Cell<Option<bool>>,
@@ -252,7 +252,7 @@ impl BrowserSurfaceHost {
         Self {
             inner: Inner::Test(std::rc::Rc::new(BrowserTestSurface {
                 commands: std::cell::RefCell::new(Vec::new()),
-                events,
+                _events: events,
                 visible: std::cell::Cell::new(None),
                 focused: std::cell::Cell::new(false),
                 focus_requests: std::cell::Cell::new(0),
