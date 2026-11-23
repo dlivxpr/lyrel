@@ -56,8 +56,7 @@ impl Host {
 
         let nav_shared = shared.clone();
         let navigation = move |url: String| {
-            let allowed =
-                super::super::policy::classify(&url) != super::super::policy::Route::Deny;
+            let allowed = super::super::policy::classify(&url) != super::super::policy::Route::Deny;
             if !allowed {
                 emit(
                     &nav_shared,
@@ -224,7 +223,9 @@ fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
     // The lock is never held across an await and never re-entered, so a
     // poisoned lock means a panicked peer — recover the data rather than
     // cascade the panic into the UI thread.
-    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn rect(bounds: Bounds<Pixels>) -> Rect {

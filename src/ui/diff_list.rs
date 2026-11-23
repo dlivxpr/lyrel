@@ -19,8 +19,8 @@ use gpui_kit::SharedString;
 use crate::ui::content_diff::{ContentFailure, ContentFile, ContentState};
 use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
 use crate::ui::scm::diff::{
-    AUTO_COLLAPSE_LINES, DiffLine, DiffSnapshot, FileDiff, FileStatus, LineKind, MAX_RENDERED_FILES,
-    Truncation,
+    AUTO_COLLAPSE_LINES, DiffLine, DiffSnapshot, FileDiff, FileStatus, LineKind,
+    MAX_RENDERED_FILES, Truncation,
 };
 use lyrel_content_diff::{BlockKind, Item, LineSpan};
 use lyrel_core::core::config::DiffViewMode;
@@ -370,11 +370,7 @@ fn hunk_rows(file: &FileDiff, mode: DiffViewMode) -> Vec<DiffRow> {
 /// One file's content-aware card: the block sequence, or the explanation and
 /// the ordinary line diff when the structural view cannot be produced. The
 /// configured mode is never changed by a fallback.
-fn content_file_rows(
-    index: usize,
-    file: &FileDiff,
-    content: &ContentViews<'_>,
-) -> Vec<DiffRow> {
+fn content_file_rows(index: usize, file: &FileDiff, content: &ContentViews<'_>) -> Vec<DiffRow> {
     // A binary file has no textual versions to compare, and no content read
     // is dispatched for it: the file header's binary indication is the whole
     // card, exactly as in the line views. Without this the card would claim
@@ -400,12 +396,7 @@ fn content_file_rows(
 }
 
 /// The block sequence of one file's structural comparison.
-fn content_rows(
-    index: usize,
-    path: &str,
-    cf: &ContentFile,
-    inner: DiffViewMode,
-) -> Vec<DiffRow> {
+fn content_rows(index: usize, path: &str, cf: &ContentFile, inner: DiffViewMode) -> Vec<DiffRow> {
     let _ = index;
     let path = SharedString::from(path.to_string());
     let mut rows: Vec<DiffRow> = Vec::new();
@@ -429,10 +420,7 @@ fn content_rows(
                 },
             })),
             Item::Block(block) => {
-                let moved = matches!(
-                    block.kind,
-                    BlockKind::Moved | BlockKind::MovedEdited
-                );
+                let moved = matches!(block.kind, BlockKind::Moved | BlockKind::MovedEdited);
                 rows.push(DiffRow::ContentBlock(ContentHead {
                     index: item_ix,
                     path: path.clone(),
@@ -451,12 +439,7 @@ fn content_rows(
                 }));
                 if let Some(hunk) = cf.file.hunks.get(item_ix) {
                     if !hunk.lines.is_empty() {
-                        rows.extend(content_line_rows(
-                            &hunk.lines,
-                            item_ix,
-                            &path,
-                            inner,
-                        ));
+                        rows.extend(content_line_rows(&hunk.lines, item_ix, &path, inner));
                     }
                 }
             }
@@ -511,10 +494,7 @@ fn content_line_rows(
                     .filter(|cell| !cell.changed)
                     .map(|cell| cell.line);
                 line.is_some_and(|line| elided.contains(&line))
-                    && row
-                        .right
-                        .as_ref()
-                        .is_none_or(|cell| !cell.changed)
+                    && row.right.as_ref().is_none_or(|cell| !cell.changed)
             }
             DiffRow::ContentUnified { row, .. } => {
                 row.kind == LineKind::Context && elided.contains(&row.line)
@@ -571,7 +551,6 @@ fn elided_context(lines: &[DiffLine]) -> HashSet<usize> {
     }
     elided
 }
-
 
 fn untracked_rows(snap: &DiffSnapshot) -> Vec<DiffRow> {
     let total = snap.untracked_count();
@@ -670,7 +649,14 @@ mod tests {
     #[test]
     fn a_line_row_names_its_file_and_its_place_in_the_hunk() {
         let snap = snapshot(vec![file("a.rs", 1), file("b.rs", 1)]);
-        let open = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let open = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         let coords = line_coords(&open);
         assert_eq!(
             coords,
@@ -687,7 +673,14 @@ mod tests {
         );
 
         let collapsed = HashMap::from([("a.rs".to_string(), false)]);
-        let after = build_rows(&snap, &collapsed, None, DiffViewMode::Unified, false, &ContentViews::default());
+        let after = build_rows(
+            &snap,
+            &collapsed,
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         assert_eq!(
             line_coords(&after),
             coords[4..].to_vec(),
@@ -700,7 +693,14 @@ mod tests {
     #[test]
     fn each_hunk_numbers_its_own_rows() {
         let snap = snapshot(vec![file("a.rs", 2)]);
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Split, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Split,
+            false,
+            &ContentViews::default(),
+        );
         let hunks: Vec<_> = line_coords(&rows)
             .into_iter()
             .map(|(_, hunk, row)| (hunk, row))
@@ -739,13 +739,27 @@ mod tests {
     #[test]
     fn an_open_file_flattens_to_a_header_a_hunk_header_and_a_row_per_line() {
         let snap = snapshot(vec![file("a.rs", 1)]);
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         assert_eq!(
             shape(&rows),
             ["file", "hunk", "unified", "unified", "unified", "unified"]
         );
 
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Split, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Split,
+            false,
+            &ContentViews::default(),
+        );
         assert_eq!(
             shape(&rows),
             ["file", "hunk", "split", "split", "split"],
@@ -767,7 +781,14 @@ mod tests {
         };
         for one_sided in [added, deleted] {
             let snap = snapshot(vec![one_sided, file("a.rs", 1)]);
-            let rows = build_rows(&snap, &open(["new.rs"]), None, DiffViewMode::Split, false, &ContentViews::default());
+            let rows = build_rows(
+                &snap,
+                &open(["new.rs"]),
+                None,
+                DiffViewMode::Split,
+                false,
+                &ContentViews::default(),
+            );
             let kinds: Vec<_> = shape(&rows)
                 .into_iter()
                 .filter(|k| matches!(*k, "split" | "unified"))
@@ -809,7 +830,14 @@ mod tests {
     fn a_collapsed_file_is_a_single_row() {
         let snap = snapshot(vec![file("a.rs", 1)]);
         let shut: HashMap<String, bool> = [("a.rs".to_string(), false)].into_iter().collect();
-        let rows = build_rows(&snap, &shut, None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &shut,
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         assert_eq!(shape(&rows), ["file"]);
     }
 
@@ -833,14 +861,28 @@ mod tests {
         let snap = snapshot(vec![file("a.rs", 1), file("b.rs", 1)]);
         let shut: HashMap<String, bool> =
             snap.files.iter().map(|f| (f.path.clone(), false)).collect();
-        let rows = build_rows(&snap, &shut, None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &shut,
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         assert_eq!(shape(&rows), ["file", "gap", "file"]);
     }
 
     #[test]
     fn the_oversized_banner_leads_and_collapses_what_was_not_asked_for() {
         let snap = snapshot(vec![file("a.rs", 1), file("b.rs", 1)]);
-        let rows = build_rows(&snap, &open(["b.rs"]), None, DiffViewMode::Unified, true, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &open(["b.rs"]),
+            None,
+            DiffViewMode::Unified,
+            true,
+            &ContentViews::default(),
+        );
         assert_eq!(
             shape(&rows),
             [
@@ -892,7 +934,14 @@ mod tests {
                 })
                 .collect(),
         );
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
         let files = rows
             .iter()
             .filter(|r| matches!(r, DiffRow::FileHeader(_)))
@@ -908,7 +957,14 @@ mod tests {
             .map(|i| format!("p{i}"))
             .collect();
         snap.untracked_total = 9_000;
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
 
         assert!(matches!(
             rows.first(),

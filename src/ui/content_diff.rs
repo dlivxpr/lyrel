@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lyrel_content_diff::{
-    language_for_path, structural_diff, BlockKind, ContentError, EditKind, LineSpan, StructuralDiff,
-    MAX_FILE_BYTES,
+    BlockKind, ContentError, EditKind, LineSpan, MAX_FILE_BYTES, StructuralDiff, language_for_path,
+    structural_diff,
 };
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
 use lyrel_ui_base::i18n::L10nKey;
@@ -54,11 +54,7 @@ pub(crate) struct FetchPlan {
 /// The unstaged comparison is index → working tree, staged is HEAD → index,
 /// combined is HEAD → working tree. A commit compares its first parent to the
 /// commit; a three-dot range compares the merge base to its target.
-pub(crate) fn plan_for(
-    source: &DiffSource,
-    old_path: &str,
-    new_path: &str,
-) -> Option<FetchPlan> {
+pub(crate) fn plan_for(source: &DiffSource, old_path: &str, new_path: &str) -> Option<FetchPlan> {
     let (old, new) = match source {
         DiffSource::Worktree => (VersionSpec::Index, VersionSpec::Worktree),
         DiffSource::Staged => (VersionSpec::Rev("HEAD".into()), VersionSpec::Index),
@@ -141,7 +137,9 @@ impl PartialEq for ContentState {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ContentState::Loading, ContentState::Loading) => true,
-            (ContentState::Ready(a), ContentState::Ready(b)) => Arc::ptr_eq(a, b) || a.file == b.file,
+            (ContentState::Ready(a), ContentState::Ready(b)) => {
+                Arc::ptr_eq(a, b) || a.file == b.file
+            }
             (ContentState::Failed(a), ContentState::Failed(b)) => a == b,
             _ => false,
         }
@@ -400,7 +398,10 @@ fn synthesize_file(
                         }
                         EditKind::Added => {
                             added += 1;
-                            (LineKind::Added, line_text(&new_lines, edit.new.unwrap_or(1)))
+                            (
+                                LineKind::Added,
+                                line_text(&new_lines, edit.new.unwrap_or(1)),
+                            )
                         }
                     };
                     DiffLine {
@@ -514,11 +515,13 @@ mod tests {
         );
         assert_eq!(plan.new, VersionSpec::Rev("feature".into()));
 
-        assert!(source_plan(DiffSource::Patch {
-            id: "o/r#1".into(),
-            label: None
-        })
-        .is_none());
+        assert!(
+            source_plan(DiffSource::Patch {
+                id: "o/r#1".into(),
+                label: None
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -547,12 +550,11 @@ mod tests {
         // Host reads are guarded against the UI thread; a worker is how
         // production calls them, and keeps this test independent of whether
         // another test already registered the current thread.
-        let file = std::thread::spawn(move || {
-            fetch_content(&*host, &root, &plan, FileStatus::Deleted)
-        })
-        .join()
-        .expect("the read thread finishes")
-        .expect("the fixture reads");
+        let file =
+            std::thread::spawn(move || fetch_content(&*host, &root, &plan, FileStatus::Deleted))
+                .join()
+                .expect("the read thread finishes")
+                .expect("the fixture reads");
         assert!(file.diff.items.is_empty());
         assert_eq!(file.file.status, FileStatus::Deleted);
     }
@@ -614,7 +616,10 @@ mod tests {
             path: "a.rs".into(),
             epoch: 1,
         };
-        let b = ContentFetchKey { epoch: 2, ..a.clone() };
+        let b = ContentFetchKey {
+            epoch: 2,
+            ..a.clone()
+        };
         assert_ne!(a, b, "a new snapshot invalidates the bytes being read");
         let c = ContentFetchKey {
             path: "b.rs".into(),

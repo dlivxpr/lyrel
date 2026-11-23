@@ -3,6 +3,7 @@ pub mod app;
 pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
+pub(crate) mod browser;
 pub(crate) mod caffeine;
 #[cfg(test)]
 mod caffeine_consumer_tests;
@@ -36,8 +37,6 @@ pub mod notice;
 pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;
-pub(crate) mod browser;
-pub(crate) mod surface_coordinator;
 pub mod pane_drag;
 pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;
@@ -77,6 +76,7 @@ pub mod sftp_host;
 pub mod ssh_connect;
 pub mod ssh_prompt;
 pub(crate) mod status_bar;
+pub(crate) mod surface_coordinator;
 pub mod switcher;
 pub(crate) mod system_badge;
 #[cfg(test)]

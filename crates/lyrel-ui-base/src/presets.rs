@@ -1708,8 +1708,8 @@ mod tests {
             // clear the floor: the result must stay on the accent's own side
             // of the window/foreground midpoint, or it stops reading as the
             // accent at all.
-            let toward_fg = contrast(m.accent_ink, m.background)
-                <= contrast(m.foreground, m.background) + 0.5;
+            let toward_fg =
+                contrast(m.accent_ink, m.background) <= contrast(m.foreground, m.background) + 0.5;
             assert!(
                 toward_fg,
                 "{}: accent_ink {:#08x} drifted onto the foreground side",

@@ -190,13 +190,7 @@ pub(crate) fn glyph_unified(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
 /// rather than panes, because this view is about what the file is made of
 /// rather than which side of it a line sits on.
 pub(crate) fn glyph_content(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
-    let bar = |width: f32| {
-        div()
-            .w(px(width))
-            .h(px(1.5))
-            .rounded(px(0.75))
-            .bg(ink)
-    };
+    let bar = |width: f32| div().w(px(width)).h(px(1.5)).rounded(px(0.75)).bg(ink);
     div()
         .flex()
         .flex_col()

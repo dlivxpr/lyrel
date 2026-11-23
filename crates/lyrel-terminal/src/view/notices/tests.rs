@@ -659,9 +659,7 @@ fn name_pane(window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppCont
 /// history with their own severities even while the desktop timing mode
 /// holds every banner back.
 #[gpui_kit::test]
-fn failed_and_unknown_command_results_record_with_desktop_delivery_closed(
-    cx: &mut TestAppContext,
-) {
+fn failed_and_unknown_command_results_record_with_desktop_delivery_closed(cx: &mut TestAppContext) {
     let _capture = crate::desktop_notification::capture_test_notifications();
     let _ = take_notifications();
     let (window, mut daemon) = harness(cx);
@@ -682,7 +680,11 @@ fn failed_and_unknown_command_results_record_with_desktop_delivery_closed(
         1,
         "one eligible command result records once: {recorded:?}"
     );
-    assert_eq!(recorded[0].0, Severity::Error, "an exit code is authoritative");
+    assert_eq!(
+        recorded[0].0,
+        Severity::Error,
+        "an exit code is authoritative"
+    );
     assert!(
         recorded[0].1.contains("t395-failed") && recorded[0].1.contains("exit code 7"),
         "the record names the command and its failure: {:?}",
@@ -816,19 +818,31 @@ fn agent_done_records_after_settle_and_superseded_done_leaves_nothing(cx: &mut T
     lyrel_ui_base::i18n::set_locale("en");
     configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
     let (pane, mut daemon) = window
-        .update(cx, |_, window, cx| super::quiet_test_pane(39501, window, cx))
+        .update(cx, |_, window, cx| {
+            super::quiet_test_pane(39501, window, cx)
+        })
         .unwrap();
     let baseline = record_count(cx);
 
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Working, 0, "sid-t395-settle", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-settle",
+            None,
+        ),
         &pane,
         cx,
         &mut daemon,
     );
     poll_agent(&window, &pane, cx);
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Done, 1, "sid-t395-settle", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-settle",
+            None,
+        ),
         &pane,
         cx,
         &mut daemon,
@@ -855,14 +869,24 @@ fn agent_done_records_after_settle_and_superseded_done_leaves_nothing(cx: &mut T
     // completion is superseded and neither records nor delivers, while the
     // wait itself is an eligible event of its own.
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Working, 1, "sid-t395-settle", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            1,
+            "sid-t395-settle",
+            None,
+        ),
         &pane,
         cx,
         &mut daemon,
     );
     poll_agent(&window, &pane, cx);
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Done, 2, "sid-t395-settle", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            2,
+            "sid-t395-settle",
+            None,
+        ),
         &pane,
         cx,
         &mut daemon,
@@ -912,19 +936,31 @@ fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppCont
     lyrel_ui_base::i18n::set_locale("en");
     configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
     let (before, mut before_daemon) = window
-        .update(cx, |_, window, cx| super::quiet_test_pane(39502, window, cx))
+        .update(cx, |_, window, cx| {
+            super::quiet_test_pane(39502, window, cx)
+        })
         .unwrap();
     let baseline = record_count(cx);
 
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Working, 0, "sid-t395-replay", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-replay",
+            None,
+        ),
         &before,
         cx,
         &mut before_daemon,
     );
     poll_agent(&window, &before, cx);
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Done, 1, "sid-t395-replay", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-replay",
+            None,
+        ),
         &before,
         cx,
         &mut before_daemon,
@@ -940,10 +976,17 @@ fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppCont
     // The same daemon pane, reattached the way a restored tab is: the replay
     // is where this pane starts, not a result that just arrived.
     let (after, mut after_daemon) = window
-        .update(cx, |_, window, cx| super::quiet_reattached_test_pane(39502, window, cx))
+        .update(cx, |_, window, cx| {
+            super::quiet_reattached_test_pane(39502, window, cx)
+        })
         .unwrap();
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Done, 1, "sid-t395-replay", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-replay",
+            None,
+        ),
         &after,
         cx,
         &mut after_daemon,
@@ -965,7 +1008,7 @@ fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppCont
 /// bounds the desktop, and the rate-limited remainder is said once.
 #[gpui_kit::test]
 fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
-    use lyrel_core::core::osc::{NOTES_PER_WINDOW, NOTE_WINDOW};
+    use lyrel_core::core::osc::{NOTE_WINDOW, NOTES_PER_WINDOW};
     let _capture = crate::desktop_notification::capture_test_notifications();
     let _ = take_notifications();
     let (window, mut daemon) = harness(cx);
@@ -1041,16 +1084,19 @@ fn hooked_agent_program_notes_are_swallowed_before_the_history(cx: &mut TestAppC
     .encode(&mut daemon)
     .unwrap();
     report_agent_state(
-        agent_state(lyrel_core::core::cli_agent::AgentStatus::Working, 0, "sid-t395-hooks", None),
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-hooks",
+            None,
+        ),
         &window.update(cx, |_, _, cx| cx.entity()).unwrap(),
         cx,
         &mut daemon,
     );
-    lyrel_core::daemon::protocol::DaemonMsg::Output(
-        b"\x1b]9;t395-hook-duplicate\x1b\\".to_vec(),
-    )
-    .encode(&mut daemon)
-    .unwrap();
+    lyrel_core::daemon::protocol::DaemonMsg::Output(b"\x1b]9;t395-hook-duplicate\x1b\\".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
     for _ in 0..400 {
         pump_foreground(cx);
         if !take_notifications().is_empty() || record_count(cx) > baseline {

@@ -178,9 +178,8 @@ fn menu_offers_three_modes_and_reflects_the_live_hold(cx: &mut TestAppContext) {
     }
     // The cup's accessible name carries the mode and the actual state; the
     // menu's title row keeps the plain title beside it (#401).
-    let cup_label = vcx.update(|window, _| {
-        window.find("status-caffeine").label().map(str::to_owned)
-    });
+    let cup_label =
+        vcx.update(|window, _| window.find("status-caffeine").label().map(str::to_owned));
     assert_eq!(
         cup_label.as_deref(),
         Some("Caffeine, Off: Sleeps per system power settings"),
@@ -680,7 +679,7 @@ fn quitting_the_desktop_releases_the_request(cx: &mut TestAppContext) {
 
 #[test]
 fn cup_look_decides_the_four_presentations() {
-    use crate::ui::caffeine::{cup_look, CupInk};
+    use crate::ui::caffeine::{CupInk, cup_look};
 
     // A live hold is the filled cup in the contrast-checked accent, whatever
     // a stale release error still says: the request is genuinely held and the

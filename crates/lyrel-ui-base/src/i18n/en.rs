@@ -1462,17 +1462,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "A program or agent is still working. Only the tab indicator applies."
         }
         L10nKey::ActivityRowWaiting => "Waiting",
-        L10nKey::ActivityRowWaitingDesc => {
-            "A program or agent is waiting for your input."
-        }
+        L10nKey::ActivityRowWaitingDesc => "A program or agent is waiting for your input.",
         L10nKey::ActivityRowEnded => "Ended",
-        L10nKey::ActivityRowEndedDesc => {
-            "A program or agent finished its task successfully."
-        }
+        L10nKey::ActivityRowEndedDesc => "A program or agent finished its task successfully.",
         L10nKey::ActivityRowFailed => "Failed",
-        L10nKey::ActivityRowFailedDesc => {
-            "A program or agent ended with an error."
-        }
+        L10nKey::ActivityRowFailedDesc => "A program or agent ended with an error.",
         L10nKey::ActivityChannelTab => "Tab",
         L10nKey::ActivityChannelDesktop => "Desktop",
         L10nKey::ActivityChannelSound => "Sound",
@@ -2799,9 +2793,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserConcealedHint => {
             "Hidden while an overlay is open. The page keeps its content, scroll position and draft."
         }
-        L10nKey::BrowserSurfaceAutomated => {
-            "the browser surface is not started by automated tests"
-        }
+        L10nKey::BrowserSurfaceAutomated => "the browser surface is not started by automated tests",
         L10nKey::BrowserSurfaceNoDataDir => "the browser has no data directory for this Host",
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {

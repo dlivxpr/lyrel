@@ -641,7 +641,10 @@ mod tests {
     fn the_same_event_identity_records_once() {
         let mut inbox = Inbox::open(temp_path("dedup"));
         let id = stable_record_id("v1|command|0|1|local|0|Failed(7)|build");
-        assert!(inbox.append(record(id, "failed")), "first observation records");
+        assert!(
+            inbox.append(record(id, "failed")),
+            "first observation records"
+        );
         assert!(
             !inbox.append(record(id, "failed")),
             "a replay of the same event is a no-op, not a second record"
@@ -696,9 +699,7 @@ mod tests {
         }
         assert_eq!(inbox.records().count(), RETENTION);
         assert!(
-            inbox
-                .records()
-                .all(|existing| existing.message() == "note"),
+            inbox.records().all(|existing| existing.message() == "note"),
             "retention trims the oldest, never rewriting what remains"
         );
     }

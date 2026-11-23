@@ -71,80 +71,284 @@ fn ts_unwrap(kind: &str) -> bool {
 }
 
 const RUST_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "function_item", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "struct_item", label: "struct", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "union_item", label: "struct", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "enum_item", label: "enum", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "trait_item", label: "trait", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "impl_item", label: "impl", name: NameRule::Header },
-    KindSpec { kind: "mod_item", label: "module", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "const_item", label: "constant", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "static_item", label: "constant", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "type_item", label: "type", name: NameRule::Field(&["type_identifier", "name"]) },
-    KindSpec { kind: "macro_definition", label: "macro", name: NameRule::Field(&["name"]) },
+    KindSpec {
+        kind: "function_item",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "struct_item",
+        label: "struct",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "union_item",
+        label: "struct",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "enum_item",
+        label: "enum",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "trait_item",
+        label: "trait",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "impl_item",
+        label: "impl",
+        name: NameRule::Header,
+    },
+    KindSpec {
+        kind: "mod_item",
+        label: "module",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "const_item",
+        label: "constant",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "static_item",
+        label: "constant",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "type_item",
+        label: "type",
+        name: NameRule::Field(&["type_identifier", "name"]),
+    },
+    KindSpec {
+        kind: "macro_definition",
+        label: "macro",
+        name: NameRule::Field(&["name"]),
+    },
 ];
 
 const PYTHON_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "function_definition", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "class_definition", label: "class", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "import_statement", label: "import", name: NameRule::Text },
-    KindSpec { kind: "import_from_statement", label: "import", name: NameRule::Text },
+    KindSpec {
+        kind: "function_definition",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "class_definition",
+        label: "class",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "import_statement",
+        label: "import",
+        name: NameRule::Text,
+    },
+    KindSpec {
+        kind: "import_from_statement",
+        label: "import",
+        name: NameRule::Text,
+    },
 ];
 
 const GO_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "function_declaration", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "method_declaration", label: "method", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "type_declaration", label: "type", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "type_spec", label: "type", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "type_alias", label: "type", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "const_declaration", label: "constant", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "const_spec", label: "constant", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "var_declaration", label: "variable", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "var_spec", label: "variable", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "import_declaration", label: "import", name: NameRule::Text },
+    KindSpec {
+        kind: "function_declaration",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "method_declaration",
+        label: "method",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "type_declaration",
+        label: "type",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "type_spec",
+        label: "type",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "type_alias",
+        label: "type",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "const_declaration",
+        label: "constant",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "const_spec",
+        label: "constant",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "var_declaration",
+        label: "variable",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "var_spec",
+        label: "variable",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "import_declaration",
+        label: "import",
+        name: NameRule::Text,
+    },
 ];
 
 const JS_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "function_declaration", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "generator_function_declaration", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "class_declaration", label: "class", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "lexical_declaration", label: "variable", name: NameRule::Declarator },
-    KindSpec { kind: "variable_declaration", label: "variable", name: NameRule::Declarator },
-    KindSpec { kind: "import_statement", label: "import", name: NameRule::Text },
+    KindSpec {
+        kind: "function_declaration",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "generator_function_declaration",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "class_declaration",
+        label: "class",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "lexical_declaration",
+        label: "variable",
+        name: NameRule::Declarator,
+    },
+    KindSpec {
+        kind: "variable_declaration",
+        label: "variable",
+        name: NameRule::Declarator,
+    },
+    KindSpec {
+        kind: "import_statement",
+        label: "import",
+        name: NameRule::Text,
+    },
 ];
 
 /// TypeScript and TSX share these declarations; the two grammars differ only
 /// in whether JSX is part of the expression grammar.
 const TS_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "function_declaration", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "generator_function_declaration", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "function_signature", label: "function", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "class_declaration", label: "class", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "abstract_class_declaration", label: "class", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "interface_declaration", label: "type", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "type_alias_declaration", label: "type", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "enum_declaration", label: "enum", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "module", label: "module", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "internal_module", label: "module", name: NameRule::Field(&["name"]) },
-    KindSpec { kind: "lexical_declaration", label: "variable", name: NameRule::Declarator },
-    KindSpec { kind: "variable_declaration", label: "variable", name: NameRule::Declarator },
-    KindSpec { kind: "import_statement", label: "import", name: NameRule::Text },
+    KindSpec {
+        kind: "function_declaration",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "generator_function_declaration",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "function_signature",
+        label: "function",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "class_declaration",
+        label: "class",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "abstract_class_declaration",
+        label: "class",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "interface_declaration",
+        label: "type",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "type_alias_declaration",
+        label: "type",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "enum_declaration",
+        label: "enum",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "module",
+        label: "module",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "internal_module",
+        label: "module",
+        name: NameRule::Field(&["name"]),
+    },
+    KindSpec {
+        kind: "lexical_declaration",
+        label: "variable",
+        name: NameRule::Declarator,
+    },
+    KindSpec {
+        kind: "variable_declaration",
+        label: "variable",
+        name: NameRule::Declarator,
+    },
+    KindSpec {
+        kind: "import_statement",
+        label: "import",
+        name: NameRule::Text,
+    },
 ];
 
 const JSON_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "pair", label: "key", name: NameRule::Field(&["key"]) },
-    KindSpec { kind: "array", label: "array", name: NameRule::Text },
+    KindSpec {
+        kind: "pair",
+        label: "key",
+        name: NameRule::Field(&["key"]),
+    },
+    KindSpec {
+        kind: "array",
+        label: "array",
+        name: NameRule::Text,
+    },
 ];
 
 const TOML_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "pair", label: "key", name: NameRule::Field(&["key"]) },
-    KindSpec { kind: "table", label: "section", name: NameRule::FirstLine },
-    KindSpec { kind: "table_array_element", label: "section", name: NameRule::FirstLine },
+    KindSpec {
+        kind: "pair",
+        label: "key",
+        name: NameRule::Field(&["key"]),
+    },
+    KindSpec {
+        kind: "table",
+        label: "section",
+        name: NameRule::FirstLine,
+    },
+    KindSpec {
+        kind: "table_array_element",
+        label: "section",
+        name: NameRule::FirstLine,
+    },
 ];
 
 const YAML_KINDS: &[KindSpec] = &[
-    KindSpec { kind: "block_mapping_pair", label: "key", name: NameRule::Field(&["key"]) },
-    KindSpec { kind: "block_sequence", label: "sequence", name: NameRule::Text },
+    KindSpec {
+        kind: "block_mapping_pair",
+        label: "key",
+        name: NameRule::Field(&["key"]),
+    },
+    KindSpec {
+        kind: "block_sequence",
+        label: "sequence",
+        name: NameRule::Text,
+    },
 ];
 
 pub(crate) const SPECS: &[LangSpec] = &[

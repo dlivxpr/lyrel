@@ -1269,7 +1269,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DocumentFill => "铺满窗口",
         L10nKey::SettingsNotifications => "通知",
         L10nKey::SettingsNotifyOnCommandFinish => "通知时机",
-        L10nKey::SettingsNotifyOnCommandFinishDesc => "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。",
+        L10nKey::SettingsNotifyOnCommandFinishDesc => {
+            "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。"
+        }
         L10nKey::SettingsNotifyThreshold => "最短命令运行时间",
         L10nKey::SettingsNotifyThresholdDesc => "仅在命令运行达到此时长后发送完成通知。",
         L10nKey::SettingsCommandDesktop => "命令结果",
@@ -2504,9 +2506,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserHostLocal => "本机",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "正在加载页面",
-        L10nKey::BrowserConcealedHint => {
-            "浮层打开期间已隐藏；页面内容、滚动位置和草稿都会保留。"
-        }
+        L10nKey::BrowserConcealedHint => "浮层打开期间已隐藏；页面内容、滚动位置和草稿都会保留。",
         L10nKey::BrowserSurfaceAutomated => "自动化测试不启动浏览器表面",
         L10nKey::BrowserSurfaceNoDataDir => "该主机暂无浏览器数据目录",
         L10nKey::PanelNoSession => "没有活动会话。",
@@ -2682,7 +2682,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffContentOverBudget => "文件过大，内容感知视图无法比较，已显示行级差异。",
         L10nKey::DiffContentParseFailed => "无法解析此文件的内容感知结构，已显示行级差异。",
         L10nKey::DiffContentReadFailed => "无法读取此文件的两个版本，已显示行级差异。",
-        L10nKey::DiffContentRemoteUnsupported => "此远程 Host 无法发送文件版本，内容感知视图不可用；请更新该 Host 上的 lyrel-server，或继续使用行级差异。",
+        L10nKey::DiffContentRemoteUnsupported => {
+            "此远程 Host 无法发送文件版本，内容感知视图不可用；请更新该 Host 上的 lyrel-server，或继续使用行级差异。"
+        }
         L10nKey::DiffContentJumpSource => "跳转到原始位置",
         L10nKey::DiffContentJumpBlock => "跳转到移动后的块",
         L10nKey::DiffContentMoved => "已移动",
@@ -3228,9 +3230,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::AppPaneNoCodingAgent => "此窗格未运行编码 agent",
         L10nKey::AppForkNoCommand => "lyrel 没有用于 {name} 的 fork 命令",
-        L10nKey::AppForkIndependentUnavailable => {
-            "lyrel 暂时无法为 {name} 创建独立 Fork 会话"
-        }
+        L10nKey::AppForkIndependentUnavailable => "lyrel 暂时无法为 {name} 创建独立 Fork 会话",
         L10nKey::AppForkLocalOnly => "无法在 SSH 或 WSL 会话里 fork {name} 会话",
         L10nKey::AppForkNoSessionId => {
             "lyrel 尚未在此窗格中看到 {name} 的会话 ID，请在“设置 → 集成”中安装其 hook"

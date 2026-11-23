@@ -209,13 +209,18 @@ impl SettingsWindow {
                         t(L10nKey::SettingsCommandDesktopDesc),
                         {
                             let on = cx.global::<Config>().terminal_notifications.command_desktop;
-                            self.settings_switch("settings-cmd-desktop", on, cx, |this, on, _, cx| {
-                                this.set_terminal_notification(
-                                    TerminalNotificationChannel::CommandDesktop,
-                                    on,
-                                    cx,
-                                )
-                            })
+                            self.settings_switch(
+                                "settings-cmd-desktop",
+                                on,
+                                cx,
+                                |this, on, _, cx| {
+                                    this.set_terminal_notification(
+                                        TerminalNotificationChannel::CommandDesktop,
+                                        on,
+                                        cx,
+                                    )
+                                },
+                            )
                         },
                         cx,
                     ),
@@ -224,13 +229,18 @@ impl SettingsWindow {
                         t(L10nKey::SettingsOscDesktopDesc),
                         {
                             let on = cx.global::<Config>().terminal_notifications.osc_desktop;
-                            self.settings_switch("settings-osc-desktop", on, cx, |this, on, _, cx| {
-                                this.set_terminal_notification(
-                                    TerminalNotificationChannel::OscDesktop,
-                                    on,
-                                    cx,
-                                )
-                            })
+                            self.settings_switch(
+                                "settings-osc-desktop",
+                                on,
+                                cx,
+                                |this, on, _, cx| {
+                                    this.set_terminal_notification(
+                                        TerminalNotificationChannel::OscDesktop,
+                                        on,
+                                        cx,
+                                    )
+                                },
+                            )
                         },
                         cx,
                     ),
@@ -324,11 +334,9 @@ impl SettingsWindow {
                 .w(px(56.))
                 .flex()
                 .justify_center()
-                .child(
-                    self.settings_switch(id, on, cx, move |this, on, _, cx| {
-                        this.set_activity_channel(activity, channel, on, cx)
-                    }),
-                )
+                .child(self.settings_switch(id, on, cx, move |this, on, _, cx| {
+                    this.set_activity_channel(activity, channel, on, cx)
+                }))
         };
         let badge = match activity {
             lyrel_core::core::config::ActivityState::Running => div().w(px(56.)),

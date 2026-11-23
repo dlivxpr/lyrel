@@ -265,7 +265,11 @@ impl LyrelApp {
         // failure footer is itself the explanation.
         let access_name = t_fmt(
             L10nKey::StatusCaffeineAccessName,
-            &[("title", title), ("mode", mode.label()), ("state", footer.as_str())],
+            &[
+                ("title", title),
+                ("mode", mode.label()),
+                ("state", footer.as_str()),
+            ],
         );
 
         let (cup_icon, cup_ink) = cup_look(holding, errored);

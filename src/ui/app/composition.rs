@@ -449,7 +449,11 @@ impl LyrelApp {
             .items_center()
             .justify_center()
             .rounded_lg()
-            .icon(gpui_kit::component::Icon::empty().path("icons/park.svg").size_4())
+            .icon(
+                gpui_kit::component::Icon::empty()
+                    .path("icons/park.svg")
+                    .size_4(),
+            )
             .label(label)
             .accessibility_label(badge.clone())
             .tooltip(badge)

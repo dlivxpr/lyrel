@@ -744,7 +744,9 @@ impl Tab {
     ) -> Option<crate::core::cli_agent::AgentStatus> {
         use crate::core::cli_agent::AgentStatus;
         use lyrel_core::core::config::ActivityState;
-        let activity = cx.global::<lyrel_ui_base::config::Config>().program_activity;
+        let activity = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .program_activity;
         let urgency = |s: AgentStatus| match s {
             AgentStatus::Waiting => 3,
             AgentStatus::Working => 2,
@@ -758,7 +760,10 @@ impl Tab {
                 let view = leaf.read(cx);
                 view.agent()?;
                 let session = view.agent_session();
-                let status = session.as_ref().map(|s| s.status).unwrap_or(AgentStatus::Idle);
+                let status = session
+                    .as_ref()
+                    .map(|s| s.status)
+                    .unwrap_or(AgentStatus::Idle);
                 let row = ActivityState::of_agent(
                     status,
                     session.and_then(|s| s.readout.result.as_ref().map(|r| r.outcome)),
@@ -776,7 +781,9 @@ impl Tab {
         if self.agent_indicator_status(cx) != Some(AgentStatus::Done) {
             return 0;
         }
-        let activity = cx.global::<lyrel_ui_base::config::Config>().program_activity;
+        let activity = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .program_activity;
         self.pane
             .terminals()
             .into_iter()

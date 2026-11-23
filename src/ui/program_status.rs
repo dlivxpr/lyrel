@@ -95,7 +95,13 @@ pub(crate) fn current_status(record: &ProgramRecord, cx: &App) -> AnyElement {
                 .rounded_full()
                 .bg(dot),
         )
-        .child(div().min_w_0().truncate().text_ellipsis().child(label.clone()))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_ellipsis()
+                .child(label.clone()),
+        )
         .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
         .into_any_element()
 }

@@ -138,9 +138,8 @@ impl LyrelApp {
                     // transition cover must not outlive the slide it belonged
                     // to. The caller's layout write already resynced the
                     // surfaces.
-                    self.surface_coordinator.uncover(
-                        crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
-                    );
+                    self.surface_coordinator
+                        .uncover(crate::ui::surface_coordinator::CoverSource::SidePanelTransition);
                 }
             }
         }

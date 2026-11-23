@@ -199,7 +199,10 @@ fn resizing_re_reveals_the_current_directory(cx: &mut TestAppContext) {
         // Narrowing the panel must not push the fixed actions out of line.
         let row = window.find("sftp-path-row");
         assert!(lane.bounds().right() <= window.find("panel-sftp-refresh").bounds().left());
-        for action in [window.find("panel-sftp-refresh"), window.find("panel-sftp-menu")] {
+        for action in [
+            window.find("panel-sftp-refresh"),
+            window.find("panel-sftp-menu"),
+        ] {
             assert!(
                 action.bounds().left() >= row.bounds().left()
                     && action.bounds().right() <= row.bounds().right(),
@@ -244,7 +247,10 @@ fn go_to_path_swaps_the_row_for_a_full_width_editor(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("escape");
     settle(&mut vcx);
     vcx.update(|window, _| {
-        assert!(window.try_find("sftp-path-edit").is_none(), "Escape cancels");
+        assert!(
+            window.try_find("sftp-path-edit").is_none(),
+            "Escape cancels"
+        );
         assert!(
             window.try_find("sftp-breadcrumb").is_some(),
             "the breadcrumb returns"

@@ -956,20 +956,14 @@ impl Render for ParkedDeck {
             let center = f32::from(window.viewport_size().width) / 2. - reserve;
             let x = (center + 188. * zoom)
                 .min((f32::from(window.viewport_size().width) - 72. * zoom).max(0.));
-            div()
-                .absolute()
-                .left(px(x))
-                .top(px(10. * zoom))
-                .child(
-                    Button::new("parked-more")
-                        .ghost()
-                        .small()
-                        .label(self.labels.more.clone())
-                        .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_overflow(window, cx)
-                        })),
-                )
+            div().absolute().left(px(x)).top(px(10. * zoom)).child(
+                Button::new("parked-more")
+                    .ghost()
+                    .small()
+                    .label(self.labels.more.clone())
+                    .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_overflow(window, cx))),
+            )
         });
         if self.focus.is_focused(window) && window.last_input_was_keyboard() {
             self.keyboard = true;
@@ -1051,8 +1045,7 @@ impl Render for ParkedDeck {
                         } else {
                             0.
                         };
-                        let center_x =
-                            px(f32::from(window.viewport_size().width) / 2. - reserve);
+                        let center_x = px(f32::from(window.viewport_size().width) / 2. - reserve);
                         let window_center_x = px(f32::from(window.viewport_size().width) / 2.);
                         let scene = Frame::new(FrameInput {
                             bounds,

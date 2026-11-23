@@ -973,8 +973,8 @@ fn titlebar_capsule(
     let count = u8::from(cpu) + u8::from(ram) + u8::from(gpu);
     let scale = rem_size / 16.;
     let width = capsule_strip_w(count, charts, rem_size) - TITLEBAR_TILE_GAP * scale;
-    let chart_w = ((width - 2. * CAPSULE_PAD * scale - 2. * 6. * scale) / f32::from(count))
-        .max(12. * scale);
+    let chart_w =
+        ((width - 2. * CAPSULE_PAD * scale - 2. * 6. * scale) / f32::from(count)).max(12. * scale);
     let detail = readout.detail.clone();
     let cpu_color = cx.theme().accent;
     let memory_color = cx.theme().success;
@@ -1456,7 +1456,10 @@ impl LyrelApp {
         let (full, compact) = if count == 0 || document {
             (0., 0.)
         } else {
-            (capsule_strip_w(count, true, rem), capsule_strip_w(count, false, rem))
+            (
+                capsule_strip_w(count, true, rem),
+                capsule_strip_w(count, false, rem),
+            )
         };
         crate::ui::window_chrome::titlebar_fit(
             window.viewport_size().width.as_f32(),

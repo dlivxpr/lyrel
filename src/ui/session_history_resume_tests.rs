@@ -973,10 +973,7 @@ fn plan_scan_offers_antigravity_history_only_for_an_offered_agent(
     assert_eq!(offered.antigravity.len(), 1);
     assert_eq!(offered.antigravity[0].agent, CLIAgent::Antigravity);
     assert_eq!(offered.antigravity[0].cwd, PathBuf::from("/project"));
-    assert_eq!(
-        offered.antigravity[0].kind,
-        SessionOperationKind::Resume
-    );
+    assert_eq!(offered.antigravity[0].kind, SessionOperationKind::Resume);
 
     let unoffered = cx.update(|cx| {
         crate::ui::session_history::plan_scan(
@@ -1125,15 +1122,19 @@ fn a_history_fork_for_antigravity_is_refused_before_the_host(cx: &mut TestAppCon
     let mut req = request(Some(cwd), true);
     req.agent = CLIAgent::Antigravity;
     run_resume(&app, &mut vcx, req);
-    settle(&mut vcx, "the unavailable history fork is explained", |cx| {
-        crate::ui::notification_history::history(cx)
-            .read(cx)
-            .records()
-            .any(|record| {
-                let message = record.message();
-                message.contains("Antigravity") && message.to_ascii_lowercase().contains("fork")
-            })
-    });
+    settle(
+        &mut vcx,
+        "the unavailable history fork is explained",
+        |cx| {
+            crate::ui::notification_history::history(cx)
+                .read(cx)
+                .records()
+                .any(|record| {
+                    let message = record.message();
+                    message.contains("Antigravity") && message.to_ascii_lowercase().contains("fork")
+                })
+        },
+    );
 
     assert!(
         host.seen().is_empty(),

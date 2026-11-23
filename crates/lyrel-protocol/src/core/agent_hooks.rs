@@ -109,11 +109,13 @@ pub fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_j
     // Some upstream observers report storage only. Fill only missing public
     // terminal fields in an existing scope, never synthesize/replace storage
     // scope on a status-only event or copy inline config/credentials.
-    if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes" | "antigravity")
-        && let Some(environment) = body
-            .get_mut("session_scope")
-            .and_then(|scope| scope.get_mut("environment"))
-            .and_then(serde_json::Value::as_object_mut)
+    if matches!(
+        agent,
+        "omp" | "pi" | "kimi" | "opencode" | "hermes" | "antigravity"
+    ) && let Some(environment) = body
+        .get_mut("session_scope")
+        .and_then(|scope| scope.get_mut("environment"))
+        .and_then(serde_json::Value::as_object_mut)
     {
         for key in crate::host::session_operations::TERMINAL_SCOPE_ENV {
             if !environment.contains_key(*key)

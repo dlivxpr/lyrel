@@ -12,7 +12,7 @@ use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::pane::{Pane, PaneSlot};
 use crate::ui::program_attention::TerminalViewProgramSource as _;
 use crate::ui::settings::ActivityChannel;
-use crate::ui::system_badge::{label_for, take_test_badges, SystemBadgeState};
+use crate::ui::system_badge::{SystemBadgeState, label_for, take_test_badges};
 use crate::ui::windows::WindowRegistry;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::core::config::ActivityState;
@@ -95,9 +95,7 @@ fn last_badge() -> Option<String> {
 }
 
 #[gpui_kit::test]
-fn badge_aggregates_distinct_tabs_across_windows_and_dedupes_split_panes(
-    cx: &mut TestAppContext,
-) {
+fn badge_aggregates_distinct_tabs_across_windows_and_dedupes_split_panes(cx: &mut TestAppContext) {
     let (a, mut av, mut ast) = harness_with_tabs(cx, 3);
     let (b, mut bv, mut bst) = harness_with_tabs(cx, 1);
     av.update(|_, cx| WindowRegistry::init(cx));
@@ -147,7 +145,14 @@ fn badge_defaults_cover_waiting_and_failed_but_not_ended(cx: &mut TestAppContext
     register(&app, &mut vcx);
     let view = pane(&app, 0, &mut vcx);
 
-    report(&view, &mut streams[0], AgentStatus::Waiting, None, false, &mut vcx);
+    report(
+        &view,
+        &mut streams[0],
+        AgentStatus::Waiting,
+        None,
+        false,
+        &mut vcx,
+    );
     assert_eq!(refresh(&mut vcx), 1);
 
     // A failed unread result stays counted through the Failed row.
@@ -219,13 +224,31 @@ fn zero_aggregate_clears_the_system_badge(cx: &mut TestAppContext) {
     register(&app, &mut vcx);
     let view = pane(&app, 0, &mut vcx);
 
-    report(&view, &mut streams[0], AgentStatus::Waiting, None, false, &mut vcx);
+    report(
+        &view,
+        &mut streams[0],
+        AgentStatus::Waiting,
+        None,
+        false,
+        &mut vcx,
+    );
     assert_eq!(refresh(&mut vcx), 1);
     assert_eq!(last_badge().as_deref(), Some("1"));
 
-    report(&view, &mut streams[0], AgentStatus::Idle, None, false, &mut vcx);
+    report(
+        &view,
+        &mut streams[0],
+        AgentStatus::Idle,
+        None,
+        false,
+        &mut vcx,
+    );
     assert_eq!(refresh(&mut vcx), 0);
-    assert_eq!(last_badge(), None, "a zero aggregate clears the platform badge");
+    assert_eq!(
+        last_badge(),
+        None,
+        "a zero aggregate clears the platform badge"
+    );
 }
 
 #[gpui_kit::test]
@@ -308,16 +331,18 @@ fn settings_badge_channel_controls_the_system_badge(cx: &mut TestAppContext) {
     vcx.update(|_, cx| WindowRegistry::init(cx));
     register(&app, &mut vcx);
     let view = pane(&app, 0, &mut vcx);
-    report(&view, &mut streams[0], AgentStatus::Waiting, None, false, &mut vcx);
+    report(
+        &view,
+        &mut streams[0],
+        AgentStatus::Waiting,
+        None,
+        false,
+        &mut vcx,
+    );
 
     let settings = crate::ui::settings::test_window::open(&app, &mut vcx);
     settings.update(&mut vcx, |settings, cx| {
-        settings.set_activity_channel(
-            ActivityState::Waiting,
-            ActivityChannel::Badge,
-            false,
-            cx,
-        );
+        settings.set_activity_channel(ActivityState::Waiting, ActivityChannel::Badge, false, cx);
     });
     vcx.run_until_parked();
     assert!(
@@ -327,12 +352,7 @@ fn settings_badge_channel_controls_the_system_badge(cx: &mut TestAppContext) {
     assert_eq!(refresh(&mut vcx), 0);
 
     settings.update(&mut vcx, |settings, cx| {
-        settings.set_activity_channel(
-            ActivityState::Waiting,
-            ActivityChannel::Badge,
-            true,
-            cx,
-        );
+        settings.set_activity_channel(ActivityState::Waiting, ActivityChannel::Badge, true, cx);
     });
     vcx.run_until_parked();
     assert_eq!(refresh(&mut vcx), 1);

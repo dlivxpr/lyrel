@@ -1198,7 +1198,9 @@ mod tests {
     fn tool_layout_fixture() -> ToolLayoutState {
         ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
-            order: vec![TabEntryState::Tool(crate::core::config::RightPanelTab::Info)],
+            order: vec![TabEntryState::Tool(
+                crate::core::config::RightPanelTab::Info,
+            )],
             active: TabSelectionState::Tool(crate::core::config::RightPanelTab::Info),
             last_used: crate::core::config::RightPanelTab::Info,
             open: false,

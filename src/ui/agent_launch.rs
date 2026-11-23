@@ -628,8 +628,7 @@ impl LyrelApp {
             let view = view.read(cx);
             (
                 view.agent(),
-                view.agent_session()
-                    .and_then(|state| state.session_id),
+                view.agent_session().and_then(|state| state.session_id),
             )
         };
         // The pane has not reported an agent identity yet; keep waiting for
@@ -650,10 +649,7 @@ impl LyrelApp {
         window.notify_app(
             crate::ui::notification_history::Notification::error(t_fmt(
                 L10nKey::AppSessionResumeOpenedDifferent,
-                &[
-                    ("expected", expected.as_str()),
-                    ("actual", actual.as_str()),
-                ],
+                &[("expected", expected.as_str()), ("actual", actual.as_str())],
             ))
             .autohide(false),
             cx,

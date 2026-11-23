@@ -626,8 +626,14 @@ impl WindowChrome {
             .gap_2()
             .child(window_mark())
             .child(self.left);
-        let left = title_bar_row(left_row, "workbench-left-drag", window_move_locked, window, cx)
-            .into_any_element();
+        let left = title_bar_row(
+            left_row,
+            "workbench-left-drag",
+            window_move_locked,
+            window,
+            cx,
+        )
+        .into_any_element();
         let trailing_inset = titlebar_trailing_inset(macos_fullscreen);
         let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);
         let strip = h_flex()

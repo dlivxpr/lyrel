@@ -927,9 +927,7 @@ pub fn git_blob_reads_one_bounded_revision_side(h: &dyn Host, sb: &dyn Sandbox) 
     let repo = h.join(sb.path(), "blob-repo");
     mkdir(h, &repo);
     let Some(()) = git_repo(h, &repo) else { return };
-    let out = h
-        .git(&repo, &["config", "core.autocrlf", "false"])
-        .unwrap();
+    let out = h.git(&repo, &["config", "core.autocrlf", "false"]).unwrap();
     assert!(out.success(), "config exited {:?}", out.status);
 
     let index_body = b"fn v1() {}\n";

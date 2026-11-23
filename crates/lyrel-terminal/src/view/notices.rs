@@ -253,7 +253,9 @@ impl TerminalView {
         // The budget bounds intake into the history exactly as it bounds
         // delivery to the desktop; the rest are counted dropped and said
         // once when a flood stops, as before.
-        let (notes, dropped) = self.terminal.pace_osc_notes(notes, std::time::Instant::now());
+        let (notes, dropped) = self
+            .terminal
+            .pace_osc_notes(notes, std::time::Instant::now());
         let agent = self.terminal.foreground_agent().map(|a| a.display_name());
         let source = self.resolve_event_source(window, cx);
         if dropped && show {
@@ -322,9 +324,9 @@ impl TerminalView {
     }
 
     fn resolve_event_source(&self, window: &mut Window, cx: &mut App) -> Option<Source> {
-        let resolve =
-            cx.try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
-                .resolver();
+        let resolve = cx
+            .try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
+            .resolver();
         resolve(self.event_origin_pane(), window, cx)
     }
 

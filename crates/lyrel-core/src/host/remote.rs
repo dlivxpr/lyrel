@@ -3132,10 +3132,7 @@ mod tests {
                 let ControlRequest::SessionOperation { request } = request else {
                     panic!("unexpected request");
                 };
-                assert_eq!(
-                    request.agent,
-                    crate::core::cli_agent::CLIAgent::Antigravity
-                );
+                assert_eq!(request.agent, crate::core::cli_agent::CLIAgent::Antigravity);
                 assert_eq!(request.expected_host, 0);
                 let prepared = PreparedSession {
                     host_id: 0,
@@ -3164,10 +3161,7 @@ mod tests {
         request.source_id = "remote-conversation".into();
         let prepared = host.session_operation(&request).unwrap();
         assert_eq!(prepared.host_id, host.id().0);
-        assert_eq!(
-            prepared.target_id.as_deref(),
-            Some("remote-conversation")
-        );
+        assert_eq!(prepared.target_id.as_deref(), Some("remote-conversation"));
         let ControlRequest::SessionOperation { request } = seen.recv().unwrap() else {
             panic!("wrong request");
         };
@@ -3184,12 +3178,8 @@ mod tests {
             .scope
             .environment
             .insert("HOME".into(), "/home/me".into());
-        let error = crate::host::session_operations::antigravity::sessions(
-            &*host,
-            None,
-            &request,
-        )
-        .unwrap_err();
+        let error = crate::host::session_operations::antigravity::sessions(&*host, None, &request)
+            .unwrap_err();
         assert_eq!(
             error.kind,
             crate::host::session_operations::SessionErrorKind::Unsupported
@@ -3286,7 +3276,9 @@ mod tests {
                             more: false,
                         })
                     }
-                    SqliteRequest::Page { query, .. } if query.table == "conversation_summaries" => {
+                    SqliteRequest::Page { query, .. }
+                        if query.table == "conversation_summaries" =>
+                    {
                         assert_eq!(query.sort, Some((3, true)));
                         assert!(query.search.is_empty());
                         SqliteReply::Page(SqlitePage {
@@ -3308,10 +3300,7 @@ mod tests {
                     SqliteRequest::Close { .. } => SqliteReply::Closed,
                     other => panic!("unexpected sqlite request {other:?}"),
                 };
-                Some((
-                    ControlReply::Ok(ReplyOk::Sqlite(Box::new(reply))),
-                    vec![],
-                ))
+                Some((ControlReply::Ok(ReplyOk::Sqlite(Box::new(reply))), vec![]))
             },
         );
         let mut request = session_request(host.id());
@@ -3329,10 +3318,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "remote-conversation");
         assert_eq!(found[0].title, "Remote Antigravity");
-        assert_eq!(
-            found[0].cwd.as_deref(),
-            Some(Path::new("/home/me/repo"))
-        );
+        assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/home/me/repo")));
         assert_eq!(
             found[0]
                 .scope

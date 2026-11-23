@@ -141,7 +141,10 @@ mod tests {
             complete_typed("https://example.com").as_deref(),
             Some("https://example.com")
         );
-        assert_eq!(complete_typed("about:blank").as_deref(), Some("about:blank"));
+        assert_eq!(
+            complete_typed("about:blank").as_deref(),
+            Some("about:blank")
+        );
         assert_eq!(complete_typed(""), None);
         assert_eq!(complete_typed("file:///etc/passwd"), None);
         assert_eq!(complete_typed("a b"), None);

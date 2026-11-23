@@ -472,7 +472,13 @@ mod tests {
     #[test]
     fn antigravity_initial_task_seeds_the_interactive_tui_and_rejects_other_modes() {
         // The bare launch carries the task through `--prompt-interactive`.
-        let line = agent_line(CLIAgent::Antigravity, "fix the parser", &HashMap::new(), "sh").unwrap();
+        let line = agent_line(
+            CLIAgent::Antigravity,
+            "fix the parser",
+            &HashMap::new(),
+            "sh",
+        )
+        .unwrap();
         assert_eq!(
             crate::core::cli_agent::command_argv(&line),
             ["agy", "--prompt-interactive", "fix the parser"]
@@ -484,8 +490,13 @@ mod tests {
             ["agy", "--prompt-interactive", "--help"]
         );
         // A multi-line task likewise.
-        let line =
-            agent_line(CLIAgent::Antigravity, " 第一行\n第二行 ", &HashMap::new(), "sh").unwrap();
+        let line = agent_line(
+            CLIAgent::Antigravity,
+            " 第一行\n第二行 ",
+            &HashMap::new(),
+            "sh",
+        )
+        .unwrap();
         assert_eq!(
             crate::core::cli_agent::command_argv(&line),
             ["agy", "--prompt-interactive", "第一行\n第二行"]

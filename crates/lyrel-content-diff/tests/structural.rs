@@ -3,7 +3,7 @@
 //! agrees with a human reviewer.
 
 use lyrel_content_diff::{
-    language_for_path, structural_diff, Block, BlockKind, ContentError, EditKind, Item, LineSpan,
+    Block, BlockKind, ContentError, EditKind, Item, LineSpan, language_for_path, structural_diff,
 };
 
 fn blocks(diff: &lyrel_content_diff::StructuralDiff) -> Vec<&Block> {
@@ -27,14 +27,17 @@ fn anchors(diff: &lyrel_content_diff::StructuralDiff) -> Vec<(LineSpan, u32)> {
 }
 
 /// (kind, old span, new span) per block, in display order.
-fn shape(diff: &lyrel_content_diff::StructuralDiff) -> Vec<(BlockKind, Option<LineSpan>, Option<LineSpan>)> {
+fn shape(
+    diff: &lyrel_content_diff::StructuralDiff,
+) -> Vec<(BlockKind, Option<LineSpan>, Option<LineSpan>)> {
     blocks(diff)
         .into_iter()
         .map(|b| (b.kind, b.old, b.new))
         .collect()
 }
 
-const OLD_BASIC: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"beta\");\n}\n\nfn gamma() {}\nfn delta() {}\n";
+const OLD_BASIC: &str =
+    "fn alpha() {}\n\nfn beta() {\n    println!(\"beta\");\n}\n\nfn gamma() {}\nfn delta() {}\n";
 // beta moved below gamma and edited; delta deleted; epsilon added.
 const NEW_BASIC: &str = "fn alpha() {}\n\nfn gamma() {}\n\nfn beta() {\n    println!(\"beta v2\");\n}\n\nfn epsilon() {}\n";
 
@@ -42,7 +45,11 @@ const NEW_BASIC: &str = "fn alpha() {}\n\nfn gamma() {}\n\nfn beta() {\n    prin
 fn a_moved_and_edited_block_reports_its_inner_edits() {
     let diff = structural_diff("rust", OLD_BASIC, NEW_BASIC).expect("rust parses");
     // alpha is untouched context and never appears.
-    assert!(!blocks(&diff).iter().any(|b| b.name.as_deref() == Some("alpha")));
+    assert!(
+        !blocks(&diff)
+            .iter()
+            .any(|b| b.name.as_deref() == Some("alpha"))
+    );
     let beta = blocks(&diff)
         .into_iter()
         .find(|b| b.name.as_deref() == Some("beta"))
@@ -54,10 +61,24 @@ fn a_moved_and_edited_block_reports_its_inner_edits() {
     // The edit inside the moved block points at both versions of the
     // changed line.
     let kinds: Vec<EditKind> = beta.edits.iter().map(|e| e.kind).collect();
-    assert!(kinds.contains(&EditKind::Removed), "the old println line: {kinds:?}");
-    assert!(kinds.contains(&EditKind::Added), "the new println line: {kinds:?}");
-    let removed = beta.edits.iter().find(|e| e.kind == EditKind::Removed).unwrap();
-    let added = beta.edits.iter().find(|e| e.kind == EditKind::Added).unwrap();
+    assert!(
+        kinds.contains(&EditKind::Removed),
+        "the old println line: {kinds:?}"
+    );
+    assert!(
+        kinds.contains(&EditKind::Added),
+        "the new println line: {kinds:?}"
+    );
+    let removed = beta
+        .edits
+        .iter()
+        .find(|e| e.kind == EditKind::Removed)
+        .unwrap();
+    let added = beta
+        .edits
+        .iter()
+        .find(|e| e.kind == EditKind::Added)
+        .unwrap();
     assert_eq!(removed.old, Some(4));
     assert_eq!(added.new, Some(6));
 }
@@ -77,14 +98,23 @@ fn ambiguous_matches_stay_additions_and_deletions() {
     // One `helper` on the left, two on the right: which copy moved cannot be
     // established, so nothing may be paired.
     let old = "def helper():\n    return 1\n\ndef main():\n    pass\n";
-    let new = "def helper():\n    return 2\n\ndef helper():\n    return 1\n\ndef main():\n    pass\n";
+    let new =
+        "def helper():\n    return 2\n\ndef helper():\n    return 1\n\ndef main():\n    pass\n";
     let diff = structural_diff("python", old, new).expect("python parses");
     let helper_blocks: Vec<&Block> = blocks(&diff)
         .into_iter()
         .filter(|b| b.name.as_deref() == Some("helper"))
         .collect();
-    assert_eq!(helper_blocks.len(), 3, "one deletion, two additions: {helper_blocks:?}");
-    assert!(helper_blocks.iter().all(|b| matches!(b.kind, BlockKind::Added | BlockKind::Deleted)));
+    assert_eq!(
+        helper_blocks.len(),
+        3,
+        "one deletion, two additions: {helper_blocks:?}"
+    );
+    assert!(
+        helper_blocks
+            .iter()
+            .all(|b| matches!(b.kind, BlockKind::Added | BlockKind::Deleted))
+    );
 }
 
 #[test]
@@ -121,7 +151,11 @@ fn a_pure_move_without_edits_has_no_inner_edits() {
             },
         })
         .collect();
-    assert_eq!(kinds, vec!["b-anchor", "c-block", "b-block", "c-anchor"], "{kinds:?}");
+    assert_eq!(
+        kinds,
+        vec!["b-anchor", "c-block", "b-block", "c-anchor"],
+        "{kinds:?}"
+    );
 }
 
 #[test]
@@ -134,7 +168,10 @@ fn formatting_only_changes_are_flagged_not_expanded() {
         .find(|b| b.name.as_deref() == Some("b"))
         .expect("b changed");
     assert!(b.formatting_only, "only whitespace moved: {b:?}");
-    assert!(b.edits.is_empty(), "formatting-only blocks carry no edit rows");
+    assert!(
+        b.edits.is_empty(),
+        "formatting-only blocks carry no edit rows"
+    );
     assert_eq!(b.kind, BlockKind::Modified, "b stayed in place");
 }
 
@@ -147,8 +184,17 @@ fn comment_and_literal_changes_are_real_edits() {
         .into_iter()
         .find(|b| b.name.as_deref() == Some("b"))
         .unwrap();
-    assert!(!b.formatting_only, "comments and strings are content: {b:?}");
-    assert_eq!(b.edits.iter().filter(|e| e.kind != EditKind::Context).count(), 4);
+    assert!(
+        !b.formatting_only,
+        "comments and strings are content: {b:?}"
+    );
+    assert_eq!(
+        b.edits
+            .iter()
+            .filter(|e| e.kind != EditKind::Context)
+            .count(),
+        4
+    );
 }
 
 #[test]
@@ -188,7 +234,10 @@ fn reordered_blocks_read_in_new_file_order() {
 
 #[test]
 fn unsupported_language_and_unknown_extension() {
-    assert_eq!(language_for_path(std::path::Path::new("x.rs")), Some("rust"));
+    assert_eq!(
+        language_for_path(std::path::Path::new("x.rs")),
+        Some("rust")
+    );
     assert_eq!(language_for_path(std::path::Path::new("x.TSX")), None);
     assert_eq!(language_for_path(std::path::Path::new("noext")), None);
     let err = structural_diff("cobol", "a", "b").unwrap_err();
@@ -230,9 +279,11 @@ fn same_name_sibling_items_stay_conservative_when_ambiguous() {
     // modifications. This asserts the happy path stays reachable when there
     // is no ambiguity.
     assert_eq!(shape.len(), 2, "{shape:?}");
-    assert!(shape.iter().all(|(kind, o, n)| {
-        *kind == BlockKind::Modified && o.is_some() && n.is_some()
-    }));
+    assert!(
+        shape
+            .iter()
+            .all(|(kind, o, n)| { *kind == BlockKind::Modified && o.is_some() && n.is_some() })
+    );
 }
 
 // ---- the other advertised formats ----
@@ -242,13 +293,20 @@ fn javascript_moves_are_detected() {
     let old = "function one() {\n  return 1;\n}\n\nfunction two() {\n  return 2;\n}\n";
     let new = "function two() {\n  return 2;\n}\n\nfunction one() {\n  return 1;\n}\n";
     let diff = structural_diff("javascript", old, new).expect("javascript parses");
-    assert_eq!(blocks(&diff).iter().filter(|b| b.kind == BlockKind::Moved).count(), 2);
+    assert_eq!(
+        blocks(&diff)
+            .iter()
+            .filter(|b| b.kind == BlockKind::Moved)
+            .count(),
+        2
+    );
 }
 
 #[test]
 fn typescript_exported_functions_keep_their_identity() {
     let old = "export function parse(input: string): number {\n  return Number(input);\n}\n";
-    let new = "export function parse(input: string): number {\n  return Math.floor(Number(input));\n}\n";
+    let new =
+        "export function parse(input: string): number {\n  return Math.floor(Number(input));\n}\n";
     let diff = structural_diff("typescript", old, new).expect("typescript parses");
     let b = &blocks(&diff)[0];
     assert_eq!(b.kind, BlockKind::Modified);
@@ -308,7 +366,13 @@ fn toml_sections_move() {
     let old = "[package]\nname = \"lyrel\"\n\n[dependencies]\nrust = \"1\"\n";
     let new = "[dependencies]\nrust = \"1\"\n\n[package]\nname = \"lyrel\"\n";
     let diff = structural_diff("toml", old, new).expect("toml parses");
-    assert_eq!(blocks(&diff).iter().filter(|b| b.kind == BlockKind::Moved).count(), 2);
+    assert_eq!(
+        blocks(&diff)
+            .iter()
+            .filter(|b| b.kind == BlockKind::Moved)
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -347,11 +411,19 @@ fn line_numbers_are_file_global() {
         .into_iter()
         .find(|b| b.name.as_deref() == Some("b"))
         .unwrap();
-    let removed = b.edits.iter().find(|e| e.kind == EditKind::Removed).unwrap();
+    let removed = b
+        .edits
+        .iter()
+        .find(|e| e.kind == EditKind::Removed)
+        .unwrap();
     let added = b.edits.iter().find(|e| e.kind == EditKind::Added).unwrap();
     assert_eq!(removed.old, Some(7));
     assert_eq!(added.new, Some(7));
-    let ctx = b.edits.iter().find(|e| e.kind == EditKind::Context).unwrap();
+    let ctx = b
+        .edits
+        .iter()
+        .find(|e| e.kind == EditKind::Context)
+        .unwrap();
     assert_eq!(ctx.old, Some(5));
     assert_eq!(ctx.new, Some(5));
 }
@@ -372,9 +444,12 @@ fn block_named<'a>(diff: &'a lyrel_content_diff::StructuralDiff, name: &str) -> 
 
 fn anchor_named(diff: &lyrel_content_diff::StructuralDiff, name: &str) -> Option<(LineSpan, u32)> {
     diff.items.iter().find_map(|item| match item {
-        Item::Source { name: Some(n), old, new_start, .. } if n == name => {
-            Some((*old, *new_start))
-        }
+        Item::Source {
+            name: Some(n),
+            old,
+            new_start,
+            ..
+        } if n == name => Some((*old, *new_start)),
         _ => None,
     })
 }
@@ -410,7 +485,10 @@ function greet(name) {
     assert_eq!(greet.kind, BlockKind::MovedEdited);
     assert_eq!(greet.old, Some(LineSpan { start: 1, end: 4 }));
     assert_eq!(greet.new, Some(LineSpan { start: 7, end: 10 }));
-    assert!(!greet.formatting_only, "a comment and a literal changed: {greet:?}");
+    assert!(
+        !greet.formatting_only,
+        "a comment and a literal changed: {greet:?}"
+    );
     assert_eq!(
         anchor_named(&diff, "greet"),
         Some((LineSpan { start: 1, end: 4 }, 7)),
@@ -429,13 +507,22 @@ function greet(name) {
     assert_eq!(retries.kind, BlockKind::MovedEdited);
     assert_eq!(retries.old, Some(LineSpan { start: 6, end: 6 }));
     assert_eq!(retries.new, Some(LineSpan { start: 5, end: 5 }));
-    assert_eq!(anchor_named(&diff, "retries"), Some((LineSpan { start: 6, end: 6 }, 5)));
+    assert_eq!(
+        anchor_named(&diff, "retries"),
+        Some((LineSpan { start: 6, end: 6 }, 5))
+    );
 
     let main = block_named(&diff, "main");
     assert_eq!(main.kind, BlockKind::Moved);
-    assert!(!main.formatting_only, "a move reads as a move, not as formatting");
+    assert!(
+        !main.formatting_only,
+        "a move reads as a move, not as formatting"
+    );
     assert!(main.edits.is_empty(), "an exact move has no inner edits");
-    assert_eq!(anchor_named(&diff, "main"), Some((LineSpan { start: 8, end: 10 }, 1)));
+    assert_eq!(
+        anchor_named(&diff, "main"),
+        Some((LineSpan { start: 8, end: 10 }, 1))
+    );
 }
 
 #[test]
@@ -446,7 +533,10 @@ fn javascript_whitespace_only_edits_collapse() {
     let run = block_named(&diff, "run");
     assert_eq!(run.kind, BlockKind::Modified);
     assert!(run.formatting_only, "{run:?}");
-    assert!(run.edits.is_empty(), "formatting-only blocks carry no edit rows");
+    assert!(
+        run.edits.is_empty(),
+        "formatting-only blocks carry no edit rows"
+    );
 }
 
 #[test]
@@ -496,7 +586,10 @@ export interface Options {
         Some((LineSpan { start: 1, end: 3 }, 12))
     );
     assert!(
-        options.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(14)),
+        options
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Added && e.new == Some(14)),
         "the added field stays visible: {:?}",
         options.edits
     );
@@ -506,7 +599,10 @@ export interface Options {
     assert_eq!(mode.kind, BlockKind::MovedEdited);
     assert_eq!(mode.old, Some(LineSpan { start: 5, end: 5 }));
     assert_eq!(mode.new, Some(LineSpan { start: 1, end: 1 }));
-    assert_eq!(anchor_named(&diff, "Mode"), Some((LineSpan { start: 5, end: 5 }, 1)));
+    assert_eq!(
+        anchor_named(&diff, "Mode"),
+        Some((LineSpan { start: 5, end: 5 }, 1))
+    );
 
     let phase = block_named(&diff, "Phase");
     assert_eq!(phase.label, "enum");
@@ -514,15 +610,24 @@ export interface Options {
     assert_eq!(phase.old, Some(LineSpan { start: 7, end: 10 }));
     assert_eq!(phase.new, Some(LineSpan { start: 3, end: 6 }));
     assert!(
-        phase.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(9))
-            && phase.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(5)),
+        phase
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(9))
+            && phase
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(5)),
         "the enum literal change is a real edit: {:?}",
         phase.edits
     );
 
     let run = block_named(&diff, "run");
     assert_eq!(run.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "run"), Some((LineSpan { start: 12, end: 14 }, 8)));
+    assert_eq!(
+        anchor_named(&diff, "run"),
+        Some((LineSpan { start: 12, end: 14 }, 8))
+    );
 }
 
 #[test]
@@ -536,8 +641,14 @@ fn typescript_export_and_ambient_wrappers_stay_in_the_item() {
     assert_eq!(parse.old, Some(LineSpan { start: 1, end: 3 }));
     assert_eq!(parse.new, Some(LineSpan { start: 1, end: 3 }));
     assert!(
-        parse.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(1))
-            && parse.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(1)),
+        parse
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(1))
+            && parse
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(1)),
         "the export line is the edit: {:?}",
         parse.edits
     );
@@ -594,7 +705,10 @@ export function Card() {
 
     let shell = block_named(&diff, "Shell");
     assert_eq!(shell.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "Shell"), Some((LineSpan { start: 6, end: 8 }, 1)));
+    assert_eq!(
+        anchor_named(&diff, "Shell"),
+        Some((LineSpan { start: 6, end: 8 }, 1))
+    );
 }
 
 #[test]
@@ -628,7 +742,10 @@ def helper():
     assert_eq!(build.kind, BlockKind::Moved);
     assert_eq!(build.old, Some(LineSpan { start: 5, end: 7 }));
     assert_eq!(build.new, Some(LineSpan { start: 4, end: 6 }));
-    assert_eq!(anchor_named(&diff, "build"), Some((LineSpan { start: 5, end: 7 }, 4)));
+    assert_eq!(
+        anchor_named(&diff, "build"),
+        Some((LineSpan { start: 5, end: 7 }, 4))
+    );
 
     let helper = block_named(&diff, "helper");
     assert_eq!(helper.kind, BlockKind::MovedEdited);
@@ -646,7 +763,10 @@ def helper():
     let store = block_named(&diff, "Store");
     assert_eq!(store.label, "class");
     assert_eq!(store.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "Store"), Some((LineSpan { start: 9, end: 10 }, 1)));
+    assert_eq!(
+        anchor_named(&diff, "Store"),
+        Some((LineSpan { start: 9, end: 10 }, 1))
+    );
 }
 
 #[test]
@@ -659,8 +779,14 @@ fn python_decorator_changes_are_edits() {
     assert_eq!(build.old, Some(LineSpan { start: 1, end: 3 }));
     assert_eq!(build.new, Some(LineSpan { start: 1, end: 3 }));
     assert!(
-        build.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(1))
-            && build.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(1)),
+        build
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(1))
+            && build
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(1)),
         "the decorator line is the edit: {:?}",
         build.edits
     );
@@ -677,8 +803,13 @@ fn python_dedent_is_a_real_edit_and_internal_spacing_is_formatting() {
     assert_eq!(run.kind, BlockKind::Modified);
     assert!(!run.formatting_only, "{run:?}");
     assert!(
-        run.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(4))
-            && run.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(4)),
+        run.edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(4))
+            && run
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(4)),
         "{:?}",
         run.edits
     );
@@ -739,8 +870,14 @@ type Config struct {
         Some((LineSpan { start: 3, end: 6 }, 12))
     );
     assert!(
-        config.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(4))
-            && config.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(13)),
+        config
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(4))
+            && config
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(13)),
         "the comment and the added field are edits: {:?}",
         config.edits
     );
@@ -753,12 +890,18 @@ type Config struct {
 
     let timeout = block_named(&diff, "Timeout");
     assert_eq!(timeout.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "Timeout"), Some((LineSpan { start: 10, end: 10 }, 9)));
+    assert_eq!(
+        anchor_named(&diff, "Timeout"),
+        Some((LineSpan { start: 10, end: 10 }, 9))
+    );
 
     let label = block_named(&diff, "Label");
     assert_eq!(label.label, "method");
     assert_eq!(label.kind, BlockKind::MovedEdited);
-    assert_eq!(anchor_named(&diff, "Label"), Some((LineSpan { start: 13, end: 15 }, 3)));
+    assert_eq!(
+        anchor_named(&diff, "Label"),
+        Some((LineSpan { start: 13, end: 15 }, 3))
+    );
 }
 
 #[test]
@@ -771,7 +914,10 @@ fn go_type_alias_moves_with_its_name() {
     assert_eq!(alias.kind, BlockKind::MovedEdited);
     assert_eq!(alias.old, Some(LineSpan { start: 3, end: 3 }));
     assert_eq!(alias.new, Some(LineSpan { start: 5, end: 5 }));
-    assert_eq!(anchor_named(&diff, "Alias"), Some((LineSpan { start: 3, end: 3 }, 5)));
+    assert_eq!(
+        anchor_named(&diff, "Alias"),
+        Some((LineSpan { start: 3, end: 3 }, 5))
+    );
 }
 
 #[test]
@@ -811,15 +957,24 @@ fn json_pairs_move_and_keep_their_nested_literals() {
     assert_eq!(server.old, Some(LineSpan { start: 3, end: 6 }));
     assert_eq!(server.new, Some(LineSpan { start: 4, end: 7 }));
     assert!(
-        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(5))
-            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(6)),
+        server
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(5))
+            && server
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(6)),
         "the nested port literal is an edit: {:?}",
         server.edits
     );
 
     let name = block_named(&diff, "\"name\"");
     assert_eq!(name.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "\"name\""), Some((LineSpan { start: 2, end: 2 }, 3)));
+    assert_eq!(
+        anchor_named(&diff, "\"name\""),
+        Some((LineSpan { start: 2, end: 2 }, 3))
+    );
 }
 
 #[test]
@@ -858,8 +1013,14 @@ version = "0.2.0"
         Some((LineSpan { start: 1, end: 4 }, 7))
     );
     assert!(
-        package.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(2))
-            && package.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(8)),
+        package
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(2))
+            && package
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(8)),
         "the comment is a real edit: {:?}",
         package.edits
     );
@@ -871,7 +1032,10 @@ version = "0.2.0"
 
     let profile = block_named(&diff, "[profile.release]");
     assert_eq!(profile.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "[profile.release]"), Some((LineSpan { start: 9, end: 10 }, 1)));
+    assert_eq!(
+        anchor_named(&diff, "[profile.release]"),
+        Some((LineSpan { start: 9, end: 10 }, 1))
+    );
 }
 
 #[test]
@@ -902,8 +1066,14 @@ name: lyrel
         Some((LineSpan { start: 3, end: 6 }, 1))
     );
     assert!(
-        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(5))
-            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(3)),
+        server
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(5))
+            && server
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(3)),
         "the nested comment is a real edit: {:?}",
         server.edits
     );
@@ -915,7 +1085,10 @@ name: lyrel
 
     let name = block_named(&diff, "name");
     assert_eq!(name.kind, BlockKind::Moved);
-    assert_eq!(anchor_named(&diff, "name"), Some((LineSpan { start: 1, end: 1 }, 6)));
+    assert_eq!(
+        anchor_named(&diff, "name"),
+        Some((LineSpan { start: 1, end: 1 }, 6))
+    );
 }
 
 #[test]
@@ -925,10 +1098,19 @@ fn yaml_indentation_is_structure_not_formatting() {
     let diff = structural_diff("yaml", old, new).expect("yaml parses");
     let server = block_named(&diff, "server");
     assert_eq!(server.kind, BlockKind::Modified);
-    assert!(!server.formatting_only, "leading whitespace is structure: {server:?}");
     assert!(
-        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(2))
-            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(2)),
+        !server.formatting_only,
+        "leading whitespace is structure: {server:?}"
+    );
+    assert!(
+        server
+            .edits
+            .iter()
+            .any(|e| e.kind == EditKind::Removed && e.old == Some(2))
+            && server
+                .edits
+                .iter()
+                .any(|e| e.kind == EditKind::Added && e.new == Some(2)),
         "{:?}",
         server.edits
     );

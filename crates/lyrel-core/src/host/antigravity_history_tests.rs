@@ -6,11 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use lyrel_protocol::core::cli_agent::CLIAgent;
+use lyrel_protocol::host::Host;
+use lyrel_protocol::host::session_operations::antigravity;
 use lyrel_protocol::host::session_operations::{
     SessionErrorKind, SessionOperation, SessionOperationKind, SessionScope,
 };
-use lyrel_protocol::host::session_operations::antigravity;
-use lyrel_protocol::host::Host;
 
 use rusqlite::{Connection, params};
 
@@ -151,8 +151,7 @@ fn request(
 
 fn paths_equal(actual: Option<&Path>, expected: &Path) -> bool {
     actual.is_some_and(|actual| {
-        actual.to_string_lossy().replace('\\', "/")
-            == expected.to_string_lossy().replace('\\', "/")
+        actual.to_string_lossy().replace('\\', "/") == expected.to_string_lossy().replace('\\', "/")
     })
 }
 
@@ -233,10 +232,19 @@ fn history_reads_only_root_cli_conversations_and_scopes_the_directory() {
     drop(index);
 
     let host = crate::host::local::new();
-    let request = request(&*host, home.path(), project.path(), "", SessionOperationKind::Resume);
+    let request = request(
+        &*host,
+        home.path(),
+        project.path(),
+        "",
+        SessionOperationKind::Resume,
+    );
     let found = antigravity::sessions(&*host, Some(project.path()), &request).unwrap();
     assert_eq!(
-        found.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(),
+        found
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>(),
         [ROOT_ID, SECOND_ID],
         "directory-scoped, root CLI conversations only"
     );
@@ -267,7 +275,9 @@ fn history_reads_only_root_cli_conversations_and_scopes_the_directory() {
 
     let all = antigravity::sessions(&*host, None, &request).unwrap();
     assert_eq!(
-        all.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(),
+        all.iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>(),
         [ROOT_ID, SECOND_ID, OTHER_ID],
         "an unscoped listing keeps other directories but not another app store or a subagent"
     );
@@ -278,7 +288,10 @@ fn history_reads_only_root_cli_conversations_and_scopes_the_directory() {
         &request,
     )
     .unwrap();
-    assert!(absent.is_empty(), "a directory with no rows is a normal empty answer");
+    assert!(
+        absent.is_empty(),
+        "a directory with no rows is a normal empty answer"
+    );
 }
 
 #[test]
@@ -286,7 +299,13 @@ fn a_missing_or_unreadable_store_keeps_other_sources_usable() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let host = crate::host::local::new();
-    let request = request(&*host, home.path(), project.path(), "", SessionOperationKind::Resume);
+    let request = request(
+        &*host,
+        home.path(),
+        project.path(),
+        "",
+        SessionOperationKind::Resume,
+    );
 
     let absent = antigravity::sessions(&*host, None, &request).unwrap();
     assert!(
@@ -368,9 +387,12 @@ fn exact_resume_revalidates_identity_directory_and_fork_boundary() {
     assert!(command.contains(ROOT_ID), "{command}");
     let transcript = prepared.session_file.expect("the exact transcript");
     assert!(
-        transcript.to_string_lossy().replace('\\', "/").ends_with(&format!(
-            "brain/{ROOT_ID}/.system_generated/logs/transcript.jsonl"
-        )),
+        transcript
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with(&format!(
+                "brain/{ROOT_ID}/.system_generated/logs/transcript.jsonl"
+            )),
         "{}",
         transcript.display()
     );

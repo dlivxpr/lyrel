@@ -321,10 +321,9 @@ impl CLIAgent {
                 prompt.to_string(),
             ]),
             CLIAgent::Hermes => Some(vec!["chat".to_string(), format!("--query={prompt}")]),
-            CLIAgent::Antigravity => Some(vec![
-                "--prompt-interactive".to_string(),
-                prompt.to_string(),
-            ]),
+            CLIAgent::Antigravity => {
+                Some(vec!["--prompt-interactive".to_string(), prompt.to_string()])
+            }
             _ => None,
         }
     }
@@ -2002,7 +2001,11 @@ mod tests {
         // them belongs in a remembered default launch.
         assert_eq!(
             CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
-                "agy", "--conversation", "old-id", "--model", "custom"
+                "agy",
+                "--conversation",
+                "old-id",
+                "--model",
+                "custom"
             ])),
             Some(argv(&["agy", "--model", "custom"]))
         );
@@ -2014,7 +2017,9 @@ mod tests {
         // first task into the default: the flag and its value drop together.
         assert_eq!(
             CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
-                "agy", "--prompt-interactive", "fix the parser"
+                "agy",
+                "--prompt-interactive",
+                "fix the parser"
             ])),
             Some(argv(&["agy"]))
         );
