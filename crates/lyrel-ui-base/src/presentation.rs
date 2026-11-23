@@ -141,10 +141,11 @@ pub fn install_preset_theme(
     let t = Theme::global_mut(cx);
     t.font_size = ui_font_size;
     // Toasts belong above the global status bar, in the bottom-right corner.
-    // The margin follows the bar's `1.625rem` height at the same UI scale plus
+    // The margin follows the bar's actual height at the same UI scale plus
     // the standard 8px gap, so zooming the interface keeps them clear of it.
     t.notification.placement = gpui_kit::Anchor::BottomRight;
-    t.notification.margins.bottom = ui_font_size * 1.625 + px(8.);
+    t.notification.margins.bottom =
+        ui_font_size * crate::display::GLOBAL_STATUS_BAR_HEIGHT_REM + px(8.);
     t.notification.margins.right = px(8.);
     // Assigned in both directions, never only when set: this is the one place
     // that decides the chrome's face, so it has to say "back to stock" as

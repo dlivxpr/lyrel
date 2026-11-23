@@ -1616,8 +1616,8 @@ mod tests {
             );
             assert_eq!(
                 theme.notification.margins.bottom,
-                px(24. * 1.625 + 8.),
-                "toast stack must clear the 1.625rem status bar and its 8px gap"
+                px(24. * lyrel_ui_base::display::GLOBAL_STATUS_BAR_HEIGHT_REM + 8.),
+                "toast stack must clear the 2rem global status bar and its 8px gap"
             );
         });
     }
