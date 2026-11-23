@@ -7,7 +7,9 @@ use crate::ui::app::test_window::harness_with_tabs;
 #[gpui_kit::test]
 fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
     let (first, second) = app.update_in(&mut vcx, |app, _, cx| {
+        app.right_panel_width.set(460.);
         app.open_web_page("https://example.test/first", None, cx);
         let first = layout_active_web(&app.tool_layout()).unwrap();
         app.attach_test_browser_surface(&first, cx);
@@ -36,8 +38,12 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
     });
     settle(&mut vcx);
     vcx.update(|window, _| {
-        assert!(window.find(format!("web-tab-{first}")).visible());
-        assert!(window.find(format!("web-tab-{second}")).visible());
+        let strip = window.find("side-panel-tool-scroll").bounds();
+        let first_tab = window.find(format!("web-tab-{first}"));
+        let second_tab = window.find(format!("web-tab-{second}"));
+        assert!(strip.contains(&first_tab.bounds().center()));
+        assert!(strip.contains(&second_tab.bounds().center()));
+        assert_eq!(second_tab.selected(), Some(true));
     });
 
     app.update_in(&mut vcx, |app, window, cx| {
