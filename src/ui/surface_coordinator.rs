@@ -113,8 +113,10 @@ pub(crate) fn install_popup_menu_presence(cx: &mut App) {
         // covers a menu replaced or dropped without one.
         let dismiss = cx.subscribe_self(|_, _: &DismissEvent, cx| notify_live_apps(cx));
         let release = cx.on_release(move |_, cx| {
-            if let Some(state) = cx.try_global_mut::<PopupMenus>() {
+            if cx.has_global::<PopupMenus>() {
+                let state = cx.global_mut::<PopupMenus>();
                 state.subscriptions.remove(&entity_id);
+                state.menus.retain(|weak| weak.entity_id() != entity_id);
             }
             notify_live_apps(cx);
         });

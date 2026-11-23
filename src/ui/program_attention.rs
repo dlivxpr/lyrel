@@ -458,7 +458,7 @@ impl crate::ui::app::LyrelApp {
     pub(crate) fn acknowledge_viewed_program(
         &mut self,
         window: &gpui_kit::Window,
-        cx: &gpui_kit::App,
+        cx: &mut gpui_kit::App,
     ) {
         let Some(view) = self
             .tabs

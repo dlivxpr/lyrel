@@ -805,6 +805,7 @@ pub(crate) fn render_browser_page(
          tip: L10nKey,
          enabled: bool,
          action: fn(&mut LyrelApp, &str, &mut Context<LyrelApp>)| {
+            let tab_id = tab_id.clone();
             Button::new(id)
                 .icon(Icon::new(icon))
                 .custom(

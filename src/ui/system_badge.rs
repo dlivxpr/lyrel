@@ -16,7 +16,7 @@
 //! is untouched.
 
 #[cfg(all(target_os = "windows", not(test)))]
-use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 #[cfg(all(target_os = "windows", not(test)))]
 use windows::Win32::Foundation::HWND;
 
@@ -59,9 +59,7 @@ impl SystemBadgeState {
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor().timer(RECONCILE_EVERY).await;
-                if cx.update(Self::reconcile).is_err() {
-                    break;
-                }
+                cx.update(Self::reconcile);
             }
         })
         .detach();

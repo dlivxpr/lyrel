@@ -37,7 +37,8 @@ use crate::ui::diff_list::{
 use crate::ui::diff_probe::{DiffProbeKey, ProbeCompletion, ProbeRequest};
 use crate::ui::diff_rows::{DiffSelection, RowId, Side, SplitCell, SplitRow, UnifiedRow};
 use crate::ui::document_column::{
-    DocumentChrome, glyph_content, glyph_split, glyph_unified, switch_cell, switch_ink, switch_track,
+    DocumentChrome, glyph_content, glyph_split, glyph_unified, switch_cell, switch_ink,
+    switch_track,
 };
 use crate::ui::right_panel::{HEADING, META, META_MONO, TEXT, TEXT_MONO, git_badge, info_chip};
 use crate::ui::scm::path::relative_time;
@@ -457,9 +458,7 @@ impl LyrelApp {
         let Some(index) = index else {
             return;
         };
-        overlay
-            .list
-            .scroll_to_reveal_item(index);
+        overlay.list.scroll_to_reveal_item(index);
         cx.notify();
     }
 
@@ -1449,13 +1448,12 @@ impl LyrelApp {
                             .insert(want.path, ContentState::Failed(ContentFailure::PatchOnly));
                     }
                     Some(plan) => {
-                        let supported = lyrel_content_diff::language_for_path(Path::new(
-                            &want.path,
-                        ))
-                        .or_else(|| {
-                            lyrel_content_diff::language_for_path(Path::new(&want.old_path))
-                        })
-                        .is_some();
+                        let supported =
+                            lyrel_content_diff::language_for_path(Path::new(&want.path))
+                                .or_else(|| {
+                                    lyrel_content_diff::language_for_path(Path::new(&want.old_path))
+                                })
+                                .is_some();
                         if supported {
                             overlay
                                 .content
@@ -1517,9 +1515,10 @@ impl LyrelApp {
             return;
         };
         for (path, _, _) in fetches {
-            overlay
-                .content
-                .insert(path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+            overlay.content.insert(
+                path.clone(),
+                ContentState::Failed(ContentFailure::ReadFailed),
+            );
         }
         cx.notify();
     }
@@ -1545,11 +1544,9 @@ impl LyrelApp {
                     Err(reason) => ContentState::Failed(reason),
                 };
                 for tab in self.tabs.iter_mut() {
-                    let Some(overlay) = tab
-                        .diff_overlay
-                        .as_mut()
-                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
-                    else {
+                    let Some(overlay) = tab.diff_overlay.as_mut().filter(|o| {
+                        o.host_id == key.host && o.cwd == key.cwd && o.source == key.source
+                    }) else {
                         continue;
                     };
                     if overlay.content_epoch != key.epoch {
@@ -1564,11 +1561,9 @@ impl LyrelApp {
                 // drop the state so the next frame asks it; without one, say
                 // so instead of reading forever.
                 for tab in self.tabs.iter_mut() {
-                    let Some(overlay) = tab
-                        .diff_overlay
-                        .as_mut()
-                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
-                    else {
+                    let Some(overlay) = tab.diff_overlay.as_mut().filter(|o| {
+                        o.host_id == key.host && o.cwd == key.cwd && o.source == key.source
+                    }) else {
                         continue;
                     };
                     if overlay.content_epoch != key.epoch {
@@ -1579,9 +1574,10 @@ impl LyrelApp {
                             overlay.content.remove(&key.path);
                         }
                         false => {
-                            overlay
-                                .content
-                                .insert(key.path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+                            overlay.content.insert(
+                                key.path.clone(),
+                                ContentState::Failed(ContentFailure::ReadFailed),
+                            );
                         }
                     }
                     touched = true;
@@ -1599,11 +1595,7 @@ impl LyrelApp {
     /// Called from `render`, so the [`RowsKey`] comparison is what keeps it
     /// cheap: flattening a twenty-thousand-line patch allocates a row per
     /// line, and nothing about that changes between two frames of scrolling.
-    fn sync_diff_rows(
-        &mut self,
-        inner: DiffViewMode,
-        cx: &mut Context<Self>,
-    ) -> Option<DiffBody> {
+    fn sync_diff_rows(&mut self, inner: DiffViewMode, cx: &mut Context<Self>) -> Option<DiffBody> {
         let mode = view_mode(cx);
         let active = self.tabs.active_index();
         let overlay = self.tabs.get_mut(active)?.diff_overlay.as_mut()?;
@@ -1686,18 +1678,14 @@ impl LyrelApp {
             .is_none_or(|held| !held.describes(&from));
         if stale {
             let rows = match (mode, from.preview, untracked) {
-                (DiffViewMode::Content, _, Some(path)) => {
-                    match overlay.content.get(path) {
-                        Some(state) => crate::ui::diff_list::content_preview_rows(
-                            path, state, inner,
-                        ),
-                        None => crate::ui::diff_list::content_preview_rows(
-                            path,
-                            &ContentState::Loading,
-                            inner,
-                        ),
-                    }
-                }
+                (DiffViewMode::Content, _, Some(path)) => match overlay.content.get(path) {
+                    Some(state) => crate::ui::diff_list::content_preview_rows(path, state, inner),
+                    None => crate::ui::diff_list::content_preview_rows(
+                        path,
+                        &ContentState::Loading,
+                        inner,
+                    ),
+                },
                 (_, Some(file), _) => crate::ui::diff_list::preview_rows(file, from.mode),
                 _ => crate::ui::diff_list::build_rows(
                     from.snap,
@@ -2091,17 +2079,10 @@ fn diff_row_element(
             drag,
             app,
         ),
-        DiffRow::ContentBlock(head) => {
-            padded(content_block_row(head, font, app, cx))
-        }
-        DiffRow::ContentAnchor(head) => {
-            padded(content_anchor_row(head, font, app, cx))
-        }
+        DiffRow::ContentBlock(head) => padded(content_block_row(head, font, app, cx)),
+        DiffRow::ContentAnchor(head) => padded(content_anchor_row(head, font, app, cx)),
         DiffRow::ContentElided { count } => padded(note_row(
-            t_fmt(
-                L10nKey::DiffContentElided,
-                &[("count", &count.to_string())],
-            ),
+            t_fmt(L10nKey::DiffContentElided, &[("count", &count.to_string())]),
             cx,
         )),
         DiffRow::ContentStatus(key) => padded(note_row(t(*key).to_string(), cx)),
@@ -3436,8 +3417,22 @@ mod tests {
         let shut = |path: &str| -> HashMap<String, bool> {
             [(path.to_string(), false)].into_iter().collect()
         };
-        let open = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
-        let middle_shut = build_rows(&snap, &shut("b.rs"), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let open = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
+        let middle_shut = build_rows(
+            &snap,
+            &shut("b.rs"),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
 
         let (replaced, with) = spliced_range(&open, &middle_shut);
         assert_eq!(
@@ -3464,7 +3459,14 @@ mod tests {
             files: vec![small_file("a.rs", 2)],
             ..Default::default()
         };
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
 
         let (replaced, with) = spliced_range(&[], &rows);
         assert_eq!((replaced.start, replaced.end, with), (0, 0, rows.len()));
@@ -4116,7 +4118,11 @@ mod overlay_gpui_tests {
         assert_eq!(mode(&mut vcx), DiffViewMode::Unified);
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
-        assert_eq!(mode(&mut vcx), DiffViewMode::Content, "and on to the structure");
+        assert_eq!(
+            mode(&mut vcx),
+            DiffViewMode::Content,
+            "and on to the structure"
+        );
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
         assert_eq!(mode(&mut vcx), DiffViewMode::Split, "and back again");
@@ -4830,14 +4836,7 @@ mod content_view_tests {
         focus: Option<&str>,
         expanded: &[&str],
     ) {
-        open_source(
-            app,
-            vcx,
-            root,
-            DiffSource::Worktree,
-            focus,
-            expanded,
-        );
+        open_source(app, vcx, root, DiffSource::Worktree, focus, expanded);
     }
 
     /// As [`open`], for any Git source the overlay can show.
@@ -5101,7 +5100,12 @@ mod content_view_tests {
     }
 
     impl ForeignDiffHost {
-        fn mounted(id: HostId, shown: &Path, backing: &Path, can_read_versions: bool) -> SharedHost {
+        fn mounted(
+            id: HostId,
+            shown: &Path,
+            backing: &Path,
+            can_read_versions: bool,
+        ) -> SharedHost {
             Arc::new(Self {
                 inner: Arc::new(LocalHost::new()),
                 id,
@@ -5249,9 +5253,7 @@ mod content_view_tests {
     }
 
     #[gpui_kit::test]
-    fn a_remote_staged_view_reads_its_own_hosts_index_not_the_local_copy(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_remote_staged_view_reads_its_own_hosts_index_not_the_local_copy(cx: &mut TestAppContext) {
         let (_remote_temp, remote_backing) = foreign_repo();
         // A competing desktop checkout with the same relative path: if any
         // read fell back to local resolution, its marker would appear instead.
@@ -5297,7 +5299,10 @@ mod content_view_tests {
         let id = foreign_id();
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
         vcx.update(|_, cx| {
-            HostRegistry::insert(cx, ForeignDiffHost::mounted(id, &foreign_root(), &backing, false));
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &backing, false),
+            );
         });
 
         open_source_on(
@@ -5367,16 +5372,18 @@ mod content_view_tests {
         // Reconnect under the same HostId: a new instance, the same path,
         // and a tree that moved on. No snapshot lands, so only the host
         // identity can fence the old bytes.
-        write_file(&backing, "a.rs", "fn alpha() {}\n\nfn beta() {\n    println!(\"v4\");\n}\n");
+        write_file(
+            &backing,
+            "a.rs",
+            "fn alpha() {}\n\nfn beta() {\n    println!(\"v4\");\n}\n",
+        );
         vcx.update(|_, cx| {
             HostRegistry::insert(
                 cx,
                 ForeignDiffHost::mounted(id, &foreign_root(), &backing, true),
             );
         });
-        pump_until(&app, &mut vcx, |app| {
-            content_has(app, "a.rs", "\"v4\"")
-        });
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v4\""));
         frame(&app, &mut vcx);
 
         let rows = rows(&app, &mut vcx);
@@ -5482,8 +5489,7 @@ mod content_view_tests {
             &["a.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
-        let rows = rows(&app, &mut vcx);
-        let (old, new) = content_texts(&rows);
+        let (old, new) = content_texts(&rows(&app, &mut vcx));
         assert!(has(&old, "\"v1\""), "the staged old side is HEAD");
         assert!(has(&new, "\"v2\""), "the staged new side is the index");
         assert!(
@@ -5504,7 +5510,10 @@ mod content_view_tests {
         let (old, new) = content_texts(&rows);
         assert!(has(&old, "\"v2\""), "the unstaged old side is the index");
         assert!(has(&new, "\"v3\""), "and its new side is the working tree");
-        assert!(!has(&old, "\"v1\""), "HEAD is not part of the unstaged pair");
+        assert!(
+            !has(&old, "\"v1\""),
+            "HEAD is not part of the unstaged pair"
+        );
     }
 
     #[gpui_kit::test]
@@ -5698,12 +5707,12 @@ mod content_view_tests {
             &["new/name.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "new/name.rs"));
-        let rows = rows(&app, &mut vcx);
+        let staged_rows = rows(&app, &mut vcx);
         assert_eq!(
-            file_head(&rows, "new/name.rs").shown_path,
+            file_head(&staged_rows, "new/name.rs").shown_path,
             "old/name.rs → new/name.rs"
         );
-        let (old, new) = content_texts(&rows);
+        let (old, new) = content_texts(&staged_rows);
         assert!(has(&old, "\"two\""));
         assert!(has(&new, "\"two v2\""));
 
@@ -5732,7 +5741,11 @@ mod content_view_tests {
     fn added_and_deleted_files_keep_their_empty_sides(cx: &mut TestAppContext) {
         let (_temp, root) = empty_repo();
         write_file(&root, "kept.rs", "fn kept() {}\n");
-        write_file(&root, "gone.rs", "fn gone() {\n    println!(\"gone\");\n}\n");
+        write_file(
+            &root,
+            "gone.rs",
+            "fn gone() {\n    println!(\"gone\");\n}\n",
+        );
         commit_all(&root, "base");
 
         // Deleted in the working tree: the index still holds the old side,
@@ -5748,11 +5761,11 @@ mod content_view_tests {
             &["gone.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
-        let rows = rows(&app, &mut vcx);
-        let gone = content_block(&rows, "gone");
+        let worktree_rows = rows(&app, &mut vcx);
+        let gone = content_block(&worktree_rows, "gone");
         assert_eq!(gone.kind, BlockKind::Deleted);
         assert_eq!(gone.new, None);
-        let (old, new) = content_texts(&rows);
+        let (old, new) = content_texts(&worktree_rows);
         assert!(has(&old, "println!(\"gone\")"));
         assert!(new.is_empty(), "a deletion has no new side");
 
@@ -5766,8 +5779,10 @@ mod content_view_tests {
             &["gone.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
-        let rows = rows(&app, &mut vcx);
-        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
 
         // A staged deletion reads the index's empty side, and the commit's
         // deletion reads its parent's old side.
@@ -5781,8 +5796,10 @@ mod content_view_tests {
             &["gone.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
-        let rows = rows(&app, &mut vcx);
-        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
         let deletion = commit_all(&root, "delete");
         open_source(
             &app,
@@ -5793,12 +5810,18 @@ mod content_view_tests {
             &["gone.rs"],
         );
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
-        let rows = rows(&app, &mut vcx);
-        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
 
         // Intent-to-add puts a new file in the worktree patch; the index side
         // is git's empty blob.
-        write_file(&root, "fresh.rs", "fn fresh() {\n    println!(\"new\");\n}\n");
+        write_file(
+            &root,
+            "fresh.rs",
+            "fn fresh() {\n    println!(\"new\");\n}\n",
+        );
         git_ok(&root, &["add", "-N", "fresh.rs"]);
         open_source(
             &app,
@@ -5998,10 +6021,8 @@ mod content_view_tests {
             epoch,
         };
         app.update_in(&mut vcx, |app, _, _| {
-            let overlay = app.tabs[app.tabs.active_index()]
-                .diff_overlay
-                .as_mut()
-                .unwrap();
+            let active = app.tabs.active_index();
+            let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.content.remove("a.rs");
             assert_eq!(
                 app.content_fetches.request(&host, &staged_key),
@@ -6158,7 +6179,8 @@ mod content_view_tests {
         );
         // The harness window is wide enough for the paired layout.
         assert!(
-            rows.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "inner edits are drawn in the paired layout"
         );
 
@@ -6172,7 +6194,10 @@ mod content_view_tests {
             })
             .expect("gamma is a pure move");
         assert_eq!(gamma.kind, BlockKind::Moved);
-        assert!(!gamma.formatting_only, "a pure move is not a formatting change");
+        assert!(
+            !gamma.formatting_only,
+            "a pure move is not a formatting change"
+        );
         assert_eq!(gamma.edits, 0, "a pure move has no inner rows");
         assert!(
             rows.iter().any(|row| matches!(
@@ -6205,13 +6230,7 @@ mod content_view_tests {
             for (hunk_ix, hunk) in cf.file.hunks.iter().enumerate() {
                 for (row, line) in hunk.lines.iter().enumerate() {
                     if line.kind == LineKind::Removed && line.text.contains("println!(\"beta\")") {
-                        return (
-                            RowId {
-                                hunk: hunk_ix,
-                                row,
-                            },
-                            line.text.clone(),
-                        );
+                        return (RowId { hunk: hunk_ix, row }, line.text.clone());
                     }
                 }
             }
@@ -6242,11 +6261,15 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let narrow = rows(&app, &mut vcx);
         assert!(
-            narrow.iter().any(|row| matches!(row, DiffRow::ContentUnified { .. })),
+            narrow
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentUnified { .. })),
             "a narrow dock draws the single-column sequence"
         );
         assert!(
-            !narrow.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            !narrow
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "and not the paired one"
         );
 
@@ -6254,7 +6277,8 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let wide = rows(&app, &mut vcx);
         assert!(
-            wide.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            wide.iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "a wide surface pairs the columns again"
         );
     }
@@ -6293,10 +6317,8 @@ mod content_view_tests {
 
         let rows = rows(&app, &mut vcx);
         assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                DiffRow::ContentStatus(L10nKey::DiffContentUnsupported)
-            )),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(L10nKey::DiffContentUnsupported))),
             "the fallback names its reason"
         );
         assert!(
@@ -6345,7 +6367,13 @@ mod content_view_tests {
                 }],
                 ..Default::default()
             };
-            app.open_supplied_diff(HostId::LOCAL, Arc::new(snap), Some("a.rs".into()), window, cx);
+            app.open_supplied_diff(
+                HostId::LOCAL,
+                Arc::new(snap),
+                Some("a.rs".into()),
+                window,
+                cx,
+            );
             let active = app.tabs.active_index();
             let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.expanded.insert("a.rs".to_string(), true);
@@ -6353,10 +6381,8 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let rows = rows(&app, &mut vcx);
         assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly)
-            )),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly))),
             "a patch-only comparison explains itself"
         );
         assert!(
@@ -6448,7 +6474,10 @@ mod content_view_tests {
         let (staged, worktree) = worker.join().expect("the read thread finishes");
 
         let staged_text = content_line_text(&staged);
-        assert!(staged_text.contains("\"v1\""), "the staged old side is HEAD");
+        assert!(
+            staged_text.contains("\"v1\""),
+            "the staged old side is HEAD"
+        );
         assert!(
             staged_text.contains("\"v2\""),
             "the staged new side is the index"
@@ -6463,7 +6492,10 @@ mod content_view_tests {
         );
 
         let worktree_text = content_line_text(&worktree);
-        assert!(worktree_text.contains("\"v2\""), "the unstaged old side is the index");
+        assert!(
+            worktree_text.contains("\"v2\""),
+            "the unstaged old side is the index"
+        );
         assert!(
             worktree_text.contains("\"v3\""),
             "the unstaged new side is the worktree"

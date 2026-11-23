@@ -378,7 +378,7 @@ mod platform {
 
         fn icon_info(&self) -> ICONINFO {
             ICONINFO {
-                fIcon: 1,
+                fIcon: windows::core::BOOL(1),
                 xHotspot: 0,
                 yHotspot: 0,
                 hbmMask: self.mask,

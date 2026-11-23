@@ -16,6 +16,7 @@ function graph() {
       { name: 'lyrel-core', dependencies: [dep('lyrel-protocol')] },
       { name: 'lyrel-protocol', dependencies: [] },
       { name: 'lyrel-document', dependencies: [] },
+      { name: 'lyrel-content-diff', dependencies: [dep('tree-sitter')] },
       { name: 'lyrel-insights', dependencies: [dep('lyrel-protocol')] },
       { name: 'lyrel-updater', dependencies: [] },
       { name: 'lyrel-markdown-editor', dependencies: [dep('lyrel-document')] },

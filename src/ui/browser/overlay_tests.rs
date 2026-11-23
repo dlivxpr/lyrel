@@ -19,16 +19,26 @@ fn visibility(app: &LyrelApp, tab: &str) -> Option<bool> {
         .and_then(|surface| surface.test_visibility())
 }
 
-fn register_window(app: &mut LyrelApp, window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<LyrelApp>) {
+fn register_window(
+    app: &mut LyrelApp,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<LyrelApp>,
+) {
+    let app_entity = cx.entity().downgrade();
     crate::ui::windows::WindowRegistry::register(
         cx,
         app.workspace,
         window.window_handle(),
-        cx.entity().downgrade(),
+        app_entity,
     );
 }
 
-fn open_page(app: &mut LyrelApp, address: &str, window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<LyrelApp>) -> String {
+fn open_page(
+    app: &mut LyrelApp,
+    address: &str,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<LyrelApp>,
+) -> String {
     app.open_web_page(address, None, cx);
     let id = layout_active_web(&app.tool_layout()).expect("the new page is selected");
     app.attach_test_browser_surface(&id, cx);
@@ -174,7 +184,7 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
             "the toast stack still clears the global status bar"
         );
 
-        window.push_notification(Notification::new().message("Saved"), cx);
+        window.notify_app(Notification::new().message("Saved"), cx);
         window.draw(cx).clear(cx);
         assert_eq!(
             visibility(app, &tab),
