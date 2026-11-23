@@ -30,17 +30,20 @@ use gpui_kit::{Bounds, Pixels};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSResponder, NSView};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSImage, NSResponder,
+    NSView,
+};
 use objc2_foundation::{
-    NSArray, NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions,
+    NSArray, NSData, NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions,
     NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest,
     NSUUID, ns_string,
 };
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
     WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKNavigationType,
-    WKOpenPanelParameters, WKPermissionDecision, WKSecurityOrigin, WKUIDelegate, WKWebView,
-    WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
+    WKOpenPanelParameters, WKPermissionDecision, WKSecurityOrigin, WKSnapshotConfiguration,
+    WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
 };
 use smol::channel::Sender;
 use std::cell::RefCell;
@@ -168,9 +171,62 @@ impl Host {
             BrowserCommand::SetRouteGuard { guard } => {
                 self.shared.borrow_mut().guard = guard;
             }
+            BrowserCommand::Capture { request } => {
+                let configuration: Retained<WKSnapshotConfiguration> = unsafe {
+                    WKSnapshotConfiguration::new(MainThreadMarker::new().ok_or_else(|| {
+                        BrowserSurfaceError::Platform(
+                            "the page must be captured on the main thread".into(),
+                        )
+                    })?)
+                };
+                let shared = self.shared.clone();
+                let handler: block2::RcBlock<dyn Fn(*mut NSImage, *mut NSError)> =
+                    block2::RcBlock::new(move |image, error| {
+                        match capture_png(image, error) {
+                            Ok(png) => emit(&shared, BrowserEvent::Captured { request, png }),
+                            Err(message) => emit(
+                                &shared,
+                                BrowserEvent::CaptureFailed {
+                                    request,
+                                    message: format!("the page could not be captured: {message}"),
+                                },
+                            ),
+                        }
+                    });
+                unsafe {
+                    self.webview
+                        .takeSnapshotWithConfiguration_completionHandler(
+                            Some(&configuration),
+                            &handler,
+                        );
+                }
+            }
         }
         Ok(())
     }
+}
+
+/// Converts the snapshot completion's `NSImage` into PNG bytes. The
+/// completion may arrive with an error instead of an image; both are
+/// reported rather than turned into an empty share.
+fn capture_png(image: *mut NSImage, error: *mut NSError) -> Result<Vec<u8>, String> {
+    if !error.is_null() {
+        // SAFETY: AppKit hands us a borrowed error for this callback.
+        let text = unsafe { (*error).localizedDescription() };
+        return Err(text.to_string());
+    }
+    // SAFETY: the completion's image is valid for the callback.
+    let image = unsafe { Retained::retain(image) }.ok_or("the page returned no image")?;
+    let tiff = image.TIFFRepresentation().ok_or("the image has no bitmap data")?;
+    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
+        .ok_or("the image could not be read as a bitmap")?;
+    let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
+    let png: Retained<NSData> = unsafe {
+        bitmap
+            .representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+    }
+    .ok_or("the bitmap could not be encoded as PNG")?;
+    Ok(png.to_vec())
 }
 
 impl Drop for Host {

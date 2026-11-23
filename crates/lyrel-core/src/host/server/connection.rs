@@ -101,6 +101,11 @@ where
         // so an incompatible app can never be reported as a live receiver.
         conn.identity.register_gui();
     }
+    if hello.preview {
+        // A desktop's remote link consumes agent previews without turning
+        // this machine into a `GuiOpen` target (#393).
+        conn.identity.register_preview();
+    }
 
     if let Some(workspace) = hello.workspace.as_deref()
         && let Err(e) = conn
@@ -122,6 +127,7 @@ where
     conn.identity.release_all(conn.machine.as_deref());
     // Every exit path converges here, including EOF and protocol errors.
     conn.identity.unregister_gui();
+    conn.identity.unregister_preview();
     drop(machine_sub);
     sink.retire();
     let _ = shutdown.shutdown_link();

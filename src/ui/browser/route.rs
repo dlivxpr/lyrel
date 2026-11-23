@@ -339,6 +339,7 @@ mod tests {
             address: "http://localhost:3000/app".into(),
             title: String::new(),
             host,
+            source: None,
         }
     }
 

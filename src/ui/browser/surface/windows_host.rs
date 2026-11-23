@@ -16,8 +16,11 @@ use std::rc::Rc;
 use std::result::Result;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::*;
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::Foundation::{HGLOBAL, HWND, RECT};
+use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+use windows::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, CoInitializeEx, IStream, STREAM_SEEK_END, STREAM_SEEK_SET,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER,
     SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
@@ -651,9 +654,75 @@ impl Host {
                 BrowserCommand::SetRouteGuard { guard } => {
                     self.shared.borrow_mut().guard = guard;
                 }
+                BrowserCommand::Capture { request } => {
+                    // The stream is empty and owns its HGLOBAL; WebView2
+                    // writes PNG bytes into it before the handler runs.
+                    let stream: IStream =
+                        CreateStreamOnHGlobal(HGLOBAL(std::ptr::null_mut()), true)
+                            .map_err(|error| BrowserSurfaceError::Platform(error.to_string()))?;
+                    let read_back = stream.clone();
+                    let shared = self.shared.clone();
+                    let handler = CapturePreviewCompletedHandler::create(Box::new(
+                        move |result: windows::core::Result<()>| {
+                            let captured = result
+                                .map_err(|error| error.to_string())
+                                .and_then(|()| stream_png(&read_back));
+                            match captured {
+                                Ok(png) => {
+                                    emit(&shared, BrowserEvent::Captured { request, png })
+                                }
+                                Err(message) => emit(
+                                    &shared,
+                                    BrowserEvent::CaptureFailed {
+                                        request,
+                                        message: format!(
+                                            "the page could not be captured: {message}"
+                                        ),
+                                    },
+                                ),
+                            }
+                            Ok(())
+                        },
+                    ));
+                    webview
+                        .CapturePreview(
+                            COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                            &stream,
+                            &handler,
+                        )
+                        .map_err(|error| BrowserSurfaceError::Platform(error.to_string()))?;
+                }
             }
         }
         Ok(())
+    }
+}
+
+/// Reads the PNG bytes WebView2 wrote into one in-memory stream, bounded so a
+/// pathological page cannot turn a share into an unbounded allocation.
+unsafe fn stream_png(stream: &IStream) -> Result<Vec<u8>, String> {
+    const MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
+    unsafe {
+        let mut end = 0u64;
+        stream
+            .Seek(0, STREAM_SEEK_END, Some(&mut end))
+            .map_err(|error| error.to_string())?;
+        if end > MAX_CAPTURE_BYTES {
+            return Err(format!("the capture is {end} bytes; the limit is 64 MiB"));
+        }
+        stream
+            .Seek(0, STREAM_SEEK_SET, None)
+            .map_err(|error| error.to_string())?;
+        let mut bytes = vec![0u8; end as usize];
+        let mut read = 0u32;
+        if !bytes.is_empty() {
+            let hr = stream.Read(bytes.as_mut_ptr().cast(), end as u32, Some(&mut read));
+            if hr.is_err() {
+                return Err(windows::core::Error::from(hr).to_string());
+            }
+        }
+        bytes.truncate(read as usize);
+        Ok(bytes)
     }
 }
 

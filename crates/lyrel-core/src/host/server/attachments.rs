@@ -14,6 +14,10 @@ use super::output::Sink;
 pub struct AttachRegistry {
     live: Mutex<Vec<Live>>,
     guis: Mutex<Vec<GuiLive>>,
+    /// Control links that consume agent preview requests (#393). Separate
+    /// from `guis`: the desktop's remote link wants previews but must not
+    /// make a remote `GuiOpen` believe this machine runs a GUI.
+    previews: Mutex<Vec<GuiLive>>,
     handover: Mutex<()>,
 }
 
@@ -70,6 +74,52 @@ impl AttachRegistry {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|gui| gui.conn != conn);
+    }
+
+    fn register_preview(&self, conn: u64, sink: Arc<Sink>) {
+        let mut previews = self.previews.lock().unwrap_or_else(|e| e.into_inner());
+        previews.retain(|preview| preview.conn != conn);
+        previews.push(GuiLive { conn, sink });
+    }
+
+    fn unregister_preview(&self, conn: u64) {
+        self.previews
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|preview| preview.conn != conn);
+    }
+
+    /// Hands one agent-requested preview to every link that said it consumes
+    /// previews (#393). The event names the owning workspace; each receiving
+    /// GUI maps it through its own view record and refuses to guess a window.
+    /// Dead links are dropped here rather than being written to forever.
+    fn preview_open(&self, workspace: &str, pane: u64, url: &str, scratch: &str) -> usize {
+        let targets: Vec<(u64, Arc<Sink>)> = self
+            .previews
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|preview| (preview.conn, Arc::clone(&preview.sink)))
+            .collect();
+        let event = ControlServerMsg::Event(ControlEvent::PreviewOpen {
+            workspace: workspace.to_string(),
+            pane,
+            url: url.to_string(),
+            scratch: scratch.to_string(),
+        });
+        let mut delivered = 0;
+        let mut dead = Vec::new();
+        for (conn, sink) in targets {
+            if sink.send(&event).is_ok() {
+                delivered += 1;
+            } else {
+                dead.push(conn);
+            }
+        }
+        for conn in dead {
+            self.unregister_preview(conn);
+        }
+        delivered
     }
 
     fn open_gui(&self, path: Option<String>, workspace: Option<WorkspaceId>) -> bool {
@@ -210,6 +260,25 @@ impl ConnectionIdentity {
         self.registry.unregister_gui(self.id);
     }
 
+    pub(super) fn register_preview(&self) {
+        self.registry
+            .register_preview(self.id, Arc::clone(&self.holder.sink));
+    }
+
+    pub(super) fn unregister_preview(&self) {
+        self.registry.unregister_preview(self.id);
+    }
+
+    pub(super) fn preview_open(
+        &self,
+        workspace: &str,
+        pane: u64,
+        url: &str,
+        scratch: &str,
+    ) -> usize {
+        self.registry.preview_open(workspace, pane, url, scratch)
+    }
+
     pub(super) fn open_gui(&self, path: Option<String>, workspace: Option<WorkspaceId>) -> bool {
         self.registry.open_gui(path, workspace)
     }
@@ -344,6 +413,59 @@ mod gui_registry_tests {
 
         registry.unregister_gui(7);
         assert!(!registry.open_gui(None, None));
+    }
+
+    #[test]
+    fn previews_reach_every_preview_link_and_never_a_gui_launcher() {
+        let registry = AttachRegistry::default();
+        let preview_bytes = Arc::new(Mutex::new(Vec::new()));
+        let plain_bytes = Arc::new(Mutex::new(Vec::new()));
+        registry.register_preview(
+            7,
+            Arc::new(Sink::new(SharedWriter(Arc::clone(&preview_bytes)))),
+        );
+        registry.register_gui(
+            8,
+            Arc::new(Sink::new(SharedWriter(Arc::clone(&plain_bytes)))),
+        );
+
+        let workspace = WorkspaceId::new();
+        assert_eq!(
+            registry.preview_open(
+                &workspace.to_string(),
+                42,
+                "http://localhost:5173",
+                "/tmp/lyrel/previews"
+            ),
+            1,
+            "only the link that announced preview support receives it"
+        );
+        let frame = preview_bytes.lock().unwrap().clone();
+        assert_eq!(
+            ControlServerMsg::read(&mut Cursor::new(frame)).unwrap(),
+            ControlServerMsg::Event(ControlEvent::PreviewOpen {
+                workspace: workspace.to_string(),
+                pane: 42,
+                url: "http://localhost:5173".into(),
+                scratch: "/tmp/lyrel/previews".into(),
+            })
+        );
+        assert!(
+            plain_bytes.lock().unwrap().is_empty(),
+            "a GUI launcher is not a preview consumer unless it says so"
+        );
+
+        registry.unregister_preview(7);
+        assert_eq!(
+            registry.preview_open(
+                &workspace.to_string(),
+                42,
+                "http://localhost:5173",
+                "/tmp/lyrel/previews"
+            ),
+            0
+        );
+        assert!(registry.open_gui(None, None), "GUI registration is separate");
     }
 
     #[test]

@@ -1042,6 +1042,7 @@ mod tests {
                     address: "http://127.0.0.1:3000".into(),
                     host: None,
                     title: String::new(),
+                    source: None,
                 }),
                 TabEntryState::Tool(Scm),
             ],

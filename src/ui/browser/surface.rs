@@ -41,6 +41,19 @@ pub enum BrowserEvent {
     TitleChanged {
         title: String,
     },
+    /// The visible page was captured as PNG bytes for the explicit share
+    /// action (#393). `request` is the one the panel minted, so a slow answer
+    /// cannot be mistaken for a newer capture.
+    Captured {
+        request: u64,
+        png: Vec<u8>,
+    },
+    /// The page could not be captured. The page itself is still alive; the
+    /// composer shows why the share did not happen.
+    CaptureFailed {
+        request: u64,
+        message: String,
+    },
     /// The user asked for a new window (a `target=_blank`-style open with a
     /// user gesture behind it). The panel answers by opening a sibling tab
     /// bound to the same Host; the surface itself never creates a window.
@@ -91,6 +104,12 @@ pub enum BrowserCommand {
     /// until the panel verifies it and sets a new origin (#392).
     SetRouteGuard {
         guard: RouteGuard,
+    },
+    /// Capture the visible page as PNG for the explicit share action (#393).
+    /// The answer is [`BrowserEvent::Captured`] or
+    /// [`BrowserEvent::CaptureFailed`], carrying this request id back.
+    Capture {
+        request: u64,
     },
 }
 
@@ -422,6 +441,12 @@ impl BrowserSurfaceHost {
         match &mut self.inner {
             #[cfg(any(test, feature = "test-support"))]
             Inner::Test(surface) => {
+                if let BrowserCommand::Capture { request } = command {
+                    let _ = surface.events.try_send(BrowserEvent::Captured {
+                        request,
+                        png: test_support::CAPTURED_PNG.to_vec(),
+                    });
+                }
                 surface.commands.borrow_mut().push(command);
                 Ok(())
             }
@@ -443,6 +468,16 @@ impl BrowserSurfaceHost {
 // Dropping the host destroys the native child with it (each platform Host's
 // own Drop tears the WebView down) and closes the page: a closed tab's live
 // page is destroyed, never revived on restore.
+
+/// The automated surface's capture answer. The native hosts return real PNG
+/// bytes; this recognizable stand-in lets the panel's write-and-deliver path
+/// run end to end without a WebView (#393).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod test_support {
+    /// An 8-byte PNG signature, enough to prove the bytes written are the
+    /// ones the panel received rather than a path or a re-encoded copy.
+    pub(crate) const CAPTURED_PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+}
 
 #[cfg(windows)]
 mod windows_host;

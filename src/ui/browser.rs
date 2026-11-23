@@ -6,9 +6,9 @@
 //! entry points that open a page: the `+` menu, Search Everywhere, and a
 //! local terminal link's URL.
 //!
-//! What is deliberately not here: remote loopback forwarding and its
-//! reconnect flow (#392), and agent-requested previews with screenshot and
-//! feedback (#393). Both build on this module's tab model.
+//! Remote loopback forwarding and its reconnect flow live in [`route`] (#392);
+//! agent-requested previews and the explicit screenshot-and-feedback share
+//! live here as tab state and an opt-in composer (#393).
 //!
 //! The native surface contract lives in [`surface`]; the navigation policy
 //! in [`policy`]. There is no page → workbench bridge — the only things a
@@ -35,12 +35,16 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, Bounds, Context, Entity, Pixels, Subscription, Window, div, prelude::*, px,
+    AnyElement, Bounds, Context, Entity, Focusable as _, Pixels, Subscription, Window, div,
+    prelude::*, px,
 };
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 use crate::ui::app::LyrelApp;
 use crate::ui::right_panel::{PanelTab, ToolLayout, WebTab};
+use lyrel_core::core::session::{PreviewSourceState, WorkspaceId};
+use lyrel_terminal::view::{AgentPromptError, TerminalView};
+use lyrel_ui_base::host_ops::{HostId, SharedHost};
 
 /// One page's live runtime, keyed by its durable tab id in
 /// [`crate::ui::right_panel::RightPanelState::web_pages`]. Everything here is
@@ -80,6 +84,70 @@ pub(crate) struct WebPage {
     /// only talks to the native child when something changed.
     cover_synced: Option<bool>,
     pub(crate) load_error: Option<String>,
+    /// The explicit share of this page back to its agent (#393). Created on
+    /// the user's first share action, so a page nobody asked about carries no
+    /// input state.
+    pub(crate) feedback: Option<PreviewFeedback>,
+    /// The next capture id this page mints. A stale native answer must not
+    /// be mistaken for the share the user just asked for.
+    next_capture: u64,
+}
+
+/// The explicit share composer for one agent preview (#393).
+pub(crate) struct PreviewFeedback {
+    pub(crate) input: Entity<InputState>,
+    pub(crate) open: bool,
+    pub(crate) pending: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) notice: Option<String>,
+    /// Set after a successful send; the next render clears the field with
+    /// the `Window` this state was created with.
+    clear_draft: bool,
+    pending_capture: Option<CaptureJob>,
+    _subscription: Subscription,
+}
+
+struct CaptureJob {
+    request: u64,
+    feedback: String,
+}
+
+/// Why an explicit share cannot be handed to the remembered pane. Every arm
+/// is shown in the composer: silence would read as a delivered share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewTargetError {
+    WorkspaceChanged,
+    PaneGone,
+    PaneElsewhere,
+    HostMismatch,
+    HostDisconnected,
+    Exited,
+    Locked,
+}
+
+impl PreviewTargetError {
+    fn message(self, pane: u64) -> String {
+        let pane = format!("%{pane}");
+        match self {
+            Self::WorkspaceChanged => t(L10nKey::BrowserPreviewWorkspaceChanged).to_string(),
+            Self::PaneGone => t_fmt(L10nKey::BrowserPreviewPaneGone, &[("pane", &pane)]),
+            Self::PaneElsewhere => {
+                t_fmt(L10nKey::BrowserPreviewPaneElsewhere, &[("pane", &pane)])
+            }
+            Self::HostMismatch => t(L10nKey::BrowserPreviewHostMismatch).to_string(),
+            Self::HostDisconnected => t(L10nKey::BrowserPreviewHostDisconnected).to_string(),
+            Self::Exited => t_fmt(L10nKey::BrowserPreviewPaneExited, &[("pane", &pane)]),
+            Self::Locked => t_fmt(L10nKey::BrowserPreviewPaneLocked, &[("pane", &pane)]),
+        }
+    }
+
+    fn from_agent_prompt(error: AgentPromptError) -> Self {
+        match error {
+            AgentPromptError::Exited => Self::Exited,
+            AgentPromptError::HostDisconnected => Self::HostDisconnected,
+            AgentPromptError::Locked => Self::Locked,
+        }
+    }
 }
 
 /// The Host-bound route a page has at this moment (#392).
@@ -176,6 +244,8 @@ impl WebPage {
             surface_attempted: false,
             cover_synced: None,
             load_error: None,
+            feedback: None,
+            next_capture: 0,
         }
     }
 
@@ -269,6 +339,7 @@ impl LyrelApp {
             address: address.to_string(),
             title: String::new(),
             host,
+            source: None,
         };
         let tab_id = tab.id.clone();
         let mut layout = self.tool_layout();
@@ -285,6 +356,581 @@ impl LyrelApp {
             RouteState::Local
         };
         self.store_tool_layout(&layout, cx);
+        cx.notify();
+    }
+
+    /// Reveals one agent-requested preview in its own workspace (#393).
+    ///
+    /// Called only for the window that holds `source_workspace`. The Host
+    /// binding is read from this window's own `WorkspaceStore` record, never
+    /// from the event, so a remote preview inherits the verified route the
+    /// window already uses. The page is selected and the panel expands; no
+    /// focus call happens here, so the terminal keeps the keyboard and the
+    /// window is not activated. A second request from the same pane reuses
+    /// that pane's preview tab instead of growing the strip.
+    pub(crate) fn reveal_agent_preview(
+        &mut self,
+        source_workspace: WorkspaceId,
+        pane: u64,
+        address: &str,
+        scratch: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let address = address.trim();
+        if !lyrel_core::core::web::is_preview_address(address) {
+            return Err("an agent preview needs an absolute http(s) URL".to_string());
+        }
+        let host = lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, self.workspace);
+        let expected = match &host {
+            Some(host) if host.workspace == source_workspace => Some(host.clone()),
+            Some(_) => {
+                return Err("the requested preview belongs to another workspace".to_string());
+            }
+            None if source_workspace == self.workspace => None,
+            None => {
+                return Err("the requested preview belongs to another workspace".to_string());
+            }
+        };
+        let source = PreviewSourceState {
+            workspace: source_workspace,
+            pane,
+            scratch: scratch.to_string(),
+        };
+        let mut layout = self.tool_layout();
+        let existing = layout.order.iter().find_map(|entry| match entry {
+            PanelTab::Web(tab)
+                if tab.source.as_ref().is_some_and(|source| {
+                    source.pane == pane && source.workspace == source_workspace
+                }) =>
+            {
+                Some(tab.clone())
+            }
+            _ => None,
+        });
+        if let Some(existing) = existing {
+            let address_changed = existing.address != address;
+            let tab = WebTab {
+                id: existing.id.clone(),
+                address: address.to_string(),
+                title: String::new(),
+                host: expected,
+                source: Some(source),
+            };
+            for entry in &mut layout.order {
+                if matches!(entry, PanelTab::Web(open) if open.id == tab.id) {
+                    *entry = PanelTab::Web(tab.clone());
+                }
+            }
+            if matches!(&layout.active, PanelTab::Web(open) if open.id == tab.id) {
+                layout.active = PanelTab::Web(tab.clone());
+            }
+            layout.open = true;
+            let bound = tab.host.is_some();
+            if let Some(page) = self.right_panel.web_pages.get_mut(&tab.id) {
+                page.display_url = address.to_string();
+                if address_changed {
+                    page.load_error = None;
+                    page.live_title.clear();
+                    page.status = PageStatus::Starting;
+                    page.route = if bound {
+                        RouteState::Unverified
+                    } else {
+                        RouteState::Local
+                    };
+                }
+            }
+            self.store_tool_layout(&layout, cx);
+            if address_changed {
+                self.navigate_web_tab(&tab.id, address, cx);
+            }
+            cx.notify();
+            return Ok(());
+        }
+        let bound = expected.is_some();
+        let tab = WebTab {
+            id: self.new_web_tab_id(),
+            address: address.to_string(),
+            title: String::new(),
+            host: expected,
+            source: Some(source),
+        };
+        let tab_id = tab.id.clone();
+        layout.show_web(tab);
+        let page = self
+            .right_panel
+            .web_pages
+            .entry(tab_id)
+            .or_insert_with(WebPage::new);
+        page.display_url = address.to_string();
+        page.route = if bound {
+            RouteState::Unverified
+        } else {
+            RouteState::Local
+        };
+        self.store_tool_layout(&layout, cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// The source chip on the preview's chrome: which pane asked, and whether
+    /// that pane can still receive a share. The closed form is visible even
+    /// before the user tries to send.
+    pub(crate) fn agent_preview_source_label(
+        &self,
+        tab: &WebTab,
+        cx: &gpui_kit::App,
+    ) -> Option<gpui_kit::SharedString> {
+        let source = tab.source.as_ref()?;
+        let pane = format!("%{}", source.pane);
+        let available = self.preview_target(tab, source, cx).is_ok();
+        let key = if available {
+            L10nKey::BrowserPreviewSource
+        } else {
+            L10nKey::BrowserPreviewSourceMissing
+        };
+        Some(t_fmt(key, &[("pane", &pane)]).into())
+    }
+
+    /// Resolves the remembered source pane to a live view on the preview's
+    /// verified Host. Every check the share depends on is here: window
+    /// workspace, pane ownership, Host route, connection, and whether the
+    /// pane's stream can take input at all.
+    fn preview_target(
+        &self,
+        tab: &WebTab,
+        source: &PreviewSourceState,
+        cx: &gpui_kit::App,
+    ) -> Result<(Entity<TerminalView>, SharedHost), PreviewTargetError> {
+        let window_host = lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, self.workspace);
+        if window_host != tab.host {
+            return Err(PreviewTargetError::WorkspaceChanged);
+        }
+        let source_workspace_matches = match &tab.host {
+            Some(host) => source.workspace == host.workspace,
+            None => source.workspace == self.workspace,
+        };
+        if !source_workspace_matches {
+            return Err(PreviewTargetError::WorkspaceChanged);
+        }
+        let expected = tab
+            .host
+            .as_ref()
+            .map(|host| host.host_id())
+            .unwrap_or(HostId::LOCAL);
+        let view = self
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.pane.terminals())
+            .find(|view| view.read(cx).pane_id == source.pane)
+            .ok_or(PreviewTargetError::PaneGone)?;
+        let terminal = view.read(cx);
+        if terminal
+            .owner_workspace()
+            .is_some_and(|workspace| workspace != self.workspace)
+        {
+            return Err(PreviewTargetError::PaneElsewhere);
+        }
+        let on_the_preview_host = match &tab.host {
+            Some(host) => {
+                terminal.host_id() == host.host_id()
+                    && terminal.workspace().is_some_and(|workspace| {
+                        workspace.workspace == source.workspace
+                            && workspace.target.host_id() == host.host_id()
+                    })
+            }
+            None => terminal.host_id().is_local(),
+        };
+        if !on_the_preview_host {
+            return Err(if terminal.host_id() != expected {
+                PreviewTargetError::HostMismatch
+            } else {
+                PreviewTargetError::PaneElsewhere
+            });
+        }
+        let host = terminal
+            .host(cx)
+            .ok_or(PreviewTargetError::HostDisconnected)?;
+        if host.id() != expected {
+            return Err(PreviewTargetError::HostMismatch);
+        }
+        if !host.is_connected() {
+            return Err(PreviewTargetError::HostDisconnected);
+        }
+        if let Some(error) = terminal.agent_prompt_error(cx) {
+            return Err(PreviewTargetError::from_agent_prompt(error));
+        }
+        Ok((view, host))
+    }
+
+    /// Opens the explicit share composer on `tab_id`, creating its field on
+    /// first use. This is a user action, so it may take the keyboard.
+    pub(crate) fn browser_preview_feedback_open(
+        &mut self,
+        tab_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        if tab.source.is_none() {
+            return;
+        }
+        let placeholder = t(L10nKey::BrowserPreviewFeedbackPlaceholder).to_string();
+        let submit_tab = tab_id.to_string();
+        let page = self
+            .right_panel
+            .web_pages
+            .entry(tab_id.to_string())
+            .or_insert_with(WebPage::new);
+        if page.feedback.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+            let subscription = cx.subscribe_in(
+                &input,
+                window,
+                move |app, _input, event, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        app.browser_preview_feedback_send(&submit_tab, window, cx);
+                    }
+                },
+            );
+            page.feedback = Some(PreviewFeedback {
+                input,
+                open: true,
+                pending: false,
+                error: None,
+                notice: None,
+                clear_draft: false,
+                pending_capture: None,
+                _subscription: subscription,
+            });
+        }
+        let input = {
+            let feedback = page.feedback.as_mut().expect("feedback was just ensured");
+            feedback.open = true;
+            if !feedback.pending {
+                feedback.error = None;
+            }
+            feedback.input.clone()
+        };
+        window.focus(&input.read(cx).focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    pub(crate) fn browser_preview_feedback_cancel(
+        &mut self,
+        tab_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(feedback) = self
+            .right_panel
+            .web_pages
+            .get_mut(tab_id)
+            .and_then(|page| page.feedback.as_mut())
+        {
+            feedback.open = false;
+            feedback.pending = false;
+            feedback.pending_capture = None;
+            feedback.error = None;
+            feedback.notice = None;
+        }
+        cx.notify();
+    }
+
+    fn set_preview_feedback_error(
+        &mut self,
+        tab_id: &str,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(feedback) = self
+            .right_panel
+            .web_pages
+            .get_mut(tab_id)
+            .and_then(|page| page.feedback.as_mut())
+        {
+            feedback.pending = false;
+            feedback.pending_capture = None;
+            feedback.error = Some(message);
+        }
+        cx.notify();
+    }
+
+    /// The explicit send: verify the source, then ask the surface for one
+    /// screenshot. Nothing is written or delivered until that answer arrives,
+    /// and both steps are owned by this one click.
+    pub(crate) fn browser_preview_feedback_send(
+        &mut self,
+        tab_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let Some(source) = tab.source.clone() else {
+            self.set_preview_feedback_error(
+                tab_id,
+                t(L10nKey::BrowserPreviewNoSource).to_string(),
+                cx,
+            );
+            return;
+        };
+        if let Some(feedback) = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .and_then(|page| page.feedback.as_ref())
+            && feedback.pending
+        {
+            return;
+        }
+        if let Err(error) = self.preview_target(&tab, &source, cx) {
+            self.set_preview_feedback_error(tab_id, error.message(source.pane), cx);
+            return;
+        }
+        let feedback_text = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .and_then(|page| page.feedback.as_ref())
+            .map(|feedback| feedback.input.read(cx).value().to_string())
+            .unwrap_or_default();
+        let request = {
+            let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
+                return;
+            };
+            page.next_capture = page.next_capture.wrapping_add(1);
+            let request = page.next_capture;
+            let Some(feedback) = page.feedback.as_mut() else {
+                return;
+            };
+            feedback.pending = true;
+            feedback.error = None;
+            feedback.notice = None;
+            feedback.pending_capture = Some(CaptureJob {
+                request,
+                feedback: feedback_text.trim().to_string(),
+            });
+            request
+        };
+        let command = self
+            .right_panel
+            .web_pages
+            .get_mut(tab_id)
+            .and_then(|page| page.surface.as_mut())
+            .map(|surface| surface.command(BrowserCommand::Capture { request }))
+            .unwrap_or_else(|| {
+                Err(surface::BrowserSurfaceError::Platform(
+                    "the browser surface is not running".to_string(),
+                ))
+            });
+        if let Err(error) = command {
+            self.set_preview_feedback_error(
+                tab_id,
+                t_fmt(
+                    L10nKey::BrowserPreviewCaptureUnavailable,
+                    &[("error", &error.to_string())],
+                ),
+                cx,
+            );
+            return;
+        }
+        cx.notify();
+    }
+
+    fn preview_capture_failed(
+        &mut self,
+        tab_id: &str,
+        request: u64,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        let matches = self
+            .right_panel
+            .web_pages
+            .get_mut(tab_id)
+            .and_then(|page| page.feedback.as_mut())
+            .filter(|feedback| {
+                feedback
+                    .pending_capture
+                    .as_ref()
+                    .is_some_and(|job| job.request == request)
+            });
+        let Some(feedback) = matches else {
+            return;
+        };
+        feedback.pending = false;
+        feedback.pending_capture = None;
+        feedback.error = Some(t_fmt(
+            L10nKey::BrowserPreviewCaptureFailed,
+            &[("error", &message)],
+        ));
+        cx.notify();
+    }
+
+    /// A screenshot arrived for the share the user asked for. The bytes are
+    /// written through the pane's own Host (which may be remote), then the
+    /// prompt is delivered only if the pane still passes the same checks.
+    fn preview_capture_ready(
+        &mut self,
+        tab_id: &str,
+        request: u64,
+        png: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
+        let job = {
+            let Some(feedback) = self
+                .right_panel
+                .web_pages
+                .get_mut(tab_id)
+                .and_then(|page| page.feedback.as_mut())
+            else {
+                return;
+            };
+            let Some(job) = feedback
+                .pending_capture
+                .take()
+                .filter(|job| job.request == request)
+            else {
+                return;
+            };
+            feedback.pending = false;
+            job
+        };
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let Some(source) = tab.source.clone() else {
+            return;
+        };
+        let host = match self.preview_target(&tab, &source, cx) {
+            Ok((_, host)) => host,
+            Err(error) => {
+                self.set_preview_feedback_error(tab_id, error.message(source.pane), cx);
+                return;
+            }
+        };
+        let scratch = std::path::PathBuf::from(&source.scratch);
+        if !host.is_absolute(&scratch) {
+            self.set_preview_feedback_error(
+                tab_id,
+                t(L10nKey::BrowserPreviewScratchInvalid).to_string(),
+                cx,
+            );
+            return;
+        }
+        let file_name = format!(
+            "preview-{}-{}.png",
+            source.pane,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or_default()
+        );
+        let pane = source.pane;
+        let feedback = job.feedback;
+        let tab = tab_id.to_string();
+        lyrel_ui_base::host_ops::HostOps::run(
+            host,
+            cx,
+            move |host| {
+                let file = host.join(&scratch, &file_name);
+                host.create_dir(&scratch, true)?;
+                host.write_file(&file, &png)?;
+                Ok(file)
+            },
+            move |app, result, cx| {
+                app.preview_share_landed(&tab, pane, feedback, result, cx);
+            },
+        );
+        cx.notify();
+    }
+
+    fn preview_share_landed(
+        &mut self,
+        tab_id: &str,
+        pane: u64,
+        feedback: String,
+        result: std::io::Result<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match result {
+            Ok(path) => path,
+            Err(error) => {
+                self.set_preview_feedback_error(
+                    tab_id,
+                    t_fmt(
+                        L10nKey::BrowserPreviewWriteFailed,
+                        &[("error", &error.to_string())],
+                    ),
+                    cx,
+                );
+                return;
+            }
+        };
+        let path_text = path.to_string_lossy().into_owned();
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let Some(source) = tab.source.clone() else {
+            return;
+        };
+        let address = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .map(|page| {
+                if page.display_url.is_empty() {
+                    tab.address.clone()
+                } else {
+                    page.display_url.clone()
+                }
+            })
+            .unwrap_or_else(|| tab.address.clone());
+        let prompt = crate::core::agent_prompt::build_preview_feedback_prompt(
+            &feedback,
+            Some(&path_text),
+            &address,
+        );
+        let target = self.preview_target(&tab, &source, cx);
+        let outcome = match (target, prompt) {
+            (Ok((view, _)), Some(prompt)) => {
+                view.read(cx).deliver_agent_prompt(&prompt, cx).map_err(|error| {
+                    PreviewTargetError::from_agent_prompt(error).message(source.pane)
+                })
+            }
+            (Err(error), _) => Err(error.message(source.pane)),
+            (Ok(_), None) => Err(t(L10nKey::BrowserPreviewNoSource).to_string()),
+        };
+        let Some(share) = self
+            .right_panel
+            .web_pages
+            .get_mut(tab_id)
+            .and_then(|page| page.feedback.as_mut())
+        else {
+            return;
+        };
+        share.pending = false;
+        match outcome {
+            Ok(()) => {
+                let sent = t_fmt(
+                    L10nKey::BrowserPreviewSent,
+                    &[("pane", &format!("%{pane}"))],
+                );
+                share.notice = Some(sent);
+                share.error = None;
+                share.clear_draft = true;
+            }
+            Err(reason) => {
+                let saved = t_fmt(
+                    L10nKey::BrowserPreviewSavedUnsent,
+                    &[("path", &path_text), ("reason", &reason)],
+                );
+                share.error = Some(saved);
+                share.notice = None;
+            }
+        }
         cx.notify();
     }
 
@@ -873,6 +1519,12 @@ impl LyrelApp {
                     }
                 }
             }
+            BrowserEvent::Captured { request, png } => {
+                self.preview_capture_ready(tab_id, request, png, cx);
+            }
+            BrowserEvent::CaptureFailed { request, message } => {
+                self.preview_capture_failed(tab_id, request, message, cx);
+            }
             BrowserEvent::TitleChanged { title } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                     page.live_title = title.clone();
@@ -1286,6 +1938,40 @@ pub(crate) fn render_browser_page(
     } else {
         display_url
     };
+    // A successful share asks the next render to clear the field; this is
+    // the first moment a `Window` is available to do it.
+    if let Some(feedback) = app
+        .right_panel
+        .web_pages
+        .get_mut(&tab.id)
+        .and_then(|page| page.feedback.as_mut())
+        && feedback.clear_draft
+    {
+        feedback.clear_draft = false;
+        let input = feedback.input.clone();
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+    }
+    let source_label = app.agent_preview_source_label(tab, cx);
+    let source_tip = tab.source.as_ref().map(|source| {
+        t_fmt(
+            L10nKey::BrowserPreviewSourceTip,
+            &[("pane", &format!("%{}", source.pane))],
+        )
+    });
+    let feedback_view = app
+        .right_panel
+        .web_pages
+        .get(&tab.id)
+        .and_then(|page| page.feedback.as_ref())
+        .filter(|feedback| feedback.open)
+        .map(|feedback| {
+            (
+                feedback.input.clone(),
+                feedback.pending,
+                feedback.error.clone(),
+                feedback.notice.clone(),
+            )
+        });
     let covered = app.native_surface_covered(window.window_handle().window_id(), cx);
 
     if app.browser_chrome.is_none() {
@@ -1319,6 +2005,17 @@ pub(crate) fn render_browser_page(
                     action(this, &tab_id, cx);
                 }))
         };
+
+    let share_button = tab.source.as_ref().map(|_| {
+        let tab_id = tab.id.clone();
+        Button::new("browser-preview-share")
+            .label(t(L10nKey::BrowserPreviewShare))
+            .small()
+            .tooltip(t(L10nKey::BrowserPreviewShareTip))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.browser_preview_feedback_open(&tab_id, window, cx);
+            }))
+    });
 
     let toolbar = h_flex()
         .id("browser-chrome")
@@ -1385,6 +2082,27 @@ pub(crate) fn render_browser_page(
                 .text_color(muted)
                 .child(browser_host_label(tab)),
         )
+        .children(source_label.map(|label| {
+            div()
+                .id("browser-preview-source")
+                .test_support()
+                .flex_none()
+                .px_2()
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .rounded(px(5.))
+                .bg(cx.theme().muted)
+                .text_xs()
+                .text_color(muted)
+                .when_some(source_tip, |chip, tip| {
+                    chip.tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                })
+                .child(label)
+        }))
+        .children(share_button)
         .child(icon_button(
             "browser-external",
             IconName::ExternalLink,
@@ -1419,11 +2137,100 @@ pub(crate) fn render_browser_page(
         .id("browser-surface-anchor")
         .test_support();
 
+    let feedback_row = feedback_view.map(|(feedback_input, pending, error, notice)| {
+        let tab_id = tab.id.clone();
+        let cancel_id = tab.id.clone();
+        let pane = tab
+            .source
+            .as_ref()
+            .map(|source| format!("%{}", source.pane))
+            .unwrap_or_default();
+        let send_label: gpui_kit::SharedString = if pending {
+            t(L10nKey::BrowserPreviewSending).to_string().into()
+        } else {
+            t_fmt(L10nKey::BrowserPreviewSend, &[("pane", &pane)]).into()
+        };
+        v_flex()
+            .id("browser-preview-feedback")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(26.))
+                            .px_2()
+                            .rounded(px(6.))
+                            .bg(cx.theme().muted)
+                            .flex()
+                            .items_center()
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&feedback_input)
+                                        .appearance(false)
+                                        .xsmall()
+                                        .cleanable(false),
+                                ),
+                            ),
+                    )
+                    .child(
+                        Button::new("browser-preview-send")
+                            .label(send_label)
+                            .small()
+                            .disabled(pending)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.browser_preview_feedback_send(&tab_id, window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("browser-preview-cancel")
+                            .label(t(L10nKey::BrowserPreviewCancel))
+                            .small()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.browser_preview_feedback_cancel(&cancel_id, cx);
+                            })),
+                    ),
+            )
+            .when_some(error, |col, error| {
+                col.child(
+                    div()
+                        .id("browser-preview-feedback-error")
+                        .test_support()
+                        .max_w_full()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            })
+            .when_some(notice, |col, notice| {
+                col.child(
+                    div()
+                        .id("browser-preview-feedback-notice")
+                        .test_support()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(notice),
+                )
+            })
+    });
+
     v_flex()
         .flex_1()
         .min_w_0()
         .min_h_0()
         .child(toolbar)
+        .children(feedback_row)
         .child(
             div()
                 .flex_1()

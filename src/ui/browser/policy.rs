@@ -29,14 +29,14 @@ const SCHEME_SEP: &str = "://";
 
 /// Classifies one address for the browser surface.
 ///
-/// The route itself is [`lyrel_protocol::core::web::classify`], shared with
+/// The route itself is [`lyrel_core::core::web::classify`], shared with
 /// the CLI and daemon that validate an agent's preview request; this wrapper
 /// only names the GUI's own type.
 pub(crate) fn classify(address: &str) -> Route {
-    match lyrel_protocol::core::web::classify(address) {
-        lyrel_protocol::core::web::WebRoute::Load => Route::Load,
-        lyrel_protocol::core::web::WebRoute::Blank => Route::Blank,
-        lyrel_protocol::core::web::WebRoute::Deny => Route::Deny,
+    match lyrel_core::core::web::classify(address) {
+        lyrel_core::core::web::WebRoute::Load => Route::Load,
+        lyrel_core::core::web::WebRoute::Blank => Route::Blank,
+        lyrel_core::core::web::WebRoute::Deny => Route::Deny,
     }
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn loopback_origin(address: &str) -> Option<String> {
 
 /// Whether `address` spells the built-in blank page.
 pub(crate) fn is_blank(address: &str) -> bool {
-    lyrel_protocol::core::web::is_blank(address)
+    lyrel_core::core::web::is_blank(address)
 }
 
 /// Completes what the user typed into an absolute URL the surface can load.

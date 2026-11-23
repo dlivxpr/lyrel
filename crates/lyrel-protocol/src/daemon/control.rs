@@ -434,8 +434,10 @@ pub enum ControlRequest {
     /// pane it does not serve. The GUI reveals the page without taking
     /// keyboard focus or activating a window. `scratch` is an absolute
     /// directory on that pane's Host where the explicit user share action
-    /// may later write a screenshot; it is chosen by the requesting process
-    /// on the Host it runs on, never by a web page.
+    /// may later write a screenshot; the owning daemon accepts an absolute
+    /// path from its caller and otherwise resolves one in its own temporary
+    /// directory, so a client routed through `-m` never guesses another
+    /// machine's paths. A web page never supplies it.
     PreviewOpen {
         pane: u64,
         url: String,
