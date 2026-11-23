@@ -20,9 +20,50 @@ fn the_handshake_describes_this_server() {
     assert!(peer.has_feature(feature::HOST_RPC));
     assert!(peer.has_feature(feature::CONTENT_SEARCH));
     assert!(
+        peer.has_feature(feature::GIT_BLOB),
+        "the content-aware Diff asks this name before sending a version read"
+    );
+    assert!(
         !peer.home.is_empty(),
         "the server's $HOME backs `new workspace in ~`"
     );
+}
+
+#[test]
+fn a_bounded_git_blob_crosses_the_control_server() {
+    use crate::host::Host as _;
+
+    let p = pair();
+    let temp = tempfile::TempDir::new().unwrap();
+    let root = temp.path();
+    let git = |args: &[&str]| {
+        let out = p.host.git(root, args).unwrap();
+        assert!(
+            out.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "--quiet", "-b", "main"]);
+    git(&["config", "core.autocrlf", "false"]);
+
+    let file = p.host.join(root, "a.rs");
+    p.host.write_file(&file, b"fn v1() {}\n").unwrap();
+    git(&["add", "a.rs"]);
+    p.host.write_file(&file, b"fn v3() {}\n").unwrap();
+
+    assert_eq!(
+        p.host.git_blob(root, ":a.rs", 1024).unwrap().unwrap(),
+        b"fn v1() {}\n",
+        "the server answers the index side the client asked for"
+    );
+    assert_eq!(
+        p.host.git_blob(root, "HEAD:a.rs", 1024).unwrap(),
+        None,
+        "an unborn revision has no side"
+    );
+    let error = p.host.git_blob(root, ":a.rs", 4).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge, "{error}");
 }
 
 #[test]

@@ -644,6 +644,52 @@ impl Host for RemoteHost {
         }
     }
 
+    fn git_blob(&self, cwd: &Path, spec: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+        guard_off_ui();
+        // A peer that never announced the request would take the link down
+        // decoding it. Asking `git show` instead would transfer an unbounded
+        // object, so the missing capability is the answer: the content-aware
+        // Diff keeps its line fallback and names the reason.
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::GIT_BLOB)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot send one revision-addressed file version; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        let got = self.client.call_full(
+            ControlRequest::GitBlob {
+                cwd: wire_path(cwd),
+                spec: spec.to_string(),
+                max_bytes,
+            },
+            &[],
+        )?;
+        match got.reply {
+            ReplyOk::GitBlob { present, len } => match present {
+                false => Ok(None),
+                true => {
+                    if len > max_bytes || got.blob.len() as u64 != len {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "control peer sent {} bytes for a {len}-byte file version (limit {max_bytes})",
+                                got.blob.len()
+                            ),
+                        ));
+                    }
+                    Ok(Some(got.blob))
+                }
+            },
+            other => Err(wrong_shape("one file version", &other)),
+        }
+    }
+
     fn git_with_deadline(
         &self,
         cwd: &Path,
@@ -2634,6 +2680,95 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
         assert!(e.to_string().contains("900 MB"));
+    }
+
+    #[test]
+    fn a_bounded_git_blob_is_one_request_and_one_blob_reply() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let body = b"fn v1() {}\n".to_vec();
+        let served = body.clone();
+        let (host, seen) = host_with_peer_announcing('/', &[GIT_BLOB], move |req| match req {
+            ControlRequest::GitBlob {
+                cwd,
+                spec,
+                max_bytes,
+            } => {
+                assert_eq!(cwd, "/repo");
+                assert_eq!(spec, ":src/a.rs");
+                assert_eq!(*max_bytes, 4096);
+                Some((
+                    ControlReply::Ok(ReplyOk::GitBlob {
+                        present: true,
+                        len: served.len() as u64,
+                    }),
+                    served.clone(),
+                ))
+            }
+            other => panic!("unexpected request {other:?}"),
+        });
+
+        let bytes = host
+            .git_blob(Path::new("/repo"), ":src/a.rs", 4096)
+            .unwrap()
+            .expect("the version exists");
+        assert_eq!(bytes, body);
+        assert!(matches!(
+            seen.recv().unwrap(),
+            ControlRequest::GitBlob { .. }
+        ));
+    }
+
+    #[test]
+    fn an_absent_git_blob_side_is_none_not_an_error() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let (host, _seen) = host_with_peer_announcing('/', &[GIT_BLOB], |req| match req {
+            ControlRequest::GitBlob { .. } => Some((
+                ControlReply::Ok(ReplyOk::GitBlob {
+                    present: false,
+                    len: 0,
+                }),
+                vec![],
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        assert_eq!(
+            host.git_blob(Path::new("/repo"), "HEAD:missing.rs", 4096)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_peer_without_git_blob_is_never_asked() {
+        let (host, seen) = host_with_peer('/', |_| None);
+        let error = host
+            .git_blob(Path::new("/repo"), ":a.rs", 4096)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}");
+        assert!(error.to_string().contains("update lyrel-server"), "{error}");
+        assert!(
+            seen.try_recv().is_err(),
+            "a request an older peer cannot decode must never be sent"
+        );
+    }
+
+    #[test]
+    fn a_git_blob_reply_that_breaks_its_own_bound_is_refused() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let (host, _seen) = host_with_peer_announcing('/', &[GIT_BLOB], |req| match req {
+            ControlRequest::GitBlob { .. } => Some((
+                ControlReply::Ok(ReplyOk::GitBlob {
+                    present: true,
+                    len: 99,
+                }),
+                b"short".to_vec(),
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        let error = host
+            .git_blob(Path::new("/repo"), ":a.rs", 4096)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
     }
 
     #[test]

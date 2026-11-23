@@ -262,6 +262,26 @@ fn run_request(
                 .start(&conn.host, &conn.sink, id, p(&cwd), args);
             (ReplyOk::Unit, Vec::new())
         }
+        ControlRequest::GitBlob {
+            cwd,
+            spec,
+            max_bytes,
+        } => match conn.host.git_blob(&p(&cwd), &spec, max_bytes)? {
+            Some(bytes) => (
+                ReplyOk::GitBlob {
+                    present: true,
+                    len: bytes.len() as u64,
+                },
+                bytes,
+            ),
+            None => (
+                ReplyOk::GitBlob {
+                    present: false,
+                    len: 0,
+                },
+                Vec::new(),
+            ),
+        },
 
         ControlRequest::Shells => (ReplyOk::Shells(h.shells()?), Vec::new()),
         ControlRequest::AgentSessions { directory } => (

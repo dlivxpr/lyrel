@@ -101,6 +101,10 @@ pub(crate) enum ContentFailure {
     ParseFailed,
     /// The Host could not supply the bytes.
     ReadFailed,
+    /// The remote Host's server cannot send revision-addressed versions, so
+    /// the bounded read has no route. This is a capability gap, not a read
+    /// failure: the server needs updating.
+    RemoteUnsupported,
 }
 
 impl ContentFailure {
@@ -111,6 +115,7 @@ impl ContentFailure {
             ContentFailure::OverBudget => L10nKey::DiffContentOverBudget,
             ContentFailure::ParseFailed => L10nKey::DiffContentParseFailed,
             ContentFailure::Binary | ContentFailure::ReadFailed => L10nKey::DiffContentReadFailed,
+            ContentFailure::RemoteUnsupported => L10nKey::DiffContentRemoteUnsupported,
         }
     }
 }
@@ -252,7 +257,11 @@ fn read_side(
 ) -> Result<Vec<u8>, ContentFailure> {
     let limit = MAX_FILE_BYTES as u64;
     match spec {
-        VersionSpec::Worktree => match host.read_file(&root.join(path), limit) {
+        // The path is on the Host, whose separator need not be this
+        // process's: a Linux checkout read from a Windows desktop is still
+        // `/home/me/repo`. `Path::join` would spell it with `\\` before the
+        // wire ever saw it.
+        VersionSpec::Worktree => match host.read_file(&host.join(root, path), limit) {
             Ok(bytes) => Ok(bytes),
             // A deleted file's new side is empty, exactly as git defines a
             // deletion; the snapshot still lists it so the block can show
@@ -260,13 +269,12 @@ fn read_side(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(match error.kind() {
                 std::io::ErrorKind::FileTooLarge => ContentFailure::OverBudget,
+                std::io::ErrorKind::Unsupported => ContentFailure::RemoteUnsupported,
                 _ => ContentFailure::ReadFailed,
             }),
         },
-        VersionSpec::Index => Ok(git_show(host, root, &format!(":{path}"))?.unwrap_or_default()),
-        VersionSpec::Rev(rev) => {
-            Ok(git_show(host, root, &format!("{rev}:{path}"))?.unwrap_or_default())
-        }
+        VersionSpec::Index => read_git_side(host, root, &format!(":{path}")),
+        VersionSpec::Rev(rev) => read_git_side(host, root, &format!("{rev}:{path}")),
         VersionSpec::MergeBase { base, head } => {
             let out = host
                 .git(root, &["merge-base", base, head])
@@ -278,28 +286,34 @@ fn read_side(
             if merge_base.is_empty() {
                 return Err(ContentFailure::ReadFailed);
             }
-            Ok(git_show(host, root, &format!("{merge_base}:{path}"))?.unwrap_or_default())
+            read_git_side(host, root, &format!("{merge_base}:{path}"))
         }
     }
 }
 
-/// `git show <spec>` bytes, bounded. `Ok(None)` means the side does not
-/// exist in that revision.
-fn git_show(
+/// One revision-addressed side, bounded on the owning Host. `Ok(None)` means
+/// the side does not exist in that revision, which Git defines as empty.
+fn read_git_side(
     host: &dyn lyrel_core::host::Host,
     root: &Path,
     spec: &str,
-) -> Result<Option<Vec<u8>>, ContentFailure> {
-    let out = host
-        .git(root, &["show", spec])
-        .map_err(|_| ContentFailure::ReadFailed)?;
-    if !out.success() {
-        return Ok(None);
+) -> Result<Vec<u8>, ContentFailure> {
+    match host.git_blob(root, spec, MAX_FILE_BYTES as u64) {
+        Ok(Some(bytes)) => Ok(bytes),
+        Ok(None) => Ok(Vec::new()),
+        Err(error) => Err(git_read_failure(error)),
     }
-    if out.stdout.len() > MAX_FILE_BYTES {
-        return Err(ContentFailure::OverBudget);
+}
+
+/// What a failed bounded version read means to the view. A transport without
+/// the capability is its own reason; a budget refusal is the existing
+/// over-budget fallback; everything else is an ordinary read failure.
+fn git_read_failure(error: std::io::Error) -> ContentFailure {
+    match error.kind() {
+        std::io::ErrorKind::Unsupported => ContentFailure::RemoteUnsupported,
+        std::io::ErrorKind::FileTooLarge => ContentFailure::OverBudget,
+        _ => ContentFailure::ReadFailed,
     }
-    Ok(Some(out.stdout))
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
@@ -612,6 +626,43 @@ mod tests {
             ..a.clone()
         };
         assert_ne!(a, d);
+        // Two commits are two revisions however much they share; a result
+        // for one can never fill the other.
+        let first = ContentFetchKey {
+            source: DiffSource::commit("aaaa"),
+            ..a.clone()
+        };
+        let second = ContentFetchKey {
+            source: DiffSource::commit("bbbb"),
+            ..a
+        };
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_failed_version_read_keeps_the_reason_it_found() {
+        assert_eq!(
+            git_read_failure(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "the peer cannot send one version"
+            )),
+            ContentFailure::RemoteUnsupported,
+            "a capability gap is not an ordinary read failure"
+        );
+        assert_eq!(
+            git_read_failure(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "over the budget"
+            )),
+            ContentFailure::OverBudget
+        );
+        assert_eq!(
+            git_read_failure(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "link down"
+            )),
+            ContentFailure::ReadFailed
+        );
     }
 
     #[test]
@@ -631,6 +682,10 @@ mod tests {
         assert_eq!(
             ContentFailure::ParseFailed.message(),
             L10nKey::DiffContentParseFailed
+        );
+        assert_eq!(
+            ContentFailure::RemoteUnsupported.message(),
+            L10nKey::DiffContentRemoteUnsupported
         );
     }
 }
