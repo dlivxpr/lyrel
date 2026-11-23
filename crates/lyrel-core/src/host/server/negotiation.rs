@@ -31,6 +31,10 @@ pub(super) fn handshake<R: Read>(
         feature::HOST_RPC.to_string(),
         feature::READ_LINK.to_string(),
         feature::FILE_RANGE.to_string(),
+        // The request is part of this server's control surface; a Host that
+        // cannot answer refuses per request with `Unsupported`. Advertising
+        // the name means an older peer is never sent the request.
+        feature::GIT_BLOB.to_string(),
         // Read-only browsing is part of this server's control surface. A Host
         // that cannot answer still refuses per request with `Unsupported`;
         // advertising the name means an old peer is never sent the request.
@@ -41,6 +45,7 @@ pub(super) fn handshake<R: Read>(
         // it (see `RemoteHost::search_content`).
         feature::CONTENT_SEARCH.to_string(),
         feature::SESSION_OPERATIONS.to_string(),
+        feature::ANTIGRAVITY.to_string(),
         feature::HERMES_HISTORY.to_string(),
         feature::HERMES_STATISTICS.to_string(),
         feature::OPENCODE_STATISTICS.to_string(),

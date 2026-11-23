@@ -17,6 +17,13 @@
 //! #403 adds the remaining overlays — Park fan, inbox popover, dialogs,
 //! context menus — as more `CoverSource` variants on this one choke point.
 
+use std::collections::HashMap;
+
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::{
+    App, DismissEvent, EntityId, Focusable as _, Global, Subscription, WeakEntity, WindowId,
+};
+
 /// One overlay that takes visual and input precedence over the window's
 /// native surfaces while it is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +32,16 @@ pub(crate) enum CoverSource {
     SearchEverywhere,
     /// The Side Panel `+` add menu (the browser-relevant menu of #391).
     ToolAddMenu,
+    /// The Park fan, its overflow list or its preview card.
+    ParkFan,
+    /// The warm drop target a tiled or picture-in-picture pane drag reveals.
+    ParkDropTarget,
+    /// The notification bell's inbox popover.
+    InboxPopover,
+    /// The right Side Panel's open/close slide.
+    SidePanelTransition,
+    /// The right panel's incoming-page entrance after a tool switch.
+    ToolSwitch,
 }
 
 /// The set of covers currently active in this window. Counted per source,
@@ -65,6 +82,109 @@ impl SurfaceCoordinator {
     }
 }
 
+/// The open `PopupMenu` entities of this `App`, one list for every window.
+///
+/// A menu is an in-window deferred draw, so it paints *under* a native child
+/// surface just like any other overlay. The menu's own focus handle is the
+/// reliable open signal: the library focuses a top-level menu when it opens
+/// and restores the previous focus when it dismisses, while a submenu is
+/// created without taking focus. A menu entity can outlive its dismissal
+/// inside a trigger's element state, so counting creations would keep the
+/// page hidden forever; asking focus per window cannot.
+#[derive(Default)]
+pub(crate) struct PopupMenus {
+    menus: Vec<WeakEntity<PopupMenu>>,
+    subscriptions: HashMap<EntityId, Subscription>,
+}
+
+impl Global for PopupMenus {}
+
+/// Installs the one `PopupMenu` observer for this `App`. Idempotent so every
+/// window opened into the same process shares one list.
+pub(crate) fn install_popup_menu_presence(cx: &mut App) {
+    if cx.has_global::<PopupMenus>() {
+        return;
+    }
+    cx.set_global(PopupMenus::default());
+    cx.observe_new::<PopupMenu>(|_menu, _window, cx| {
+        let entity_id = cx.entity().entity_id();
+        let menu = cx.entity();
+        // A dismissal is the common close path; the release hook below also
+        // covers a menu replaced or dropped without one.
+        let dismiss = cx.subscribe_self(|_, _: &DismissEvent, cx| notify_live_apps(cx));
+        let release = cx.on_release(move |_, cx| {
+            if cx.has_global::<PopupMenus>() {
+                let state = cx.global_mut::<PopupMenus>();
+                state.subscriptions.remove(&entity_id);
+                state.menus.retain(|weak| weak.entity_id() != entity_id);
+            }
+            notify_live_apps(cx);
+        });
+        let state = cx.global_mut::<PopupMenus>();
+        state.menus.push(menu.downgrade());
+        state.subscriptions.insert(entity_id, dismiss);
+        release.detach();
+    })
+    .detach();
+}
+
+/// Whether a menu in `window` currently holds focus. Submenus never do, so
+/// they do not keep the page concealed after the top-level menu closes.
+pub(crate) fn popup_menu_open(window: WindowId, cx: &mut App) -> bool {
+    let Some(state) = cx.try_global::<PopupMenus>() else {
+        return false;
+    };
+    let menus: Vec<gpui_kit::FocusHandle> = state
+        .menus
+        .iter()
+        .filter_map(|menu| menu.upgrade())
+        .map(|menu| menu.read(cx).focus_handle(cx))
+        .collect();
+    if menus.is_empty() {
+        return false;
+    }
+    let Some(handle) = cx.windows().into_iter().find(|h| h.window_id() == window) else {
+        return false;
+    };
+    menus.iter().any(|focus| {
+        handle
+            .update(cx, |_, window, cx| {
+                focus.is_focused(window) || focus.contains_focused(window, cx)
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// The whole workbench's surfaces re-read the cover set after a menu opens,
+/// closes or is dropped.
+fn notify_live_apps(cx: &mut App) {
+    let apps: Vec<_> = crate::ui::windows::WindowRegistry::live_apps(cx).collect();
+    for app in apps {
+        let _ = app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
+    }
+}
+
+#[derive(Default)]
+struct NativeSurfaceCoverHooks;
+
+impl Global for NativeSurfaceCoverHooks {}
+
+/// Installs the bridge from the shared dialog/sheet cover registry to each
+/// window's workbench, once per `App`. A cover raised by a crate that cannot
+/// name `LyrelApp` (the workbench editor's dialogs) lands here and the owning
+/// window hides its native surfaces on the same frame.
+pub(crate) fn install_native_surface_cover_hooks(cx: &mut App) {
+    if cx.has_global::<NativeSurfaceCoverHooks>() {
+        return;
+    }
+    cx.set_global(NativeSurfaceCoverHooks);
+    lyrel_ui_base::native_surface::on_change(cx, |window, cx| {
+        if let Some(app) = crate::ui::windows::WindowRegistry::app_for_window(cx, window) {
+            let _ = app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,10 +196,7 @@ mod tests {
 
         coordinator.cover(CoverSource::SearchEverywhere);
         coordinator.cover(CoverSource::SearchEverywhere);
-        assert!(
-            coordinator.is_covered(),
-            "one cover hides the surfaces"
-        );
+        assert!(coordinator.is_covered(), "one cover hides the surfaces");
         assert_eq!(
             coordinator.covers(),
             &[CoverSource::SearchEverywhere],

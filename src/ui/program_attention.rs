@@ -86,6 +86,26 @@ pub(crate) struct AttentionChange {
     pub(crate) notices: Vec<String>,
 }
 
+/// Which matrix rows one pane's observed program records currently need
+/// attention for. A blocked record is a live wait even after its notice was
+/// acknowledged; an unread error or done result is an unacknowledged outcome.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct BadgeAttention {
+    waiting: bool,
+    ended: bool,
+    failed: bool,
+}
+
+impl BadgeAttention {
+    /// Whether any row that qualifies here keeps its badge channel open.
+    pub(crate) fn any(&self, activity: &lyrel_core::core::config::ProgramActivity) -> bool {
+        use lyrel_core::core::config::ActivityState;
+        (self.waiting && activity.channels(ActivityState::Waiting).badge)
+            || (self.ended && activity.channels(ActivityState::Ended).badge)
+            || (self.failed && activity.channels(ActivityState::Failed).badge)
+    }
+}
+
 impl ProgramAttention {
     pub(crate) fn forget(&mut self, source: ProgramSource) {
         self.panes.remove(&source);
@@ -167,6 +187,23 @@ impl ProgramAttention {
 
     pub(crate) fn unread(&self, source: ProgramSource) -> usize {
         self.panes.get(&source).map_or(0, PaneObservation::unread)
+    }
+
+    /// The badge rows this pane's program records currently qualify for.
+    pub(crate) fn badge_attention(&self, source: ProgramSource) -> BadgeAttention {
+        let Some(pane) = self.panes.get(&source) else {
+            return BadgeAttention::default();
+        };
+        let mut attention = BadgeAttention::default();
+        for cursor in pane.records.values() {
+            match cursor.state {
+                ProgramState::Blocked => attention.waiting = true,
+                ProgramState::Error if cursor.unread() => attention.failed = true,
+                ProgramState::Done if cursor.unread() => attention.ended = true,
+                _ => {}
+            }
+        }
+        attention
     }
 
     /// Acknowledge only versions this window actually observed. An incoming
@@ -386,6 +423,9 @@ impl crate::ui::app::LyrelApp {
         if watched {
             changed |= self.program_attention.acknowledge(source);
         }
+        if changed {
+            crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
+        }
         changed
     }
 
@@ -418,7 +458,7 @@ impl crate::ui::app::LyrelApp {
     pub(crate) fn acknowledge_viewed_program(
         &mut self,
         window: &gpui_kit::Window,
-        cx: &gpui_kit::App,
+        cx: &mut gpui_kit::App,
     ) {
         let Some(view) = self
             .tabs
@@ -428,8 +468,10 @@ impl crate::ui::app::LyrelApp {
             return;
         };
         if self.program_pane_is_viewed(&view, window, cx) {
-            self.program_attention
-                .acknowledge(view.read(cx).program_source());
+            let source = view.read(cx).program_source();
+            if self.program_attention.acknowledge(source) {
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
+            }
         }
     }
 

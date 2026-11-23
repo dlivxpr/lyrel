@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use crate::core::cli_agent::CLIAgent;
 use crate::host::Host;
 
+mod antigravity;
+#[cfg(test)]
+mod antigravity_tests;
 mod hermes;
 #[cfg(test)]
 mod hermes_tests;
@@ -22,7 +25,22 @@ mod omp;
 pub const LYREL_ENV_MARKER: &str = "LYREL";
 pub const LYREL_AGENT_HOOK_EXE_ENV: &str = "LYREL_AGENT_HOOK_EXE";
 
+/// The passive stdout answer an Antigravity hook command owes `agy` for the
+/// upstream event it ran under. Re-exported for the runner in `lyrel-core`.
+pub fn antigravity_response(upstream: &str) -> &'static str {
+    antigravity::response(upstream)
+}
+
+/// The upstream event name an Antigravity hook actually ran under, preferring
+/// the payload's `hookEventName` over the registry command's spelling.
+pub fn antigravity_upstream_event(arg: &str, stdin_json: &str) -> String {
+    antigravity::upstream_event(arg, stdin_json)
+}
+
 pub fn effective_event<'a>(agent: &str, event: &'a str, stdin_json: &str) -> Option<&'a str> {
+    if agent == "antigravity" {
+        return antigravity::effective(event, stdin_json);
+    }
     if agent == "kimi" {
         let payload: serde_json::Value = serde_json::from_str(stdin_json).ok()?;
         if payload
@@ -72,6 +90,9 @@ pub fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_j
     if agent == "kimi" {
         kimi_readout(event, &payload, &mut body);
     }
+    if agent == "antigravity" {
+        antigravity::normalize(event, &payload, &mut body);
+    }
     if matches!(agent, "omp" | "pi" | "opencode" | "hermes")
         && let Some(value) = payload.get("session_scope")
         && let Ok(mut scope) =
@@ -88,7 +109,7 @@ pub fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_j
     // Some upstream observers report storage only. Fill only missing public
     // terminal fields in an existing scope, never synthesize/replace storage
     // scope on a status-only event or copy inline config/credentials.
-    if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes")
+    if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes" | "antigravity")
         && let Some(environment) = body
             .get_mut("session_scope")
             .and_then(|scope| scope.get_mut("environment"))
@@ -242,15 +263,17 @@ pub enum HookAgent {
     OhMyPi,
     Kimi,
     Hermes,
+    Antigravity,
 }
 
 impl HookAgent {
-    pub const ALL: [HookAgent; 5] = [
+    pub const ALL: [HookAgent; 6] = [
         HookAgent::OhMyPi,
         HookAgent::Kimi,
         HookAgent::Pi,
         HookAgent::OpenCode,
         HookAgent::Hermes,
+        HookAgent::Antigravity,
     ];
 
     /// The hooks behind a detected agent process, if it has any.
@@ -258,10 +281,8 @@ impl HookAgent {
     /// Process detection knows far more agents than hooks do — the ones with no
     /// arm here report status some other way, or not at all. The match is
     /// exhaustive on purpose: a newly detected agent has to say which it is.
-    ///
-    /// Antigravity answers `None`: its hook contract is #384's work, and until
-    /// the documented observer hooks are verified, launch and recognition
-    /// must not claim a hooks integration that does not exist yet.
+    /// Antigravity's documented observer hooks live in the named global
+    /// registry `~/.gemini/config/hooks.json`; see `agent_hooks::antigravity`.
     pub fn of_detected(agent: CLIAgent) -> Option<HookAgent> {
         match agent {
             CLIAgent::OhMyPi => Some(HookAgent::OhMyPi),
@@ -269,7 +290,7 @@ impl HookAgent {
             CLIAgent::Pi => Some(HookAgent::Pi),
             CLIAgent::OpenCode => Some(HookAgent::OpenCode),
             CLIAgent::Hermes => Some(HookAgent::Hermes),
-            CLIAgent::Antigravity => None,
+            CLIAgent::Antigravity => Some(HookAgent::Antigravity),
         }
     }
 
@@ -290,6 +311,7 @@ impl HookAgent {
             HookAgent::Pi => "pi",
             HookAgent::OhMyPi => "omp",
             HookAgent::Kimi => "kimi",
+            HookAgent::Antigravity => "antigravity",
         }
     }
 
@@ -300,6 +322,7 @@ impl HookAgent {
             HookAgent::Pi => "Pi",
             HookAgent::OhMyPi => "OMP",
             HookAgent::Kimi => "Kimi Code",
+            HookAgent::Antigravity => "Antigravity",
         }
     }
 
@@ -316,6 +339,7 @@ impl HookAgent {
                 return hermes::home(target)
                     .map(|home| target.under(&home, &["plugins", "lyrel", "__init__.py"]));
             }
+            HookAgent::Antigravity => return antigravity::registry_path(target),
             HookAgent::OpenCode => target.under(
                 &target.opencode_config_dir_checked()?,
                 &["plugins", "lyrel", "tui.ts"],
@@ -547,6 +571,9 @@ pub fn hooks_state(target: &HookTarget, agent: HookAgent) -> HooksState {
     if agent == HookAgent::Hermes {
         return hermes::state(target);
     }
+    if agent == HookAgent::Antigravity {
+        return antigravity::state(target);
+    }
     let Ok(path) = agent.target_path(target) else {
         return HooksState::NotInstalled;
     };
@@ -574,6 +601,7 @@ pub enum HooksDiagnostic {
     OmpExtension,
     KimiHistory,
     HermesObserver { home: PathBuf },
+    AntigravityRegistry { path: PathBuf },
     ScopeUnavailable { error: String },
     OpenCodeUnreadable { path: PathBuf },
     OpenCodeRuntimeDiagnosis { path: PathBuf },
@@ -592,6 +620,12 @@ pub fn hooks_diagnostic(target: &HookTarget, agent: HookAgent) -> Option<HooksDi
         HookAgent::Kimi => Some(HooksDiagnostic::KimiHistory),
         HookAgent::Hermes => Some(match target.hermes_home() {
             Ok(home) => HooksDiagnostic::HermesObserver { home },
+            Err(error) => HooksDiagnostic::ScopeUnavailable {
+                error: error.to_string(),
+            },
+        }),
+        HookAgent::Antigravity => Some(match antigravity::registry_path(target) {
+            Ok(path) => HooksDiagnostic::AntigravityRegistry { path },
             Err(error) => HooksDiagnostic::ScopeUnavailable {
                 error: error.to_string(),
             },
@@ -683,6 +717,9 @@ pub fn install_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<Ho
     if agent == HookAgent::Hermes {
         return hermes::install(target);
     }
+    if agent == HookAgent::Antigravity {
+        return antigravity::install(target);
+    }
     if agent == HookAgent::OpenCode
         && let Some(HooksDiagnostic::OpenCodeDisabled { path, pattern }) =
             opencode_plugin_diagnostic(target)
@@ -715,6 +752,9 @@ pub fn install_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<Ho
 pub fn uninstall_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<HookOutcome> {
     if agent == HookAgent::Hermes {
         return hermes::uninstall(target);
+    }
+    if agent == HookAgent::Antigravity {
+        return antigravity::uninstall(target);
     }
     let path = agent.target_path(target)?;
     if agent == HookAgent::OpenCode {
@@ -1022,6 +1062,9 @@ fn owned_file_content(target: &HookTarget, agent: HookAgent) -> Option<String> {
         HookAgent::Pi => pi::extension(target),
         HookAgent::OhMyPi => omp::extension(target),
         HookAgent::Kimi => None,
+        // Antigravity merges into the global hooks.json registry; there is no
+        // lyrel-owned file to install.
+        HookAgent::Antigravity => None,
     }
 }
 

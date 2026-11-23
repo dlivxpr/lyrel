@@ -404,6 +404,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer home: {home}. Installation does not grant authorization. In this home/profile, run hermes plugins enable lyrel, then hermes plugins list. HERMES_SAFE_MODE or disabled plugins prevent reports. on_session_end carries finalized outcomes; on_session_finalize is not a turn result. Missing events never imply Idle/Done. Native history and operations use the selected installation's runtime, not the system Python. lyrel does not change plugin consent."
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity registry: {path}. lyrel owns only its named entry in the global hooks.json and never touches sibling hooks or status-line preferences. Its observer reports Working and settled Done; ordinary tool calls are never Waiting. Real-turn verification of the hook contract for your agy version is still outstanding."
+        }
         L10nKey::IntegrationScopeUnavailable => {
             "Integration scope is unavailable: {error}. No files were changed."
         }
@@ -580,6 +583,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppSessionDirectoryGone => "The session's directory no longer exists: {path}",
         L10nKey::AppSessionOpenUnconfirmed => {
             "A pane already runs session {id}, but its store could not be confirmed from here. Resume it in that pane instead of starting a second writer."
+        }
+        L10nKey::AppSessionResumeOpenedDifferent => {
+            "Asked to resume conversation {expected}, but Antigravity opened {actual}. This is not an exact resume."
         }
         L10nKey::SearchSessionActions => "Choose what to do with this session…",
         L10nKey::SessionActionsHint => "actions",
@@ -1456,20 +1462,16 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "A program or agent is still working. Only the tab indicator applies."
         }
         L10nKey::ActivityRowWaiting => "Waiting",
-        L10nKey::ActivityRowWaitingDesc => {
-            "A program or agent is waiting for your input."
-        }
+        L10nKey::ActivityRowWaitingDesc => "A program or agent is waiting for your input.",
         L10nKey::ActivityRowEnded => "Ended",
-        L10nKey::ActivityRowEndedDesc => {
-            "A program or agent finished its task successfully."
-        }
+        L10nKey::ActivityRowEndedDesc => "A program or agent finished its task successfully.",
         L10nKey::ActivityRowFailed => "Failed",
-        L10nKey::ActivityRowFailedDesc => {
-            "A program or agent ended with an error."
-        }
+        L10nKey::ActivityRowFailedDesc => "A program or agent ended with an error.",
         L10nKey::ActivityChannelTab => "Tab",
         L10nKey::ActivityChannelDesktop => "Desktop",
         L10nKey::ActivityChannelSound => "Sound",
+        L10nKey::ActivityChannelBadge => "Badge",
+        L10nKey::SystemBadgeTabsNeedAttention => "Tabs needing attention: {count}",
         L10nKey::SettingsWindow => "Startup & restore",
         L10nKey::NotifyModeNever => "Never",
         L10nKey::NotifyModeUnfocused => "When unfocused",
@@ -2789,9 +2791,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserHostLocal => "This machine",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "Loading page",
-        L10nKey::BrowserSurfaceAutomated => {
-            "the browser surface is not started by automated tests"
+        L10nKey::BrowserConcealedHint => {
+            "Hidden while an overlay is open. The page keeps its content, scroll position and draft."
         }
+        L10nKey::BrowserSurfaceAutomated => "the browser surface is not started by automated tests",
         L10nKey::BrowserSurfaceNoDataDir => "the browser has no data directory for this Host",
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
@@ -3000,6 +3003,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::DiffContentReadFailed => {
             "Couldn't read this file's two versions; showing the line diff."
+        }
+        L10nKey::DiffContentRemoteUnsupported => {
+            "This remote Host can't send file versions for the content-aware view; update lyrel-server there, or keep using the line diff."
         }
         L10nKey::DiffContentJumpSource => "Jump to original position",
         L10nKey::DiffContentJumpBlock => "Jump to the moved block",
@@ -3596,6 +3602,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::AppPaneNoCodingAgent => "This pane isn't running a coding agent",
         L10nKey::AppForkNoCommand => "lyrel has no fork command for {name}",
+        L10nKey::AppForkIndependentUnavailable => {
+            "lyrel can't fork {name} into an independent session yet"
+        }
         L10nKey::AppForkLocalOnly => {
             "{name} sessions can't be forked from inside an SSH or WSL session"
         }

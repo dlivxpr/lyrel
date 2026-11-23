@@ -32,6 +32,9 @@ struct Shared {
     webview: Option<ICoreWebView2>,
     initial_url: String,
     visible: bool,
+    /// Whether the WebView currently holds keyboard focus, tracked from the
+    /// controller's GotFocus/LostFocus pair so a cover can hand it back.
+    focused: bool,
     rect: RECT,
     closed: bool,
     /// The loopback rule the panel set for this page (#392).
@@ -83,6 +86,7 @@ impl Host {
             webview: None,
             initial_url: url.to_string(),
             visible: true,
+            focused: false,
             rect,
             closed: false,
             guard,
@@ -247,6 +251,29 @@ impl Host {
 
         let mut token = 0i64;
 
+        // The controller's focus pair is the authoritative answer to "was the
+        // page holding the keyboard?" when a workbench cover goes up.
+        let focused_shared = shared.clone();
+        unsafe {
+            controller.add_GotFocus(
+                &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                    focused_shared.borrow_mut().focused = true;
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+        }
+        let blurred_shared = shared.clone();
+        unsafe {
+            controller.add_LostFocus(
+                &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                    blurred_shared.borrow_mut().focused = false;
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+        }
+
         // Top-level routes: HTTP, HTTPS, about:blank. Everything else —
         // file:, ftp:, data:, custom schemes — is cancelled before it leaves
         // the process.
@@ -348,10 +375,7 @@ impl Host {
                         Err(_) => false,
                     };
                     if !allowed {
-                        emit(
-                            &new_window_shared,
-                            BrowserEvent::RouteBlocked { url: uri },
-                        );
+                        emit(&new_window_shared, BrowserEvent::RouteBlocked { url: uri });
                         return Ok(());
                     }
                     let mut flag = windows::core::BOOL(0);
@@ -503,6 +527,9 @@ impl Host {
                     let mut success = windows::core::BOOL(0);
                     let _ = args.IsSuccess(&mut success);
                     if success.as_bool() {
+                        // Both engines report a finished top-level load the
+                        // same way: Navigated on the way, Ready at the end.
+                        emit(&load_shared, BrowserEvent::Ready);
                         return Ok(());
                     }
                     let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
@@ -586,6 +613,11 @@ impl Host {
                 let _ = controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
             }
         }
+    }
+
+    /// Whether the controller reports page focus.
+    pub fn has_focus(&self) -> bool {
+        self.shared.borrow().focused
     }
 
     pub fn command(&mut self, command: BrowserCommand) -> Result<(), BrowserSurfaceError> {

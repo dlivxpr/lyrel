@@ -368,6 +368,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer 目录：{home}。安装不代表授权。请在同一 home/profile 运行 hermes plugins enable lyrel，再运行 hermes plugins list。HERMES_SAFE_MODE 或禁用插件会阻止报告。on_session_end 携带最终结果，on_session_finalize 不是本轮结果。缺少事件不代表 Idle/Done。原生历史与操作使用所选安装的运行时，不使用系统 Python；lyrel 不更改插件授权。"
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity 注册表：{path}。lyrel 只在全局 hooks.json 中管理自己的具名条目，不改动其他 hooks 或状态栏偏好。observer 只报告 Working 与确定结束的 Done；普通工具调用不会显示为 Waiting。该 agy 版本的钩子契约仍需真实轮次验证。"
+        }
         L10nKey::IntegrationScopeUnavailable => "集成作用域不可用：{error}。未修改文件。",
         L10nKey::IntegrationOpenCodeUnreadable => "无法读取 OpenCode CLI 插件配置：{path}",
         L10nKey::IntegrationOpenCodeRuntimeDiagnosis => {
@@ -521,6 +524,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppSessionDirectoryGone => "会话所在的目录已不存在：{path}",
         L10nKey::AppSessionOpenUnconfirmed => {
             "已有窗格在运行会话 {id}，但无法从这里确认其存储。请直接在该窗格中恢复，以免启动第二个写入者。"
+        }
+        L10nKey::AppSessionResumeOpenedDifferent => {
+            "已请求恢复会话 {expected}，但 Antigravity 打开了 {actual}；这不是精确恢复。"
         }
         L10nKey::SearchSessionActions => "选择要对这个会话执行的操作…",
         L10nKey::SessionActionsHint => "操作",
@@ -1263,7 +1269,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DocumentFill => "铺满窗口",
         L10nKey::SettingsNotifications => "通知",
         L10nKey::SettingsNotifyOnCommandFinish => "通知时机",
-        L10nKey::SettingsNotifyOnCommandFinishDesc => "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。",
+        L10nKey::SettingsNotifyOnCommandFinishDesc => {
+            "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。"
+        }
         L10nKey::SettingsNotifyThreshold => "最短命令运行时间",
         L10nKey::SettingsNotifyThresholdDesc => "仅在命令运行达到此时长后发送完成通知。",
         L10nKey::SettingsCommandDesktop => "命令结果",
@@ -1285,6 +1293,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ActivityChannelTab => "标签页",
         L10nKey::ActivityChannelDesktop => "桌面",
         L10nKey::ActivityChannelSound => "声音",
+        L10nKey::ActivityChannelBadge => "徽标",
+        L10nKey::SystemBadgeTabsNeedAttention => "需要处理的标签页：{count}",
         L10nKey::SettingsWindow => "启动与恢复",
         L10nKey::NotifyModeNever => "从不",
         L10nKey::NotifyModeUnfocused => "窗口未聚焦时",
@@ -2497,6 +2507,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserHostLocal => "本机",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "正在加载页面",
+        L10nKey::BrowserConcealedHint => "浮层打开期间已隐藏；页面内容、滚动位置和草稿都会保留。",
         L10nKey::BrowserSurfaceAutomated => "自动化测试不启动浏览器表面",
         L10nKey::BrowserSurfaceNoDataDir => "该主机暂无浏览器数据目录",
         L10nKey::PanelNoSession => "没有活动会话。",
@@ -2672,6 +2683,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffContentOverBudget => "文件过大，内容感知视图无法比较，已显示行级差异。",
         L10nKey::DiffContentParseFailed => "无法解析此文件的内容感知结构，已显示行级差异。",
         L10nKey::DiffContentReadFailed => "无法读取此文件的两个版本，已显示行级差异。",
+        L10nKey::DiffContentRemoteUnsupported => {
+            "此远程 Host 无法发送文件版本，内容感知视图不可用；请更新该 Host 上的 lyrel-server，或继续使用行级差异。"
+        }
         L10nKey::DiffContentJumpSource => "跳转到原始位置",
         L10nKey::DiffContentJumpBlock => "跳转到移动后的块",
         L10nKey::DiffContentMoved => "已移动",
@@ -3217,6 +3231,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::AppPaneNoCodingAgent => "此窗格未运行编码 agent",
         L10nKey::AppForkNoCommand => "lyrel 没有用于 {name} 的 fork 命令",
+        L10nKey::AppForkIndependentUnavailable => "lyrel 暂时无法为 {name} 创建独立 Fork 会话",
         L10nKey::AppForkLocalOnly => "无法在 SSH 或 WSL 会话里 fork {name} 会话",
         L10nKey::AppForkNoSessionId => {
             "lyrel 尚未在此窗格中看到 {name} 的会话 ID，请在“设置 → 集成”中安装其 hook"

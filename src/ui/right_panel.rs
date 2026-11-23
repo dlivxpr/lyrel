@@ -1127,7 +1127,9 @@ impl LyrelApp {
     /// build (a web selection writes the last-used tool there — the old
     /// build lands on a tool page, never on a tab it cannot know).
     pub(super) fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
+        let switch_before = self.right_panel.tool_switch.generation;
         self.remember_tool_layout(layout.clone());
+        let switch_after = self.right_panel.tool_switch.generation;
         self.apply_layout_mirror(layout);
         lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
             cx,
@@ -1142,6 +1144,36 @@ impl LyrelApp {
             cfg.right_panel_tab = config_tab;
             cfg.right_panel_visible = layout.open;
         });
+        if switch_after != switch_before {
+            // The incoming page slides in for a moment; a native child cannot
+            // follow that transform, so it waits out the entrance at the
+            // settled edge (#403).
+            self.set_surface_cover(
+                crate::ui::surface_coordinator::CoverSource::ToolSwitch,
+                true,
+                cx,
+            );
+            let generation = switch_after;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(TOOL_SWITCH_ENTER_MS))
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if app.right_panel.tool_switch.generation == generation {
+                        app.set_surface_cover(
+                            crate::ui::surface_coordinator::CoverSource::ToolSwitch,
+                            false,
+                            cx,
+                        );
+                    }
+                });
+            })
+            .detach();
+        }
+        // A selection change can move the page out of the painted tree before
+        // its next paint; hide or show its native child on this write rather
+        // than waiting for the watchdog.
+        self.sync_browser_surfaces(cx);
         cx.notify();
     }
 
@@ -1259,6 +1291,10 @@ impl LyrelApp {
             self.surface_coordinator.uncover(source);
         }
         self.sync_browser_surfaces(cx);
+        // A page concealed for longer than the paint grace is no longer in
+        // the paint set; this frame re-anchors it and paints the still frame
+        // (or lifts it) on the same turn the cover changed.
+        cx.notify();
     }
 
     /// The browser surfaces' watchdog, started with the first page that
@@ -3008,9 +3044,7 @@ impl LyrelApp {
                 let preview_host = ctx
                     .remote_ref
                     .clone()
-                    .filter(|_| {
-                        lyrel_core::daemon::protocol::PortEntry::reaches_loopback(&p.addr)
-                    });
+                    .filter(|_| lyrel_core::daemon::protocol::PortEntry::reaches_loopback(&p.addr));
                 actions = actions.child(
                     self.info_tile(
                         ("panel-port-open", i),

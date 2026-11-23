@@ -221,6 +221,7 @@ impl SettingsWindow {
                 ActivityChannel::Tab => channels.tab = on,
                 ActivityChannel::Desktop => channels.desktop = on,
                 ActivityChannel::Sound => channels.sound = on,
+                ActivityChannel::Badge => channels.badge = on,
             };
             match activity {
                 ActivityState::Running => {
@@ -233,6 +234,9 @@ impl SettingsWindow {
                 ActivityState::Failed => row(&mut cfg.program_activity.failed),
             }
         });
+        // The system badge reads this matrix; re-evaluate it now rather than
+        // waiting for the next reconcile tick.
+        crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
     }
 
     /// The terminal events' own desktop toggles — ordinary command results
@@ -414,7 +418,8 @@ impl SettingsWindow {
                 )
             }
             L10nKey::SettingsProgramActivity => {
-                self.update_config(cx, |cfg| cfg.program_activity = defaults.program_activity)
+                self.update_config(cx, |cfg| cfg.program_activity = defaults.program_activity);
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             }
             L10nKey::ActivityRowRunning => {
                 self.set_activity_channel(
@@ -427,17 +432,20 @@ impl SettingsWindow {
             L10nKey::ActivityRowWaiting => {
                 self.update_config(cx, |cfg| {
                     cfg.program_activity.waiting = defaults.program_activity.waiting
-                })
+                });
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             }
             L10nKey::ActivityRowEnded => {
                 self.update_config(cx, |cfg| {
                     cfg.program_activity.ended = defaults.program_activity.ended
-                })
+                });
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             }
             L10nKey::ActivityRowFailed => {
                 self.update_config(cx, |cfg| {
                     cfg.program_activity.failed = defaults.program_activity.failed
-                })
+                });
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             }
             L10nKey::SettingsTerminalBell => self.set_bell_mode(defaults.bell, cx),
             L10nKey::SettingsRestoreLastLayout => {

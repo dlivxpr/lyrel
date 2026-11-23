@@ -733,7 +733,9 @@ fn report_agent(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         window.background_executor.run_until_parked();
-        if view.read_with(window, |view, _| view.agent_session() == Some(state.clone())) {
+        if view.read_with(window, |view, _| {
+            view.agent_session() == Some(state.clone())
+        }) {
             break;
         }
         assert!(
@@ -764,7 +766,11 @@ fn opening_the_bell_preserves_unread_and_each_acknowledgement_targets_its_record
     settle(&mut window);
     window.update(|window, cx| window.click("status-notifications", cx));
     settle(&mut window);
-    assert_eq!(unread(&window), 2, "opening the bell preserves unread state");
+    assert_eq!(
+        unread(&window),
+        2,
+        "opening the bell preserves unread state"
+    );
     let ids: Vec<_> = window.read(|cx| history(cx).read(cx).records().map(Record::id).collect());
     window.update(|window, cx| window.click(format!("notification-detail-{}", ids[0]), cx));
     settle(&mut window);
@@ -785,9 +791,7 @@ fn opening_the_bell_preserves_unread_and_each_acknowledgement_targets_its_record
 }
 
 #[gpui_kit::test]
-fn waiting_pane_projects_into_pending_across_filters_and_resolves_live(
-    cx: &mut TestAppContext,
-) {
+fn waiting_pane_projects_into_pending_across_filters_and_resolves_live(cx: &mut TestAppContext) {
     let (app, mut window, mut streams) = harness_with_tabs(cx, 1);
     let dir = isolated(&mut window);
     lyrel_ui_base::i18n::set_locale("en");
@@ -1005,7 +1009,7 @@ fn keyboard_reaches_pending_actions_in_the_open_bell(cx: &mut TestAppContext) {
     for _ in 0..32 {
         window.update(|window, cx| window.press("tab", cx));
         settle(&mut window);
-        if window.update(|window, _| window.find(button_id.as_str()).focused()) == Some(true) {
+        if window.update(|window, _| window.find(button_id.clone()).focused()) == Some(true) {
             focused = true;
             break;
         }
@@ -1014,14 +1018,18 @@ fn keyboard_reaches_pending_actions_in_the_open_bell(cx: &mut TestAppContext) {
     window.update(|window, cx| window.press("enter", cx));
     settle(&mut window);
     app.update_in(&mut window, |app, window, cx| {
-        assert!(app.tabs[0].pane.first_leaf().unwrap().contains_focused(window, cx));
+        assert!(
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .unwrap()
+                .contains_focused(window, cx)
+        );
     });
 }
 
 #[gpui_kit::test]
-fn vanished_source_keeps_full_copyable_text_with_navigation_unavailable(
-    cx: &mut TestAppContext,
-) {
+fn vanished_source_keeps_full_copyable_text_with_navigation_unavailable(cx: &mut TestAppContext) {
     let (app, mut window, _streams) = harness_with_tabs(cx, 2);
     let _dir = isolated(&mut window);
     lyrel_ui_base::i18n::set_locale("en");

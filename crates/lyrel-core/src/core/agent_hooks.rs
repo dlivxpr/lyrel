@@ -18,12 +18,31 @@ const MAX_STDIN: u64 = 64 * 1024;
 
 pub fn run_agent_hook(agent: &str, event: &str) {
     detach_console();
-    if std::env::var_os(LYREL_ENV_MARKER).is_none() || CLIAgent::from_slug(agent).is_none() {
+    let antigravity = CLIAgent::from_slug(agent) == Some(CLIAgent::Antigravity);
+    // Every agent except Antigravity keeps the old guard: no lyrel pane means
+    // the hook is silent before stdin is ever touched. Antigravity must
+    // answer `agy` even outside a lyrel pane — its hook commands run under a
+    // global registry that is not scoped to this terminal.
+    if !antigravity
+        && (std::env::var_os(LYREL_ENV_MARKER).is_none() || CLIAgent::from_slug(agent).is_none())
+    {
         return;
     }
     let mut input = String::new();
     if !std::io::stdin().is_terminal() {
         let _ = std::io::stdin().take(MAX_STDIN).read_to_string(&mut input);
+    }
+    if antigravity {
+        // `agy` waits on the hook's stdout answer and the observer is always
+        // passive: print it before anything else can fail, and never exit
+        // non-zero — an observer cannot justify gating a tool call, a stop,
+        // or an agent turn on a delivery hiccup.
+        let upstream = antigravity_upstream_event(event, &input);
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), "{}", antigravity_response(&upstream));
+        if std::env::var_os(LYREL_ENV_MARKER).is_none() {
+            return;
+        }
     }
     let Some(event) = effective_event(agent, event, &input) else {
         return;
@@ -43,6 +62,9 @@ pub fn run_agent_hook(agent: &str, event: &str) {
                     .is_ok_and(|version| version.has_feature(feature))
             {
                 eprintln!("lyrel: daemon does not support {feature}; update/reconnect the daemon");
+                if antigravity {
+                    return;
+                }
                 std::process::exit(2);
             }
         }
@@ -52,6 +74,9 @@ pub fn run_agent_hook(agent: &str, event: &str) {
         && !write_to_controlling_tty(&hook_sequence(&body))
     {
         eprintln!("lyrel: agent status delivery failed: {error}; controlling terminal unavailable");
+        if antigravity {
+            return;
+        }
         std::process::exit(2);
     }
 }

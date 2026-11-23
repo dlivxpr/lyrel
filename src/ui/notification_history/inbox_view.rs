@@ -27,6 +27,16 @@ pub(crate) struct NotificationBell {
     _navigation: Subscription,
 }
 
+/// The inbox popover opening or closing. The workbench uses this to give way
+/// its native surfaces (#403); the popover itself stays the owner of focus
+/// and dismissal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NotificationBellEvent {
+    OpenChanged(bool),
+}
+
+impl EventEmitter<NotificationBellEvent> for NotificationBell {}
+
 impl NotificationBell {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         ensure(cx);
@@ -55,6 +65,28 @@ impl NotificationBell {
             _navigation: navigation,
         }
     }
+
+    /// Whether the inbox popover is up. Read by the window's native-surface
+    /// cover check as a second, state-derived signal beside the event.
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_open_for_test(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.open == open {
+            return;
+        }
+        self.open = open;
+        if open {
+            self.view.update(cx, |view, cx| {
+                view.detail = None;
+                cx.notify();
+            });
+        }
+        cx.emit(NotificationBellEvent::OpenChanged(open));
+        cx.notify();
+    }
 }
 
 impl Render for NotificationBell {
@@ -74,6 +106,7 @@ impl Render for NotificationBell {
                         cx.notify();
                     });
                 }
+                cx.emit(NotificationBellEvent::OpenChanged(*open));
                 cx.notify();
             }))
             .trigger(
@@ -132,11 +165,10 @@ impl InboxView {
         });
         let machine_watch =
             cx.observe_global::<crate::ui::machine_mirror::MachineMirrors>(|_, cx| cx.notify());
-        let windows_watch =
-            cx.observe_global::<crate::ui::windows::WindowRegistry>(|this, cx| {
-                this.watch_apps(cx);
-                cx.notify();
-            });
+        let windows_watch = cx.observe_global::<crate::ui::windows::WindowRegistry>(|this, cx| {
+            this.watch_apps(cx);
+            cx.notify();
+        });
         let pending_watch = cx.observe_global::<super::PendingEpoch>(|_, cx| cx.notify());
         let mut this = Self {
             inbox,
@@ -166,7 +198,8 @@ impl InboxView {
         // each app needs it mutably.
         let apps: Vec<_> = crate::ui::windows::WindowRegistry::live_apps(cx).collect();
         for app in apps {
-            self._app_watches.push(cx.observe(&app, |_, _, cx| cx.notify()));
+            self._app_watches
+                .push(cx.observe(&app, |_, _, cx| cx.notify()));
         }
     }
 
@@ -371,9 +404,11 @@ impl Render for InboxView {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t(L10nKey::NotificationPending)),
                         )
-                        .children(pending_items.iter().map(|item| {
-                            render_pending_item(item, view.clone(), window, cx)
-                        })),
+                        .children(
+                            pending_items
+                                .iter()
+                                .map(|item| render_pending_item(item, view.clone(), window, cx)),
+                        ),
                 )
             })
             .when(count == 0, |column| {

@@ -40,8 +40,12 @@ pub(crate) fn classify(address: &str) -> Route {
         return Route::Deny;
     };
     let scheme = &trimmed[..sep];
+    let rest = &trimmed[sep + SCHEME_SEP.len()..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     match scheme.to_ascii_lowercase().as_str() {
-        "http" | "https" => Route::Load,
+        // A page needs a host to load: `http://` alone has nowhere to go and
+        // is refused here rather than handed to a host.
+        "http" | "https" if !authority.is_empty() => Route::Load,
         // `about:blank` has no `://`; handled above. Everything else —
         // file:, ftp:, data:, javascript:, custom schemes — stays inside the
         // app's deny path.
@@ -149,7 +153,10 @@ mod tests {
             complete_typed("https://example.com").as_deref(),
             Some("https://example.com")
         );
-        assert_eq!(complete_typed("about:blank").as_deref(), Some("about:blank"));
+        assert_eq!(
+            complete_typed("about:blank").as_deref(),
+            Some("about:blank")
+        );
         assert_eq!(complete_typed(""), None);
         assert_eq!(complete_typed("file:///etc/passwd"), None);
         assert_eq!(complete_typed("a b"), None);

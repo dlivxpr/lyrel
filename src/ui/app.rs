@@ -412,6 +412,7 @@ pub struct LyrelApp {
     pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
     pub(crate) disk_view: Option<Entity<crate::ui::host_disk::HostDiskView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
+    _notification_bell_sub: Subscription,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,
@@ -426,6 +427,10 @@ pub struct LyrelApp {
     /// Parked switcher groups (#485) whose notice the user dismissed by key —
     /// the entries stay, only the "will not reconnect" block is hidden.
     pub(crate) parked_dismissed: std::collections::HashSet<String>,
+    /// Launched exact Antigravity resumes whose native conversation identity
+    /// has not been observed yet (#385). A different reported id is a failed
+    /// exact resume; the pane itself is left alone.
+    pub(crate) exact_resumes: Vec<crate::ui::agent_launch::ExactResumeExpectation>,
     /// Why the window opened with no terminal in it. Shown on the home screen,
     /// which is otherwise indistinguishable from having closed everything.
     pub(crate) startup_error: Option<gpui_kit::SharedString>,
@@ -2650,6 +2655,7 @@ impl LyrelApp {
                 }
                 // A split pane went away with its agents; re-evaluate the hold.
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 self.focus_active(window, cx);
                 self.save_session(cx);
                 cx.notify();
@@ -2697,6 +2703,7 @@ impl LyrelApp {
             CloseOutcome::Collapsed => {
                 self.program_attention
                     .forget(view.read(cx).program_source());
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 Self::kill_pane_off_thread(view.read(cx).pane_route(), view.read(cx).pane_id, cx);
                 if index == self.tabs.active_index() {
                     self.maximized = None;
@@ -3595,6 +3602,7 @@ impl LyrelApp {
         // The closed tab's Working agents went with it; automatic mode
         // re-evaluates once this update unwinds.
         crate::ui::caffeine::CaffeineState::agents_changed(cx);
+        crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
         if navigation_on_closing {
             self.sidebar_nav_target = navigation_successor;
             self.sidebar_nav_settle(cx);
@@ -3952,6 +3960,16 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
+        if agent.fork_label().is_none() {
+            window.notify_app(
+                t_fmt(
+                    L10nKey::AppForkIndependentUnavailable,
+                    &[("name", agent.display_name())],
+                ),
+                cx,
+            );
+            return;
+        }
         let session = view.agent_session().unwrap_or_default();
         let source_id = if agent == crate::core::cli_agent::CLIAgent::OpenCode {
             session

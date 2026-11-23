@@ -37,7 +37,8 @@ use crate::ui::diff_list::{
 use crate::ui::diff_probe::{DiffProbeKey, ProbeCompletion, ProbeRequest};
 use crate::ui::diff_rows::{DiffSelection, RowId, Side, SplitCell, SplitRow, UnifiedRow};
 use crate::ui::document_column::{
-    DocumentChrome, glyph_content, glyph_split, glyph_unified, switch_cell, switch_ink, switch_track,
+    DocumentChrome, glyph_content, glyph_split, glyph_unified, switch_cell, switch_ink,
+    switch_track,
 };
 use crate::ui::right_panel::{HEADING, META, META_MONO, TEXT, TEXT_MONO, git_badge, info_chip};
 use crate::ui::scm::path::relative_time;
@@ -87,6 +88,12 @@ pub(crate) struct DiffOverlayState {
     /// Bumped with every snapshot. A content read carries the epoch it was
     /// dispatched under and may not install over a newer one.
     pub(crate) content_epoch: u64,
+    /// The host instance the content states were read from. A reconnect keeps
+    /// `host_id` but installs a new instance, and bytes read over the retired
+    /// connection must not draw for the new one even when no snapshot has
+    /// landed to bump [`Self::content_epoch`] yet. Weak, so an overlay left
+    /// open on a disconnect does not keep the retired link alive.
+    pub(crate) content_host: Option<std::sync::Weak<dyn lyrel_ui_base::host_ops::Host>>,
     /// The virtualised list the rows scroll in. Held across frames: it owns
     /// the scroll position, and the row heights gpui has measured.
     pub(crate) list: gpui_kit::ListState,
@@ -218,6 +225,7 @@ impl LyrelApp {
             selecting: false,
             content: std::collections::HashMap::new(),
             content_epoch: 0,
+            content_host: None,
             list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                 .with_uniform_item_height(DIFF_LINE_H),
             rows: Rc::new(Vec::new()),
@@ -450,9 +458,7 @@ impl LyrelApp {
         let Some(index) = index else {
             return;
         };
-        overlay
-            .list
-            .scroll_to_reveal_item(index);
+        overlay.list.scroll_to_reveal_item(index);
         cx.notify();
     }
 
@@ -1275,6 +1281,58 @@ impl LyrelApp {
             .into_any_element()
     }
 
+    /// The live host for this overlay, after invalidating content read from a
+    /// previous connection to the same `HostId`.
+    ///
+    /// A reconnect replaces the registry instance without changing the id or
+    /// necessarily landing a new snapshot. Bytes installed from the retired
+    /// connection are the wrong generation even when the path and revision
+    /// spell the same thing, so they are dropped and the epoch advances, which
+    /// makes the next fetch ask the live host instead of reusing them.
+    fn sync_content_host(
+        &mut self,
+        host_id: lyrel_ui_base::host_ops::HostId,
+        cwd: &Path,
+        source: &DiffSource,
+        cx: &mut Context<Self>,
+    ) -> Option<lyrel_ui_base::host_ops::SharedHost> {
+        let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id);
+        let mut invalidated = false;
+        for tab in self.tabs.iter_mut() {
+            let Some(overlay) = tab
+                .diff_overlay
+                .as_mut()
+                .filter(|o| o.host_id == host_id && o.cwd == cwd && o.source == *source)
+            else {
+                continue;
+            };
+            let retired = match (&live, overlay.content_host.as_ref()) {
+                // A dead weak handle is the connection that went away, not a
+                // licence to reuse its bytes on whatever replaced it.
+                (Some(live), Some(read)) => match read.upgrade() {
+                    Some(read) => !Arc::ptr_eq(&read, live),
+                    None => true,
+                },
+                // Content that exists without a recorded connection was
+                // explained while no host was live; a host coming back must
+                // re-read rather than inherit those failures.
+                (Some(_), None) => !overlay.content.is_empty(),
+                (None, Some(_)) => true,
+                (None, None) => false,
+            };
+            if retired {
+                overlay.content.clear();
+                overlay.content_epoch = overlay.content_epoch.wrapping_add(1);
+                invalidated = true;
+            }
+            overlay.content_host = live.as_ref().map(Arc::downgrade);
+        }
+        if invalidated {
+            cx.notify();
+        }
+        live
+    }
+
     /// Dispatch the structural reads the Content view needs this frame: one
     /// per expanded textual file (or the focused untracked file), each through
     /// the owning Host, each only once per snapshot.
@@ -1289,6 +1347,19 @@ impl LyrelApp {
             return;
         }
         let active = self.tabs.active_index();
+        let Some((host_id, cwd, source)) = self
+            .tabs
+            .get(active)
+            .and_then(|t| t.diff_overlay.as_ref())
+            .map(|o| (o.host_id, o.cwd.clone(), o.source.clone()))
+        else {
+            return;
+        };
+        // A reconnect keeps the HostId and installs a new host instance.
+        // Drop the bytes read over the old connection before deciding what
+        // still needs a read, so this frame asks the live host and draws
+        // nothing from the generation that left.
+        let host = self.sync_content_host(host_id, &cwd, &source, cx);
         let Some(overlay) = self.tabs.get(active).and_then(|t| t.diff_overlay.as_ref()) else {
             return;
         };
@@ -1377,13 +1448,12 @@ impl LyrelApp {
                             .insert(want.path, ContentState::Failed(ContentFailure::PatchOnly));
                     }
                     Some(plan) => {
-                        let supported = lyrel_content_diff::language_for_path(Path::new(
-                            &want.path,
-                        ))
-                        .or_else(|| {
-                            lyrel_content_diff::language_for_path(Path::new(&want.old_path))
-                        })
-                        .is_some();
+                        let supported =
+                            lyrel_content_diff::language_for_path(Path::new(&want.path))
+                                .or_else(|| {
+                                    lyrel_content_diff::language_for_path(Path::new(&want.old_path))
+                                })
+                                .is_some();
                         if supported {
                             overlay
                                 .content
@@ -1400,7 +1470,7 @@ impl LyrelApp {
             }
         }
 
-        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+        let Some(host) = host else {
             self.fail_content_reads(&source, &fetches, cx);
             return;
         };
@@ -1445,9 +1515,10 @@ impl LyrelApp {
             return;
         };
         for (path, _, _) in fetches {
-            overlay
-                .content
-                .insert(path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+            overlay.content.insert(
+                path.clone(),
+                ContentState::Failed(ContentFailure::ReadFailed),
+            );
         }
         cx.notify();
     }
@@ -1473,11 +1544,9 @@ impl LyrelApp {
                     Err(reason) => ContentState::Failed(reason),
                 };
                 for tab in self.tabs.iter_mut() {
-                    let Some(overlay) = tab
-                        .diff_overlay
-                        .as_mut()
-                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
-                    else {
+                    let Some(overlay) = tab.diff_overlay.as_mut().filter(|o| {
+                        o.host_id == key.host && o.cwd == key.cwd && o.source == key.source
+                    }) else {
                         continue;
                     };
                     if overlay.content_epoch != key.epoch {
@@ -1492,11 +1561,9 @@ impl LyrelApp {
                 // drop the state so the next frame asks it; without one, say
                 // so instead of reading forever.
                 for tab in self.tabs.iter_mut() {
-                    let Some(overlay) = tab
-                        .diff_overlay
-                        .as_mut()
-                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
-                    else {
+                    let Some(overlay) = tab.diff_overlay.as_mut().filter(|o| {
+                        o.host_id == key.host && o.cwd == key.cwd && o.source == key.source
+                    }) else {
                         continue;
                     };
                     if overlay.content_epoch != key.epoch {
@@ -1507,9 +1574,10 @@ impl LyrelApp {
                             overlay.content.remove(&key.path);
                         }
                         false => {
-                            overlay
-                                .content
-                                .insert(key.path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+                            overlay.content.insert(
+                                key.path.clone(),
+                                ContentState::Failed(ContentFailure::ReadFailed),
+                            );
                         }
                     }
                     touched = true;
@@ -1527,11 +1595,7 @@ impl LyrelApp {
     /// Called from `render`, so the [`RowsKey`] comparison is what keeps it
     /// cheap: flattening a twenty-thousand-line patch allocates a row per
     /// line, and nothing about that changes between two frames of scrolling.
-    fn sync_diff_rows(
-        &mut self,
-        inner: DiffViewMode,
-        cx: &mut Context<Self>,
-    ) -> Option<DiffBody> {
+    fn sync_diff_rows(&mut self, inner: DiffViewMode, cx: &mut Context<Self>) -> Option<DiffBody> {
         let mode = view_mode(cx);
         let active = self.tabs.active_index();
         let overlay = self.tabs.get_mut(active)?.diff_overlay.as_mut()?;
@@ -1614,18 +1678,14 @@ impl LyrelApp {
             .is_none_or(|held| !held.describes(&from));
         if stale {
             let rows = match (mode, from.preview, untracked) {
-                (DiffViewMode::Content, _, Some(path)) => {
-                    match overlay.content.get(path) {
-                        Some(state) => crate::ui::diff_list::content_preview_rows(
-                            path, state, inner,
-                        ),
-                        None => crate::ui::diff_list::content_preview_rows(
-                            path,
-                            &ContentState::Loading,
-                            inner,
-                        ),
-                    }
-                }
+                (DiffViewMode::Content, _, Some(path)) => match overlay.content.get(path) {
+                    Some(state) => crate::ui::diff_list::content_preview_rows(path, state, inner),
+                    None => crate::ui::diff_list::content_preview_rows(
+                        path,
+                        &ContentState::Loading,
+                        inner,
+                    ),
+                },
                 (_, Some(file), _) => crate::ui::diff_list::preview_rows(file, from.mode),
                 _ => crate::ui::diff_list::build_rows(
                     from.snap,
@@ -2019,17 +2079,10 @@ fn diff_row_element(
             drag,
             app,
         ),
-        DiffRow::ContentBlock(head) => {
-            padded(content_block_row(head, font, app, cx))
-        }
-        DiffRow::ContentAnchor(head) => {
-            padded(content_anchor_row(head, font, app, cx))
-        }
+        DiffRow::ContentBlock(head) => padded(content_block_row(head, font, app, cx)),
+        DiffRow::ContentAnchor(head) => padded(content_anchor_row(head, font, app, cx)),
         DiffRow::ContentElided { count } => padded(note_row(
-            t_fmt(
-                L10nKey::DiffContentElided,
-                &[("count", &count.to_string())],
-            ),
+            t_fmt(L10nKey::DiffContentElided, &[("count", &count.to_string())]),
             cx,
         )),
         DiffRow::ContentStatus(key) => padded(note_row(t(*key).to_string(), cx)),
@@ -3364,8 +3417,22 @@ mod tests {
         let shut = |path: &str| -> HashMap<String, bool> {
             [(path.to_string(), false)].into_iter().collect()
         };
-        let open = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
-        let middle_shut = build_rows(&snap, &shut("b.rs"), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let open = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
+        let middle_shut = build_rows(
+            &snap,
+            &shut("b.rs"),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
 
         let (replaced, with) = spliced_range(&open, &middle_shut);
         assert_eq!(
@@ -3392,7 +3459,14 @@ mod tests {
             files: vec![small_file("a.rs", 2)],
             ..Default::default()
         };
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let rows = build_rows(
+            &snap,
+            &HashMap::new(),
+            None,
+            DiffViewMode::Unified,
+            false,
+            &ContentViews::default(),
+        );
 
         let (replaced, with) = spliced_range(&[], &rows);
         assert_eq!((replaced.start, replaced.end, with), (0, 0, rows.len()));
@@ -4044,7 +4118,11 @@ mod overlay_gpui_tests {
         assert_eq!(mode(&mut vcx), DiffViewMode::Unified);
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
-        assert_eq!(mode(&mut vcx), DiffViewMode::Content, "and on to the structure");
+        assert_eq!(
+            mode(&mut vcx),
+            DiffViewMode::Content,
+            "and on to the structure"
+        );
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
         assert_eq!(mode(&mut vcx), DiffViewMode::Split, "and back again");
@@ -4485,6 +4563,7 @@ mod selection_gpui_tests {
                 selecting: false,
                 content: HashMap::new(),
                 content_epoch: 0,
+                content_host: None,
                 list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                     .with_uniform_item_height(DIFF_LINE_H),
                 rows: Rc::new(Vec::new()),
@@ -4704,7 +4783,14 @@ mod content_view_tests {
     use crate::ui::content_diff::{ContentFailure, ContentState};
     use crate::ui::scm::diff::{DiffLine, Hunk};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_core::host::local::LocalHost;
+    use lyrel_core::host::{
+        ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit,
+        SharedHost,
+    };
     use lyrel_ui_base::host_ops::HostId;
+    use lyrel_ui_base::host_registry::HostRegistry;
+    use std::io;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -4750,6 +4836,31 @@ mod content_view_tests {
         focus: Option<&str>,
         expanded: &[&str],
     ) {
+        open_source(app, vcx, root, DiffSource::Worktree, focus, expanded);
+    }
+
+    /// As [`open`], for any Git source the overlay can show.
+    fn open_source(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        root: &Path,
+        source: DiffSource,
+        focus: Option<&str>,
+        expanded: &[&str],
+    ) {
+        open_source_on(app, vcx, HostId::LOCAL, root, source, focus, expanded);
+    }
+
+    /// As [`open_source`], for an overlay whose files live on another Host.
+    fn open_source_on(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        host: HostId,
+        root: &Path,
+        source: DiffSource,
+        focus: Option<&str>,
+        expanded: &[&str],
+    ) {
         let root = root.to_path_buf();
         let focus = focus.map(str::to_string);
         let expanded: Vec<String> = expanded.iter().map(|p| p.to_string()).collect();
@@ -4757,14 +4868,7 @@ mod content_view_tests {
             let mut cfg = cx.global::<Config>().clone();
             cfg.diff_view = DiffViewMode::Content;
             cx.set_global(cfg);
-            app.open_diff_overlay(
-                HostId::LOCAL,
-                root.clone(),
-                DiffSource::Worktree,
-                focus,
-                window,
-                cx,
-            );
+            app.open_diff_overlay(host, root.clone(), source, focus, window, cx);
             let active = app.tabs.active_index();
             let overlay = app.tabs[active]
                 .diff_overlay
@@ -4826,6 +4930,1225 @@ mod content_view_tests {
         })
     }
 
+    // ---- Exact Git versions through the Diff workbench seam -------------
+
+    fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git runs")
+    }
+
+    fn git_ok(root: &Path, args: &[&str]) -> String {
+        let out = git_output(root, args);
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// A repository with deterministic identity and byte handling, so every
+    /// fixture below reads the same on Windows and Unix.
+    fn empty_repo() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git_ok(&root, &["init", "--quiet", "-b", "main"]);
+        for (key, value) in [
+            ("user.name", "Diff Test"),
+            ("user.email", "diff@example.test"),
+            ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
+            ("core.safecrlf", "false"),
+        ] {
+            git_ok(&root, &["config", key, value]);
+        }
+        (temp, root)
+    }
+
+    fn write_file(root: &Path, path: &str, text: &str) {
+        let path = root.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn commit_all(root: &Path, message: &str) -> String {
+        git_ok(root, &["add", "-A"]);
+        git_ok(root, &["commit", "--quiet", "-m", message]);
+        git_ok(root, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    const V1: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v1\");\n}\n";
+    const V2: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v2\");\n}\n";
+    const V3: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v3\");\n}\n";
+
+    /// The original- and new-side line texts the content rows draw. Split
+    /// cells carry the side they sit on; unified rows carry the line kind.
+    fn content_texts(rows: &[DiffRow]) -> (Vec<String>, Vec<String>) {
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for row in rows {
+            match row {
+                DiffRow::ContentSplit { row, .. } => {
+                    if let Some(cell) = &row.left {
+                        old.push(cell.text.clone());
+                    }
+                    if let Some(cell) = &row.right {
+                        new.push(cell.text.clone());
+                    }
+                }
+                DiffRow::ContentUnified { row, .. } => match row.kind {
+                    LineKind::Removed => old.push(row.text.clone()),
+                    LineKind::Added => new.push(row.text.clone()),
+                    LineKind::Context => {}
+                },
+                _ => {}
+            }
+        }
+        (old, new)
+    }
+
+    fn has(texts: &[String], needle: &str) -> bool {
+        texts.iter().any(|text| text.contains(needle))
+    }
+
+    fn file_head<'a>(rows: &'a [DiffRow], path: &str) -> &'a FileHead {
+        rows.iter()
+            .find_map(|row| match row {
+                DiffRow::FileHeader(head) if head.path == path => Some(head),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no file header for {path}"))
+    }
+
+    fn content_block<'a>(rows: &'a [DiffRow], name: &str) -> &'a ContentHead {
+        rows.iter()
+            .find_map(|row| match row {
+                DiffRow::ContentBlock(head) if head.name.as_deref() == Some(name) => Some(head),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no content block named {name}"))
+    }
+
+    fn content_has(app: &LyrelApp, path: &str, needle: &str) -> bool {
+        let Some(overlay) = app.tabs[app.tabs.active_index()].diff_overlay.as_ref() else {
+            return false;
+        };
+        match overlay.content.get(path) {
+            Some(ContentState::Ready(file)) => file
+                .file
+                .hunks
+                .iter()
+                .any(|hunk| hunk.lines.iter().any(|line| line.text.contains(needle))),
+            _ => false,
+        }
+    }
+
+    fn snapshot_ready(app: &LyrelApp) -> bool {
+        let Some(overlay) = app.tabs[app.tabs.active_index()].diff_overlay.as_ref() else {
+            return false;
+        };
+        app.diff_probes.inflight() == 0
+            && !overlay.loading
+            && matches!(overlay.load, DiffLoad::Ready(_))
+    }
+
+    fn content_epoch(app: &LyrelApp) -> u64 {
+        app.tabs[app.tabs.active_index()]
+            .diff_overlay
+            .as_ref()
+            .expect("an overlay is open")
+            .content_epoch
+    }
+
+    /// Production reads Host bytes off the UI thread. The focused landing
+    /// tests call the same function the same way instead of tripping the
+    /// Host's UI-thread guard.
+    fn read_content(
+        host: lyrel_ui_base::host_registry::SharedHost,
+        root: PathBuf,
+        plan: crate::ui::content_diff::FetchPlan,
+    ) -> ContentFile {
+        std::thread::spawn(move || {
+            fetch_content(&*host, &root, &plan, FileStatus::Modified).expect("the fixture reads")
+        })
+        .join()
+        .expect("the read thread finishes")
+    }
+
+    /// A host with another machine's identity whose bytes really come from a
+    /// local fixture directory. It is how a remote overlay is exercised
+    /// without a real SSH link: the Host seam is the same one the transport
+    /// implements, and the id is what separates "this host's bytes" from the
+    /// desktop's.
+    ///
+    /// A mounted fixture presents a path that does not exist on this desk — a
+    /// remote checkout — and backs it with a local directory. Everything the
+    /// overlay sees is the mounted path, so only a read through this Host can
+    /// reach the bytes; local path resolution has nothing to find.
+    struct ForeignDiffHost {
+        inner: SharedHost,
+        id: HostId,
+        can_read_versions: bool,
+        mount: Option<(PathBuf, PathBuf)>,
+    }
+
+    impl ForeignDiffHost {
+        fn mounted(
+            id: HostId,
+            shown: &Path,
+            backing: &Path,
+            can_read_versions: bool,
+        ) -> SharedHost {
+            Arc::new(Self {
+                inner: LocalHost::new(),
+                id,
+                can_read_versions,
+                mount: Some((shown.to_path_buf(), backing.to_path_buf())),
+            })
+        }
+
+        /// The real directory behind a mounted path, or the path unchanged.
+        fn backing(&self, p: &Path) -> PathBuf {
+            let Some((shown, backing)) = &self.mount else {
+                return p.to_path_buf();
+            };
+            let shown = shown.to_string_lossy();
+            let path = p.to_string_lossy();
+            if path == shown {
+                return backing.clone();
+            }
+            match path
+                .strip_prefix(shown.as_ref())
+                .and_then(|rest| rest.strip_prefix(['/', '\\']))
+            {
+                Some(rest) => backing.join(rest),
+                None => p.to_path_buf(),
+            }
+        }
+
+        fn backing_roots(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
+            roots.iter().map(|root| self.backing(root)).collect()
+        }
+    }
+
+    impl Host for ForeignDiffHost {
+        fn id(&self) -> HostId {
+            self.id
+        }
+        fn separator(&self) -> char {
+            self.inner.separator()
+        }
+        fn is_absolute(&self, p: &Path) -> bool {
+            self.inner.is_absolute(p) || self.mount.as_ref().is_some_and(|(m, _)| p == m)
+        }
+        fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
+            let root = root.map(|root| self.backing(root));
+            self.inner.read_dir(&self.backing(p), root.as_deref())
+        }
+        fn stat(&self, p: &Path) -> io::Result<Meta> {
+            self.inner.stat(&self.backing(p))
+        }
+        fn read_file(&self, p: &Path, max: u64) -> io::Result<Vec<u8>> {
+            self.inner.read_file(&self.backing(p), max)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.inner.canonicalize(&self.backing(p))
+        }
+        fn search(
+            &self,
+            roots: &[PathBuf],
+            query: &str,
+            limit: usize,
+            max_dirs: usize,
+            hidden: bool,
+        ) -> io::Result<Vec<SearchHit>> {
+            self.inner
+                .search(&self.backing_roots(roots), query, limit, max_dirs, hidden)
+        }
+        fn search_content(
+            &self,
+            roots: &[PathBuf],
+            query: &ContentQuery,
+            limits: &ContentLimits,
+        ) -> io::Result<ContentResults> {
+            self.inner
+                .search_content(&self.backing_roots(roots), query, limits)
+        }
+        fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
+            self.inner.write_file(&self.backing(p), bytes)
+        }
+        fn create_file_new(&self, p: &Path) -> io::Result<()> {
+            self.inner.create_file_new(&self.backing(p))
+        }
+        fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> {
+            self.inner.create_dir(&self.backing(p), recursive)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.inner.rename(&self.backing(from), &self.backing(to))
+        }
+        fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
+            self.inner.remove(&self.backing(p), recursive)
+        }
+        fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+            self.inner.repo_root(&self.backing(p))
+        }
+        fn git(&self, cwd: &Path, args: &[&str]) -> io::Result<Output> {
+            let mut out = self.inner.git(&self.backing(cwd), args)?;
+            // The host claims the mounted root as its own checkout, exactly
+            // as a far side would report its own path.
+            if out.success()
+                && args.len() == 2
+                && args[0] == "rev-parse"
+                && args[1] == "--show-toplevel"
+                && let Some((shown, _)) = &self.mount
+            {
+                out.stdout = format!("{}\n", shown.to_string_lossy()).into_bytes();
+            }
+            Ok(out)
+        }
+        fn git_blob(&self, cwd: &Path, spec: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+            match self.can_read_versions {
+                true => self.inner.git_blob(&self.backing(cwd), spec, max_bytes),
+                false => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "this fixture peer has no version reads",
+                )),
+            }
+        }
+        fn shells(&self) -> io::Result<lyrel_core::core::shells::ShellInventory> {
+            self.inner.shells()
+        }
+        fn watch(&self, paths: &[PathBuf]) -> io::Result<lyrel_ui_base::host_ops::WatchSub> {
+            self.inner.watch(&self.backing_roots(paths))
+        }
+    }
+
+    /// The path a mounted fixture presents to the overlay. It names nothing on
+    /// this desk: only the Host can resolve it.
+    fn foreign_root() -> PathBuf {
+        PathBuf::from("/lyrel-fixture/content")
+    }
+
+    fn foreign_id() -> HostId {
+        HostId::from_connection_key("ssh-direct:lyrel@content-fixture:22")
+    }
+
+    /// A repository on the foreign Host, staged to v2 and then edited to v3
+    /// in the worktree — the shape of a real remote review.
+    fn foreign_repo() -> (tempfile::TempDir, PathBuf) {
+        let (temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+        (temp, root)
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_staged_view_reads_its_own_hosts_index_not_the_local_copy(cx: &mut TestAppContext) {
+        let (_remote_temp, remote_backing) = foreign_repo();
+        // A competing desktop checkout with the same relative path: if any
+        // read fell back to local resolution, its marker would appear instead.
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_only() {}\n");
+
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let host = ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, host));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Staged,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""), "the staged old side is HEAD");
+        assert!(has(&new, "\"v2\""), "the staged new side is the index");
+        assert!(
+            !has(&new, "\"v3\""),
+            "the worktree edit is not part of the staged comparison"
+        );
+        assert!(
+            !has(&old, "local_only") && !has(&new, "local_only"),
+            "a competing local path never substitutes for the Host's bytes"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_peer_without_version_reads_explains_and_keeps_the_line_view(
+        cx: &mut TestAppContext,
+    ) {
+        let (_temp, backing) = foreign_repo();
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| {
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &backing, false),
+            );
+        });
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|o| {
+                    matches!(
+                        o.content.get("a.rs"),
+                        Some(ContentState::Failed(ContentFailure::RemoteUnsupported))
+                    )
+                })
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentStatus(L10nKey::DiffContentRemoteUnsupported)
+            )),
+            "the missing capability is named"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
+            "the ordinary line diff still draws"
+        );
+        assert_eq!(
+            vcx.update(|_, cx| cx.global::<Config>().diff_view),
+            DiffViewMode::Content,
+            "a fallback never rewrites the configured mode"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_reconnect_drops_content_from_the_previous_connection(cx: &mut TestAppContext) {
+        let (_temp, backing) = foreign_repo();
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let retired = ForeignDiffHost::mounted(id, &foreign_root(), &backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, retired));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        assert!(
+            app.update_in(&mut vcx, |app, _, _| content_has(app, "a.rs", "\"v3\"")),
+            "the first connection reads the worktree it saw"
+        );
+
+        // Reconnect under the same HostId: a new instance, the same path,
+        // and a tree that moved on. No snapshot lands, so only the host
+        // identity can fence the old bytes.
+        write_file(
+            &backing,
+            "a.rs",
+            "fn alpha() {}\n\nfn beta() {\n    println!(\"v4\");\n}\n",
+        );
+        vcx.update(|_, cx| {
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &backing, true),
+            );
+        });
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v4\""));
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (_, new) = content_texts(&rows);
+        assert!(has(&new, "\"v4\""), "the live connection's bytes draw");
+        assert!(
+            !has(&new, "\"v3\""),
+            "bytes from the retired connection are gone"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_late_landing_from_another_host_is_not_rendered(cx: &mut TestAppContext) {
+        let (_remote_temp, remote_backing) = foreign_repo();
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_index() {}\n");
+        git_ok(&local_root, &["add", "a.rs"]);
+        write_file(&local_root, "a.rs", "fn local_worktree() {}\n");
+
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let retired = ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, retired.clone()));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        // The desktop's own copy of the same relative path is read, with the
+        // remote key still in flight. A fresh connection then replaces the
+        // host, and the retired read lands late.
+        let local_host = app
+            .update_in(&mut vcx, |_, _, cx| HostRegistry::lookup(cx, HostId::LOCAL))
+            .expect("the local host is registered");
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let local_file = read_content(local_host, local_root.clone(), plan);
+        let epoch = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+        let key = ContentFetchKey {
+            host: id,
+            cwd: foreign_root(),
+            source: DiffSource::Worktree,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&retired, &key),
+                ContentRequest::Spawn
+            );
+        });
+        vcx.update(|_, cx| {
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true),
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(key.clone(), retired.clone(), Ok(local_file), cx);
+        });
+        assert!(
+            !app.update_in(&mut vcx, |app, _, _| content_has(app, "a.rs", "local_")),
+            "the other Host's bytes never land in this overlay"
+        );
+
+        // A frame asks the live connection again, and only its bytes draw.
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v3\""));
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(
+            !has(&old, "local_") && !has(&new, "local_"),
+            "the rejected read left nothing behind"
+        );
+        assert!(has(&new, "\"v3\""), "the remote worktree still draws");
+    }
+
+    #[gpui_kit::test]
+    fn a_staged_then_edited_file_shows_the_index_version(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        // Stage v2, then edit the working tree again to v3. The staged review
+        // is HEAD -> index; only the unstaged review sees v3.
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let (old, new) = content_texts(&rows(&app, &mut vcx));
+        assert!(has(&old, "\"v1\""), "the staged old side is HEAD");
+        assert!(has(&new, "\"v2\""), "the staged new side is the index");
+        assert!(
+            !has(&new, "\"v3\""),
+            "the later working-tree edit is not what a commit would contain"
+        );
+
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v2\""), "the unstaged old side is the index");
+        assert!(has(&new, "\"v3\""), "and its new side is the working tree");
+        assert!(
+            !has(&old, "\"v1\""),
+            "HEAD is not part of the unstaged pair"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_combined_comparison_reads_head_and_the_working_tree(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Head,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""));
+        assert!(has(&new, "\"v3\""));
+        assert!(
+            !has(&new, "\"v2\""),
+            "combined is HEAD -> working tree, not a chain through the index"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_initial_commit_compares_against_an_empty_side(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        let root_rev = commit_all(&root, "root");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(root_rev),
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let beta = content_block(&rows, "beta");
+        assert_eq!(beta.kind, BlockKind::Added);
+        assert_eq!(beta.old, None, "the root commit has no parent to compare");
+        let (old, new) = content_texts(&rows);
+        assert!(old.is_empty(), "no original side is read");
+        assert!(has(&new, "\"v1\""));
+    }
+
+    #[gpui_kit::test]
+    fn a_merge_commit_compares_with_its_first_parent(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"base\");\n}\n",
+        );
+        commit_all(&root, "base");
+        git_ok(&root, &["checkout", "--quiet", "-b", "side"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"side\");\n}\n",
+        );
+        commit_all(&root, "side");
+        git_ok(&root, &["checkout", "--quiet", "main"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"main\");\n}\n",
+        );
+        commit_all(&root, "main");
+        let merge = git_output(&root, &["merge", "--no-ff", "-m", "merge side", "side"]);
+        assert!(!merge.status.success(), "the two edits conflict");
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"merged\");\n}\n",
+        );
+        let merge_rev = commit_all(&root, "merge");
+        assert_eq!(
+            git_ok(&root, &["rev-list", "--parents", "-n", "1", "HEAD"])
+                .split_whitespace()
+                .count(),
+            3,
+            "the fixture really is a merge"
+        );
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(merge_rev),
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"main\""), "the old side is the first parent");
+        assert!(has(&new, "\"merged\""));
+        assert!(
+            !has(&old, "\"side\"") && !has(&new, "\"side\""),
+            "the second parent is not one of the two versions"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_three_dot_range_reads_the_merge_base(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"base\");\n}\n",
+        );
+        commit_all(&root, "base");
+        git_ok(&root, &["checkout", "--quiet", "-b", "feature"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"feature\");\n}\n",
+        );
+        commit_all(&root, "feature");
+        git_ok(&root, &["checkout", "--quiet", "main"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"main\");\n}\n",
+        );
+        commit_all(&root, "main");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Range {
+                base: "main".into(),
+                head: "feature".into(),
+            },
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"base\""), "three dots start at the merge base");
+        assert!(has(&new, "\"feature\""));
+        assert!(
+            !has(&old, "\"main\""),
+            "the base tip's own work is not the old side"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_rename_reads_the_old_and_new_paths(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "old/name.rs",
+            "fn alpha() {\n    println!(\"one\");\n}\n\nfn beta() {\n    println!(\"two\");\n}\n",
+        );
+        commit_all(&root, "base");
+        // `git mv` does not create the destination directory.
+        std::fs::create_dir_all(root.join("new")).unwrap();
+        git_ok(&root, &["mv", "old/name.rs", "new/name.rs"]);
+        write_file(
+            &root,
+            "new/name.rs",
+            "fn alpha() {\n    println!(\"one\");\n}\n\nfn beta() {\n    println!(\"two v2\");\n}\n",
+        );
+        git_ok(&root, &["add", "-A"]);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+
+        // Staged rename: the index's new path against HEAD's old path.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("new/name.rs"),
+            &["new/name.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "new/name.rs"));
+        let staged_rows = rows(&app, &mut vcx);
+        assert_eq!(
+            file_head(&staged_rows, "new/name.rs").shown_path,
+            "old/name.rs → new/name.rs"
+        );
+        let (old, new) = content_texts(&staged_rows);
+        assert!(has(&old, "\"two\""));
+        assert!(has(&new, "\"two v2\""));
+
+        // The same rename as a commit reads its own two paths.
+        let commit = commit_all(&root, "rename");
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(commit),
+            Some("new/name.rs"),
+            &["new/name.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "new/name.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(
+            file_head(&rows, "new/name.rs").shown_path,
+            "old/name.rs → new/name.rs"
+        );
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"two\""));
+        assert!(has(&new, "\"two v2\""));
+    }
+
+    #[gpui_kit::test]
+    fn added_and_deleted_files_keep_their_empty_sides(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "kept.rs", "fn kept() {}\n");
+        write_file(
+            &root,
+            "gone.rs",
+            "fn gone() {\n    println!(\"gone\");\n}\n",
+        );
+        commit_all(&root, "base");
+
+        // Deleted in the working tree: the index still holds the old side,
+        // and the missing new side is empty rather than a read failure.
+        std::fs::remove_file(root.join("gone.rs")).unwrap();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        let worktree_rows = rows(&app, &mut vcx);
+        let gone = content_block(&worktree_rows, "gone");
+        assert_eq!(gone.kind, BlockKind::Deleted);
+        assert_eq!(gone.new, None);
+        let (old, new) = content_texts(&worktree_rows);
+        assert!(has(&old, "println!(\"gone\")"));
+        assert!(new.is_empty(), "a deletion has no new side");
+
+        // The combined comparison reads the same empty working-tree side.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Head,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
+
+        // A staged deletion reads the index's empty side, and the commit's
+        // deletion reads its parent's old side.
+        git_ok(&root, &["add", "gone.rs"]);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
+        let deletion = commit_all(&root, "delete");
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(deletion),
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        assert_eq!(
+            content_block(&rows(&app, &mut vcx), "gone").kind,
+            BlockKind::Deleted
+        );
+
+        // Intent-to-add puts a new file in the worktree patch; the index side
+        // is git's empty blob.
+        write_file(
+            &root,
+            "fresh.rs",
+            "fn fresh() {\n    println!(\"new\");\n}\n",
+        );
+        git_ok(&root, &["add", "-N", "fresh.rs"]);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("fresh.rs"),
+            &["fresh.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "fresh.rs"));
+        let rows = rows(&app, &mut vcx);
+        let fresh = content_block(&rows, "fresh");
+        assert_eq!(fresh.kind, BlockKind::Added);
+        assert_eq!(fresh.old, None);
+        let (old, new) = content_texts(&rows);
+        assert!(old.is_empty(), "an addition has no old side");
+        assert!(has(&new, "println!(\"new\")"));
+    }
+
+    #[gpui_kit::test]
+    fn a_binary_file_keeps_the_existing_indication(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        std::fs::write(root.join("blob.rs"), [0u8, 1, 2, 3]).unwrap();
+        commit_all(&root, "base");
+        std::fs::write(root.join("blob.rs"), [0u8, 9, 8, 7, 6]).unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("blob.rs"),
+            &["blob.rs"],
+        );
+        pump_until(&app, &mut vcx, snapshot_ready);
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        assert!(file_head(&rows, "blob.rs").binary);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(_))),
+            "no structural read is attempted for a binary file"
+        );
+        let has_content = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|overlay| overlay.content.contains_key("blob.rs"))
+        });
+        assert!(!has_content, "binary files never enter the content map");
+    }
+
+    #[gpui_kit::test]
+    fn an_untracked_binary_file_keeps_its_indication(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "kept.rs", "fn kept() {}\n");
+        commit_all(&root, "base");
+        std::fs::write(root.join("blob.rs"), [0u8, 1, 2, 3]).unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("blob.rs"),
+            &["blob.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|overlay| {
+                    matches!(
+                        overlay.content.get("blob.rs"),
+                        Some(ContentState::Failed(ContentFailure::Binary))
+                    )
+                })
+        });
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        assert!(file_head(&rows, "blob.rs").binary);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(_))),
+            "the header's badge replaces a reading or failure note"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn content_mode_keeps_git_line_counts(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        // Git's own count for the move fixture: the whole moved block reads
+        // as removal + addition, which is more than the structural matcher's
+        // inner edits.
+        let numstat = git_ok(&root, &["diff", "--numstat", "--", "a.rs"]);
+        let mut fields = numstat.split_whitespace();
+        let added: u32 = fields.next().unwrap().parse().unwrap();
+        let removed: u32 = fields.next().unwrap().parse().unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let head = file_head(&rows, "a.rs");
+        assert_eq!(
+            (head.added, head.removed),
+            (added, removed),
+            "the header keeps the Git patch's counts"
+        );
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            DiffRow::ContentBlock(head)
+                if head.kind == BlockKind::MovedEdited && head.name.as_deref() == Some("beta")
+        )));
+        let structural = app.update_in(&mut vcx, |app, _, _| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap();
+            let Some(ContentState::Ready(file)) = overlay.content.get("a.rs") else {
+                panic!("content is ready");
+            };
+            (file.file.added, file.file.removed)
+        });
+        assert_ne!(
+            (head.added, head.removed),
+            structural,
+            "the header is Git's count, not the structural block's inner edits"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_repository_change_invalidates_and_reloads_content(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let before = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+
+        // The worktree moves under the open comparison. The SCM epoch is the
+        // repository-change signal the overlay watches.
+        write_file(&root, "a.rs", V3);
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.scm_invalidate(HostId::LOCAL, &root, cx);
+            app.maybe_refresh_diff_overlay(cx);
+        });
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v3\""));
+        let after = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+        assert_ne!(before, after, "a new snapshot starts a new content epoch");
+
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""));
+        assert!(has(&new, "\"v3\""));
+        assert!(!has(&new, "\"v2\""), "the replaced bytes are gone");
+    }
+
+    #[gpui_kit::test]
+    fn a_landing_from_another_source_or_snapshot_is_not_applied(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        let (host, epoch) = app.update_in(&mut vcx, |app, _, cx| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap();
+            (
+                lyrel_ui_base::host_registry::HostRegistry::lookup(cx, HostId::LOCAL)
+                    .expect("the local host is registered"),
+                overlay.content_epoch,
+            )
+        });
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let read = || read_content(host.clone(), root.clone(), plan.clone());
+
+        // The old source's read lands after the overlay moved on.
+        let mut staged_key = ContentFetchKey {
+            host: HostId::LOCAL,
+            cwd: root.clone(),
+            source: DiffSource::Staged,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            let active = app.tabs.active_index();
+            let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
+            overlay.content.remove("a.rs");
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let installed = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .contains_key("a.rs")
+        });
+        assert!(!installed, "a staged read cannot fill a worktree overlay");
+
+        // A refresh's old epoch lands after the new snapshot replaced it.
+        staged_key.source = DiffSource::Worktree;
+        staged_key.epoch = epoch.wrapping_add(1);
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let installed = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .contains_key("a.rs")
+        });
+        assert!(!installed, "a snapshot's old bytes cannot install over it");
+
+        // The matching key is the one that may land.
+        staged_key.epoch = epoch;
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let ready = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .get("a.rs")
+                .is_some_and(|state| matches!(state, ContentState::Ready(_)))
+        });
+        assert!(ready, "the current source and epoch still deliver");
+    }
+
+    #[gpui_kit::test]
+    fn a_landing_for_the_previous_selection_does_not_replace_the_drawn_file(
+        cx: &mut TestAppContext,
+    ) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", "fn alpha() {\n    println!(\"a1\");\n}\n");
+        write_file(&root, "b.rs", "fn beta() {\n    println!(\"b1\");\n}\n");
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", "fn alpha() {\n    println!(\"a2\");\n}\n");
+        write_file(&root, "b.rs", "fn beta() {\n    println!(\"b2\");\n}\n");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        // The reader moves to b while a's bytes are already in hand.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("b.rs"),
+            &["b.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "b.rs"));
+
+        let (host, epoch) = app.update_in(&mut vcx, |app, _, cx| {
+            (
+                lyrel_ui_base::host_registry::HostRegistry::lookup(cx, HostId::LOCAL)
+                    .expect("the local host is registered"),
+                content_epoch(app),
+            )
+        });
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let file = read_content(host.clone(), root.clone(), plan);
+        let key = ContentFetchKey {
+            host: HostId::LOCAL,
+            cwd: root.clone(),
+            source: DiffSource::Worktree,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(key.clone(), host.clone(), Ok(file), cx);
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (_, new) = content_texts(&rows);
+        assert!(has(&new, "\"b2\""), "the selected file is what draws");
+        assert!(
+            !has(&new, "\"a2\""),
+            "a landing for the previous selection cannot replace it"
+        );
+    }
+
     #[gpui_kit::test]
     fn a_moved_and_edited_function_reads_as_one_block_with_its_source(cx: &mut TestAppContext) {
         let (_temp, root) = repository();
@@ -4856,8 +6179,33 @@ mod content_view_tests {
         );
         // The harness window is wide enough for the paired layout.
         assert!(
-            rows.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "inner edits are drawn in the paired layout"
+        );
+
+        // gamma only changed position. It reads as a move, not as a
+        // formatting-only block, and its old position keeps an anchor.
+        let gamma = rows
+            .iter()
+            .find_map(|row| match row {
+                DiffRow::ContentBlock(head) if head.name.as_deref() == Some("gamma") => Some(head),
+                _ => None,
+            })
+            .expect("gamma is a pure move");
+        assert_eq!(gamma.kind, BlockKind::Moved);
+        assert!(
+            !gamma.formatting_only,
+            "a pure move is not a formatting change"
+        );
+        assert_eq!(gamma.edits, 0, "a pure move has no inner rows");
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentAnchor(anchor)
+                    if anchor.name.as_deref() == Some("gamma") && anchor.new_start == 3
+            )),
+            "gamma's old position keeps a jumpable anchor"
         );
     }
 
@@ -4882,13 +6230,7 @@ mod content_view_tests {
             for (hunk_ix, hunk) in cf.file.hunks.iter().enumerate() {
                 for (row, line) in hunk.lines.iter().enumerate() {
                     if line.kind == LineKind::Removed && line.text.contains("println!(\"beta\")") {
-                        return (
-                            RowId {
-                                hunk: hunk_ix,
-                                row,
-                            },
-                            line.text.clone(),
-                        );
+                        return (RowId { hunk: hunk_ix, row }, line.text.clone());
                     }
                 }
             }
@@ -4919,11 +6261,15 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let narrow = rows(&app, &mut vcx);
         assert!(
-            narrow.iter().any(|row| matches!(row, DiffRow::ContentUnified { .. })),
+            narrow
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentUnified { .. })),
             "a narrow dock draws the single-column sequence"
         );
         assert!(
-            !narrow.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            !narrow
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "and not the paired one"
         );
 
@@ -4931,7 +6277,8 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let wide = rows(&app, &mut vcx);
         assert!(
-            wide.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            wide.iter()
+                .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "a wide surface pairs the columns again"
         );
     }
@@ -4970,10 +6317,8 @@ mod content_view_tests {
 
         let rows = rows(&app, &mut vcx);
         assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                DiffRow::ContentStatus(L10nKey::DiffContentUnsupported)
-            )),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(L10nKey::DiffContentUnsupported))),
             "the fallback names its reason"
         );
         assert!(
@@ -5022,7 +6367,13 @@ mod content_view_tests {
                 }],
                 ..Default::default()
             };
-            app.open_supplied_diff(HostId::LOCAL, Arc::new(snap), Some("a.rs".into()), window, cx);
+            app.open_supplied_diff(
+                HostId::LOCAL,
+                Arc::new(snap),
+                Some("a.rs".into()),
+                window,
+                cx,
+            );
             let active = app.tabs.active_index();
             let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.expanded.insert("a.rs".to_string(), true);
@@ -5030,15 +6381,145 @@ mod content_view_tests {
         frame(&app, &mut vcx);
         let rows = rows(&app, &mut vcx);
         assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly)
-            )),
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly))),
             "a patch-only comparison explains itself"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
+            "and falls back to Split, where a supplied patch has no versions to read"
         );
         assert_eq!(
             vcx.update(|_, cx| cx.global::<Config>().diff_view),
             DiffViewMode::Content
+        );
+    }
+
+    fn content_line_text(file: &ContentFile) -> String {
+        file.file
+            .hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter())
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The real SSH acceptance for #389: an isolated remote Git checkout,
+    /// read through the production control link and the same bounded
+    /// selected-file retrieval the desktop uses. Staged-then-edited shows the
+    /// index version; the worktree comparison shows the edit; a desktop
+    /// checkout at the same relative path contributes nothing.
+    ///
+    /// Deferred fixture: needs an isolated pinned native SSH/SFTP endpoint,
+    /// a same-commit `lyrel-server`, and `LYREL_TEST_SSH_LOCAL_SERVER` (see
+    /// `.agent/skills/lyrel-development/SKILL.md`), plus `git` on the remote.
+    /// Run alone with `--ignored --exact`.
+    #[gpui_kit::test]
+    #[ignore = "requires isolated pinned native SSH/SFTP, same-commit server, and LYREL_TEST_SSH_LOCAL_SERVER; run alone"]
+    fn native_ssh_content_review_reads_the_remote_versions(_: &mut TestAppContext) {
+        let binary = PathBuf::from(
+            std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
+        );
+        let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
+        lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
+        let host = fixture.connect_control();
+        assert!(host.is_connected(), "the isolated SSH link is up");
+        let remote_home = PathBuf::from(fixture.remote_home());
+        let repo = host.join(&remote_home, "lyrel-389-content");
+        host.create_dir(&repo, true).expect("remote fixture repo");
+
+        let git = |args: &[&str]| {
+            let out = host.git(&repo, args).expect("remote git runs");
+            assert!(
+                out.success(),
+                "remote git {args:?} failed: {}",
+                out.stderr_trimmed()
+            );
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["config", "user.name", "Content Fixture"]);
+        git(&["config", "user.email", "content@fixture.test"]);
+        git(&["config", "core.autocrlf", "false"]);
+        host.write_file(&host.join(&repo, "a.rs"), V1.as_bytes())
+            .expect("remote base file");
+        git(&["add", "a.rs"]);
+        git(&["commit", "--quiet", "-m", "base"]);
+        // Staged v2, then edited to v3. Only the index side may feed the
+        // staged comparison.
+        host.write_file(&host.join(&repo, "a.rs"), V2.as_bytes())
+            .expect("remote staged file");
+        git(&["add", "a.rs"]);
+        host.write_file(&host.join(&repo, "a.rs"), V3.as_bytes())
+            .expect("remote worktree file");
+
+        // A competing desktop checkout at the same relative path.
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_only() {}\n");
+        git_ok(&local_root, &["add", "a.rs"]);
+
+        let staged = plan_for(&DiffSource::Staged, "a.rs", "a.rs").unwrap();
+        let worktree = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let worker = {
+            let host = Arc::clone(&host);
+            let repo = repo.clone();
+            std::thread::spawn(move || {
+                let staged = fetch_content(&*host, &repo, &staged, FileStatus::Modified)
+                    .expect("the remote staged pair reads");
+                let worktree = fetch_content(&*host, &repo, &worktree, FileStatus::Modified)
+                    .expect("the remote worktree pair reads");
+                (staged, worktree)
+            })
+        };
+        let (staged, worktree) = worker.join().expect("the read thread finishes");
+
+        let staged_text = content_line_text(&staged);
+        assert!(
+            staged_text.contains("\"v1\""),
+            "the staged old side is HEAD"
+        );
+        assert!(
+            staged_text.contains("\"v2\""),
+            "the staged new side is the index"
+        );
+        assert!(
+            !staged_text.contains("\"v3\""),
+            "the worktree edit is not part of the staged comparison"
+        );
+        assert!(
+            !staged_text.contains("local_only"),
+            "the desktop's copy never substitutes for the remote checkout"
+        );
+
+        let worktree_text = content_line_text(&worktree);
+        assert!(
+            worktree_text.contains("\"v2\""),
+            "the unstaged old side is the index"
+        );
+        assert!(
+            worktree_text.contains("\"v3\""),
+            "the unstaged new side is the worktree"
+        );
+        assert!(!worktree_text.contains("local_only"));
+        assert_ne!(host.id(), HostId::LOCAL);
+
+        // A dropped link is a read failure, never bytes reused from the
+        // previous connection.
+        let mut fixture = fixture;
+        fixture.restart_router();
+        let error = host
+            .git_blob(&repo, ":a.rs", 1024)
+            .expect_err("the retired link cannot answer");
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::NotConnected
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::TimedOut
+            ),
+            "a dead link must not present a stale version: {error}"
         );
     }
 }

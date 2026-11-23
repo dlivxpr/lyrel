@@ -32,8 +32,9 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSResponder, NSView};
 use objc2_foundation::{
-    NSArray, NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration,
-    NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID, ns_string,
+    NSArray, NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions,
+    NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest,
+    NSUUID, ns_string,
 };
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
@@ -77,10 +78,14 @@ impl Host {
         })?;
         // SAFETY: the handle stays valid while the GPUI window that produced
         // it is alive, and the surface is dropped with its presentation.
-        let parent_view = unsafe { Retained::retain(parent.view.ns_view.as_ptr().cast::<NSView>()) }
-            .ok_or_else(|| {
-                BrowserSurfaceError::Platform("the window has no view to anchor the page".into())
-            })?;
+        let parent_view =
+            unsafe { Retained::retain(parent.view.ns_view.as_ptr().cast::<NSView>()) }.ok_or_else(
+                || {
+                    BrowserSurfaceError::Platform(
+                        "the window has no view to anchor the page".into(),
+                    )
+                },
+            )?;
 
         let configuration = unsafe { WKWebViewConfiguration::new(mtm) };
         let identifier = NSUUID::from_bytes(super::super::route::site_data_identifier(&site.key));
@@ -133,6 +138,13 @@ impl Host {
             let responder: &NSResponder = &self.webview;
             let _ = window.makeFirstResponder(Some(responder));
         }
+    }
+
+    /// WKWebView keeps its first responder across `setHidden:`/`setVisible:`
+    /// on macOS, so the panel has nothing to hand back; the platform focuses
+    /// the page itself when it is shown again.
+    pub fn has_focus(&self) -> bool {
+        false
     }
 
     pub fn command(&mut self, command: BrowserCommand) -> Result<(), BrowserSurfaceError> {
@@ -238,7 +250,12 @@ fn fail(shared: &Rc<RefCell<Shared>>, message: impl Into<String>) {
         }
         state.closed = true;
     }
-    emit(shared, BrowserEvent::Failed { message: message.into() });
+    emit(
+        shared,
+        BrowserEvent::Failed {
+            message: message.into(),
+        },
+    );
 }
 
 struct NavigationIvars {
@@ -262,7 +279,8 @@ define_class!(
             handler: &block2::DynBlock<dyn Fn(WKNavigationActionPolicy)>,
         ) {
             let request = unsafe { action.request() };
-            let Some(url) = (unsafe { request.URL() }).and_then(|url| unsafe { url.absoluteString() })
+            let Some(url) =
+                (unsafe { request.URL() }).and_then(|url| unsafe { url.absoluteString() })
             else {
                 handler.call((WKNavigationActionPolicy::Cancel,));
                 return;
@@ -278,26 +296,23 @@ define_class!(
                 handler.call((WKNavigationActionPolicy::Cancel,));
                 return;
             }
-            let allowed = self.ivars().shared.try_borrow().is_ok_and(|state| {
-                state.guard.allows(&url)
-            });
+            let allowed = self
+                .ivars()
+                .shared
+                .try_borrow()
+                .is_ok_and(|state| state.guard.allows(&url));
             if !allowed {
-                emit(
-                    &self.ivars().shared,
-                    BrowserEvent::RouteBlocked { url },
-                );
+                emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
                 handler.call((WKNavigationActionPolicy::Cancel,));
                 return;
             }
             // A `download` attribute is a download, not a page.
             let should_download = unsafe { action.shouldPerformDownload() };
-            handler.call((
-                if should_download {
-                    WKNavigationActionPolicy::Cancel
-                } else {
-                    WKNavigationActionPolicy::Allow
-                },
-            ));
+            handler.call((if should_download {
+                WKNavigationActionPolicy::Cancel
+            } else {
+                WKNavigationActionPolicy::Allow
+            },));
         }
 
         #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
@@ -345,7 +360,12 @@ define_class!(
         }
 
         #[unsafe(method(webView:didFailNavigation:withError:))]
-        fn did_fail(&self, webview: &WKWebView, _navigation: Option<&WKNavigation>, error: &NSError) {
+        fn did_fail(
+            &self,
+            webview: &WKWebView,
+            _navigation: Option<&WKNavigation>,
+            error: &NSError,
+        ) {
             emit_failed(&self.ivars().shared, webview, error);
         }
 
@@ -361,10 +381,7 @@ define_class!(
 
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
         fn web_content_process_did_terminate(&self, _webview: &WKWebView) {
-            fail(
-                &self.ivars().shared,
-                "the page's content process stopped",
-            );
+            fail(&self.ivars().shared, "the page's content process stopped");
         }
     }
 );
@@ -436,14 +453,13 @@ define_class!(
                 );
                 return None;
             }
-            let allowed = self.ivars().shared.try_borrow().is_ok_and(|state| {
-                state.guard.allows(&url)
-            });
+            let allowed = self
+                .ivars()
+                .shared
+                .try_borrow()
+                .is_ok_and(|state| state.guard.allows(&url));
             if !allowed {
-                emit(
-                    &self.ivars().shared,
-                    BrowserEvent::RouteBlocked { url },
-                );
+                emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
                 return None;
             }
             // Only a real link click becomes a sibling tab. A script-opened
@@ -609,12 +625,15 @@ impl BrowserTitleObserver {
         let this = Self::alloc(mtm).set_ivars(TitleIvars { webview, shared });
         let observer: Retained<Self> = unsafe { msg_send![super(this), init] };
         unsafe {
-            observer.ivars().webview.addObserver_forKeyPath_options_context(
-                &observer,
-                ns_string!("title"),
-                NSKeyValueObservingOptions::New,
-                null_mut(),
-            );
+            observer
+                .ivars()
+                .webview
+                .addObserver_forKeyPath_options_context(
+                    &observer,
+                    ns_string!("title"),
+                    NSKeyValueObservingOptions::New,
+                    null_mut(),
+                );
         }
         observer
     }
@@ -623,10 +642,9 @@ impl BrowserTitleObserver {
 impl Drop for BrowserTitleObserver {
     fn drop(&mut self) {
         unsafe {
-            self.ivars().webview.removeObserver_forKeyPath(
-                self,
-                ns_string!("title"),
-            );
+            self.ivars()
+                .webview
+                .removeObserver_forKeyPath(self, ns_string!("title"));
         }
     }
 }

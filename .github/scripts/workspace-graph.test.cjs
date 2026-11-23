@@ -16,6 +16,7 @@ function graph() {
       { name: 'lyrel-core', dependencies: [dep('lyrel-protocol')] },
       { name: 'lyrel-protocol', dependencies: [] },
       { name: 'lyrel-document', dependencies: [] },
+      { name: 'lyrel-content-diff', dependencies: [dep('tree-sitter')] },
       { name: 'lyrel-insights', dependencies: [dep('lyrel-protocol')] },
       { name: 'lyrel-updater', dependencies: [] },
       { name: 'lyrel-markdown-editor', dependencies: [dep('lyrel-document')] },
@@ -94,6 +95,16 @@ test('permits Markdown only through the opt-in native harness', () => {
 
   root.features.default.push('native-markdown-tests');
   assert.deepEqual(check(input), ['lyrel declares a direct production dependency on lyrel-markdown-editor']);
+});
+
+test('allows the Side Panel engines only on their native targets', () => {
+  const input = graph();
+  const root = input.packages.find(pkg => pkg.name === 'lyrel');
+  root.dependencies.push({ ...dep('webview2-com'), target: 'cfg(windows)' });
+  root.dependencies.push({ ...dep('wry'), target: 'cfg(target_os = "macos")' });
+  assert.deepEqual(check(input), []);
+  root.dependencies.push(dep('wry'));
+  assert.deepEqual(check(input), ['lyrel declares a direct production dependency on wry']);
 });
 
 test('keeps the server one edge deep and detects renamed direct GUI engine dependencies', () => {

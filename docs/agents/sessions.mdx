@@ -84,6 +84,7 @@ daemon 重启依然遵循原有会话恢复规则，持久停放记录不代表�
 | pi | 核对精确源文件 header，以正式 `pi --fork <路径> --mode rpc` 获取新 ID／文件，再在新窗格执行 `pi --session <新路径>` |
 | Kimi Code 2.2.0 | 在源 Host 原生 `kimi fork <id>`，严格验证stdout与实际新目标后，在新窗格原生 `kimi --session <新ID>` |
 | Hermes | 从所选安装的 launcher 取得准确运行时，调用 `session.branch_stored` 返回持久化新 ID，再在新窗格原生恢复 |
+| Antigravity 1.5.15 | 不提供：官方 `/fork`（别名 `/branch`）只切换发起它的交互终端；`agy --help` 没有非交互 CLI fork 入口，两窗格契约未验证（#386） |
 
 lyrel 只调用智能体自己的操作，不复制内部会话文件。原生操作与新窗格打开分为独立阶段；实际证明范围见[验收状态与已知限制](#acceptance-status)，不能把一条可构造的命令当作分叉已经成功。
 
@@ -292,6 +293,74 @@ seance 来源不作为可恢复主会话列出。标题取正式 title slot／�
 既有原生操作探针取得真实新 header ID，并分别恢复源与分叉；真实 Windows GUI 裸启动也已有独立证据。
 这些结果不能外推成功模型、多请求、审批、后台工作或两个会话继续对话的完整矩阵。
 
+## Antigravity 1.5.15 的历史与精确恢复
+
+Antigravity 使用自己的 `agy` CLI 数据目录，不与桌面 Antigravity 2.0 或 IDE 混用。已观测的
+`antigravity-cli` 1.5.15 存储布局为：
+
+- `<home>/.gemini/antigravity-cli/conversation_summaries.db`：搜索索引；`search_schema_version`
+  当前为 `3`，`conversation_summaries` 记录原生 ID、标题、预览、工作区 URI、更新时间和
+  `app_data_dir`。
+- `<home>/.gemini/antigravity-cli/conversations/<id>.db`：单个已保存对话。
+- `<home>/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`：观察钩子
+  也上报的精确 transcript 文件。
+
+三个历史入口共用同一只读适配器。读取通过所属 Host 既有的只读 SQLite 浏览能力
+（`sqlite-browse-v1`）与 `agent-environment` 完成，不新增 provider 专用 control 变体；旧 peer
+缺少这些能力时明确报告需要更新，其他来源照常列出。索引版本不是 `3`、缺少已知列、工作区 URI
+无法解码或行身份不完整时按“未知格式”报告，不把空结果冒充为没有会话。
+
+列表只包含 CLI 根级对话：`app_data_dir = antigravity-cli`、无父对话、`nesting_depth = 0`。
+桌面／IDE 记录和子代理对话不会出现。时间取自索引；标题为空时退回首条预览，再退回原生 ID。
+目录筛选按所属 Host 的路径语义进行；`--add-dir` 的附加目录不替代主工作区。
+
+恢复前适配器重新读取同一原生 ID，核对 `app_data_dir`、根级身份、记录的工作目录和
+`conversations/<id>.db`，然后只构造交互式 `agy --conversation <id>`；`--continue`／`-c`、
+print 模式、提示词和其他一次性参数会从重放参数中移除，未知选项 fail-closed。已有窗格以
+`conversationId` 精确匹配时直接聚焦，不再启动第二个写入者。上游若实际打开了另一对话，
+观察钩子报告的新 ID 会产生“不是精确恢复”的错误通知，并保留该新对话供用户检查。
+
+`antigravity-v1` 能力只协商 session operation 的执行；旧 server 不接收该请求。Antigravity
+没有已验证的原生删除路径，列表保持不可删除；Fork 按[下文门禁](#antigravity-fork-gate)保持关闭。
+
+<a id="antigravity-fork-gate"></a>
+### Fork 门禁（#386）
+
+Antigravity 的工作台 Fork 目前是**关闭**状态，而不是已验证的 Fork 实现。对
+`antigravity-cli` 1.5.15 复核的结果：
+
+- 官方[对话管理文档](https://antigravity.google/docs/cli/conversations/#branching-with-fork)说明，
+  `/fork`（别名 `/branch`）把截至当前轮次的整段对话复制到新会话，并分配新的唯一会话 ID；
+  随后“your active terminal switches immediately to the new branch”，要回到原分支需再执行
+  `/resume`。这是当前 TUI 内的交互操作，不是可由另一个进程创建独立窗格的入口。
+- 本机 `agy --version` 为 `1.5.15`；`agy --help` 只列出 `--conversation`、`-c`／`--continue`、
+  `--prompt-interactive`、print 模式等参数和既有子命令，没有 `--fork` 或 fork 子命令。
+- 1.5.12 的 `agy changelog` 还说明，`/fork` 会把较大的 artifact 目录留在原会话并让分叉引用它；
+  删除原会话会同时删除这些文件。对话 ID 可以不同，但 artifact 归属并非完全独立。
+- 官方 [hooks 文档](https://antigravity.google/docs/hooks/)只定义 `SessionStart` 在“新对话会话
+  开始”时触发，没有定义 `/fork` 的完成事件或新 ID 返回值。lyrel 用每次事件的 `conversationId`
+  校验身份，但不能据此在创建完成前取得并核验独立的新 ID。
+
+ACP 集成是父规格明确排除的范围，也没有被本实现当作替代 Fork 路线。
+
+工作台 Fork 要求原窗格继续停留在原 ID 与原对话，同时新窗格拥有已核验、可独立恢复的新 ID。
+在源窗格输入 `/fork` 会把该终端切到新分支，直接破坏“源保持不变”；先在新窗格恢复源再输入
+`/fork` 则只能依赖斜杠命令注入，lyrel 无法在创建前核验新 ID，还会短暂制造第二个源写入者。
+lyrel 不通过文本注入伪造原生 fork，因此门禁保持关闭：
+
+- 窗格菜单、标签页菜单和 Search Everywhere 不为 Antigravity 显示 Fork 动作；File 菜单等
+  通用入口执行时也会在联系 Host 前拒绝并说明原因。
+- 即使直接提交 `SessionOperationKind::Fork`，适配器也会在读取索引或创建任何会话之前以
+  `Unsupported` 拒绝，并提示在 `agy` 窗格内使用 `/fork`。源索引和会话文件保持字节不变。
+- 这不等同于“已验证 Fork”：没有创建新窗格，也没有可独立恢复的新会话证据。真实两窗格运行
+  尚未执行；待上游提供非交互 fork 入口或可核验的独立创建契约后，再按同一夹具补做本机、
+  远端 SSH／WSL 与 macOS 验收。
+
+待验收夹具（deferred，未执行）：在本机 Windows／macOS 以及受管远端 SSH／WSL 上，让源窗格
+运行真实 `agy` 1.5.15 对话 X 并触发工作台 Fork。通过条件必须同时满足：源窗格仍报告 X 且其
+对话内容未被切换或改写；新窗格报告不同 ID Y；关闭并单独恢复 Y 仍回到同一对话。当前没有
+满足该前提的非交互创建入口，因此不记录为通过。
+
 <a id="acceptance-status"></a>
 ## 验收状态与已知限制
 
@@ -299,6 +368,7 @@ seance 来源不作为可恢复主会话列出。标题取正式 title slot／�
 
 - 已有 Windows／Linux 构建、契约套件、真实 CLI→daemon→PTY、部分正式 Host 会话操作及隔离 SSH／SFTP 证据；Windows GUI 语言、shell 创建及 OpenCode 共享服务生命周期也有独立实跑记录。这些结果不代表五种智能体的完整成功模型矩阵均已通过。
 - Kimi Code 2.2.0 保留原生 TUI 的自动首任务仍缺公开接收／交接契约；Hermes 裸启动及部分恢复／分叉后的即时身份仍缺正式事件，不能从屏幕或内部 breadcrumb 猜测。各自的其他能力不能掩盖这些缺口。
+- Antigravity #385 的索引读取与精确恢复准备已用真实 1.5.15 存储布局的 SQLite 夹具覆盖，混合版本能力拒绝也有协议回归；但真实 `agy` TUI 的恢复、上游实际打开另一对话时的运行表现、远端 SSH／WSL 和 macOS 实机尚未运行。精确性依赖 #384 钩子上报的 `conversationId`；缺少钩子时只能确认预备身份，不能声称恢复已被上游确认。原生删除仍不在支持范围；Fork 的 1.5.15 上游限制与关闭门禁见[上文](#antigravity-fork-gate)。门禁回归覆盖会话行不提供 Fork、活动窗格与历史入口在联系 Host 前拒绝、协议在读取或创建会话前拒绝；真实两窗格运行未执行，不能算作已验证 Fork。
 - 多请求、真实审批、重试／压缩、后台工作及活跃写入的完整组合仍需分别验收；模型连接错误和终态收敛不等同成功模型回复。
 - macOS 自有适配尚无完整原生实机证据，该独立验收门已获豁免并记录为已接受风险，而非通过。GSSAPI 需要票据与真实服务前提；Windows 没有该认证实现。
 - 远端晚到 pane 的 RAII 回收已修正，但没有新增真实 SSH 桌面取消场景的运行证明。平台包、在线更新、签名、公证及真实系统注册仍各自需要对应环境与资产，不能由本机测试外推。

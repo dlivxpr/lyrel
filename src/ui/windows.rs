@@ -1,7 +1,7 @@
 use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Bounds, Global, Styled as _,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, point, px, size,
+    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowId, WindowOptions, point, px, size,
 };
 
 use crate::core::window_state::{WindowGeometry as _, WindowState};
@@ -113,6 +113,16 @@ impl WindowRegistry {
             .iter()
             .find(|w| w.workspace == workspace && w.app.upgrade().is_some())
             .map(|w| w.app.clone())
+    }
+
+    /// The live workbench owning `window`, for window-scoped signals such as a
+    /// dialog's native-surface cover.
+    pub(crate) fn app_for_window(cx: &App, window: WindowId) -> Option<gpui_kit::Entity<LyrelApp>> {
+        cx.try_global::<Self>()?
+            .windows
+            .iter()
+            .find(|w| w.handle.window_id() == window)
+            .and_then(|w| w.app.upgrade())
     }
 
     pub fn refresh_locale(cx: &mut App, except: Option<WorkspaceId>) {

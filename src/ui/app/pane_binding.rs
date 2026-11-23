@@ -232,6 +232,7 @@ impl LyrelApp {
         cx: &mut Context<LyrelApp>,
     ) {
         cx.subscribe_in(view, window, |app, view, _: &ChildExited, window, cx| {
+            app.forget_exact_resume(view.entity_id());
             app.on_child_exited(view.clone(), window, cx);
         })
         .detach();
@@ -254,8 +255,9 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
+            |app, view, _: &lyrel_terminal::view::AgentSessionChanged, window, cx| {
                 app.save_session(cx);
+                app.note_agent_session_changed(view, window, cx);
                 cx.notify();
             },
         )
@@ -269,6 +271,8 @@ impl LyrelApp {
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
                 // The same transition reshapes the inbox's live Pending rows.
                 crate::ui::notification_history::note_agent_status_changed(cx);
+                // And the process-wide system badge.
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             },
         )
         .detach();

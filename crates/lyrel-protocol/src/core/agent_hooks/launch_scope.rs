@@ -220,6 +220,21 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                 "--query-file",
             ]
             .contains(&key);
+        let antigravity_value = agent == HookAgent::Antigravity
+            && [
+                "--prompt-interactive",
+                "-i",
+                "--effort",
+                "--input-format",
+                "--json-schema",
+                "--output-format",
+                "--print-timeout",
+                "--project",
+                "--log-file",
+                "--settings",
+                "--conversation",
+            ]
+            .contains(&key);
         let takes_value = if agent == HookAgent::Pi {
             crate::core::cli_agent::PI_VALUE_OPTIONS.contains(&key)
                 || matches!(
@@ -234,7 +249,10 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                         | "-r"
                 )
         } else {
-            values.contains(&key) || hermes_value || (agent == HookAgent::OpenCode && key == "-s")
+            values.contains(&key)
+                || hermes_value
+                || antigravity_value
+                || (agent == HookAgent::OpenCode && key == "-s")
         };
         if takes_value {
             let value = if let Some(value) = inline {
@@ -266,6 +284,19 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
         } else if !switches.contains(&key)
             && !(agent == HookAgent::Pi && crate::core::cli_agent::PI_SWITCHES.contains(&key))
             && !(agent == HookAgent::OpenCode && key == "--auto")
+            && !(agent == HookAgent::Antigravity
+                && [
+                    "--add-dir",
+                    "--dangerously-skip-permissions",
+                    "--disable-slash-commands",
+                    "--new-project",
+                    "--print",
+                    "-p",
+                    "--remote-agent",
+                    "--remote-control",
+                    "--sandbox",
+                ]
+                .contains(&key))
             && !(agent == HookAgent::Hermes
                 && [
                     "--verbose",

@@ -387,6 +387,12 @@ pub struct Config {
     /// Running, Waiting, Ended and Failed — see [`ProgramActivity`].
     #[serde(default)]
     pub program_activity: ProgramActivity,
+    /// One-time migration marker for the system-badge column (#397). The
+    /// activity matrix (#396) wrote `badge: false` for every row before the
+    /// column existed; a config without this marker gets the approved
+    /// Waiting/Failed badge defaults once, then the key is saved as true.
+    #[serde(default)]
+    pub badge_defaults_applied: bool,
     /// Separate desktop delivery for ordinary command results and explicit
     /// OSC notices — see [`TerminalNotifications`].
     #[serde(default)]
@@ -796,9 +802,9 @@ impl ActivityState {
 }
 
 /// What one activity row may do. `tab` drives the tab strip's own marks,
-/// `desktop` the OS banner, `sound` the alert sound and `badge` the
-/// platform count on the app's own icon; an enabled `badge` with nothing to
-/// count yet is wired up with the system-badge column.
+/// `desktop` the OS banner, `sound` the alert sound and `badge` the platform
+/// count on the app's own icon: the number of distinct terminal tabs whose
+/// panes currently qualify for that row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ActivityChannels {
@@ -807,9 +813,11 @@ pub struct ActivityChannels {
     #[serde(default = "default_true")]
     pub desktop: bool,
     pub sound: bool,
-    /// No per-row function: a row whose `badge` key was written stays with
-    /// it, and a missing one follows the struct default; the Waiting/Failed
-    /// rows override that when the whole row is absent.
+    /// Whether a tab with this activity counts once toward the app icon's
+    /// system badge. Waiting and Failed default on, Ended stays off, and
+    /// Running has no badge channel at all. A row written without this key
+    /// keeps the struct default (off); a whole missing row takes the
+    /// Waiting/Failed default above.
     #[serde(default)]
     pub badge: bool,
 }
@@ -848,7 +856,7 @@ impl Default for RunningChannels {
 /// when unfocused / always) for the desktop and sound channels; these rows
 /// decide whether a channel is open at all, and closing one only spares the
 /// interruption — the event's history record is already written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ProgramActivity {
     pub running: RunningChannels,
@@ -857,6 +865,19 @@ pub struct ProgramActivity {
     pub ended: ActivityChannels,
     #[serde(default = "default_activity_failed")]
     pub failed: ActivityChannels,
+}
+
+impl Default for ProgramActivity {
+    /// A fresh install gets the approved badge defaults even without a
+    /// `config.json`: Waiting and Failed badge, Ended does not.
+    fn default() -> Self {
+        Self {
+            running: RunningChannels::default(),
+            waiting: default_activity_waiting(),
+            ended: ActivityChannels::default(),
+            failed: default_activity_failed(),
+        }
+    }
 }
 
 impl ProgramActivity {
@@ -1059,6 +1080,7 @@ impl Default for Config {
             sidebar_auto_grouping: true,
             notify_on_command_finish: NotifyMode::Unfocused,
             program_activity: ProgramActivity::default(),
+            badge_defaults_applied: true,
             terminal_notifications: TerminalNotifications::default(),
             check_for_updates: true,
             auto_download_updates: true,
@@ -1385,6 +1407,16 @@ impl Config {
             && command.trim().is_empty()
         {
             self.link_file_command = None;
+        }
+        // The system-badge column arrived after the activity matrix had
+        // already saved `badge: false` for every row. Before the column
+        // existed no user could have chosen that value, so a config without
+        // the marker gets the approved Waiting/Failed defaults once. A later
+        // explicit off carries the marker and is preserved.
+        if !self.badge_defaults_applied {
+            self.program_activity.waiting.badge = true;
+            self.program_activity.failed.badge = true;
+            self.badge_defaults_applied = true;
         }
         // Absent means a config written before file links could open in the
         // built-in editor. Anyone who had already pointed `link_file_command`
@@ -2055,6 +2087,50 @@ mod tests {
             assert!(NotifyMode::Always.allows(watched));
             assert_eq!(NotifyMode::Unfocused.allows(watched), !watched);
         }
+    }
+
+    #[test]
+    fn activity_matrix_defaults_badge_waiting_and_failed_only() {
+        let cfg = ProgramActivity::default();
+        assert!(cfg.waiting.badge);
+        assert!(cfg.failed.badge);
+        assert!(!cfg.ended.badge);
+        assert!(!cfg.channels(ActivityState::Running).badge);
+        assert!(cfg.channels(ActivityState::Waiting).badge);
+        assert!(cfg.channels(ActivityState::Failed).badge);
+
+        // A config written before the matrix gains the approved badge
+        // defaults without touching its other keys.
+        let old: Config = serde_json::from_str(r#"{"font_size": 17.0}"#).unwrap();
+        assert!(old.program_activity.waiting.badge);
+        assert!(old.program_activity.failed.badge);
+        assert!(!old.program_activity.ended.badge);
+
+        // A row that was written without the badge key keeps the row's own
+        // struct default; only a whole missing row takes the approved one.
+        let partial: Config =
+            serde_json::from_str(r#"{"program_activity":{"waiting":{"tab":false}}}"#).unwrap();
+        assert!(!partial.program_activity.waiting.tab);
+        assert!(!partial.program_activity.waiting.badge);
+
+        // A config written before the badge column existed has the marker
+        // absent and gets the approved defaults once...
+        let mut legacy: Config = serde_json::from_str(
+            r#"{"program_activity":{"waiting":{"badge":false},"failed":{"badge":false}}}"#,
+        )
+        .unwrap();
+        legacy.sanitize();
+        assert!(legacy.program_activity.waiting.badge);
+        assert!(legacy.program_activity.failed.badge);
+        assert!(legacy.badge_defaults_applied);
+
+        // ...while a later explicit choice carries the marker and survives.
+        let mut chosen: Config = serde_json::from_str(
+            r#"{"badge_defaults_applied":true,"program_activity":{"waiting":{"badge":false}}}"#,
+        )
+        .unwrap();
+        chosen.sanitize();
+        assert!(!chosen.program_activity.waiting.badge);
     }
 
     #[test]

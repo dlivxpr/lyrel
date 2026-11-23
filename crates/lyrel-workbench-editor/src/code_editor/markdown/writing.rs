@@ -221,12 +221,14 @@ fn open_color(
     });
     let target = editor.downgrade();
     let return_focus = editor.read(cx).focus_handle(cx);
+    let cover = lyrel_ui_base::native_surface::cover(window, cx);
     window.open_dialog(cx, move |dialog, _, _| {
         let commit_picker = picker.clone();
         let target = target.clone();
         let request = request.clone();
         let clear_picker = picker.clone();
         let focus = return_focus.clone();
+        let close_cover = cover.clone();
         dialog
             .title(title)
             .child(draft.clone())
@@ -285,7 +287,10 @@ fn open_color(
                 });
                 true
             })
-            .on_close(move |_, window, cx| focus.focus(window, cx))
+            .on_close(move |_, window, cx| {
+                close_cover.release(cx);
+                focus.focus(window, cx);
+            })
     });
 }
 fn pack_rgba(color: Hsla) -> u32 {

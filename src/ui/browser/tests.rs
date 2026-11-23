@@ -1,7 +1,7 @@
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
 
-use super::{BrowserCommand, BrowserEvent, layout_active_web};
+use super::{BrowserCommand, BrowserEvent, PageStatus, RouteState, layout_active_web};
 use crate::ui::app::test_window::harness_with_tabs;
 
 #[gpui_kit::test]
@@ -63,7 +63,6 @@ use lyrel_ui_base::route::ForwardRoute;
 use lyrel_ui_base::session::WorkspaceStore;
 
 use super::route::{BrowserForwardVerifier, ForwardVerifier};
-use super::{BrowserCommand, PageStatus, RouteState, layout_active_web};
 
 /// The agreed test seam: the browser's real verification path, with the
 /// daemon's forward replaced by a recording answer. Tests switch the answer
@@ -130,9 +129,7 @@ fn settle(vcx: &mut gpui_kit::VisualTestContext) {
 }
 
 #[gpui_kit::test]
-fn a_host_bound_page_verifies_before_load_and_keeps_the_host_address(
-    cx: &mut TestAppContext,
-) {
+fn a_host_bound_page_verifies_before_load_and_keeps_the_host_address(cx: &mut TestAppContext) {
     let host = remote_host(cx);
     let verifier = RecordingVerifier::new(Ok(53124));
     cx.update(|cx| {

@@ -6,8 +6,8 @@
 //!
 //! 匹配是保守的：只有可靠证据（内容完全一致，或同名同类且互相唯一最优
 //! 的相似块）才建立移动/修改关系；其余一律保持为新增和删除，不断言无法
-//! 确立的关系。仅格式（空白）变化的块标记为 [`Block::formatting_only`]，
-//! 由视图折叠成可发现的提示。
+//! 确立的关系。位置不变、仅格式（空白）变化的修改标记为
+//! [`Block::formatting_only`]，由视图折叠成可发现的提示。
 
 mod languages;
 
@@ -102,9 +102,10 @@ pub struct Block {
     /// The block's inner line diff. Empty for `Moved` and for
     /// `formatting_only` blocks.
     pub edits: Vec<Edit>,
-    /// The two sides differ only in whitespace runs: comments, string
-    /// contents and significant indentation are unchanged. Views collapse
-    /// these blocks into a discoverable marker.
+    /// An in-place modification whose two sides differ only in whitespace
+    /// runs: comments, string contents and significant indentation are
+    /// unchanged. Views collapse these blocks into a discoverable marker. A
+    /// move is never formatting only — its empty edit list already says so.
     pub formatting_only: bool,
 }
 
@@ -261,8 +262,10 @@ fn extract_items(spec: &LangSpec, text: &str) -> Result<Vec<RawItem>, ContentErr
 
 /// The item nodes one top-level node contributes. Most languages contribute
 /// the node itself; Go contributes one item per spec inside a grouped
-/// declaration, and wrappers (export statements, decorators) are unwrapped
-/// before classification.
+/// declaration, JSON its top-level keys, and YAML the mapping pairs under its
+/// document layers. Wrappers (export statements, decorators, ambient
+/// declarations) stay as the item node so their text and span are part of the
+/// block; classification looks through them (see [`classify_node`]).
 fn item_nodes<'tree>(
     spec: &LangSpec,
     node: tree_sitter::Node<'tree>,
@@ -276,22 +279,6 @@ fn item_nodes<'tree>(
         let mut cursor = node.walk();
         return node.named_children(&mut cursor).collect();
     }
-    if (spec.unwrap)(node.kind()) {
-        let mut cursor = node.walk();
-        let inner: Vec<_> = node
-            .named_children(&mut cursor)
-            .into_iter()
-            .filter(|n| n.kind() != "comment")
-            .collect();
-        let mut out = Vec::new();
-        for n in inner {
-            out.extend(item_nodes(spec, n));
-        }
-        if out.is_empty() {
-            out.push(node);
-        }
-        return out;
-    }
     if spec.name == "go"
         && matches!(
             node.kind(),
@@ -302,7 +289,7 @@ fn item_nodes<'tree>(
         let specs: Vec<_> = node
             .named_children(&mut cursor)
             .into_iter()
-            .filter(|n| n.kind().ends_with("_spec"))
+            .filter(|n| matches!(n.kind(), "type_spec" | "type_alias" | "const_spec" | "var_spec"))
             .collect();
         if !specs.is_empty() {
             return specs;
@@ -311,13 +298,48 @@ fn item_nodes<'tree>(
     vec![node]
 }
 
+/// The node whose kind and fields name an item, looking through the language's
+/// wrappers. The wrapper itself still supplies the item's text and span, so
+/// `export`, `declare`, and Python decorators remain reviewable content.
+fn classify_node<'tree>(
+    spec: &LangSpec,
+    node: tree_sitter::Node<'tree>,
+) -> tree_sitter::Node<'tree> {
+    let mut current = node;
+    loop {
+        if !(spec.unwrap)(current.kind()) {
+            return current;
+        }
+        let mut cursor = current.walk();
+        let inner = current
+            .child_by_field_name("declaration")
+            .or_else(|| current.child_by_field_name("definition"))
+            .or_else(|| {
+                current
+                    .named_children(&mut cursor)
+                    .find(|n| !matches!(n.kind(), "comment" | "decorator"))
+            });
+        match inner {
+            Some(next) => current = next,
+            None => return current,
+        }
+    }
+}
+
 fn raw_item(spec: &LangSpec, text: &str, node: tree_sitter::Node) -> RawItem {
     let start_byte = node.start_byte();
-    let end_byte = node.end_byte();
+    let mut end_byte = node.end_byte();
+    // Some grammars (TOML tables) fold trailing line endings and blank lines
+    // into the node. The block's range is its content, not the gap after it.
+    let trimmed = text[start_byte..end_byte].trim_end();
+    if !trimmed.is_empty() {
+        end_byte = start_byte + trimmed.len();
+    }
     let slice = &text[start_byte..end_byte];
-    let kind: Option<&KindSpec> = languages::kind_spec(spec, node.kind());
+    let classified = classify_node(spec, node);
+    let kind: Option<&KindSpec> = languages::kind_spec(spec, classified.kind());
     let (label, name) = match kind {
-        Some(k) => (k.label, read_name(k, text, node)),
+        Some(k) => (k.label, read_name(k, text, classified)),
         None => ("item", None),
     };
     RawItem {
@@ -325,7 +347,7 @@ fn raw_item(spec: &LangSpec, text: &str, node: tree_sitter::Node) -> RawItem {
         name,
         start_byte,
         end_byte,
-        norm: normalize(slice),
+        norm: normalize(slice, spec.significant_indent),
         text: slice.to_string(),
     }
 }
@@ -343,6 +365,10 @@ fn read_name(kind: &KindSpec, text: &str, node: tree_sitter::Node) -> Option<Str
             }
             None
         }
+        NameRule::FirstLine => {
+            let first = text[node.start_byte()..node.end_byte()].lines().next()?.trim();
+            (!first.is_empty()).then(|| first.to_string())
+        }
         NameRule::Header => {
             let body_start = node
                 .child_by_field_name("body")
@@ -351,6 +377,19 @@ fn read_name(kind: &KindSpec, text: &str, node: tree_sitter::Node) -> Option<Str
             let header = text[node.start_byte()..body_start].trim();
             (!header.is_empty()).then(|| header.to_string())
         }
+        NameRule::Declarator => {
+            let mut cursor = node.walk();
+            let mut declarators = node
+                .named_children(&mut cursor)
+                .filter(|n| n.kind() == "variable_declarator");
+            let first = declarators.next()?;
+            if declarators.next().is_some() {
+                return None;
+            }
+            let name = first.child_by_field_name("name")?;
+            let name = text[name.start_byte()..name.end_byte()].trim().to_string();
+            (!name.is_empty()).then_some(name)
+        }
         NameRule::Text => None,
     }
 }
@@ -358,8 +397,28 @@ fn read_name(kind: &KindSpec, text: &str, node: tree_sitter::Node) -> Option<Str
 /// Whitespace-insensitive token stream, for formatting-only detection and
 /// fuzzy similarity. Comments and string contents survive as tokens, so a
 /// change to either is never mistaken for a formatting change.
-fn normalize(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+///
+/// In whitespace-significant languages (Python, YAML) a line's leading
+/// whitespace is structure, so it stays in the stream: dedenting a statement
+/// out of a block is an edit, not formatting. Blank lines and trailing spaces
+/// remain cosmetic.
+fn normalize(text: &str, significant_indent: bool) -> String {
+    if !significant_indent {
+        return text.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end();
+            let rest = line.trim_start();
+            if rest.is_empty() {
+                return None;
+            }
+            let indent = &line[..line.len() - rest.len()];
+            let tokens = rest.split_whitespace().collect::<Vec<_>>().join(" ");
+            Some(format!("{indent}{tokens}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Token multiset similarity in `[0, 1]`, cheap and formatting-robust.
@@ -573,11 +632,16 @@ fn assemble(
         let old_span = old_item.span(old_index);
         let new_span = new_item.span(new_index);
 
-        let formatting_only = old_item.norm == new_item.norm;
-        // A block with nothing but formatting to show is a plain move: there
-        // are no edits inside it, so `MovedEdited` would promise rows that do
-        // not exist. The formatting flag still drives the collapsed marker.
-        let kind = match (kind, formatting_only) {
+        let only_formatting = old_item.norm == new_item.norm;
+        // Only an in-place modification can be a formatting-only change; a
+        // block that left its first line is a move, and its empty edit list
+        // already says nothing inside it changed.
+        let formatting_only = only_formatting && old_span.start == new_span.start;
+        // A moved block with nothing but formatting to show is still a plain
+        // move: there are no edits inside it, so `MovedEdited` would promise
+        // rows that do not exist. The move is the primary fact; the formatting
+        // flag is reserved for in-place modifications.
+        let kind = match (kind, only_formatting) {
             (BlockKind::MovedEdited, true) => BlockKind::Moved,
             (kind, _) => kind,
         };

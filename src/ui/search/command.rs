@@ -1177,4 +1177,45 @@ mod gpui_tests {
             );
         });
     }
+
+    /// A session row offers Fork only where the agent has a verified
+    /// independent route. Antigravity's `/fork` switches its own terminal, so
+    /// the row must not promise a second pane lyrel cannot create (#386).
+    #[gpui_kit::test]
+    fn session_actions_offer_fork_only_with_a_verified_route(cx: &mut TestAppContext) {
+        lyrel_ui_base::config::pin_test_config_dir();
+        cx.update(|cx| {
+            cx.set_global(Config::default());
+            lyrel_ui_base::i18n::set_locale("en");
+            let kind = |agent: CLIAgent| CommandKind::ResumeSession {
+                agent,
+                session_id: "conversation".into(),
+                cwd: Some(std::path::PathBuf::from("/repo")),
+                host: lyrel_ui_base::host_ops::HostId::LOCAL,
+                scope: None,
+            };
+            let actions = |agent: CLIAgent, cx: &App| {
+                Item::session_actions(&kind(agent), cx).expect("a resume row")
+            };
+            let antigravity = actions(CLIAgent::Antigravity, cx);
+            assert!(
+                antigravity
+                    .iter()
+                    .any(|item| matches!(&item.kind, CommandKind::ResumeSession { .. })),
+                "the exact conversation can still be resumed"
+            );
+            assert!(
+                !antigravity
+                    .iter()
+                    .any(|item| matches!(&item.kind, CommandKind::ForkSession { .. })),
+                "Antigravity has no verified independent fork route to offer"
+            );
+            let pi = actions(CLIAgent::Pi, cx);
+            assert!(
+                pi.iter()
+                    .any(|item| matches!(&item.kind, CommandKind::ForkSession { .. })),
+                "an agent with a verified route still offers the fork row"
+            );
+        });
+    }
 }

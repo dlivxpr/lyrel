@@ -117,8 +117,9 @@ impl RouteGuard {
         match self {
             Self::Open => true,
             Self::DenyLoopback => super::policy::loopback_origin(address).is_none(),
-            Self::Origin(origin) => super::policy::loopback_origin(address)
-                .is_none_or(|candidate| candidate == *origin),
+            Self::Origin(origin) => {
+                super::policy::loopback_origin(address).is_none_or(|candidate| candidate == *origin)
+            }
         }
     }
 }
@@ -216,6 +217,13 @@ impl BrowserParentWindow {
 pub struct BrowserTestSurface {
     pub commands: std::cell::RefCell<Vec<BrowserCommand>>,
     pub events: Sender<BrowserEvent>,
+    /// The last visibility the panel asked for, so a consumer can prove the
+    /// overlay path hid the page and brought it back.
+    pub visible: std::cell::Cell<Option<bool>>,
+    /// Whether the recording page currently holds native focus.
+    pub focused: std::cell::Cell<bool>,
+    /// How many times the panel handed keyboard focus back to the page.
+    pub focus_requests: std::cell::Cell<usize>,
 }
 
 /// Creates and owns one child browsing surface. Windows uses WebView2
@@ -245,6 +253,9 @@ impl BrowserSurfaceHost {
             inner: Inner::Test(std::rc::Rc::new(BrowserTestSurface {
                 commands: std::cell::RefCell::new(Vec::new()),
                 events,
+                visible: std::cell::Cell::new(None),
+                focused: std::cell::Cell::new(false),
+                focus_requests: std::cell::Cell::new(0),
             })),
         }
     }
@@ -255,6 +266,35 @@ impl BrowserSurfaceHost {
             Inner::Test(surface) => surface.commands.borrow().clone(),
             #[allow(unreachable_patterns)]
             _ => Vec::new(),
+        }
+    }
+
+    /// The last visibility the panel asked the recording surface for.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_visibility(&self) -> Option<bool> {
+        match &self.inner {
+            Inner::Test(surface) => surface.visible.get(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
+    /// How many times the panel handed native focus back to the page.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_focus_requests(&self) -> usize {
+        match &self.inner {
+            Inner::Test(surface) => surface.focus_requests.get(),
+            #[allow(unreachable_patterns)]
+            _ => 0,
+        }
+    }
+
+    /// Pretends the user clicked into the page, so a cover can record that the
+    /// native surface held focus.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_take_focus(&self) {
+        if let Inner::Test(surface) = &self.inner {
+            surface.focused.set(true);
         }
     }
 
@@ -330,13 +370,32 @@ impl BrowserSurfaceHost {
             #[cfg(target_os = "macos")]
             Inner::Macos(host) => host.set_visible(visible),
             #[cfg(any(test, feature = "test-support"))]
-            Inner::Test(_) => {
-                let _ = visible;
+            Inner::Test(surface) => {
+                surface.visible.set(Some(visible));
+                if !visible {
+                    surface.focused.set(false);
+                }
             }
             #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
             Inner::Unsupported => {
                 let _ = visible;
             }
+        }
+    }
+
+    /// Whether the native page currently holds keyboard focus. The panel
+    /// records this before concealing the surface and hands it back when the
+    /// last cover lifts.
+    pub fn has_focus(&self) -> bool {
+        match &self.inner {
+            #[cfg(windows)]
+            Inner::Windows(host) => host.has_focus(),
+            #[cfg(target_os = "macos")]
+            Inner::Macos(host) => host.has_focus(),
+            #[cfg(any(test, feature = "test-support"))]
+            Inner::Test(surface) => surface.focused.get(),
+            #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+            Inner::Unsupported => false,
         }
     }
 
@@ -350,7 +409,10 @@ impl BrowserSurfaceHost {
             #[cfg(target_os = "macos")]
             Inner::Macos(host) => host.focus(),
             #[cfg(any(test, feature = "test-support"))]
-            Inner::Test(_) => {}
+            Inner::Test(surface) => {
+                surface.focused.set(true);
+                surface.focus_requests.set(surface.focus_requests.get() + 1);
+            }
             #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
             Inner::Unsupported => {}
         }

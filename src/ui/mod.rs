@@ -78,6 +78,9 @@ pub mod ssh_connect;
 pub mod ssh_prompt;
 pub(crate) mod status_bar;
 pub mod switcher;
+pub(crate) mod system_badge;
+#[cfg(test)]
+mod system_badge_tests;
 pub(crate) mod tab;
 pub mod tab_sidebar;
 pub mod tab_strip;

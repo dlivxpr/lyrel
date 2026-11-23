@@ -107,7 +107,7 @@ fn park_fan_opens_downward_from_the_centered_entry_and_restores_by_keyboard_and_
         assert!(
             (f32::from(window.find("titlebar-park").bounds().center().x)
                 - f32::from(window.viewport_size().width) / 2.)
-            .abs()
+                .abs()
                 <= 1.
         );
         // Hover opens the fan downward from the title-bar center.
@@ -185,7 +185,10 @@ fn restore_out_of_fill_docks_the_document_and_preserves_it(cx: &mut TestAppConte
         if app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "the document did not open");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the document did not open"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     vcx.simulate_keystrokes("h");
@@ -638,9 +641,7 @@ fn handle_drop_parks_the_last_live_pane_and_keyboard_restores_its_identity(
 }
 
 #[gpui_kit::test]
-fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
-    cx: &mut TestAppContext,
-) {
+fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let pane = app.update_in(&mut vcx, |app, window, cx| {
@@ -669,7 +670,7 @@ fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
         let viewport = window.viewport_size();
         assert!((target.top() - content.top()).as_f32().abs() <= 1.);
         assert!((target.center().x - viewport.width / 2.).as_f32().abs() <= 1.);
-        assert!((target.height() - px(104. * zoom)).as_f32().abs() <= 1.);
+        assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
         assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
         // The title bar is covered while the drag owns the pointer: its move
         // hit region must not take the release that parks the pane below it.
@@ -698,9 +699,7 @@ fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
 }
 
 #[gpui_kit::test]
-fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(
-    cx: &mut TestAppContext,
-) {
+fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let (pane, parked) = app.update_in(&mut vcx, |app, window, cx| {
@@ -779,9 +778,7 @@ fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(
 }
 
 #[gpui_kit::test]
-fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
-    cx: &mut TestAppContext,
-) {
+fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let pane = app.update_in(&mut vcx, |app, window, cx| {
@@ -810,7 +807,7 @@ fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
         window.pointer_up(pill.center(), gpui_kit::MouseButton::Left, cx);
     });
     vcx.run_until_parked();
-    app.update_in(&mut vcx, |app, window, cx| {
+    app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.maximized.is_none());
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
         assert_eq!(app.tabs[0].pane.leaves().len(), 1);
@@ -820,7 +817,7 @@ fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
         );
         assert!(app.pane_drag.borrow().is_none());
     });
-    vcx.update(|window, cx| {
+    vcx.update(|window, _| {
         assert!(window.find("parked-empty").visible());
         assert!(window.try_find("park-drop-target").is_none());
         assert!(window.try_find("titlebar-drag-shield").is_none());
@@ -1117,11 +1114,7 @@ fn pip_pane_menu_handle_also_drags_to_the_shared_parking_target(cx: &mut TestApp
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            park_aim(window, content),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
@@ -1184,7 +1177,7 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
             assert!((target.top() - content.top()).as_f32().abs() <= 1.);
             assert!((target.left() - expected_left).as_f32().abs() <= 1.);
             assert!((target.right() - expected_right).as_f32().abs() <= 1.);
-            assert!((target.height() - px(104. * zoom)).as_f32().abs() <= 1.);
+            assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
             assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
             assert!(pill.left() >= target.left() && pill.right() <= target.right());
             for bounds in [target, pill] {
@@ -1267,11 +1260,7 @@ fn drag_park_restore_keeps_output_and_input_on_the_original_daemon_attachment(
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            park_aim(window, content),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx))

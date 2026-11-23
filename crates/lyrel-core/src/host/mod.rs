@@ -19,6 +19,9 @@
 #[cfg(any(test, feature = "test-support"))]
 pub mod conformance;
 
+#[cfg(test)]
+mod antigravity_history_tests;
+
 pub use lyrel_protocol::host::*;
 
 pub mod disk;

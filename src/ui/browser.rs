@@ -23,14 +23,17 @@ pub(crate) mod surface;
 #[path = "browser/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "browser/overlay_tests.rs"]
+mod overlay_tests;
+
 pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceHost};
 
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Bounds, Context, Entity, Pixels, Subscription, Window, div, prelude::*, px,
 };
@@ -63,6 +66,12 @@ pub(crate) struct WebPage {
     pub(crate) can_back: bool,
     pub(crate) can_forward: bool,
     bounds: Option<Bounds<Pixels>>,
+    /// The window the page painted in. Cover signals are per window, so the
+    /// watchdog can evaluate them without borrowing a `Window`.
+    window_id: Option<gpui_kit::WindowId>,
+    /// The native page held keyboard focus when it was concealed; the surface
+    /// takes it back when the last cover lifts.
+    restore_focus: bool,
     last_paint: std::time::Instant,
     surface_visible: bool,
     surface_pending: bool,
@@ -159,6 +168,8 @@ impl WebPage {
             can_back: false,
             can_forward: false,
             bounds: None,
+            window_id: None,
+            restore_focus: false,
             last_paint: std::time::Instant::now(),
             surface_visible: false,
             surface_pending: false,
@@ -182,18 +193,35 @@ impl WebPage {
     }
 
     /// Applies the visibility the render path computed, covering overlay
-    /// included. Returns whether anything changed.
+    /// included: a covered page keeps its live surface hidden, and the panel
+    /// paints the bounded still frame in its place. Returns whether anything
+    /// changed. Hiding never touches the page, and focus the page held is
+    /// handed back when the last cover lifts.
     fn sync_visibility(&mut self, visible: bool, covered: bool) -> bool {
         let Some(surface) = self.surface.as_mut() else {
             return false;
         };
-        if self.surface_visible == visible && self.cover_synced == Some(covered) {
+        let effective = visible && !covered;
+        if self.surface_visible == effective && self.cover_synced == Some(covered) {
             return false;
         }
-        self.surface_visible = visible;
+        if self.surface_visible && !effective {
+            self.restore_focus = surface.has_focus();
+        }
+        self.surface_visible = effective;
         self.cover_synced = Some(covered);
-        surface.set_visible(visible);
+        surface.set_visible(effective);
+        if effective && self.restore_focus {
+            self.restore_focus = false;
+            surface.focus();
+        }
         true
+    }
+
+    /// Whether the page should paint the bounded still frame instead of its
+    /// live native surface.
+    pub(crate) fn still_frame(&self) -> bool {
+        !self.surface_visible && self.surface.is_some()
     }
 }
 
@@ -376,13 +404,7 @@ impl LyrelApp {
             })
             .unwrap_or_else(|| tab.address.clone());
         if tab.host.is_some() && route::is_loopback(&url) {
-            self.begin_web_load(
-                tab_id,
-                PageLoad::Navigate {
-                    url: url.clone(),
-                },
-                cx,
-            );
+            self.begin_web_load(tab_id, PageLoad::Navigate { url: url.clone() }, cx);
             return;
         }
         if let Some(page) = self.right_panel.web_pages.get(tab_id)
@@ -441,13 +463,7 @@ impl LyrelApp {
                 cx.notify();
                 return;
             }
-            self.begin_web_load(
-                tab_id,
-                PageLoad::Navigate {
-                    url: url.clone(),
-                },
-                cx,
-            );
+            self.begin_web_load(tab_id, PageLoad::Navigate { url: url.clone() }, cx);
             return;
         }
         self.browser_reload(tab_id, cx);
@@ -527,24 +543,25 @@ impl LyrelApp {
                 cx.spawn(async move |this, cx| {
                     let result = cx
                         .background_executor()
-                        .spawn(async move {
-                            verifier.verify(&route, &verify_host, verify_port)
-                        })
+                        .spawn(async move { verifier.verify(&route, &verify_host, verify_port) })
                         .await;
                     let _ = this.update(cx, |app, cx| {
-                        let current = app.right_panel.web_pages.get(async_tab_id.as_str()).is_some_and(|page| {
-                            page.route_epoch == epoch
-                                && app.web_tab(&async_tab_id).and_then(|tab| tab.host) == tab_host
-                        });
+                        let current = app
+                            .right_panel
+                            .web_pages
+                            .get(async_tab_id.as_str())
+                            .is_some_and(|page| {
+                                page.route_epoch == epoch
+                                    && app.web_tab(&async_tab_id).and_then(|tab| tab.host)
+                                        == tab_host
+                            });
                         if !current {
                             return; // A newer route or tab owns the answer now.
                         }
                         match result {
                             Ok(local_port) => {
-                                let forward = route::VerifiedForward::from_loopback(
-                                    &loopback,
-                                    local_port,
-                                );
+                                let forward =
+                                    route::VerifiedForward::from_loopback(&loopback, local_port);
                                 let verified = route::VerifiedRoute::Forwarded(forward);
                                 app.apply_route_and_load(&async_tab_id, verified, load, cx);
                             }
@@ -683,7 +700,16 @@ impl LyrelApp {
                     }
                     None => surface::RouteGuard::Open,
                 };
-                self.start_web_surface(tab_id, parent, bounds, scale, site, target, route_guard, cx);
+                self.start_web_surface(
+                    tab_id,
+                    parent,
+                    bounds,
+                    scale,
+                    site,
+                    target,
+                    route_guard,
+                    cx,
+                );
             }
         }
     }
@@ -728,46 +754,29 @@ impl LyrelApp {
             if let Some(page) = self.right_panel.web_pages.get_mut(&tab_id) {
                 page.surface_attempted = true;
                 page.surface_pending = false;
-                page.status = PageStatus::Unsupported(
-                    t(L10nKey::BrowserSurfaceAutomated).to_string(),
-                );
+                page.status =
+                    PageStatus::Unsupported(t(L10nKey::BrowserSurfaceAutomated).to_string());
             }
             cx.notify();
             return;
         };
         cx.spawn(async move |this, cx| {
-            let dir_ready = std::fs::create_dir_all(&site.dir).map(|_| site.dir.clone());
             let _ = this.update(cx, |view, cx| {
                 let Some(page) = view.right_panel.web_pages.get_mut(&tab_id) else {
                     return;
                 };
                 page.surface_pending = false;
-                match dir_ready {
-                    Ok(dir) => {
-                        let (sender, receiver) = smol::channel::unbounded();
-                        match BrowserSurfaceHost::start(
-                            parent,
-                            bounds,
-                            scale,
-                            &start_url,
-                            route::BrowserSiteData {
-                                key: site.key.clone(),
-                                dir,
-                            },
-                            guard,
-                            sender,
-                        ) {
-                            Ok(surface) => {
-                                page.surface = Some(surface);
-                                page.surface_attempted = true;
-                                page.events =
-                                    Some(browser_event_pump(tab_id.clone(), receiver, cx));
-                            }
-                            Err(error) => {
-                                page.surface_attempted = true;
-                                page.status = PageStatus::Failed(error.to_string());
-                            }
-                        }
+                let (sender, receiver) = smol::channel::unbounded();
+                // The WebView2 host creates its profile directory on start,
+                // and the WKWebView host names its data store instead of a
+                // path: the panel never touches the install-local profile.
+                match BrowserSurfaceHost::start(
+                    parent, bounds, scale, &start_url, site, guard, sender,
+                ) {
+                    Ok(surface) => {
+                        page.surface = Some(surface);
+                        page.surface_attempted = true;
+                        page.events = Some(browser_event_pump(tab_id.clone(), receiver, cx));
                     }
                     Err(error) => {
                         page.surface_attempted = true;
@@ -911,11 +920,7 @@ impl LyrelApp {
                     if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                         page.display_url = original.clone();
                     }
-                    self.begin_web_load(
-                        tab_id,
-                        PageLoad::Navigate { url: original },
-                        cx,
-                    );
+                    self.begin_web_load(tab_id, PageLoad::Navigate { url: original }, cx);
                 }
             }
             BrowserEvent::LoadFailed { url, message } => {
@@ -958,6 +963,27 @@ impl LyrelApp {
         cx.notify();
     }
 
+    /// Every cover that gives a native child surface way to workbench UI:
+    /// the coordinator's explicit sources, the Park deck's own fan/drop
+    /// state, the inbox popover, a deferred popup (dropdown, select,
+    /// combobox), a focused `PopupMenu` (context menus), and a dialog or
+    /// sheet registered through `lyrel_ui_base::native_surface`.
+    pub(crate) fn native_surface_covered(
+        &self,
+        window: gpui_kit::WindowId,
+        cx: &mut gpui_kit::App,
+    ) -> bool {
+        self.surface_coordinator.is_covered()
+            || self
+                .panel_slide(crate::ui::panel_slide::PanelBoundary::Right)
+                .is_some()
+            || self.parked_deck.read(cx).covers_native_surface(cx)
+            || self.notification_bell.read(cx).is_open()
+            || gpui_kit::base::GlobalState::is_in_deferred_context(cx)
+            || crate::ui::surface_coordinator::popup_menu_open(window, cx)
+            || lyrel_ui_base::native_surface::is_covered(window, cx)
+    }
+
     /// The paint hook's target: records bounds, starts the surface on first
     /// paint, and syncs visibility (covering overlays included) while painted.
     pub(crate) fn browser_page_prepared(
@@ -968,7 +994,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let scale = window.scale_factor();
-        let covered = self.surface_coordinator.is_covered();
+        let window_id = window.window_handle().window_id();
+        let covered = self.native_surface_covered(window_id, cx);
         let tab_id_owned = tab_id.to_string();
         let page = self
             .right_panel
@@ -976,6 +1003,7 @@ impl LyrelApp {
             .entry(tab_id_owned.clone())
             .or_insert_with(WebPage::new);
         page.last_paint = std::time::Instant::now();
+        page.window_id = Some(window_id);
         let changed = page.bounds.is_none_or(|old| {
             f32::from(old.origin.x - bounds.origin.x).abs() > 0.5
                 || f32::from(old.origin.y - bounds.origin.y).abs() > 0.5
@@ -987,7 +1015,7 @@ impl LyrelApp {
             if changed {
                 surface.set_bounds(bounds, scale);
             }
-            page.sync_visibility(!covered, covered);
+            page.sync_visibility(true, covered);
             return;
         }
         if page.surface_pending || page.surface_attempted {
@@ -1047,30 +1075,72 @@ impl LyrelApp {
     /// workspace switch, or a covering overlay concealing the area. The
     /// native child hides once the grace expires; the page itself is never
     /// touched, so scroll position, an unsubmitted form and focus return all
-    /// survive (the #391 overlay seam drives the cover half through
-    /// [`crate::ui::surface_coordinator::SurfaceCoordinator`]).
+    /// survive. Cover state is re-read on every tick, not only when a paint
+    /// happens, so a menu or dialog in another crate still reaches the page.
     pub(crate) fn sync_browser_surfaces(&mut self, cx: &mut Context<Self>) {
         const VISIBLE_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
-        let covered = self.surface_coordinator.is_covered();
+        let layout = self.tool_layout();
+        let active_web = layout_active_web(&layout);
+        let panel_open = layout.open;
         let now = std::time::Instant::now();
+        // Covers are window-scoped (a dialog in another window must not hide
+        // this page); resolve each painted window once per pass.
+        let mut covered_by_window: std::collections::HashMap<gpui_kit::WindowId, bool> =
+            std::collections::HashMap::new();
+        for page in self.right_panel.web_pages.values() {
+            if let Some(window) = page.window_id {
+                covered_by_window
+                    .entry(window)
+                    .or_insert_with(|| self.native_surface_covered(window, cx));
+            }
+        }
         let mut notify = false;
-        for page in self.right_panel.web_pages.values_mut() {
-            let painted = now.duration_since(page.last_paint) < VISIBLE_GRACE
+        for (tab_id, page) in self.right_panel.web_pages.iter_mut() {
+            let selected = active_web.as_deref() == Some(tab_id.as_str());
+            let painted = selected
+                && panel_open
+                && now.duration_since(page.last_paint) < VISIBLE_GRACE
                 && page.bounds.is_some_and(|bounds| {
                     f32::from(bounds.size.width) > 1. && f32::from(bounds.size.height) > 1.
                 });
+            let covered = page
+                .window_id
+                .and_then(|window| covered_by_window.get(&window).copied())
+                .unwrap_or(false);
             if page.sync_visibility(painted, covered) {
                 notify = true;
             }
             // A live page keeps repainting so the watchdog can tell "still
             // shown" from "concealed": while visible, stay in the paint set.
-            if painted {
+            if painted && !covered {
                 cx.notify();
             }
         }
         if notify {
             cx.notify();
         }
+    }
+
+    /// The global toast stack's right inset while a web page is visible: the
+    /// content area's lower-right edge, so ordinary toasts clear the WebView
+    /// instead of covering it. No cover is raised here — a toast never hides
+    /// the page.
+    pub(crate) fn browser_toast_clearance(&self, window: &Window, cx: &gpui_kit::App) -> Pixels {
+        let layout = self.tool_layout();
+        if layout.open && layout_active_web(&layout).is_some() {
+            px(self.right_panel_px(window, cx) + 8.)
+        } else {
+            px(8.)
+        }
+    }
+
+    /// Applies [`Self::browser_toast_clearance`] to the shared notification
+    /// settings. Called from the window's render before the notification
+    /// layer paints, so this window's toasts use this window's panel width.
+    pub(crate) fn apply_toast_clearance(&self, window: &Window, cx: &mut gpui_kit::App) {
+        let right = self.browser_toast_clearance(window, cx);
+        let theme = gpui_kit::component::Theme::global_mut(cx);
+        theme.notification.margins.right = right;
     }
 
     /// Projects the selected page address without overwriting an in-progress edit.
@@ -1183,7 +1253,7 @@ pub(crate) fn render_browser_page(
     use gpui_kit::component::button::ButtonCustomVariant;
     let theme = cx.theme();
     let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
-    let (can_back, can_forward, status, display_url, load_error) = app
+    let (can_back, can_forward, status, display_url, load_error, title) = app
         .right_panel
         .web_pages
         .get(&tab.id)
@@ -1194,9 +1264,19 @@ pub(crate) fn render_browser_page(
                 page.status.clone(),
                 page.display_url.clone(),
                 page.load_error.clone(),
+                page.display_title(tab),
             )
         })
-        .unwrap_or((false, false, PageStatus::Idle, String::new(), None));
+        .unwrap_or_else(|| {
+            (
+                false,
+                false,
+                PageStatus::Idle,
+                String::new(),
+                None,
+                tab.address.clone(),
+            )
+        });
     // A Host-bound page keeps the Host's spelling in the address bar: the
     // forwarded endpoint is an implementation detail (#392).
     let address = if display_url.is_empty() {
@@ -1204,6 +1284,7 @@ pub(crate) fn render_browser_page(
     } else {
         display_url
     };
+    let covered = app.native_surface_covered(window.window_handle().window_id(), cx);
 
     if app.browser_chrome.is_none() {
         app.browser_chrome = Some(BrowserChrome::new(window, cx));
@@ -1350,6 +1431,8 @@ pub(crate) fn render_browser_page(
                     &status,
                     &address,
                     load_error.as_deref(),
+                    covered,
+                    &title,
                     cx,
                 )),
         )
@@ -1358,14 +1441,24 @@ pub(crate) fn render_browser_page(
 
 /// The frame over the page area while the surface is not Ready: a bounded
 /// static frame, so concealment never shows a hole and a failed page says
-/// why in place. The page behind it is untouched.
+/// why in place. While a workbench overlay covers the page, the same bounded
+/// frame names the page it stands in for — the surface itself is hidden, not
+/// destroyed, so the draft, scroll position and focus come back with it.
 fn browser_overlay(
     tab_id: &str,
     status: &PageStatus,
     address: &str,
     load_error: Option<&str>,
+    covered: bool,
+    title: &str,
     cx: &mut Context<LyrelApp>,
 ) -> Option<AnyElement> {
+    if covered
+        && load_error.is_none()
+        && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
+    {
+        return Some(browser_still_frame(tab_id, title, address, cx));
+    }
     let muted = cx.theme().muted_foreground;
     let message = match status {
         PageStatus::Ready => load_error.map(str::to_owned),
@@ -1395,9 +1488,7 @@ fn browser_overlay(
                     .child(message),
             )
             .when(
-                load_error.is_some()
-                    || route_unverified
-                    || matches!(status, PageStatus::Failed(_)),
+                load_error.is_some() || route_unverified || matches!(status, PageStatus::Failed(_)),
                 |col| {
                     let col = col.child(
                         div()
@@ -1432,6 +1523,80 @@ fn browser_overlay(
             )
             .into_any_element(),
     )
+}
+
+/// The bounded still frame painted in place of a concealed native page. It
+/// carries the covered tab's own title and address, so a tab switch during a
+/// transition shows the incoming page rather than a stale one.
+fn browser_still_frame(
+    tab_id: &str,
+    title: &str,
+    address: &str,
+    cx: &mut Context<LyrelApp>,
+) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let foreground = cx.theme().foreground;
+    let border = cx.theme().border;
+    v_flex()
+        .id(format!("browser-still-frame-{tab_id}"))
+        .test_support()
+        .absolute()
+        .inset_0()
+        .items_center()
+        .justify_center()
+        .p_4()
+        .bg(cx.theme().background)
+        .child(
+            v_flex()
+                .id("browser-still-frame-card")
+                .test_support()
+                .w_full()
+                .max_w_80()
+                .min_w_0()
+                .gap_1()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(border)
+                .bg(cx.theme().muted.opacity(0.35))
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Globe).size_4().text_color(muted))
+                        .child(
+                            div()
+                                .id("browser-still-frame-title")
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .text_color(foreground)
+                                .child(title.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("browser-still-frame-address")
+                        .test_support()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(address.to_string()),
+                )
+                .child(
+                    div()
+                        .id("browser-still-frame-hint")
+                        .test_support()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::BrowserConcealedHint)),
+                ),
+        )
+        .into_any_element()
 }
 
 /// The automated-test seam, scoped per `App` exactly like the diagram

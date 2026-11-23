@@ -240,7 +240,9 @@ pub(crate) fn route_plan(
     cx: &gpui_kit::App,
 ) -> Result<RoutePlan, RouteFailure> {
     let loopback = parse_loopback_url(url).ok_or_else(|| {
-        RouteFailure::new(format!("{url} is not a loopback address this page can forward"))
+        RouteFailure::new(format!(
+            "{url} is not a loopback address this page can forward"
+        ))
     })?;
     let workspace = owning_workspace(tab, cx)?;
     if workspace.shares_localhost() || matches!(&workspace.target, RemoteTarget::LocalStdio { .. })
@@ -269,12 +271,6 @@ pub(crate) fn is_loopback(url: &str) -> bool {
     parse_loopback_url(url).is_some()
 }
 
-/// The origin of `url` when it is a loopback URL. The surface guard compares
-/// this against the approved origin: same scheme, host spelling and port.
-pub(crate) fn loopback_origin(url: &str) -> Option<String> {
-    parse_loopback_url(url).map(|loopback| loopback.origin())
-}
-
 /// The Host-spelling address for a loopback URL a page asked to load. When
 /// the URL is on a previously verified forwarded origin, it is translated
 /// back first, so a stale history entry never asks the Host to forward the
@@ -301,7 +297,9 @@ fn rewrite_origin(url: &str, from: &str, to: &str) -> Option<String> {
 /// The durable `WKWebsiteDataStore` identifier for a partition key. It is a
 /// UUID-shaped value derived deterministically from the same stable key as
 /// the Windows directory, so both engines name the same Host the same way and
-/// a restart finds the data again.
+/// a restart finds the data again. Only the macOS host consumes it; the tests
+/// pin its determinism on every platform.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn site_data_identifier(key: &str) -> [u8; 16] {
     // Two FNV-1a passes with different seeds fill the 128 bits; this is an
     // identifier, not a security primitive.
@@ -319,6 +317,7 @@ pub(crate) fn site_data_identifier(key: &str) -> [u8; 16] {
     bytes
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn fnv1a64(bytes: &[u8], seed: u64) -> u64 {
     let mut hash = seed;
     for byte in bytes {
@@ -361,11 +360,15 @@ mod tests {
         assert_eq!(forward.original_origin, "http://localhost:3000");
         assert_eq!(forward.forwarded_origin, "http://127.0.0.1:53124");
         assert_eq!(
-            forward.forwarded_url("http://localhost:3000/app?x=1").as_deref(),
+            forward
+                .forwarded_url("http://localhost:3000/app?x=1")
+                .as_deref(),
             Some("http://127.0.0.1:53124/app?x=1")
         );
         assert_eq!(
-            forward.original_url("http://127.0.0.1:53124/app").as_deref(),
+            forward
+                .original_url("http://127.0.0.1:53124/app")
+                .as_deref(),
             Some("http://localhost:3000/app")
         );
         assert_eq!(

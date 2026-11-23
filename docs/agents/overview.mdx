@@ -20,7 +20,7 @@ lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能�
 | pi | `pi` | 会话桥 1.3.0；1.4.0 静态 toolResult 图片，无 fenced SVG | #255 已运行 scoped discovery、静态保存会话与真实窗口重挂载；macOS／Linux 未运行 |
 | OpenCode 2.x | `opencode`、`opencode2` | 会话桥 2.0.32；2.2.0 用户附件／eligible tool-result 卡，由 `session.image_preview` 控制 | #255 已运行 scoped／inline false、完整配置字节审计与真实窗口回放；macOS／Linux 未运行 |
 | Hermes | `hermes` | 会话桥 0.22.2；图片精确以正式 0.23.1 的 `image.render`／`InlineImage` 为基线 | #255 已运行隔离 pinned 原生组件与真实窗口；旧版 pet 仍不证明聊天图片，macOS／Linux 未运行 |
-| Antigravity | `agy` | #383 提供快速启动、窗格识别与链接工作树首任务（`--prompt-interactive`，实测 1.5.15）；hooks/状态 #384、历史/恢复 #385、Fork #386 另行交付 | 原生 PTY 行为未经实窗验收；远端 SSH/WSL、多平台证据按工单记录 |
+| Antigravity | `agy` | #383 提供快速启动、窗格识别与链接工作树首任务（`--prompt-interactive`，实测 1.5.15）；hooks/状态 #384、历史／精确恢复 #385 均已接入，Fork #386 已按 1.5.15 上游限制关闭（非已验证实现） | 原生 PTY 与真实 `agy` 轮次未经本机实窗验收；远端 SSH/WSL、macOS 证据按工单记录 |
 
 omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kimi 指现行官方 Kimi Code，不迁移归档产品的数据。OpenCode 只维护 2.x；不会在每次启动前强制探测版本，同名 1.x 仍可能被名称识别，但不加载旧集成、不把不适用接口当作成功。
 
@@ -50,7 +50,7 @@ omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kim
 }
 ```
 
-键是你的显式命令别名；值只能是 `omp`、`kimi`、`pi`、`opencode`、`hermes`。无官方依据的旧内置别名（例如 `kimi-code`）不再自动识别；如需包装脚本，请明确配置其目标。
+键是你的显式命令别名；值只能是 `omp`、`kimi`、`pi`、`opencode`、`hermes`、`antigravity`。无官方依据的旧内置别名（例如 `kimi-code`）不再自动识别；如需包装脚本，请明确配置其目标。
 
 <a id="quick-launch"></a>
 ## 快速启动
@@ -90,6 +90,16 @@ Antigravity 同规则接入：`agy` 出现在 PATH 即提供快速启动，未�
 工作树新建对话框为其提供“任务”输入框，首条任务经原生 `--prompt-interactive` 在目标 checkout 交互启动
 （`--prompt` 是一次性非交互模式，不会用作替代）。手动启动的 `agy` 以相同方式被识别；
 旧版本 peer 在缺少 Antigravity 身份时保留窗格流及其余智能体功能。
+
+`agy` 1.5.15 的已保存对话来自其 CLI 数据目录 `.gemini/antigravity-cli`：lyrel 以只读方式读取
+`conversation_summaries.db` 的 `search_schema_version`（当前 v3）和根级 CLI 记录，再按
+`conversations/<id>.db`、`brain/<id>/.system_generated/logs/transcript.jsonl` 与
+`--conversation <id>` 校验精确身份。桌面 Antigravity 2.0／IDE 的其他数据目录、子代理对话和未知索引版本
+不会被混入或猜测；来源失败只影响该来源，其他智能体历史仍可用。恢复前重新核对原生 ID 与记录的
+工作目录；已有同 ID 窗格直接聚焦，不启动第二个写入者。若上游实际打开了另一个对话，观察钩子上报的
+`conversationId` 会触发“不是精确恢复”的错误通知，并保留新对话。Antigravity 的原生删除仍不可用，
+Fork 按[#386 门禁](/agents/sessions#antigravity-fork-gate)保持关闭：官方 `/fork` 只切换发起它的
+终端，没有非交互 CLI 的独立创建入口。
 
 在远程工作区中，lyrel 无法读取远程计算机的 `PATH`，因此只会提供它已在该远程计算机上见过运行的智能体：
 手动启动一次，智能体就会加入列表。本地 `agent_launch` 中指定的包装脚本，只有在远程
