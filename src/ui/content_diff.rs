@@ -241,8 +241,9 @@ impl ContentFetchTracker {
 
 /// Read one side's bytes on the Host. Failures of a git-addressed side mean
 /// the side does not exist — that is how git itself defines an added,
-/// deleted, or initial-commit side — while a working-tree read failure is a
-/// real error.
+/// deleted, or initial-commit side. The working-tree side follows the same
+/// rule for a deletion (`git diff` lists the file, but the path is gone),
+/// while any other working-tree read failure is a real error.
 fn read_side(
     host: &dyn lyrel_core::host::Host,
     root: &Path,
@@ -251,12 +252,17 @@ fn read_side(
 ) -> Result<Vec<u8>, ContentFailure> {
     let limit = MAX_FILE_BYTES as u64;
     match spec {
-        VersionSpec::Worktree => host.read_file(&root.join(path), limit).map_err(|error| {
-            match error.kind() {
+        VersionSpec::Worktree => match host.read_file(&root.join(path), limit) {
+            Ok(bytes) => Ok(bytes),
+            // A deleted file's new side is empty, exactly as git defines a
+            // deletion; the snapshot still lists it so the block can show
+            // what left the tree.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(match error.kind() {
                 std::io::ErrorKind::FileTooLarge => ContentFailure::OverBudget,
                 _ => ContentFailure::ReadFailed,
-            }
-        }),
+            }),
+        },
         VersionSpec::Index => Ok(git_show(host, root, &format!(":{path}"))?.unwrap_or_default()),
         VersionSpec::Rev(rev) => {
             Ok(git_show(host, root, &format!("{rev}:{path}"))?.unwrap_or_default())
@@ -506,6 +512,35 @@ mod tests {
         let plan = plan_for(&DiffSource::Worktree, "old/name.rs", "new/name.rs").unwrap();
         assert_eq!(plan.old_path, "old/name.rs");
         assert_eq!(plan.new_path, "new/name.rs");
+    }
+
+    #[test]
+    fn a_deleted_worktree_side_is_empty_not_a_read_failure() {
+        // `git diff` lists a deletion, so the new side is the missing path —
+        // git's own definition of an empty side. Reading it must not turn
+        // the whole comparison into a Host failure.
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        let plan = FetchPlan {
+            old_path: "a.rs".into(),
+            new_path: "a.rs".into(),
+            old: VersionSpec::Index,
+            new: VersionSpec::Worktree,
+        };
+        let host = lyrel_core::host::local::shared();
+        // Host reads are guarded against the UI thread; a worker is how
+        // production calls them, and keeps this test independent of whether
+        // another test already registered the current thread.
+        let file = std::thread::spawn(move || {
+            fetch_content(&*host, &root, &plan, FileStatus::Deleted)
+        })
+        .join()
+        .expect("the read thread finishes")
+        .expect("the fixture reads");
+        assert!(file.diff.items.is_empty());
+        assert_eq!(file.file.status, FileStatus::Deleted);
     }
 
     #[test]

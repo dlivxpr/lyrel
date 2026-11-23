@@ -4750,6 +4750,25 @@ mod content_view_tests {
         focus: Option<&str>,
         expanded: &[&str],
     ) {
+        open_source(
+            app,
+            vcx,
+            root,
+            DiffSource::Worktree,
+            focus,
+            expanded,
+        );
+    }
+
+    /// As [`open`], for any Git source the overlay can show.
+    fn open_source(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        root: &Path,
+        source: DiffSource,
+        focus: Option<&str>,
+        expanded: &[&str],
+    ) {
         let root = root.to_path_buf();
         let focus = focus.map(str::to_string);
         let expanded: Vec<String> = expanded.iter().map(|p| p.to_string()).collect();
@@ -4757,14 +4776,7 @@ mod content_view_tests {
             let mut cfg = cx.global::<Config>().clone();
             cfg.diff_view = DiffViewMode::Content;
             cx.set_global(cfg);
-            app.open_diff_overlay(
-                HostId::LOCAL,
-                root.clone(),
-                DiffSource::Worktree,
-                focus,
-                window,
-                cx,
-            );
+            app.open_diff_overlay(HostId::LOCAL, root.clone(), source, focus, window, cx);
             let active = app.tabs.active_index();
             let overlay = app.tabs[active]
                 .diff_overlay
@@ -4824,6 +4836,824 @@ mod content_view_tests {
                     .rows,
             )
         })
+    }
+
+    // ---- Exact Git versions through the Diff workbench seam -------------
+
+    fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git runs")
+    }
+
+    fn git_ok(root: &Path, args: &[&str]) -> String {
+        let out = git_output(root, args);
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// A repository with deterministic identity and byte handling, so every
+    /// fixture below reads the same on Windows and Unix.
+    fn empty_repo() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git_ok(&root, &["init", "--quiet", "-b", "main"]);
+        for (key, value) in [
+            ("user.name", "Diff Test"),
+            ("user.email", "diff@example.test"),
+            ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
+            ("core.safecrlf", "false"),
+        ] {
+            git_ok(&root, &["config", key, value]);
+        }
+        (temp, root)
+    }
+
+    fn write_file(root: &Path, path: &str, text: &str) {
+        let path = root.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn commit_all(root: &Path, message: &str) -> String {
+        git_ok(root, &["add", "-A"]);
+        git_ok(root, &["commit", "--quiet", "-m", message]);
+        git_ok(root, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    const V1: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v1\");\n}\n";
+    const V2: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v2\");\n}\n";
+    const V3: &str = "fn alpha() {}\n\nfn beta() {\n    println!(\"v3\");\n}\n";
+
+    /// The original- and new-side line texts the content rows draw. Split
+    /// cells carry the side they sit on; unified rows carry the line kind.
+    fn content_texts(rows: &[DiffRow]) -> (Vec<String>, Vec<String>) {
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for row in rows {
+            match row {
+                DiffRow::ContentSplit { row, .. } => {
+                    if let Some(cell) = &row.left {
+                        old.push(cell.text.clone());
+                    }
+                    if let Some(cell) = &row.right {
+                        new.push(cell.text.clone());
+                    }
+                }
+                DiffRow::ContentUnified { row, .. } => match row.kind {
+                    LineKind::Removed => old.push(row.text.clone()),
+                    LineKind::Added => new.push(row.text.clone()),
+                    LineKind::Context => {}
+                },
+                _ => {}
+            }
+        }
+        (old, new)
+    }
+
+    fn has(texts: &[String], needle: &str) -> bool {
+        texts.iter().any(|text| text.contains(needle))
+    }
+
+    fn file_head<'a>(rows: &'a [DiffRow], path: &str) -> &'a FileHead {
+        rows.iter()
+            .find_map(|row| match row {
+                DiffRow::FileHeader(head) if head.path == path => Some(head),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no file header for {path}"))
+    }
+
+    fn content_block<'a>(rows: &'a [DiffRow], name: &str) -> &'a ContentHead {
+        rows.iter()
+            .find_map(|row| match row {
+                DiffRow::ContentBlock(head) if head.name.as_deref() == Some(name) => Some(head),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no content block named {name}"))
+    }
+
+    fn content_has(app: &LyrelApp, path: &str, needle: &str) -> bool {
+        let Some(overlay) = app.tabs[app.tabs.active_index()].diff_overlay.as_ref() else {
+            return false;
+        };
+        match overlay.content.get(path) {
+            Some(ContentState::Ready(file)) => file
+                .file
+                .hunks
+                .iter()
+                .any(|hunk| hunk.lines.iter().any(|line| line.text.contains(needle))),
+            _ => false,
+        }
+    }
+
+    fn snapshot_ready(app: &LyrelApp) -> bool {
+        let Some(overlay) = app.tabs[app.tabs.active_index()].diff_overlay.as_ref() else {
+            return false;
+        };
+        app.diff_probes.inflight() == 0
+            && !overlay.loading
+            && matches!(overlay.load, DiffLoad::Ready(_))
+    }
+
+    fn content_epoch(app: &LyrelApp) -> u64 {
+        app.tabs[app.tabs.active_index()]
+            .diff_overlay
+            .as_ref()
+            .expect("an overlay is open")
+            .content_epoch
+    }
+
+    /// Production reads Host bytes off the UI thread. The focused landing
+    /// tests call the same function the same way instead of tripping the
+    /// Host's UI-thread guard.
+    fn read_content(
+        host: lyrel_ui_base::host_registry::SharedHost,
+        root: PathBuf,
+        plan: crate::ui::content_diff::FetchPlan,
+    ) -> ContentFile {
+        std::thread::spawn(move || {
+            fetch_content(&*host, &root, &plan, FileStatus::Modified).expect("the fixture reads")
+        })
+        .join()
+        .expect("the read thread finishes")
+    }
+
+    #[gpui_kit::test]
+    fn a_staged_then_edited_file_shows_the_index_version(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        // Stage v2, then edit the working tree again to v3. The staged review
+        // is HEAD -> index; only the unstaged review sees v3.
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""), "the staged old side is HEAD");
+        assert!(has(&new, "\"v2\""), "the staged new side is the index");
+        assert!(
+            !has(&new, "\"v3\""),
+            "the later working-tree edit is not what a commit would contain"
+        );
+
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v2\""), "the unstaged old side is the index");
+        assert!(has(&new, "\"v3\""), "and its new side is the working tree");
+        assert!(!has(&old, "\"v1\""), "HEAD is not part of the unstaged pair");
+    }
+
+    #[gpui_kit::test]
+    fn the_combined_comparison_reads_head_and_the_working_tree(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Head,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""));
+        assert!(has(&new, "\"v3\""));
+        assert!(
+            !has(&new, "\"v2\""),
+            "combined is HEAD -> working tree, not a chain through the index"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_initial_commit_compares_against_an_empty_side(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        let root_rev = commit_all(&root, "root");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(root_rev),
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let beta = content_block(&rows, "beta");
+        assert_eq!(beta.kind, BlockKind::Added);
+        assert_eq!(beta.old, None, "the root commit has no parent to compare");
+        let (old, new) = content_texts(&rows);
+        assert!(old.is_empty(), "no original side is read");
+        assert!(has(&new, "\"v1\""));
+    }
+
+    #[gpui_kit::test]
+    fn a_merge_commit_compares_with_its_first_parent(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"base\");\n}\n",
+        );
+        commit_all(&root, "base");
+        git_ok(&root, &["checkout", "--quiet", "-b", "side"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"side\");\n}\n",
+        );
+        commit_all(&root, "side");
+        git_ok(&root, &["checkout", "--quiet", "main"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"main\");\n}\n",
+        );
+        commit_all(&root, "main");
+        let merge = git_output(&root, &["merge", "--no-ff", "-m", "merge side", "side"]);
+        assert!(!merge.status.success(), "the two edits conflict");
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn shared() {\n    println!(\"merged\");\n}\n",
+        );
+        let merge_rev = commit_all(&root, "merge");
+        assert_eq!(
+            git_ok(&root, &["rev-list", "--parents", "-n", "1", "HEAD"])
+                .split_whitespace()
+                .count(),
+            3,
+            "the fixture really is a merge"
+        );
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(merge_rev),
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"main\""), "the old side is the first parent");
+        assert!(has(&new, "\"merged\""));
+        assert!(
+            !has(&old, "\"side\"") && !has(&new, "\"side\""),
+            "the second parent is not one of the two versions"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_three_dot_range_reads_the_merge_base(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"base\");\n}\n",
+        );
+        commit_all(&root, "base");
+        git_ok(&root, &["checkout", "--quiet", "-b", "feature"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"feature\");\n}\n",
+        );
+        commit_all(&root, "feature");
+        git_ok(&root, &["checkout", "--quiet", "main"]);
+        write_file(
+            &root,
+            "a.rs",
+            "fn alpha() {}\n\nfn body() {\n    println!(\"main\");\n}\n",
+        );
+        commit_all(&root, "main");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Range {
+                base: "main".into(),
+                head: "feature".into(),
+            },
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"base\""), "three dots start at the merge base");
+        assert!(has(&new, "\"feature\""));
+        assert!(
+            !has(&old, "\"main\""),
+            "the base tip's own work is not the old side"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_rename_reads_the_old_and_new_paths(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(
+            &root,
+            "old/name.rs",
+            "fn alpha() {\n    println!(\"one\");\n}\n\nfn beta() {\n    println!(\"two\");\n}\n",
+        );
+        commit_all(&root, "base");
+        git_ok(&root, &["mv", "old/name.rs", "new/name.rs"]);
+        write_file(
+            &root,
+            "new/name.rs",
+            "fn alpha() {\n    println!(\"one\");\n}\n\nfn beta() {\n    println!(\"two v2\");\n}\n",
+        );
+        git_ok(&root, &["add", "-A"]);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+
+        // Staged rename: the index's new path against HEAD's old path.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("new/name.rs"),
+            &["new/name.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "new/name.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(
+            file_head(&rows, "new/name.rs").shown_path,
+            "old/name.rs → new/name.rs"
+        );
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"two\""));
+        assert!(has(&new, "\"two v2\""));
+
+        // The same rename as a commit reads its own two paths.
+        let commit = commit_all(&root, "rename");
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(commit),
+            Some("new/name.rs"),
+            &["new/name.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "new/name.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(
+            file_head(&rows, "new/name.rs").shown_path,
+            "old/name.rs → new/name.rs"
+        );
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"two\""));
+        assert!(has(&new, "\"two v2\""));
+    }
+
+    #[gpui_kit::test]
+    fn added_and_deleted_files_keep_their_empty_sides(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "kept.rs", "fn kept() {}\n");
+        write_file(&root, "gone.rs", "fn gone() {\n    println!(\"gone\");\n}\n");
+        commit_all(&root, "base");
+
+        // Deleted in the working tree: the index still holds the old side,
+        // and the missing new side is empty rather than a read failure.
+        std::fs::remove_file(root.join("gone.rs")).unwrap();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        let rows = rows(&app, &mut vcx);
+        let gone = content_block(&rows, "gone");
+        assert_eq!(gone.kind, BlockKind::Deleted);
+        assert_eq!(gone.new, None);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "println!(\"gone\")"));
+        assert!(new.is_empty(), "a deletion has no new side");
+
+        // The combined comparison reads the same empty working-tree side.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Head,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+
+        // A staged deletion reads the index's empty side, and the commit's
+        // deletion reads its parent's old side.
+        git_ok(&root, &["add", "gone.rs"]);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Staged,
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+        let deletion = commit_all(&root, "delete");
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::commit(deletion),
+            Some("gone.rs"),
+            &["gone.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "gone.rs"));
+        let rows = rows(&app, &mut vcx);
+        assert_eq!(content_block(&rows, "gone").kind, BlockKind::Deleted);
+
+        // Intent-to-add puts a new file in the worktree patch; the index side
+        // is git's empty blob.
+        write_file(&root, "fresh.rs", "fn fresh() {\n    println!(\"new\");\n}\n");
+        git_ok(&root, &["add", "-N", "fresh.rs"]);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("fresh.rs"),
+            &["fresh.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "fresh.rs"));
+        let rows = rows(&app, &mut vcx);
+        let fresh = content_block(&rows, "fresh");
+        assert_eq!(fresh.kind, BlockKind::Added);
+        assert_eq!(fresh.old, None);
+        let (old, new) = content_texts(&rows);
+        assert!(old.is_empty(), "an addition has no old side");
+        assert!(has(&new, "println!(\"new\")"));
+    }
+
+    #[gpui_kit::test]
+    fn a_binary_file_keeps_the_existing_indication(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        std::fs::write(root.join("blob.dat"), [0u8, 1, 2, 3]).unwrap();
+        commit_all(&root, "base");
+        std::fs::write(root.join("blob.dat"), [0u8, 9, 8, 7, 6]).unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("blob.dat"),
+            &["blob.dat"],
+        );
+        pump_until(&app, &mut vcx, snapshot_ready);
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        assert!(file_head(&rows, "blob.dat").binary);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(_))),
+            "no structural read is attempted for a binary file"
+        );
+        let has_content = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|overlay| overlay.content.contains_key("blob.dat"))
+        });
+        assert!(!has_content, "binary files never enter the content map");
+    }
+
+    #[gpui_kit::test]
+    fn an_untracked_binary_file_keeps_its_indication(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "kept.rs", "fn kept() {}\n");
+        commit_all(&root, "base");
+        std::fs::write(root.join("blob.dat"), [0u8, 1, 2, 3]).unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("blob.dat"),
+            &["blob.dat"],
+        );
+        pump_until(&app, &mut vcx, |app| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|overlay| {
+                    matches!(
+                        overlay.content.get("blob.dat"),
+                        Some(ContentState::Failed(ContentFailure::Binary))
+                    )
+                })
+        });
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        assert!(file_head(&rows, "blob.dat").binary);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, DiffRow::ContentStatus(_))),
+            "the header's badge replaces a reading or failure note"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn content_mode_keeps_git_line_counts(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        // Git's own count for the move fixture: the whole moved block reads
+        // as removal + addition, which is more than the structural matcher's
+        // inner edits.
+        let numstat = git_ok(&root, &["diff", "--numstat", "--", "a.rs"]);
+        let mut fields = numstat.split_whitespace();
+        let added: u32 = fields.next().unwrap().parse().unwrap();
+        let removed: u32 = fields.next().unwrap().parse().unwrap();
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let rows = rows(&app, &mut vcx);
+        let head = file_head(&rows, "a.rs");
+        assert_eq!(
+            (head.added, head.removed),
+            (added, removed),
+            "the header keeps the Git patch's counts"
+        );
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            DiffRow::ContentBlock(head)
+                if head.kind == BlockKind::MovedEdited && head.name.as_deref() == Some("beta")
+        )));
+        let structural = app.update_in(&mut vcx, |app, _, _| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap();
+            let Some(ContentState::Ready(file)) = overlay.content.get("a.rs") else {
+                panic!("content is ready");
+            };
+            (file.file.added, file.file.removed)
+        });
+        assert_ne!(
+            (head.added, head.removed),
+            structural,
+            "the header is Git's count, not the structural block's inner edits"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_repository_change_invalidates_and_reloads_content(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        let before = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+
+        // The worktree moves under the open comparison. The SCM epoch is the
+        // repository-change signal the overlay watches.
+        write_file(&root, "a.rs", V3);
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.scm_invalidate(HostId::LOCAL, &root, cx);
+            app.maybe_refresh_diff_overlay(cx);
+        });
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v3\""));
+        let after = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+        assert_ne!(before, after, "a new snapshot starts a new content epoch");
+
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""));
+        assert!(has(&new, "\"v3\""));
+        assert!(!has(&new, "\"v2\""), "the replaced bytes are gone");
+    }
+
+    #[gpui_kit::test]
+    fn a_landing_from_another_source_or_snapshot_is_not_applied(cx: &mut TestAppContext) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        let (host, epoch) = app.update_in(&mut vcx, |app, _, cx| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap();
+            (
+                lyrel_ui_base::host_registry::HostRegistry::lookup(cx, HostId::LOCAL)
+                    .expect("the local host is registered"),
+                overlay.content_epoch,
+            )
+        });
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let read = || read_content(host.clone(), root.clone(), plan.clone());
+
+        // The old source's read lands after the overlay moved on.
+        let mut staged_key = ContentFetchKey {
+            host: HostId::LOCAL,
+            cwd: root.clone(),
+            source: DiffSource::Staged,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_mut()
+                .unwrap();
+            overlay.content.remove("a.rs");
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let installed = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .contains_key("a.rs")
+        });
+        assert!(!installed, "a staged read cannot fill a worktree overlay");
+
+        // A refresh's old epoch lands after the new snapshot replaced it.
+        staged_key.source = DiffSource::Worktree;
+        staged_key.epoch = epoch.wrapping_add(1);
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let installed = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .contains_key("a.rs")
+        });
+        assert!(!installed, "a snapshot's old bytes cannot install over it");
+
+        // The matching key is the one that may land.
+        staged_key.epoch = epoch;
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &staged_key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(staged_key.clone(), host.clone(), Ok(read()), cx);
+        });
+        let ready = app.update_in(&mut vcx, |app, _, _| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap()
+                .content
+                .get("a.rs")
+                .is_some_and(|state| matches!(state, ContentState::Ready(_)))
+        });
+        assert!(ready, "the current source and epoch still deliver");
+    }
+
+    #[gpui_kit::test]
+    fn a_landing_for_the_previous_selection_does_not_replace_the_drawn_file(
+        cx: &mut TestAppContext,
+    ) {
+        let (_temp, root) = empty_repo();
+        write_file(&root, "a.rs", "fn alpha() {\n    println!(\"a1\");\n}\n");
+        write_file(&root, "b.rs", "fn beta() {\n    println!(\"b1\");\n}\n");
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", "fn alpha() {\n    println!(\"a2\");\n}\n");
+        write_file(&root, "b.rs", "fn beta() {\n    println!(\"b2\");\n}\n");
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        // The reader moves to b while a's bytes are already in hand.
+        open_source(
+            &app,
+            &mut vcx,
+            &root,
+            DiffSource::Worktree,
+            Some("b.rs"),
+            &["b.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "b.rs"));
+
+        let (host, epoch) = app.update_in(&mut vcx, |app, _, cx| {
+            (
+                lyrel_ui_base::host_registry::HostRegistry::lookup(cx, HostId::LOCAL)
+                    .expect("the local host is registered"),
+                content_epoch(app),
+            )
+        });
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let file = read_content(host.clone(), root.clone(), plan);
+        let key = ContentFetchKey {
+            host: HostId::LOCAL,
+            cwd: root.clone(),
+            source: DiffSource::Worktree,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&host, &key),
+                ContentRequest::Spawn
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(key.clone(), host.clone(), Ok(file), cx);
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (_, new) = content_texts(&rows);
+        assert!(has(&new, "\"b2\""), "the selected file is what draws");
+        assert!(
+            !has(&new, "\"a2\""),
+            "a landing for the previous selection cannot replace it"
+        );
     }
 
     #[gpui_kit::test]
@@ -5035,6 +5865,10 @@ mod content_view_tests {
                 DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly)
             )),
             "a patch-only comparison explains itself"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
+            "and falls back to Split, where a supplied patch has no versions to read"
         );
         assert_eq!(
             vcx.update(|_, cx| cx.global::<Config>().diff_view),
