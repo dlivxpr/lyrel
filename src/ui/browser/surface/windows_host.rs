@@ -13,6 +13,7 @@ use smol::channel::Sender;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::result::Result;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::*;
 use windows::Win32::Foundation::{HWND, RECT};
@@ -22,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     WS_VISIBLE,
 };
-use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
 struct Shared {
     host: HWND,
@@ -107,8 +108,8 @@ impl Host {
         }
         let environment_options = ICoreWebView2EnvironmentOptions::from(options);
         let handler_shared = shared.clone();
-        let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
-            move |result, env| {
+        let handler =
+            CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, env| {
                 if let Err(error) = result {
                     fail(&handler_shared, error.to_string());
                     return Ok(());
@@ -126,11 +127,15 @@ impl Host {
                 }
                 Self::create_controller(&handler_shared, env);
                 Ok(())
-            },
-        ));
+            }));
         let data_dir = HSTRING::from(data_dir.to_string_lossy().as_ref());
         let created = unsafe {
-            CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), &data_dir, &environment_options, &handler)
+            CreateCoreWebView2EnvironmentWithOptions(
+                PCWSTR::null(),
+                &data_dir,
+                &environment_options,
+                &handler,
+            )
         };
         if let Err(error) = created {
             fail(shared, error.to_string());
@@ -320,14 +325,8 @@ impl Host {
                         );
                         return Ok(());
                     }
-                    let user_initiated = args
-                        .cast::<ICoreWebView2NewWindowRequestedEventArgs2>()
-                        .map(|args2| unsafe {
-                            let mut flag = windows::core::BOOL(0);
-                            let _ = args2.IsUserInitiated(&mut flag);
-                            flag.as_bool()
-                        })
-                        .unwrap_or(false);
+                    let mut flag = windows::core::BOOL(0);
+                    let user_initiated = args.IsUserInitiated(&mut flag).is_ok() && flag.as_bool();
                     if user_initiated {
                         emit(&new_window_shared, BrowserEvent::NewWindow { url: uri });
                     } else {
@@ -685,5 +684,10 @@ fn fail(shared: &Rc<RefCell<Shared>>, message: impl Into<String>) {
         }
         state.closed = true;
     }
-    emit(shared, BrowserEvent::Failed { message: message.into() });
+    emit(
+        shared,
+        BrowserEvent::Failed {
+            message: message.into(),
+        },
+    );
 }

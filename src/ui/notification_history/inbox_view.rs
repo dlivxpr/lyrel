@@ -502,7 +502,6 @@ fn render_pending_item(
                 div()
                     .id(format!("{id}-age"))
                     .test_support()
-                    .accessibility_label(waited.clone())
                     .flex_none()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)

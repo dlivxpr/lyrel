@@ -504,16 +504,16 @@ impl ToolLayout {
                 .iter()
                 .map(|entry| match entry {
                     PanelTab::Tool(tab) => lyrel_core::core::session::TabEntryState::Tool(*tab),
-                    PanelTab::Web(tab) => lyrel_core::core::session::TabEntryState::Web(
-                        tab.state(),
-                    ),
+                    PanelTab::Web(tab) => {
+                        lyrel_core::core::session::TabEntryState::Web(tab.state())
+                    }
                 })
                 .collect(),
             active: match &self.active {
                 PanelTab::Tool(tab) => lyrel_core::core::session::TabSelectionState::Tool(*tab),
-                PanelTab::Web(tab) => lyrel_core::core::session::TabSelectionState::Web(
-                    tab.id.clone(),
-                ),
+                PanelTab::Web(tab) => {
+                    lyrel_core::core::session::TabSelectionState::Web(tab.id.clone())
+                }
             },
             last_used: self.last_used,
             open: self.open,
@@ -561,7 +561,7 @@ impl ToolLayout {
         let tab = shown_tab(tab);
         let entry = PanelTab::Tool(tab);
         if !self.order.contains(&entry) {
-            self.order.push(entry);
+            self.order.push(PanelTab::Tool(tab));
         }
         self.active = entry;
         self.last_used = tab;
@@ -632,7 +632,10 @@ impl ToolLayout {
         }
         // Right neighbour first: after the removal it sits at the removed
         // tab's own index. Only the rightmost tab falls back to the left.
-        match self.order.get(at).or_else(|| at.checked_sub(1).and_then(|left| self.order.get(left)))
+        match self
+            .order
+            .get(at)
+            .or_else(|| at.checked_sub(1).and_then(|left| self.order.get(left)))
         {
             Some(next) => {
                 self.active = next.clone();
@@ -1110,7 +1113,8 @@ impl LyrelApp {
         self.right_panel_tab = tab;
         self.right_panel_web_tab = web;
         self.right_panel_visible = open;
-        self.right_panel.stored_mirror = Some((shown_tab(tab), self.right_panel_web_tab.clone(), open));
+        self.right_panel.stored_mirror =
+            Some((shown_tab(tab), self.right_panel_web_tab.clone(), open));
     }
 
     /// Write the layout back: the map, the live mirror fields the panel code
@@ -1118,7 +1122,7 @@ impl LyrelApp {
     /// global config, which keeps carrying the tool choice for an older
     /// build (a web selection writes the last-used tool there — the old
     /// build lands on a tool page, never on a tab it cannot know).
-    fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
+    pub(super) fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
         self.remember_tool_layout(layout.clone());
         self.apply_layout_mirror(layout);
         lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
@@ -1190,7 +1194,7 @@ impl LyrelApp {
                     let tab = shown_tab(self.right_panel_tab);
                     let entry = PanelTab::Tool(tab);
                     if !layout.order.contains(&entry) {
-                        layout.order.push(entry);
+                        layout.order.push(PanelTab::Tool(tab));
                     }
                     layout.active = entry;
                     layout.last_used = tab;
@@ -1203,7 +1207,7 @@ impl LyrelApp {
             if !layout.order.is_empty() && !layout.order.contains(&entry) {
                 // A selection made while collapsed is still a choice the next
                 // expansion should honour.
-                layout.order.push(entry);
+                layout.order.push(PanelTab::Tool(tab));
             }
             if layout.order.contains(&entry) {
                 layout.active = entry;
@@ -1267,7 +1271,10 @@ impl LyrelApp {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(500))
                     .await;
-                if this.update(cx, |app, cx| app.sync_browser_surfaces(cx)).is_err() {
+                if this
+                    .update(cx, |app, cx| app.sync_browser_surfaces(cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -1424,7 +1431,11 @@ impl LyrelApp {
         }
         let tool_in_front = matches!(self.tool_layout().active, PanelTab::Tool(_));
         let mut layout = self.tool_layout();
-        if !layout.order.iter().any(|open| entry_identity_eq(open, target)) {
+        if !layout
+            .order
+            .iter()
+            .any(|open| entry_identity_eq(open, target))
+        {
             return;
         }
         if tool_in_front {
@@ -1432,7 +1443,6 @@ impl LyrelApp {
         }
         layout.select(target);
         self.store_tool_layout(&layout, cx);
-        self.sync_browser_address_input(cx);
     }
 
     /// Close `tab` in the Side Panel header. Ordinary switches
@@ -1812,7 +1822,7 @@ impl LyrelApp {
         // on a fresh mount (the keyed state is dropped with the collapsed
         // header), so a re-expanded panel re-reveals its selection too. The
         // handle applies the reveal while its container lays out.
-        if state.prev_active != Some(layout.active) {
+        if state.prev_active.as_ref() != Some(&layout.active) {
             if let Some(index) = layout.order.iter().position(|open| *open == layout.active) {
                 state.scroll.scroll_to_item(index);
             }
@@ -1881,6 +1891,7 @@ impl LyrelApp {
                 // Keep content focus and arm before NavTab stops bubbling.
                 .capture_any_mouse_down({
                     let strip_state = strip_state.clone();
+                    let entry = entry.clone();
                     move |event: &MouseDownEvent, window, cx| {
                         window.prevent_default();
                         if event.button != MouseButton::Left {
@@ -1987,21 +1998,23 @@ impl LyrelApp {
                             }
                         })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if window.default_prevented() {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            match &entry {
-                                PanelTab::Tool(tab) => {
-                                    let tab = *tab;
-                                    this.close_right_panel_tab(tab, window, cx);
+                        .on_click({
+                            let entry = entry.clone();
+                            cx.listener(move |this, _, window, cx| {
+                                if window.default_prevented() {
+                                    return;
                                 }
-                                PanelTab::Web(tab) => {
-                                    this.close_right_panel_web_tab(tab.id.clone(), window, cx);
+                                cx.stop_propagation();
+                                match &entry {
+                                    PanelTab::Tool(tab) => {
+                                        this.close_right_panel_tab(*tab, window, cx);
+                                    }
+                                    PanelTab::Web(tab) => {
+                                        this.close_right_panel_web_tab(tab.id.clone(), window, cx);
+                                    }
                                 }
-                            }
-                        })),
+                            })
+                        }),
                 )
                 .on_click(
                     cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
@@ -2064,8 +2077,7 @@ impl LyrelApp {
                     .with_animation(
                         gpui_kit::SharedString::from(format!(
                             "tool-tab-slide-{}-{}",
-                            animation_id,
-                            generation
+                            animation_id, generation
                         )),
                         Animation::new(std::time::Duration::from_millis(
                             crate::ui::tab_strip::REORDER_SLIDE_MS,
@@ -2371,11 +2383,7 @@ impl LyrelApp {
                             .w_full()
                             .items_center()
                             .gap(px(8.))
-                            .child(
-                                Icon::empty()
-                                    .path("icons/globe.svg")
-                                    .size(px(14.)),
-                            )
+                            .child(Icon::empty().path("icons/globe.svg").size(px(14.)))
                             .child(div().child(t(L10nKey::PanelBrowserTitle)))
                     })
                     .on_click(move |_, _window, cx| {
@@ -3815,11 +3823,7 @@ mod tests {
         let mut layout = ToolLayout::default();
         layout.show(Files);
         layout.show(Files);
-        assert_eq!(
-            layout.order,
-            [tool(Info), tool(Files)],
-            "one tab per tool"
-        );
+        assert_eq!(layout.order, [tool(Info), tool(Files)], "one tab per tool");
         layout.show(GitHub);
         assert_eq!(layout.order, [tool(Info), tool(Files), tool(GitHub)]);
         assert!(layout.open);

@@ -22,16 +22,15 @@ pub(crate) mod surface;
 #[path = "browser/tests.rs"]
 mod tests;
 
-pub(crate) use surface::{
-    BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceError, BrowserSurfaceHost,
-};
+pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceHost};
 
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Button, ButtonVariants as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::{
+    AnyElement, Bounds, Context, Entity, Pixels, Subscription, Window, div, prelude::*, px,
 };
-use gpui_kit::{AnyElement, App, Bounds, Context, Entity, Pixels, Subscription, Window, div, px};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 use crate::ui::app::LyrelApp;
@@ -129,6 +128,7 @@ impl WebPage {
 /// it to that page's current URL.
 pub(crate) struct BrowserChrome {
     pub(crate) input: Entity<InputState>,
+    displayed: Option<(String, String)>,
     _subscription: Subscription,
 }
 
@@ -142,6 +142,7 @@ impl BrowserChrome {
         });
         Self {
             input,
+            displayed: None,
             _subscription: subscription,
         }
     }
@@ -173,7 +174,6 @@ impl LyrelApp {
             .entry(tab_id)
             .or_insert_with(WebPage::new);
         self.store_tool_layout(&layout, cx);
-        self.sync_browser_address_input(cx);
         cx.notify();
     }
 
@@ -204,7 +204,10 @@ impl LyrelApp {
                 page_url
             }
         };
-        if matches!(policy::classify(&url), policy::Route::Blank | policy::Route::Deny) {
+        if matches!(
+            policy::classify(&url),
+            policy::Route::Blank | policy::Route::Deny
+        ) {
             return;
         }
         cx.open_url(&url);
@@ -226,7 +229,9 @@ impl LyrelApp {
         let Some(url) = policy::complete_typed(&typed) else {
             // Not a route the preview takes: put the field back to what the
             // page is on and leave the page where it was.
-            self.sync_browser_address_input(cx);
+            if let Some(chrome) = self.browser_chrome.as_mut() {
+                chrome.displayed = None;
+            }
             cx.notify();
             return;
         };
@@ -253,7 +258,6 @@ impl LyrelApp {
                 }
             }
         }
-        self.sync_browser_address_input(cx);
         cx.notify();
     }
 
@@ -343,7 +347,6 @@ impl LyrelApp {
                         page.status = PageStatus::Ready;
                     }
                 }
-                self.sync_browser_address_input(cx);
             }
             BrowserEvent::TitleChanged { title } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
@@ -357,22 +360,20 @@ impl LyrelApp {
             BrowserEvent::NewWindow { url } => {
                 // A user-initiated new window becomes a sibling tab on the
                 // same Host; the surface itself never opens a window.
-                let host = self
-                    .tool_layout()
-                    .order
-                    .iter()
-                    .find_map(|entry| match entry {
-                        PanelTab::Web(tab) if tab.id == tab_id => tab.host.clone(),
-                        _ => None,
-                    });
-                self.open_web_page(&url, host, cx);
+                let layout = self.tool_layout();
+                if let Some(tab) = layout.order.iter().find_map(|entry| match entry {
+                    PanelTab::Web(tab) if tab.id == tab_id => Some(tab),
+                    _ => None,
+                }) && policy::classify(&url) == policy::Route::Load
+                {
+                    self.open_web_page(&url, tab.host.clone(), cx);
+                }
             }
             BrowserEvent::LoadFailed { url, message } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                     page.current_url = url;
                     page.load_error = Some(message);
                 }
-                self.sync_browser_address_input(cx);
             }
             BrowserEvent::Blocked { reason } => {
                 log::info!("browser page blocked {reason}");
@@ -418,7 +419,7 @@ impl LyrelApp {
             if changed {
                 surface.set_bounds(bounds, scale);
             }
-            page.sync_visibility(true, covered);
+            page.sync_visibility(!covered, covered);
             return;
         }
         if page.surface_pending || page.surface_attempted {
@@ -443,6 +444,9 @@ impl LyrelApp {
             })
         };
         let Some(tab) = tab else {
+            return;
+        };
+        let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
             return;
         };
         let parent = match BrowserParentWindow::from_window(window) {
@@ -475,17 +479,13 @@ impl LyrelApp {
                     Some(Ok(dir)) => {
                         let (sender, receiver) = smol::channel::unbounded();
                         match BrowserSurfaceHost::start(
-                            parent,
-                            bounds,
-                            scale,
-                            &start_url,
-                            dir,
-                            sender,
+                            parent, bounds, scale, &start_url, dir, sender,
                         ) {
                             Ok(surface) => {
                                 page.surface = Some(surface);
                                 page.surface_attempted = true;
-                                page.events = Some(browser_event_pump(tab_id.clone(), receiver, cx));
+                                page.events =
+                                    Some(browser_event_pump(tab_id.clone(), receiver, cx));
                             }
                             Err(error) => {
                                 page.surface_attempted = true;
@@ -499,8 +499,9 @@ impl LyrelApp {
                     }
                     None => {
                         page.surface_attempted = true;
-                        page.status =
-                            PageStatus::Unsupported(t(L10nKey::BrowserSurfaceNoDataDir).to_string());
+                        page.status = PageStatus::Unsupported(
+                            t(L10nKey::BrowserSurfaceNoDataDir).to_string(),
+                        );
                     }
                 }
                 cx.notify();
@@ -539,32 +540,28 @@ impl LyrelApp {
         }
     }
 
-    /// Resets the address field to the selected page's current URL. Called
-    /// on tab selection and on every navigation the surface reports.
-    pub(crate) fn sync_browser_address_input(&mut self, cx: &mut Context<Self>) {
-        let Some(chrome) = self.browser_chrome.as_ref() else {
+    /// Projects the selected page address without overwriting an in-progress edit.
+    fn sync_browser_address_input(
+        &mut self,
+        tab_id: &str,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(chrome) = self.browser_chrome.as_mut() else {
             return;
         };
-        let layout = self.tool_layout();
-        let Some(tab_id) = layout_active_web(&layout) else {
+        if chrome
+            .displayed
+            .as_ref()
+            .is_some_and(|(id, address)| id == tab_id && address == url)
+        {
             return;
-        };
-        let url = self
-            .right_panel
-            .web_pages
-            .get(&tab_id)
-            .map(|page| {
-                if page.current_url.is_empty() {
-                    initial_navigate_url(&default_address_of(&layout, &tab_id))
-                } else {
-                    page.current_url.clone()
-                }
-            })
-            .unwrap_or_default();
-        let input = chrome.input.clone();
-        input.update(cx, |input, cx| {
-            if input.value() != url.as_str() {
-                input.set_value(url, cx);
+        }
+        chrome.displayed = Some((tab_id.to_owned(), url.to_owned()));
+        chrome.input.update(cx, |input, cx| {
+            if input.value() != url {
+                input.set_value(url, window, cx);
             }
         });
     }
@@ -614,17 +611,6 @@ pub(crate) fn layout_active_web(layout: &ToolLayout) -> Option<String> {
         PanelTab::Web(tab) => Some(tab.id.clone()),
         PanelTab::Tool(_) => None,
     }
-}
-
-fn default_address_of(layout: &ToolLayout, tab_id: &str) -> String {
-    layout
-        .order
-        .iter()
-        .find_map(|entry| match entry {
-            PanelTab::Web(tab) if tab.id == tab_id => Some(tab.address.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| "about:blank".to_string())
 }
 
 /// The URL a tab's surface starts on: the original address for loadable
@@ -702,7 +688,7 @@ pub(crate) fn render_browser_page(
     if app.browser_chrome.is_none() {
         app.browser_chrome = Some(BrowserChrome::new(window, cx));
     }
-    app.sync_browser_address_input(cx);
+    app.sync_browser_address_input(&tab.id, &address, window, cx);
     let chrome = app.browser_chrome.as_ref().expect("chrome just ensured");
     let input = chrome.input.clone();
     let tab_id = tab.id.clone();
@@ -773,10 +759,12 @@ pub(crate) fn render_browser_page(
                 .bg(cx.theme().muted)
                 .items_center()
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Input::new(&input).appearance(false).xsmall().cleanable(true)),
+                    div().flex_1().min_w_0().child(
+                        Input::new(&input)
+                            .appearance(false)
+                            .xsmall()
+                            .cleanable(true),
+                    ),
                 ),
         )
         .child(
@@ -792,7 +780,7 @@ pub(crate) fn render_browser_page(
                 .bg(cx.theme().muted)
                 .text_xs()
                 .text_color(muted)
-                .child(browser_host_label(tab, cx)),
+                .child(browser_host_label(tab)),
         )
         .child(icon_button(
             "browser-external",
@@ -860,10 +848,8 @@ fn browser_overlay(
 ) -> Option<AnyElement> {
     let muted = cx.theme().muted_foreground;
     let message = match status {
-        PageStatus::Ready => load_error.as_deref().map(str::to_string),
-        PageStatus::Idle | PageStatus::Starting => {
-            Some(t(L10nKey::BrowserStarting).to_string())
-        }
+        PageStatus::Ready => load_error.map(str::to_owned),
+        PageStatus::Idle | PageStatus::Starting => Some(t(L10nKey::BrowserStarting).to_string()),
         PageStatus::Failed(message) | PageStatus::Unsupported(message) => Some(message.clone()),
     }?;
     let tab_id = tab_id.to_string();

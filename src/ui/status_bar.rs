@@ -4,9 +4,7 @@ use chrono::Timelike as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
-use gpui_kit::{
-    AnyElement, Context, SharedString, Window, div, prelude::*, px, rems,
-};
+use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, rems};
 
 use crate::ui::app::LyrelApp;
 use crate::ui::scm::state::RepoKey;
@@ -89,7 +87,7 @@ fn group_line_count(count: u32, sign: char) -> String {
 fn context_pill(
     id: &'static str,
     cx: &gpui_kit::App,
-) -> impl gpui_kit::ParentElement + gpui_kit::IntoElement + gpui_kit::Styled {
+) -> impl gpui_kit::ParentElement + gpui_kit::IntoElement + gpui_kit::Styled + use<> {
     div()
         .id(id)
         .test_support()
@@ -239,9 +237,8 @@ impl LyrelApp {
                 leaf.as_ref().and_then(|leaf| {
                     leaf.read(cx).with_program_status(|status| {
                         status.representative().map(|record| {
-                            context_pill("status-program-pill", cx).child(
-                                crate::ui::program_status::current_status(record, cx),
-                            )
+                            context_pill("status-program-pill", cx)
+                                .child(crate::ui::program_status::current_status(record, cx))
                         })
                     })
                 })
@@ -254,49 +251,45 @@ impl LyrelApp {
             .gap_1()
             .when(toolbar.host, |row| {
                 row.child(
-                    context_pill("status-host-pill", cx)
-                        .max_w(rems(10.))
-                        .child(
-                            Button::new("status-host")
-                                .ghost()
-                                .xsmall()
-                                // Button defaults to shrink=0; instance styles
-                                // are applied last, and its native label already
-                                // owns ellipsis.
-                                .flex_shrink_1()
-                                .min_w(rems(1.5))
-                                .label(host.clone())
-                                .tooltip(host)
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(ToggleSwitcher), cx)
-                                }),
-                        ),
+                    context_pill("status-host-pill", cx).max_w(rems(10.)).child(
+                        Button::new("status-host")
+                            .ghost()
+                            .xsmall()
+                            // Button defaults to shrink=0; instance styles
+                            // are applied last, and its native label already
+                            // owns ellipsis.
+                            .flex_shrink_1()
+                            .min_w(rems(1.5))
+                            .label(host.clone())
+                            .tooltip(host)
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleSwitcher), cx)
+                            }),
+                    ),
                 )
             })
             .when_some(path, |row, path| {
                 let copied = path.clone();
                 row.child(
-                    context_pill("status-path-pill", cx)
-                        .max_w(rems(26.))
-                        .child(
-                            Button::new("status-path")
-                                .ghost()
-                                .xsmall()
-                                .flex_shrink_1()
-                                .min_w(rems(1.5))
-                                .label(path.clone())
-                                .tooltip(path)
-                                .accessibility_label(t(if document {
-                                    L10nKey::FileTreeContextCopyPath
-                                } else {
-                                    L10nKey::CmdCopyWorkingDirectory
-                                }))
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                        copied.clone(),
-                                    ));
-                                }),
-                        ),
+                    context_pill("status-path-pill", cx).max_w(rems(26.)).child(
+                        Button::new("status-path")
+                            .ghost()
+                            .xsmall()
+                            .flex_shrink_1()
+                            .min_w(rems(1.5))
+                            .label(path.clone())
+                            .tooltip(path)
+                            .accessibility_label(t(if document {
+                                L10nKey::FileTreeContextCopyPath
+                            } else {
+                                L10nKey::CmdCopyWorkingDirectory
+                            }))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                    copied.clone(),
+                                ));
+                            }),
+                    ),
                 )
             })
             .when_some(checkout, |row, (repo, git)| {
@@ -329,17 +322,9 @@ impl LyrelApp {
                             .child(div().flex_none().text_color(muted).child("/"))
                             .child(div().min_w_0().truncate().child(branch.clone())),
                     );
-                let row = row.child(
-                    context_pill("status-git-pill", cx)
-                        .max_w(rems(22.))
-                        .child(self.status_checkout_trigger(
-                            checkout_button,
-                            repo,
-                            branch,
-                            window,
-                            cx,
-                        )),
-                );
+                let row = row.child(context_pill("status-git-pill", cx).max_w(rems(22.)).child(
+                    self.status_checkout_trigger(checkout_button, repo, branch, window, cx),
+                ));
                 if git.added == 0 && git.removed == 0 {
                     return row;
                 }
@@ -378,9 +363,7 @@ impl LyrelApp {
             .test_support()
             .flex_none()
             .w_full()
-            .h(rems(
-                lyrel_ui_base::display::GLOBAL_STATUS_BAR_HEIGHT_REM,
-            ))
+            .h(rems(lyrel_ui_base::display::GLOBAL_STATUS_BAR_HEIGHT_REM))
             .px(rems(0.75))
             .items_center()
             .gap_1()
@@ -984,9 +967,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn global_bar_is_two_rem_with_twelve_px_insets_and_distinct_local_bar(
-        cx: &mut TestAppContext,
-    ) {
+    fn global_bar_is_two_rem_with_twelve_px_insets_and_distinct_local_bar(cx: &mut TestAppContext) {
         let (app, mut vcx, _stream) = harness_with_pane(cx);
         for (width, font) in [(1440., 16.), (720., 24.)] {
             vcx.simulate_resize(size(px(width), px(720.)));
