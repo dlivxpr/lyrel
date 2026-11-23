@@ -1285,6 +1285,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ActivityChannelTab => "标签页",
         L10nKey::ActivityChannelDesktop => "桌面",
         L10nKey::ActivityChannelSound => "声音",
+        L10nKey::ActivityChannelBadge => "徽标",
+        L10nKey::SystemBadgeTabsNeedAttention => "需要处理的标签页：{count}",
         L10nKey::SettingsWindow => "启动与恢复",
         L10nKey::NotifyModeNever => "从不",
         L10nKey::NotifyModeUnfocused => "窗口未聚焦时",

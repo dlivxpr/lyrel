@@ -54,13 +54,13 @@ pub(crate) mod test_window;
 mod scroll_tests;
 
 /// One column of the notification activity matrix, as the settings UI
-/// exposes it. The saved `ActivityChannels` also carry a `badge` flag the
-/// system-badge column #397 renders.
+/// exposes it. `Badge` is the system-icon count for tabs needing attention.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActivityChannel {
     Tab,
     Desktop,
     Sound,
+    Badge,
 }
 
 /// The two terminal-event desktop toggles that stay separate by design.

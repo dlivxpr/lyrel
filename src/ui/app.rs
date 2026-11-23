@@ -2650,6 +2650,7 @@ impl LyrelApp {
                 }
                 // A split pane went away with its agents; re-evaluate the hold.
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 self.focus_active(window, cx);
                 self.save_session(cx);
                 cx.notify();
@@ -2697,6 +2698,7 @@ impl LyrelApp {
             CloseOutcome::Collapsed => {
                 self.program_attention
                     .forget(view.read(cx).program_source());
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 Self::kill_pane_off_thread(view.read(cx).pane_route(), view.read(cx).pane_id, cx);
                 if index == self.tabs.active_index() {
                     self.maximized = None;
@@ -3595,6 +3597,7 @@ impl LyrelApp {
         // The closed tab's Working agents went with it; automatic mode
         // re-evaluates once this update unwinds.
         crate::ui::caffeine::CaffeineState::agents_changed(cx);
+        crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
         if navigation_on_closing {
             self.sidebar_nav_target = navigation_successor;
             self.sidebar_nav_settle(cx);

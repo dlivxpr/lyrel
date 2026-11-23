@@ -1470,6 +1470,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ActivityChannelTab => "Tab",
         L10nKey::ActivityChannelDesktop => "Desktop",
         L10nKey::ActivityChannelSound => "Sound",
+        L10nKey::ActivityChannelBadge => "Badge",
+        L10nKey::SystemBadgeTabsNeedAttention => "Tabs needing attention: {count}",
         L10nKey::SettingsWindow => "Startup & restore",
         L10nKey::NotifyModeNever => "Never",
         L10nKey::NotifyModeUnfocused => "When unfocused",
