@@ -3431,6 +3431,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanePark => "Park pane",
         L10nKey::PaneRestoreParked => "Restore parked pane",
         L10nKey::ParkedDeckTitle => "Parked panes",
+        L10nKey::ParkedEntryCount => "Parked panes: {count}",
         L10nKey::ParkedRestore => "Restore",
         L10nKey::ParkedAlive => "Running",
         L10nKey::ParkedExited => "Exited",

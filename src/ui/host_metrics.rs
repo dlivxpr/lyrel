@@ -46,36 +46,31 @@ const HISTORY_SPAN_MILLIS: u64 = 3_600_000;
 /// long views aggregate samples per slot and keep the peak.
 const BUCKET_COUNT: usize = 60;
 
-/// Fixed strip widths handed to the chrome budget, matching the tiles built
-/// in [`titlebar_metric`]: label + chart + value, or label + value.
-const TITLEBAR_TILE_FULL_W: f32 = 132.;
-const TITLEBAR_TILE_COMPACT_W: f32 = 76.;
+/// Fixed capsule widths handed to the chrome budget, matching the capsule
+/// built in [`titlebar_capsule`]. `CAPSULE_FULL_W` is the reviewed
+/// approximately-204 px two-line capsule at the default scale: readings on
+/// the upper line, short trends below. `CAPSULE_COMPACT_W` is the
+/// readings-only line the narrowing order falls back to before Park
+/// compresses and the capsule then hides.
+const CAPSULE_FULL_W: f32 = 204.;
+const CAPSULE_COMPACT_W: f32 = 168.;
+/// Inner breathing room, mirrored by the capsule builder.
+const CAPSULE_PAD: f32 = 10.;
+/// Between the capsule and the right command group — the same gap the old
+/// tiles carried, still included in the width handed to the chrome budget.
 const TITLEBAR_TILE_GAP: f32 = 12.;
 
-/// Which title-bar strip the available width buys, if any: `Some(true)`
-/// for full tiles with trends, `Some(false)` for compact readings, `None`
-/// when even those would crowd the command groups, drag band or native
-/// controls. The space those fixed pieces need is
-/// [`crate::ui::window_chrome::titlebar_chrome_reserve`], not a second
-/// guess at the same geometry, so the chart and the chrome cannot disagree.
-pub(crate) fn titlebar_metrics_layout(
-    viewport_width: f32,
-    rem_size: f32,
-    count: u8,
-    fullscreen: bool,
-) -> Option<bool> {
-    if count == 0 {
-        return None;
-    }
-    let available =
-        viewport_width - crate::ui::window_chrome::titlebar_chrome_reserve(rem_size, fullscreen);
-    let full = (TITLEBAR_TILE_FULL_W + TITLEBAR_TILE_GAP) * f32::from(count);
-    let compact = (TITLEBAR_TILE_COMPACT_W + TITLEBAR_TILE_GAP) * f32::from(count);
-    match available >= full {
-        true => Some(true),
-        false if available >= compact => Some(false),
-        false => None,
-    }
+/// Strip width (capsule plus its trailing gap) for `count` enabled metrics
+/// at `rem_size` — the number the chrome budget subtracts beside the
+/// centered Park slot. Proportional for the partial toolbars the settings
+/// allow, and rem-scaled like the rest of the chrome.
+pub(crate) fn capsule_strip_w(count: u8, charts: bool, rem_size: f32) -> f32 {
+    let base = if charts {
+        CAPSULE_FULL_W
+    } else {
+        CAPSULE_COMPACT_W
+    };
+    ((base * f32::from(count) / 3.).ceil() + TITLEBAR_TILE_GAP) * (rem_size / 16.)
 }
 
 #[derive(Clone)]
@@ -918,67 +913,169 @@ fn trend_chart(
         .into_any_element()
 }
 
-/// One title-bar metric: label, short trend, current value. Clicking it
-/// opens the Activity Monitor on the same samples.
-fn titlebar_metric(
+/// One metric's reading in the capsule's upper line: identifying label and
+/// current value. The wrapper keeps the old tile's element id and its host
+/// detail as the accessible name, so pending and failed samplers still speak
+/// their state word through the same seam.
+fn capsule_reading(
     id: &'static str,
     label: &'static str,
-    readout: &MetricReadout,
-    buckets: Vec<Option<TrendBucket>>,
-    series: TrendSeries,
-    color: gpui_kit::Hsla,
-    chart: bool,
-    cx: &mut Context<LyrelApp>,
+    detail: &str,
+    value: String,
+    cx: &App,
 ) -> AnyElement {
-    let detail = readout.detail.clone();
-    let value = match series {
-        TrendSeries::Cpu => readout.cpu_text(),
-        TrendSeries::Memory => readout.memory_text(),
-        TrendSeries::Gpu => readout.gpu_text(),
-    };
     h_flex()
         .id(id)
-        .aria_label(gpui_kit::SharedString::from(detail.clone()))
+        .aria_label(gpui_kit::SharedString::from(detail))
         .test_support()
-        .w(px(if chart {
-            TITLEBAR_TILE_FULL_W
-        } else {
-            TITLEBAR_TILE_COMPACT_W
-        }))
+        .flex_1()
+        .min_w_0()
         .items_center()
-        .gap(px(6.))
-        .cursor_pointer()
-        .occlude()
-        .on_click(cx.listener(move |this, _, window, cx| {
-            this.open_activity_monitor(window, cx);
-        }))
-        .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+        .justify_center()
+        .gap(px(3.))
         .child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
-        .when(chart && readout.ready(), |metric| {
-            metric.child(trend_chart(
-                format!("{id}-chart"),
-                buckets,
-                series,
-                color,
-                100.,
-                40.,
-                14.,
-            ))
-        })
         .child(
             div()
                 .id(format!("{id}-value"))
                 .aria_label(gpui_kit::SharedString::from(value.clone()))
                 .test_support()
+                .min_w_0()
+                .text_ellipsis()
                 .text_xs()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .child(gpui_kit::SharedString::from(value)),
         )
+        .into_any_element()
+}
+
+/// The title-bar capsule: one pill combining every enabled metric. Labels
+/// and readings share the upper line; a short trend per metric sits below
+/// when `charts` and a trustworthy sample allow, microchart ink against the
+/// capsule's quiet fill. The hover carries the full host detail and the
+/// click opens the Activity Monitor on the same samples. Everything scales
+/// with the interface rem like the rest of the chrome.
+#[allow(clippy::too_many_arguments)]
+fn titlebar_capsule(
+    readout: &MetricReadout,
+    buckets: Vec<Option<TrendBucket>>,
+    cpu: bool,
+    ram: bool,
+    gpu: bool,
+    charts: bool,
+    rem_size: f32,
+    cx: &mut Context<LyrelApp>,
+) -> AnyElement {
+    let count = u8::from(cpu) + u8::from(ram) + u8::from(gpu);
+    let scale = rem_size / 16.;
+    let width = capsule_strip_w(count, charts, rem_size) - TITLEBAR_TILE_GAP * scale;
+    let chart_w = ((width - 2. * CAPSULE_PAD * scale - 2. * 6. * scale) / f32::from(count))
+        .max(12. * scale);
+    let detail = readout.detail.clone();
+    let cpu_color = cx.theme().accent;
+    let memory_color = cx.theme().success;
+    let gpu_color = cx.theme().warning;
+    let capsule_bg = cx.theme().muted.opacity(0.5);
+
+    let mut readings = h_flex()
+        .id("titlebar-metric-readings")
+        .test_support()
+        .w_full()
+        .items_center()
+        .gap(rems(6. / 16.));
+    if cpu {
+        readings = readings.child(capsule_reading(
+            "titlebar-metric-cpu",
+            "CPU",
+            &detail,
+            readout.cpu_text(),
+            cx,
+        ));
+    }
+    if ram {
+        readings = readings.child(capsule_reading(
+            "titlebar-metric-ram",
+            t(L10nKey::HostMetricsRam),
+            &detail,
+            readout.memory_text(),
+            cx,
+        ));
+    }
+    if gpu {
+        readings = readings.child(capsule_reading(
+            "titlebar-metric-gpu",
+            "GPU",
+            &detail,
+            readout.gpu_text(),
+            cx,
+        ));
+    }
+
+    let mut trends = h_flex()
+        .id("titlebar-metric-trends")
+        .test_support()
+        .w_full()
+        .items_center()
+        .gap(rems(6. / 16.));
+    if cpu {
+        trends = trends.child(trend_chart(
+            "titlebar-metric-cpu-chart",
+            buckets.clone(),
+            TrendSeries::Cpu,
+            cpu_color,
+            100.,
+            chart_w,
+            12.,
+        ));
+    }
+    if ram {
+        trends = trends.child(trend_chart(
+            "titlebar-metric-ram-chart",
+            buckets.clone(),
+            TrendSeries::Memory,
+            memory_color,
+            100.,
+            chart_w,
+            12.,
+        ));
+    }
+    if gpu {
+        trends = trends.child(trend_chart(
+            "titlebar-metric-gpu-chart",
+            buckets,
+            TrendSeries::Gpu,
+            gpu_color,
+            100.,
+            chart_w,
+            12.,
+        ));
+    }
+
+    v_flex()
+        .id("titlebar-metrics")
+        .test_support()
+        .flex_none()
+        .w(px(width))
+        .px(rems(CAPSULE_PAD / 16.))
+        .py(rems(4. / 16.))
+        .gap(rems(3. / 16.))
+        .items_center()
+        .justify_center()
+        .rounded(px(9. * scale))
+        .bg(capsule_bg)
+        .cursor_pointer()
+        .occlude()
+        .aria_label(gpui_kit::SharedString::from(detail.clone()))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_activity_monitor(window, cx);
+        }))
+        .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+        .child(readings)
+        .when(charts && readout.ready(), |capsule| capsule.child(trends))
         .into_any_element()
 }
 
@@ -1320,30 +1417,55 @@ impl LyrelApp {
             .map_or_else(|| self.spawn_host(cx), |leaf| leaf.read(cx).host_id())
     }
 
-    /// Which title-bar strip this frame can afford, if any: the same
-    /// predicate drives demand (sampling) and paint, so a hidden strip never
-    /// keeps sampling and a shown one never disagrees about charts.
+    /// Which title-bar capsule this frame can afford, if any: `Some(true)`
+    /// with microcharts, `Some(false)` readings only, `None` hidden. The
+    /// same predicate drives demand (sampling) and paint, so a hidden
+    /// capsule never keeps sampling and a shown one never disagrees about
+    /// charts.
     fn titlebar_metrics_state(&self, window: &Window, cx: &Context<Self>) -> Option<bool> {
         let toolbar = cx.global::<Config>().toolbar;
-        if !toolbar.cpu && !toolbar.ram && !toolbar.gpu {
+        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
+        if count == 0 {
             return None;
         }
         if self.status_document_context(window, cx).is_some() {
             return None;
         }
-        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
-        titlebar_metrics_layout(
-            window.viewport_size().width.as_f32(),
-            window.rem_size().as_f32(),
-            count,
-            window.is_fullscreen(),
-        )
+        match self.titlebar_chrome_fit(window, cx) {
+            crate::ui::window_chrome::TitlebarFit::Full => Some(true),
+            crate::ui::window_chrome::TitlebarFit::NoCharts
+            | crate::ui::window_chrome::TitlebarFit::CompactPark => Some(false),
+            crate::ui::window_chrome::TitlebarFit::HiddenMetrics => None,
+        }
     }
 
-    /// Whether the title-bar strip shows at all this frame. The strip and
-    /// the sync share this one predicate, so demand and paint never disagree.
-    fn titlebar_metrics_visible(&self, window: &Window, cx: &Context<Self>) -> bool {
-        self.titlebar_metrics_state(window, cx).is_some()
+    /// The shared narrowing decision for this frame: the Park entry form and
+    /// the capsule variant agree because both read this one fit. Metrics
+    /// switched off or a filling document hand the center slot everything the
+    /// fixed chrome does not take (capsule widths `0`), so Park keeps its
+    /// labelled form there.
+    pub(crate) fn titlebar_chrome_fit(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> crate::ui::window_chrome::TitlebarFit {
+        let toolbar = cx.global::<Config>().toolbar;
+        let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
+        let document = self.status_document_context(window, cx).is_some();
+        let rem = window.rem_size().as_f32();
+        let (full, compact) = if count == 0 || document {
+            (0., 0.)
+        } else {
+            (capsule_strip_w(count, true, rem), capsule_strip_w(count, false, rem))
+        };
+        crate::ui::window_chrome::titlebar_fit(
+            window.viewport_size().width.as_f32(),
+            rem,
+            window.is_fullscreen(),
+            !self.tabs.is_empty(),
+            full,
+            compact,
+        )
     }
 
     /// Keep exactly one sampler alive for the host some consumer is showing,
@@ -1359,7 +1481,7 @@ impl LyrelApp {
                 lyrel_core::core::config::RightPanelTab::Monitor
             )
             && self.right_panel.procs_pane.is_some();
-        let want = self.titlebar_metrics_visible(window, cx) || monitor_shown;
+        let want = self.titlebar_metrics_state(window, cx).is_some() || monitor_shown;
         let current = self.metric_view.take();
         self.metric_view = match (want, current) {
             (true, Some(view)) if view.read(cx).host == host => Some(view),
@@ -1398,82 +1520,40 @@ impl LyrelApp {
         )
     }
 
-    /// The title-bar strip, or `None` where it must not appear. Narrow
-    /// windows drop the charts first and the whole strip last; the readings
-    /// themselves never shrink the native controls or the drag area.
+    /// The title-bar capsule, or `None` where it must not appear. Narrow
+    /// windows drop the microcharts first and the whole capsule last; the
+    /// readings themselves never shrink the native controls, the centered
+    /// Park entry or the drag area — `window_chrome::titlebar_fit` already
+    /// accounted for all of those.
     pub(crate) fn render_titlebar_metrics(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
+        fit: crate::ui::window_chrome::TitlebarFit,
     ) -> Option<(AnyElement, f32)> {
-        let chart = self.titlebar_metrics_state(window, cx)?;
         let toolbar = cx.global::<Config>().toolbar;
-        let host = self.metric_host(window, cx);
-        let (readout, mut buckets) = self.metric_presentation(host, MetricsRange::TwoMinutes, cx);
-        let theme = cx.theme();
-        let cpu_color = theme.accent;
-        let memory_color = theme.success;
-        let gpu_color = theme.warning;
-        let gap = px(TITLEBAR_TILE_GAP);
-        let strip = h_flex()
-            .id("titlebar-metrics")
-            .test_support()
-            .flex_none()
-            .items_center()
-            .gap(gap)
-            .pr(gap)
-            .when(toolbar.cpu, |strip| {
-                strip.child(titlebar_metric(
-                    "titlebar-metric-cpu",
-                    "CPU",
-                    &readout,
-                    if toolbar.ram || toolbar.gpu {
-                        buckets.clone()
-                    } else {
-                        std::mem::take(&mut buckets)
-                    },
-                    TrendSeries::Cpu,
-                    cpu_color,
-                    chart,
-                    cx,
-                ))
-            })
-            .when(toolbar.ram, |strip| {
-                strip.child(titlebar_metric(
-                    "titlebar-metric-ram",
-                    t(L10nKey::HostMetricsRam),
-                    &readout,
-                    if toolbar.gpu {
-                        buckets.clone()
-                    } else {
-                        std::mem::take(&mut buckets)
-                    },
-                    TrendSeries::Memory,
-                    memory_color,
-                    chart,
-                    cx,
-                ))
-            })
-            .when(toolbar.gpu, |strip| {
-                strip.child(titlebar_metric(
-                    "titlebar-metric-gpu",
-                    "GPU",
-                    &readout,
-                    buckets,
-                    TrendSeries::Gpu,
-                    gpu_color,
-                    chart,
-                    cx,
-                ))
-            })
-            .into_any_element();
-        let tile_w = if chart {
-            TITLEBAR_TILE_FULL_W
-        } else {
-            TITLEBAR_TILE_COMPACT_W
-        };
         let count = u8::from(toolbar.cpu) + u8::from(toolbar.ram) + u8::from(toolbar.gpu);
-        Some((strip, (tile_w + TITLEBAR_TILE_GAP) * f32::from(count)))
+        if count == 0
+            || self.status_document_context(window, cx).is_some()
+            || matches!(fit, crate::ui::window_chrome::TitlebarFit::HiddenMetrics)
+        {
+            return None;
+        }
+        let charts = fit.capsule_charts();
+        let host = self.metric_host(window, cx);
+        let (readout, buckets) = self.metric_presentation(host, MetricsRange::TwoMinutes, cx);
+        let rem = window.rem_size().as_f32();
+        let strip = titlebar_capsule(
+            &readout,
+            buckets,
+            toolbar.cpu,
+            toolbar.ram,
+            toolbar.gpu,
+            charts,
+            rem,
+            cx,
+        );
+        Some((strip, capsule_strip_w(count, charts, rem)))
     }
 
     /// The Activity Monitor's resource section: the shared trend-range

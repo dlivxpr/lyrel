@@ -22,6 +22,12 @@ mod keyboard_region;
 use graphics::{Frame, FrameCard, FrameInput, Pose, Sprite, Tokens};
 use keyboard_region::KeyboardRegion;
 
+/// How much of the deck band the canvas reserves for the +N control when the
+/// fan overflows: the cards fan within the shrunken band and the button sits
+/// in the freed reach. Shared by the canvas prepaint and the button's own
+/// positioning so the two never disagree.
+const MORE_RESERVE_REM: f32 = 6.5;
+
 /// 当前 tab 中稳定的客户端卡片身份（如 PaneSlot.entity_id.as_u64()）。
 /// App 必须在本地/远端混合场景提供唯一 token；alive 只影响标签，不禁止查看已退出会话的 scrollback。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -337,6 +343,38 @@ impl ParkedDeck {
     #[cfg(test)]
     pub fn selected_pane(&self) -> Option<u64> {
         self.selected
+    }
+
+    /// The number of cards in the current tab — the title-bar entry badge.
+    pub fn parked_count(&self) -> usize {
+        self.cards.len()
+    }
+
+    /// The title-bar entry is being hovered: open the fan without taking the
+    /// keyboard. Chrome owns the entry element; the deck owns the fan.
+    pub fn show_for_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.cards.is_empty() || self.pointer_fan {
+            return;
+        }
+        self.pointer_fan = true;
+        self.update_targets(cx.reduce_motion(), false);
+        cx.notify();
+    }
+
+    /// The entry hover ended. The fan stays open while the pointer is on the
+    /// road from the entry into the cards (the deck's band reaches one
+    /// title-bar row above the content, where the entry lives); it closes
+    /// when the pointer left for anywhere else.
+    pub fn hide_for_pointer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pointer_fan {
+            return;
+        }
+        if self.frame.borrow().deck_contains(window.mouse_position()) {
+            return;
+        }
+        self.pointer_fan = false;
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        cx.notify();
     }
 
     /// trigger 省略时记录当前真实焦点；既不默认 focus 新建 view，也不从 render 抢焦点。
@@ -819,6 +857,26 @@ impl Render for ParkedDeck {
                 .size_full()
                 .into_any_element();
         }
+        let now = Instant::now();
+        let reduced = cx.reduce_motion();
+        // At rest the deck paints nothing: the title-bar entry is the Park
+        // affordance now. The fan renders only while it is open — the pointer
+        // is on the entry or the cards, the keyboard owns it, a preview or
+        // the overflow list is up, or the closing aura is still fading — or
+        // while the drop target paints.
+        let open = !self.cards.is_empty()
+            && (self.pointer_fan
+                || self.keyboard
+                || self.selected.is_some()
+                || self.overflow_open
+                || self.aura(now, reduced) > 0.001);
+        if !open && !self.drop_target {
+            return div()
+                .id("parked-deck")
+                .test_support()
+                .size_full()
+                .into_any_element();
+        }
         self.rem = f32::from(window.rem_size());
         let capacity = self.deck_capacity();
         self.refresh_resources(cx);
@@ -826,20 +884,33 @@ impl Render for ParkedDeck {
         let more = self.cards.len() > capacity || self.overflow_open;
         let overflow_list = overflow.then(|| self.render_overflow(cx));
         let more_button = more.then(|| {
-            Button::new("parked-more")
-                .ghost()
-                .small()
-                .w(rems(6.))
-                .label(self.labels.more.clone())
-                .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
-                .on_click(cx.listener(|this, _, window, cx| this.open_overflow(window, cx)))
+            // The fan owns its +N control: right of the band the cards fan
+            // across, under the title bar. The canvas shifts the band left by
+            // the same reserve, so the button cannot sit over a card.
+            let zoom = self.zoom();
+            let reserve = MORE_RESERVE_REM * 16. * zoom / 2.;
+            let center = f32::from(window.viewport_size().width) / 2. - reserve;
+            let x = (center + 188. * zoom)
+                .min((f32::from(window.viewport_size().width) - 72. * zoom).max(0.));
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(10. * zoom))
+                .child(
+                    Button::new("parked-more")
+                        .ghost()
+                        .small()
+                        .label(self.labels.more.clone())
+                        .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_overflow(window, cx)
+                        })),
+                )
         });
         if self.focus.is_focused(window) && window.last_input_was_keyboard() {
             self.keyboard = true;
         }
         self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
-        let now = Instant::now();
-        let reduced = cx.reduce_motion();
         if self
             .cards
             .iter()
@@ -903,16 +974,26 @@ impl Render for ParkedDeck {
                                 }
                             });
                         });
-                        let mut deck_bounds = bounds;
-                        if more {
-                            deck_bounds.size.width =
-                                (deck_bounds.size.width - window.rem_size() * 6.5).max(px(0.));
-                        }
+                        let zoom = f32::from(window.rem_size()) / 16.;
+                        // The fan hangs from the window's centre line — the
+                        // Park entry's line — not from the deck overlay's own
+                        // centre, which side panels shove sideways. When the
+                        // +N control shows, the cards' band shifts left by
+                        // half its reserve so the button keeps the freed
+                        // reach (deck_capacity already counts the fan within
+                        // the shrunken band).
+                        let reserve = if more {
+                            MORE_RESERVE_REM * 16. * zoom / 2.
+                        } else {
+                            0.
+                        };
+                        let center_x =
+                            px(f32::from(window.viewport_size().width) / 2. - reserve);
                         let scene = Frame::new(FrameInput {
                             bounds,
                             viewport,
-                            deck_bounds,
-                            zoom: f32::from(window.rem_size()) / 16.,
+                            center_x,
+                            zoom,
                             cards,
                             fan: aura,
                             park,
@@ -1095,9 +1176,7 @@ impl Render for ParkedDeck {
                 )
                 .size_full(),
             )
-            .when_some(more_button, |root, button| {
-                root.child(div().absolute().right_2().bottom_2().child(button))
-            })
+            .when_some(more_button, |root, button| root.child(button))
             .when_some(overflow_list, |root, list| root.child(list))
             .into_any_element()
     }

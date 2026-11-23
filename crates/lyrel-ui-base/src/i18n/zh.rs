@@ -3082,6 +3082,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanePark => "停放窗格",
         L10nKey::PaneRestoreParked => "恢复已停放窗格",
         L10nKey::ParkedDeckTitle => "已停放窗格",
+        L10nKey::ParkedEntryCount => "已停放窗格：{count}",
         L10nKey::ParkedRestore => "恢复",
         L10nKey::ParkedAlive => "运行中",
         L10nKey::ParkedExited => "已退出",

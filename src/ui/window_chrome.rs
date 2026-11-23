@@ -273,9 +273,10 @@ fn titlebar_trailing_inset(fullscreen: bool) -> f32 {
 
 /// Width the title bar keeps for its leading inset, window mark, both
 /// command groups, native window controls and the drag band before the
-/// metrics strip gets a pixel. `host_metrics` reads this one number to
-/// choose the strip's full, compact and hidden states; `render` lays those
-/// same pieces out, so a chart cannot be chosen over a command group.
+/// centered Park slot and the metrics capsule get a pixel. `titlebar_fit`
+/// and `host_metrics::capsule_strip_w` read this one number to choose the
+/// Park form, the capsule variant and the hidden state, and `render` lays
+/// those same pieces out, so paint cannot be chosen over a command group.
 pub(crate) fn titlebar_chrome_reserve(rem_size: f32, fullscreen: bool) -> f32 {
     let scale = rem_size / 16.;
     let macos_fullscreen = cfg!(target_os = "macos") && fullscreen;
@@ -302,6 +303,85 @@ pub(crate) fn titlebar_chrome_reserve(rem_size: f32, fullscreen: bool) -> f32 {
         + group
         + rem_size * titlebar_trailing_inset(fullscreen)
         + native
+}
+
+/// The Park entry's widths at the default scale (`rem = 16`): the labelled
+/// form (icon + word + count) and the narrow form (icon + count). Both stay
+/// under the reviewed `12rem` cap, and the entry button sizes itself from
+/// these same numbers — the title-bar budget subtracts exactly what the
+/// button takes.
+pub(crate) const PARK_ENTRY_FULL_W: f32 = 108.;
+pub(crate) const PARK_ENTRY_COMPACT_W: f32 = 56.;
+/// Breathing room the fit predicate keeps between the centered Park slot and
+/// whichever side approaches it.
+pub(crate) const CENTER_SLOT_GAP: f32 = 8.;
+
+/// The compromises the chrome makes this frame so the centered Park entry,
+/// the metrics capsule, the command groups and the native controls all fit
+/// without overlapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitlebarFit {
+    /// Park keeps its word and the capsule keeps its microcharts.
+    Full,
+    /// The capsule lost its microcharts; Park keeps its word.
+    NoCharts,
+    /// Park collapsed to icon + count as well.
+    CompactPark,
+    /// Even the compact capsule no longer fits: the top metrics hide.
+    HiddenMetrics,
+}
+
+impl TitlebarFit {
+    /// Whether the metrics capsule may paint its microcharts this frame.
+    pub(crate) fn capsule_charts(self) -> bool {
+        matches!(self, Self::Full)
+    }
+
+    /// Whether the Park entry collapsed to icon + count this frame.
+    pub(crate) fn park_compact(self) -> bool {
+        matches!(self, Self::CompactPark | Self::HiddenMetrics)
+    }
+}
+
+/// The narrowing decision for one frame, shared by paint and demand: as the
+/// window narrows, the microcharts go first, then the Park word, then the
+/// whole metrics capsule. `capsule_full_w` / `capsule_compact_w` are the
+/// strip widths `host_metrics` hands the chrome — readings plus trends, or
+/// readings only, each with its trailing gap. Pass `0.` where the metrics
+/// are switched off or a filling document owns the strip's space, so the
+/// center slot gets everything the fixed chrome does not take. `park_shown`
+/// is `false` where no terminal tab exists and the center slot renders
+/// nothing at all.
+pub(crate) fn titlebar_fit(
+    viewport_width: f32,
+    rem_size: f32,
+    fullscreen: bool,
+    park_shown: bool,
+    capsule_full_w: f32,
+    capsule_compact_w: f32,
+) -> TitlebarFit {
+    let scale = rem_size / 16.;
+    let available = viewport_width - titlebar_chrome_reserve(rem_size, fullscreen);
+    let park_full = if park_shown {
+        PARK_ENTRY_FULL_W * scale
+    } else {
+        0.
+    };
+    let park_compact = if park_shown {
+        PARK_ENTRY_COMPACT_W * scale
+    } else {
+        0.
+    };
+    let gap = CENTER_SLOT_GAP * scale;
+    if available >= park_full + gap + capsule_full_w {
+        TitlebarFit::Full
+    } else if available >= park_full + gap + capsule_compact_w {
+        TitlebarFit::NoCharts
+    } else if available >= park_compact + gap + capsule_compact_w {
+        TitlebarFit::CompactPark
+    } else {
+        TitlebarFit::HiddenMetrics
+    }
 }
 
 pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
@@ -373,9 +453,12 @@ pub(crate) enum ChromeCommand {
 pub(crate) struct WindowChrome {
     left: AnyElement,
     right: AnyElement,
-    /// The shared host-metrics strip (`element`, `width`) sitting left of the
-    /// button group; `None` where the window must not show it.
+    /// The shared host-metrics capsule (`element`, `width`) sitting left of
+    /// the button group; `None` where the window must not show it.
     metrics: Option<(AnyElement, f32)>,
+    /// The centered Park entry (`element`, `width`); `None` where there is
+    /// no terminal tab to park panes in.
+    park: Option<(AnyElement, f32)>,
 }
 
 impl WindowChrome {
@@ -384,6 +467,7 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
+        park: Option<(AnyElement, f32)>,
         metrics: Option<(AnyElement, f32)>,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
@@ -494,6 +578,7 @@ impl WindowChrome {
             left: left.into_any_element(),
             right: right.into_any_element(),
             metrics,
+            park,
         }
     }
 
@@ -560,12 +645,44 @@ impl WindowChrome {
                 .child(strip);
             title_bar_drag(row, "workbench-right-drag", window, cx).into_any_element()
         };
+        let has_park = self.park.is_some();
         h_flex()
             .flex_none()
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
-            .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
+            .when_some(self.park, |bar, (park, park_width)| {
+                // The Park entry owns the geometric window centre: equal flex
+                // zones on both sides keep its slot centred no matter how
+                // wide either side's content runs, and the slot's own row
+                // keeps the empty reach around the entry draggable.
+                let row = gpui_kit::div()
+                    .id("workbench-center-drag")
+                    .flex_none()
+                    .w(px(park_width))
+                    // Same line as the rows either side: the entry must not
+                    // ride half a point above the tiles it stands between.
+                    .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent)
+                    .items_center()
+                    .justify_center()
+                    .child(park);
+                let center = title_bar_drag(row, "workbench-center-drag", window, cx);
+                bar.child(center).child(
+                    gpui_kit::div()
+                        .flex_1()
+                        .min_w_0()
+                        .justify_end()
+                        .child(
+                            gpui_kit::div()
+                                .flex_none()
+                                .w(px(right_width))
+                                .child(right),
+                        ),
+                )
+            })
+            .when(!has_park, |bar| {
+                bar.child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
+            })
             .into_any_element()
     }
 }
@@ -641,6 +758,169 @@ mod gpui_tests {
     fn the_title_bar_lead_clears_the_traffic_lights() {
         let right = traffic_light_position().x + px(TRAFFIC_LIGHTS_W);
         assert!(right + px(TRAFFIC_LIGHT_INSET) <= px(crate::ui::window_chrome::TITLE_BAR_LEAD));
+    }
+
+    /// The narrowing order the chrome agreed on, as exact thresholds derived
+    /// from the fixed reserve: microcharts first, then the Park word, then
+    /// the whole capsule.
+    #[test]
+    fn titlebar_fit_stages_narrowing_in_the_approved_order() {
+        use super::{
+            CENTER_SLOT_GAP, PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, TitlebarFit,
+            titlebar_chrome_reserve, titlebar_fit,
+        };
+        // The capsule widths the product derives for all three metrics.
+        let capsule_full = crate::ui::host_metrics::capsule_strip_w(3, true, 16.);
+        let capsule_compact = crate::ui::host_metrics::capsule_strip_w(3, false, 16.);
+        let rem = 16.;
+        let reserve = titlebar_chrome_reserve(rem, false);
+        let full_need = PARK_ENTRY_FULL_W + CENTER_SLOT_GAP + capsule_full;
+        let compact_need = PARK_ENTRY_FULL_W + CENTER_SLOT_GAP + capsule_compact;
+        let park_compact_need = PARK_ENTRY_COMPACT_W + CENTER_SLOT_GAP + capsule_compact;
+        assert!(
+            PARK_ENTRY_FULL_W <= 192.,
+            "the reviewed width cap for the Park entry is 12rem"
+        );
+        assert_eq!(
+            titlebar_fit(reserve + full_need, rem, false, true, capsule_full, capsule_compact),
+            TitlebarFit::Full
+        );
+        assert_eq!(
+            titlebar_fit(
+                reserve + full_need - 1.,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::NoCharts
+        );
+        assert_eq!(
+            titlebar_fit(
+                reserve + compact_need,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::NoCharts
+        );
+        assert_eq!(
+            titlebar_fit(
+                reserve + compact_need - 1.,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::CompactPark
+        );
+        assert_eq!(
+            titlebar_fit(
+                reserve + park_compact_need,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::CompactPark
+        );
+        assert_eq!(
+            titlebar_fit(
+                reserve + park_compact_need - 1.,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::HiddenMetrics
+        );
+        // No metrics to show (settings off, or a filling document): the
+        // center slot keeps the labelled Park form whenever it fits at all.
+        assert_eq!(
+            titlebar_fit(
+                reserve + PARK_ENTRY_FULL_W + CENTER_SLOT_GAP,
+                rem,
+                false,
+                true,
+                0.,
+                0.
+            ),
+            TitlebarFit::Full
+        );
+        assert!(TitlebarFit::Full.capsule_charts());
+        assert!(!TitlebarFit::NoCharts.capsule_charts());
+        assert!(!TitlebarFit::NoCharts.park_compact());
+        assert!(TitlebarFit::CompactPark.park_compact());
+        assert!(TitlebarFit::HiddenMetrics.park_compact());
+    }
+
+    /// The Park entry sits at the geometric window midpoint whatever the
+    /// side panels do, and neither command group nor the capsule ever reach
+    /// over it. The drag band beside it never shrinks away.
+    #[gpui_kit::test]
+    fn park_entry_sits_at_the_window_midpoint_and_clears_both_sides(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        for (width, font_size) in [(1440., 16.), (900., 16.), (900., 20.)] {
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<lyrel_ui_base::config::Config>()
+                    .ui_font_size = font_size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                cx.notify();
+            });
+            vcx.simulate_resize(size(px(width), px(900.)));
+            settle(&mut vcx);
+            for (left_open, right_open) in [(true, true), (false, true), (false, false)] {
+                app.update_in(&mut vcx, |app, _, cx| {
+                    app.sidebar_collapsed = !left_open;
+                    app.right_panel_visible = right_open;
+                    cx.notify();
+                });
+                settle_panel_toggle(&mut vcx);
+                vcx.update(|window, _| {
+                    let entry = window.find("titlebar-park").bounds();
+                    let viewport = window.viewport_size();
+                    assert!(
+                        (f32::from(entry.center().x) - f32::from(viewport.width) / 2.).abs()
+                            <= 1.,
+                        "width {width} font {font_size} panels ({left_open}, {right_open}): \
+                         the Park entry owns the geometric window centre, got {entry:?}"
+                    );
+                    assert!(
+                        window.find("titlebar-add").bounds().right() <= entry.left(),
+                        "width {width}: the left command group cannot reach over the Park entry"
+                    );
+                    assert!(
+                        window.find("workbench-left-drag").bounds().size.width >= px(40.),
+                        "width {width}: the drag band survives next to the centered entry"
+                    );
+                    let capsule = window.find("titlebar-metrics").bounds();
+                    assert!(
+                        capsule.left() >= entry.right(),
+                        "width {width}: the capsule cannot reach over the Park entry"
+                    );
+                    assert!(
+                        window.find("titlebar-split-right").bounds().left() >= capsule.right(),
+                        "width {width}: the right command group keeps its lane"
+                    );
+                    for id in [
+                        "titlebar-left-panel",
+                        "titlebar-search",
+                        "titlebar-split-right",
+                        "titlebar-right-panel",
+                    ] {
+                        assert!(window.find(id).visible(), "width {width}: {id}");
+                    }
+                });
+            }
+        }
     }
 
     fn settle(vcx: &mut VisualTestContext) {
