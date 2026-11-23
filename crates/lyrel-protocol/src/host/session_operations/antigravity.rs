@@ -31,6 +31,7 @@
 //! `antigravity-v1` feature in `RemoteHost::session_operation`.
 
 use super::*;
+use crate::core::agent_history::PastSession;
 
 /// The CLI's directory under `<home>/.gemini`.
 const APP_DATA_DIR: &str = "antigravity-cli";
@@ -238,7 +239,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     let stored = find_summary(host, &root, &request.source_id)?;
     validate_cwd(host, &stored.cwd, &request.cwd)?;
     let conversation = conversation_path(host, &root, &request.source_id);
-    if !host.stat(&conversation).is_ok_and(|meta| meta.is_file) {
+    if !host.stat(&conversation).is_ok_and(|meta| !meta.is_dir) {
         return Err(failure(
             SessionErrorKind::Identity,
             format!(

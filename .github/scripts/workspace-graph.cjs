@@ -59,6 +59,10 @@ function graphViolations(packages, normal, headless) {
   for (const dependency of shellDependencies) {
     const { name, kind, rename, optional } = dependency;
     if (kind !== null || !shellEngines.includes(name)) continue;
+    // Side Panel previews are owned by the desktop shell. Keep their native
+    // engines platform-scoped and the draw.io document bridge in the editor.
+    if (!rename && ((name === 'webview2-com' && dependency.target === 'cfg(windows)') ||
+        (name === 'wry' && dependency.target === 'cfg(target_os = "macos")'))) continue;
     // The main-thread Markdown consumer compiles in the shell library to
     // exercise real window composition, but only in the opt-in test build.
     const testOnly = name === 'lyrel-markdown-editor' && optional && !rename &&
