@@ -89,37 +89,42 @@ impl AttachRegistry {
             .retain(|preview| preview.conn != conn);
     }
 
-    /// Hands one agent-requested preview to every link that said it consumes
-    /// previews (#393). The event names the owning workspace; each receiving
-    /// GUI maps it through its own view record and refuses to guess a window.
-    /// Dead links are dropped here rather than being written to forever.
-    fn preview_open(&self, workspace: &str, pane: u64, url: &str, scratch: &str) -> usize {
-        let targets: Vec<(u64, Arc<Sink>)> = self
+    /// Hands one agent-requested preview to the one control link that both
+    /// holds the owning workspace and said it consumes previews (#393). The
+    /// workspace's current `Live.conn` is the authority: an unclaimed
+    /// workspace, or one held by a link that never negotiated `preview`,
+    /// has no target and receives nothing. Never broadcast the URL or the
+    /// screenshot directory to unrelated GUIs.
+    fn preview_open(&self, workspace: &str, pane: u64, url: &str, scratch: &str) -> bool {
+        let Some((conn, sink)) = self
+            .locked()
+            .iter()
+            .find(|live| live.workspace == workspace)
+            .map(|live| (live.conn, Arc::clone(&live.sink)))
+        else {
+            return false;
+        };
+        let consumes = self
             .previews
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|preview| (preview.conn, Arc::clone(&preview.sink)))
-            .collect();
+            .any(|preview| preview.conn == conn);
+        if !consumes {
+            return false;
+        }
         let event = ControlServerMsg::Event(ControlEvent::PreviewOpen {
             workspace: workspace.to_string(),
             pane,
             url: url.to_string(),
             scratch: scratch.to_string(),
         });
-        let mut delivered = 0;
-        let mut dead = Vec::new();
-        for (conn, sink) in targets {
-            if sink.send(&event).is_ok() {
-                delivered += 1;
-            } else {
-                dead.push(conn);
-            }
-        }
-        for conn in dead {
+        if sink.send(&event).is_ok() {
+            true
+        } else {
             self.unregister_preview(conn);
+            false
         }
-        delivered
     }
 
     fn open_gui(&self, path: Option<String>, workspace: Option<WorkspaceId>) -> bool {
@@ -275,7 +280,7 @@ impl ConnectionIdentity {
         pane: u64,
         url: &str,
         scratch: &str,
-    ) -> usize {
+    ) -> bool {
         self.registry.preview_open(workspace, pane, url, scratch)
     }
 
@@ -415,31 +420,72 @@ mod gui_registry_tests {
         assert!(!registry.open_gui(None, None));
     }
 
+    struct NoShutdown;
+
+    impl LinkShutdown for NoShutdown {
+        fn shutdown_link(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn holder(sink: Arc<Sink>) -> Holder {
+        Holder {
+            token: "token".into(),
+            hostname: "desktop".into(),
+            sink,
+            shutdown: Arc::new(NoShutdown),
+        }
+    }
+
     #[test]
-    fn previews_reach_every_preview_link_and_never_a_gui_launcher() {
+    fn previews_reach_only_the_preview_consumer_holding_the_workspace() {
         let registry = AttachRegistry::default();
         let preview_bytes = Arc::new(Mutex::new(Vec::new()));
+        let bystander_bytes = Arc::new(Mutex::new(Vec::new()));
         let plain_bytes = Arc::new(Mutex::new(Vec::new()));
+        let preview_sink = Arc::new(Sink::new(SharedWriter(Arc::clone(&preview_bytes))));
+        let plain_sink = Arc::new(Sink::new(SharedWriter(Arc::clone(&plain_bytes))));
+        registry.register_preview(7, Arc::clone(&preview_sink));
         registry.register_preview(
-            7,
-            Arc::new(Sink::new(SharedWriter(Arc::clone(&preview_bytes)))),
+            9,
+            Arc::new(Sink::new(SharedWriter(Arc::clone(&bystander_bytes)))),
         );
-        registry.register_gui(
-            8,
-            Arc::new(Sink::new(SharedWriter(Arc::clone(&plain_bytes)))),
-        );
+        registry.register_gui(8, Arc::clone(&plain_sink));
 
         let workspace = WorkspaceId::new();
-        assert_eq!(
+        let open = |registry: &AttachRegistry| {
             registry.preview_open(
                 &workspace.to_string(),
                 42,
                 "http://localhost:5173",
-                "/tmp/lyrel/previews"
-            ),
-            1,
-            "only the link that announced preview support receives it"
+                "/tmp/lyrel/previews",
+            )
+        };
+
+        assert!(!open(&registry), "an unclaimed workspace has no target");
+        assert!(
+            preview_bytes.lock().unwrap().is_empty(),
+            "nothing is broadcast before a holder exists"
         );
+
+        // A link that holds the workspace without negotiating preview is not
+        // a target, and neither is a preview consumer elsewhere.
+        registry.claim(&workspace.to_string(), 8, &holder(plain_sink), false);
+        assert!(!open(&registry), "held by a non-consumer");
+        assert!(
+            bystander_bytes.lock().unwrap().is_empty(),
+            "another workspace's consumer never sees the URL or scratch path"
+        );
+
+        // The preview consumer claims the workspace: the event goes to that
+        // exact holder and nowhere else.
+        registry.claim(
+            &workspace.to_string(),
+            7,
+            &holder(Arc::clone(&preview_sink)),
+            false,
+        );
+        assert!(open(&registry), "the consuming holder is the target");
         let frame = preview_bytes.lock().unwrap().clone();
         assert_eq!(
             ControlServerMsg::read(&mut Cursor::new(frame)).unwrap(),
@@ -451,19 +497,14 @@ mod gui_registry_tests {
             })
         );
         assert!(
-            plain_bytes.lock().unwrap().is_empty(),
-            "a GUI launcher is not a preview consumer unless it says so"
+            bystander_bytes.lock().unwrap().is_empty(),
+            "a preview consumer that does not hold the workspace gets nothing"
         );
 
         registry.unregister_preview(7);
-        assert_eq!(
-            registry.preview_open(
-                &workspace.to_string(),
-                42,
-                "http://localhost:5173",
-                "/tmp/lyrel/previews"
-            ),
-            0
+        assert!(
+            !open(&registry),
+            "a holder without preview registration has no target"
         );
         assert!(
             registry.open_gui(None, None),

@@ -2802,6 +2802,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::BrowserPreviewSource => "{pane}",
         L10nKey::BrowserPreviewSourceMissing => "{pane} (closed)",
+        L10nKey::BrowserPreviewSourceStale => "{pane} (not linked)",
         L10nKey::BrowserPreviewSourceTip => "Agent preview requested by pane {pane}",
         L10nKey::BrowserPreviewFeedbackPlaceholder => "Tell the agent what to change…",
         L10nKey::BrowserPreviewSend => "Send to {pane}",
@@ -2825,6 +2826,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserPreviewPaneExited => "Pane {pane} has exited; the feedback was not sent.",
         L10nKey::BrowserPreviewPaneLocked => {
             "Another client is driving pane {pane}; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewSourceUnverified => {
+            "This preview is not linked to its live requesting pane; ask the agent to request it again."
         }
         L10nKey::BrowserPreviewScratchInvalid => {
             "The preview has no absolute screenshot directory on its Host."

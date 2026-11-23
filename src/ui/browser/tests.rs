@@ -333,6 +333,25 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
         );
     });
 
+    // Move the Side Panel to a tool, then have the same agent pane request
+    // again: the existing preview is selected, not merely rewritten in place.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.select_panel_tab(
+            &crate::ui::right_panel::PanelTab::Tool(lyrel_core::core::config::RightPanelTab::Info),
+            window,
+            cx,
+        );
+    });
+    app.read_with(&vcx, |app, _| {
+        assert!(
+            matches!(
+                app.tool_layout().active,
+                crate::ui::right_panel::PanelTab::Tool(_)
+            ),
+            "the test really left the preview"
+        );
+    });
+
     // A second request from the same agent pane reuses its preview tab and
     // moves that page rather than piling up tabs.
     app.update_in(&mut vcx, |app, _window, cx| {
@@ -350,7 +369,11 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
             })
             .collect();
         assert_eq!(web, [first.clone()], "one preview tab per agent pane");
-        assert_eq!(layout_active_web(&layout).as_deref(), Some(first.as_str()));
+        assert!(
+            matches!(&layout.active, crate::ui::right_panel::PanelTab::Web(tab) if tab.id == first),
+            "a repeated request selects the existing preview"
+        );
+        assert!(layout.open, "the panel stays revealed");
         assert_eq!(
             app.web_tab(&first).expect("the tab").address,
             "http://localhost:5173/next"
@@ -429,6 +452,263 @@ fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(cx: &mu
             .expect("the composer stays open");
         assert!(feedback.error.is_none(), "{:?}", feedback.error);
         assert!(feedback.notice.is_some(), "the sent state is visible");
+    });
+}
+
+#[gpui_kit::test]
+fn a_stale_capture_answer_never_consumes_a_newer_share(cx: &mut TestAppContext) {
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    settle(&mut vcx);
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_path = scratch.path().to_string_lossy().into_owned();
+    let (tab, first, second) = app.update_in(&mut vcx, |app, window, cx| {
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/app",
+            &scratch_path,
+            cx,
+        )
+        .expect("the preview opens");
+        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        app.attach_test_browser_surface(&tab, cx);
+        app.browser_preview_feedback_open(&tab, window, cx);
+        let input = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .input
+            .clone();
+        input.update(cx, |state, cx| state.set_value("first", window, cx));
+        app.browser_preview_feedback_send(&tab, window, cx);
+        let first = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .pending_capture
+            .as_ref()
+            .expect("the first share is waiting")
+            .request;
+        app.browser_preview_feedback_cancel(&tab, cx);
+        app.browser_preview_feedback_open(&tab, window, cx);
+        input.update(cx, |state, cx| state.set_value("second", window, cx));
+        app.browser_preview_feedback_send(&tab, window, cx);
+        let second = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .pending_capture
+            .as_ref()
+            .expect("the second share is waiting")
+            .request;
+        assert_ne!(first, second);
+        (tab, first, second)
+    });
+
+    app.update_in(&mut vcx, |app, _window, cx| {
+        app.preview_capture_ready(
+            &tab,
+            first,
+            super::surface::test_support::CAPTURED_PNG.to_vec(),
+            cx,
+        );
+        let feedback = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists");
+        assert!(feedback.pending, "the newer share is still waiting");
+        assert_eq!(
+            feedback.pending_capture.as_ref().map(|job| job.request),
+            Some(second),
+            "a stale answer must not consume the newer pending request"
+        );
+        assert!(feedback.error.is_none(), "{:?}", feedback.error);
+    });
+
+    // Nothing was delivered by the stale or the cancelled request.
+    app.update_in(&mut vcx, |app, _window, cx| {
+        app.browser_preview_feedback_cancel(&tab, cx);
+    });
+    settle(&mut vcx);
+    assert!(
+        take_inputs(&mut streams[0]).is_empty(),
+        "neither cancelled request reached the pane"
+    );
+}
+
+#[gpui_kit::test]
+fn a_cancelled_share_never_reaches_the_pane_after_its_write(cx: &mut TestAppContext) {
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    settle(&mut vcx);
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_path = scratch.path().to_string_lossy().into_owned();
+    let (tab, request) = app.update_in(&mut vcx, |app, window, cx| {
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/app",
+            &scratch_path,
+            cx,
+        )
+        .expect("the preview opens");
+        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        app.attach_test_browser_surface(&tab, cx);
+        app.browser_preview_feedback_open(&tab, window, cx);
+        let input = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .input
+            .clone();
+        input.update(cx, |state, cx| state.set_value("cancel me", window, cx));
+        app.browser_preview_feedback_send(&tab, window, cx);
+        let request = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .pending_capture
+            .as_ref()
+            .expect("the share is waiting")
+            .request;
+        app.preview_capture_ready(
+            &tab,
+            request,
+            super::surface::test_support::CAPTURED_PNG.to_vec(),
+            cx,
+        );
+        assert!(
+            app.right_panel.web_pages[&tab]
+                .feedback
+                .as_ref()
+                .expect("the composer exists")
+                .pending,
+            "the request stays pending through the Host write"
+        );
+        app.browser_preview_feedback_cancel(&tab, cx);
+        (tab, request)
+    });
+    assert!(request > 0);
+
+    // Wait for the write itself, then give the landing callback a chance to
+    // run: it must find the share cancelled and deliver nothing.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        vcx.background_executor.run_until_parked();
+        let wrote = std::fs::read_dir(scratch.path())
+            .map(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "png")
+                })
+            })
+            .unwrap_or(false);
+        if wrote {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the screenshot write never finished"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for _ in 0..20 {
+        vcx.background_executor.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        take_inputs(&mut streams[0]).is_empty(),
+        "a cancelled share never reaches the pane, even after its screenshot was written"
+    );
+    app.read_with(&vcx, |app, _| {
+        let feedback = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer stays open");
+        assert!(!feedback.pending, "nothing is left waiting");
+        assert!(
+            feedback.notice.is_none(),
+            "a cancelled share never reports success"
+        );
+        assert!(
+            feedback.error.is_none(),
+            "a cancelled share is not a failure: {:?}",
+            feedback.error
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
+    use crate::ui::right_panel::PanelTab;
+    use lyrel_core::core::config::RightPanelTab;
+    use lyrel_core::core::config::RightPanelTab::Info;
+    use lyrel_core::core::session::{
+        TabEntryState, TabSelectionState, ToolLayoutState, WebTabState, WindowView, WindowViews,
+    };
+
+    let workspace = WorkspaceId::new();
+    let state = ToolLayoutState {
+        version: ToolLayoutState::CURRENT_VERSION,
+        order: vec![
+            TabEntryState::Tool(Info),
+            TabEntryState::Web(WebTabState {
+                id: "web-preview".into(),
+                address: "http://localhost:5173/app".into(),
+                host: None,
+                title: String::new(),
+            }),
+        ],
+        active: TabSelectionState::Web("web-preview".into()),
+        last_used: RightPanelTab::Info,
+        open: true,
+    };
+    cx.update(|cx| {
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![WindowView {
+                    id: workspace,
+                    tool_layout: Some(state),
+                    ..WindowView::default()
+                }],
+                active: Some(workspace),
+            },
+        );
+    });
+    let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, workspace);
+    settle(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        let layout = app.tool_layout();
+        assert!(
+            matches!(&layout.active, PanelTab::Web(tab) if tab.id == "web-preview"),
+            "the tab and its address restore"
+        );
+        let tab = app.web_tab("web-preview").expect("the restored preview");
+        assert_eq!(tab.address, "http://localhost:5173/app");
+        assert!(
+            tab.source.is_none(),
+            "a restored preview has no remembered pane to send to"
+        );
+        assert!(
+            app.agent_preview_source_label(&tab, cx).is_none(),
+            "no source chip is shown without a live request"
+        );
+        app.browser_preview_feedback_open("web-preview", window, cx);
+        assert!(
+            app.right_panel
+                .web_pages
+                .get("web-preview")
+                .and_then(|page| page.feedback.as_ref())
+                .is_none(),
+            "a restored preview offers no share composer"
+        );
+        app.browser_preview_feedback_send("web-preview", window, cx);
+        assert!(
+            app.browser_surface_commands("web-preview").is_empty(),
+            "a restored preview never captures anything"
+        );
     });
 }
 
