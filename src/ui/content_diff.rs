@@ -597,5 +597,13 @@ mod tests {
             ContentFailure::ParseFailed.message(),
             L10nKey::DiffContentParseFailed
         );
+        assert_eq!(
+            ContentFailure::Binary.message(),
+            L10nKey::DiffContentReadFailed
+        );
+        assert_eq!(
+            ContentFailure::ReadFailed.message(),
+            L10nKey::DiffContentReadFailed
+        );
     }
 }
