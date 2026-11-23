@@ -958,7 +958,9 @@ fn browser_overlay(
     title: &str,
     cx: &mut Context<LyrelApp>,
 ) -> Option<AnyElement> {
-    if covered && load_error.is_none() && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
+    if covered
+        && load_error.is_none()
+        && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
     {
         return Some(browser_still_frame(tab_id, title, address, cx));
     }

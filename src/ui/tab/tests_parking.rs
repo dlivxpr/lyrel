@@ -107,7 +107,7 @@ fn park_fan_opens_downward_from_the_centered_entry_and_restores_by_keyboard_and_
         assert!(
             (f32::from(window.find("titlebar-park").bounds().center().x)
                 - f32::from(window.viewport_size().width) / 2.)
-            .abs()
+                .abs()
                 <= 1.
         );
         // Hover opens the fan downward from the title-bar center.
@@ -185,7 +185,10 @@ fn restore_out_of_fill_docks_the_document_and_preserves_it(cx: &mut TestAppConte
         if app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "the document did not open");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the document did not open"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     vcx.simulate_keystrokes("h");
@@ -638,9 +641,7 @@ fn handle_drop_parks_the_last_live_pane_and_keyboard_restores_its_identity(
 }
 
 #[gpui_kit::test]
-fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
-    cx: &mut TestAppContext,
-) {
+fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let pane = app.update_in(&mut vcx, |app, window, cx| {
@@ -698,9 +699,7 @@ fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
 }
 
 #[gpui_kit::test]
-fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(
-    cx: &mut TestAppContext,
-) {
+fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let (pane, parked) = app.update_in(&mut vcx, |app, window, cx| {
@@ -779,9 +778,7 @@ fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(
 }
 
 #[gpui_kit::test]
-fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
-    cx: &mut TestAppContext,
-) {
+fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
     let pane = app.update_in(&mut vcx, |app, window, cx| {
@@ -1117,11 +1114,7 @@ fn pip_pane_menu_handle_also_drags_to_the_shared_parking_target(cx: &mut TestApp
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            park_aim(window, content),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
@@ -1267,11 +1260,7 @@ fn drag_park_restore_keeps_output_and_input_on_the_original_daemon_attachment(
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            park_aim(window, content),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx))
