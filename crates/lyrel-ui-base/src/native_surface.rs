@@ -145,7 +145,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn covers_count_per_window_and_release_once(cx: &mut gpui_kit::TestAppContext) {
-        let (_, mut window) = cx.add_window_view(|_, _| EmptyView);
+        let (_, window) = cx.add_window_view(|_, _| EmptyView);
         window.update(|window, cx| {
             let id = window.window_handle().window_id();
             assert!(!is_covered(id, cx));
@@ -165,10 +165,10 @@ mod tests {
         use std::rc::Rc;
 
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let (_, mut window) = cx.add_window_view(|_, _| EmptyView);
+        let (_, window) = cx.add_window_view(|_, _| EmptyView);
         window.update(|window, cx| {
-            let seen = seen.clone();
-            on_change(cx, move |id, _| seen.borrow_mut().push(id));
+            let events = seen.clone();
+            on_change(cx, move |id, _| events.borrow_mut().push(id));
             let id = window.window_handle().window_id();
             let guard = cover(window, cx);
             guard.release(cx);
