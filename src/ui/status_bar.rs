@@ -86,7 +86,10 @@ fn group_line_count(count: u32, sign: char) -> String {
 /// truncates inside it, so a long path or branch never squeezes the clock,
 /// Caffeine, or the bell out of the window. Separators between context
 /// groups are gone: the fill alone carries the grouping.
-fn context_pill(id: &'static str, cx: &gpui_kit::App) -> gpui_kit::Div {
+fn context_pill(
+    id: &'static str,
+    cx: &gpui_kit::App,
+) -> impl gpui_kit::ParentElement + gpui_kit::IntoElement + gpui_kit::Styled {
     div()
         .id(id)
         .test_support()
@@ -1112,7 +1115,7 @@ mod tests {
             let counts = window.find("status-git-counts");
             assert!(counts.visible());
             assert_eq!(counts.label(), Some("+4 −0"));
-            assert!(counts_pill.contains(&counts.center()));
+            assert!(counts_pill.contains(&counts.bounds().center()));
             // The branch control still truncates inside its pill, not by
             // shoving the fixed tools out of the window.
             let branch = window.find("status-git-branch").bounds();

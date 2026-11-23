@@ -645,7 +645,12 @@ impl WindowChrome {
                 .child(strip);
             title_bar_drag(row, "workbench-right-drag", window, cx).into_any_element()
         };
-        let has_park = self.park.is_some();
+        let right = gpui_kit::div().flex_none().w(px(right_width)).child(right);
+        let right = if self.park.is_some() {
+            h_flex().flex_1().min_w_0().justify_end().child(right)
+        } else {
+            right
+        };
         h_flex()
             .flex_none()
             .h(rems(3.))
@@ -666,23 +671,9 @@ impl WindowChrome {
                     .items_center()
                     .justify_center()
                     .child(park);
-                let center = title_bar_drag(row, "workbench-center-drag", window, cx);
-                bar.child(center).child(
-                    gpui_kit::div()
-                        .flex_1()
-                        .min_w_0()
-                        .justify_end()
-                        .child(
-                            gpui_kit::div()
-                                .flex_none()
-                                .w(px(right_width))
-                                .child(right),
-                        ),
-                )
+                bar.child(title_bar_drag(row, "workbench-center-drag", window, cx))
             })
-            .when(!has_park, |bar| {
-                bar.child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
-            })
+            .child(right)
             .into_any_element()
     }
 }
@@ -782,7 +773,14 @@ mod gpui_tests {
             "the reviewed width cap for the Park entry is 12rem"
         );
         assert_eq!(
-            titlebar_fit(reserve + full_need, rem, false, true, capsule_full, capsule_compact),
+            titlebar_fit(
+                reserve + full_need,
+                rem,
+                false,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
             TitlebarFit::Full
         );
         assert_eq!(
@@ -864,9 +862,7 @@ mod gpui_tests {
     /// side panels do, and neither command group nor the capsule ever reach
     /// over it. The drag band beside it never shrinks away.
     #[gpui_kit::test]
-    fn park_entry_sits_at_the_window_midpoint_and_clears_both_sides(
-        cx: &mut TestAppContext,
-    ) {
+    fn park_entry_sits_at_the_window_midpoint_and_clears_both_sides(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         for (width, font_size) in [(1440., 16.), (900., 16.), (900., 20.)] {
             app.update_in(&mut vcx, |_, _, cx| {
@@ -888,8 +884,7 @@ mod gpui_tests {
                     let entry = window.find("titlebar-park").bounds();
                     let viewport = window.viewport_size();
                     assert!(
-                        (f32::from(entry.center().x) - f32::from(viewport.width) / 2.).abs()
-                            <= 1.,
+                        (f32::from(entry.center().x) - f32::from(viewport.width) / 2.).abs() <= 1.,
                         "width {width} font {font_size} panels ({left_open}, {right_open}): \
                          the Park entry owns the geometric window centre, got {entry:?}"
                     );

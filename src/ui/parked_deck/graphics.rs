@@ -461,7 +461,7 @@ impl Frame {
                 radians.sin() * pose.scale * zoom,
                 radians.cos() * pose.scale * zoom,
             );
-            let mut anchor_x = f32::from(self.center_x) + (pose.x - shift) * zoom;
+            let mut anchor_x = f32::from(center_x) + (pose.x - shift) * zoom;
             // The fan hangs below the title bar now: the deck overlays the
             // content, whose top edge sits directly under the centered Park
             // entry, and every pose's (negative) lift carries its card
