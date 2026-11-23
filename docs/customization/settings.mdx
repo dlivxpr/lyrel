@@ -189,6 +189,7 @@ OpenCode、Kimi Code、pi 和 Oh My Pi 的会话仍可在 Lyrel 中隐藏。暂�
 - Kimi Code 在获取会话锁失败后仍可能继续删除。
 - pi 的写入和删除没有跨进程互斥机制。
 - Oh My Pi 的原生删除入口不持有会话写入租约。
+- Antigravity 的对话索引只有已验证的读取与精确恢复路径，没有原生删除路径；记录保持不可删除，直到该路径单独验收。
 
 <a id="skills-statistics-usage-boundaries"></a>
 ## 技能、统计与用量的引入边界

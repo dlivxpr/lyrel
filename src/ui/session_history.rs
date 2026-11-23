@@ -7,13 +7,14 @@
 //! landed result is bound to the host and generation that asked for it, so a
 //! stale answer can never repaint a newer question. Each agent provider
 //! answers separately — the native pi/Oh My Pi/Kimi stores through
-//! `Host::agent_sessions`, OpenCode and Hermes through their scoped requests
-//! — so one source failing never empties the others: the listing keeps the
-//! per-source errors beside the sessions it did find, and the view says
-//! which is which. Search Everywhere's Sessions tab consumes the same
-//! plan/collect pair (see [`crate::ui::search`]), and Sessions settings
-//! (#366) builds on the listing type and the [`SessionIdentity`] visibility
-//! model both consumers hide through.
+//! `Host::agent_sessions`, OpenCode and Hermes through their scoped requests,
+//! Antigravity through its read-only index adapter — so one source failing
+//! never empties the others: the listing keeps the per-source errors beside
+//! the sessions it did find, and the view says which is which. Search
+//! Everywhere's Sessions tab consumes the same plan/collect pair (see
+//! [`crate::ui::search`]), and Sessions settings (#366) builds on the listing
+//! type and the [`SessionIdentity`] visibility model both consumers hide
+//! through.
 
 use std::path::{Path, PathBuf};
 
@@ -290,8 +291,10 @@ fn store_root(
             "HOME",
             "USERPROFILE",
         ]),
-        // Antigravity 的原生会话存储位置由 #385 的版本核验适配器确定；
-        // 在那之前不猜一个通用 home，store 只能保持未确认。
+        // Antigravity's conversation id is the row identity; the scan
+        // preserves the exact native transcript file (#385) rather than a
+        // profile or generic home selector, so no store root is guessed
+        // here.
         CLIAgent::Antigravity => None,
         CLIAgent::Pi => pick(&["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "HOME"]),
         CLIAgent::Kimi => pick(&["KIMI_CODE_HOME", "HOME", "USERPROFILE"]),
@@ -543,6 +546,9 @@ pub(crate) struct SessionScan {
     opencode: Vec<SessionOperation>,
     hermes: Vec<SessionOperation>,
     hermes_errors: Vec<SessionOperationError>,
+    /// Antigravity's conversation index is read through the owning Host's own
+    /// read-only SQLite browser; one request is enough for the host's store.
+    pub(crate) antigravity: Vec<SessionOperation>,
 }
 
 /// Build the scan requests from what only the UI can read: the scopes open
@@ -558,9 +564,11 @@ pub(crate) fn plan_scan(
 ) -> SessionScan {
     let opencode = CLIAgent::OpenCode;
     let hermes = CLIAgent::Hermes;
+    let antigravity = CLIAgent::Antigravity;
     let mut opencode_scopes = Vec::new();
     let mut hermes_scopes = Vec::new();
     let mut hermes_errors = Vec::new();
+    let mut antigravity_scopes = Vec::new();
     for leaf in panes {
         let pane = leaf.read(cx);
         if pane.host_id() == host_id
@@ -653,11 +661,27 @@ pub(crate) fn plan_scan(
             }),
         }
     }
+    // Discovery itself needs no launch arguments: the conversation index is
+    // read on the owning Host, and a row's own scope/file is what resume
+    // prepares from. The agent must still be offered, so a workspace that
+    // never saw `agy` does not scan a store the user cannot use.
+    if agents.contains(&antigravity) {
+        antigravity_scopes.push(SessionOperation {
+            expected_host: host_id.0,
+            agent: antigravity,
+            kind: SessionOperationKind::Resume,
+            source_id: String::new(),
+            cwd: default_cwd.to_path_buf(),
+            launch_argv: Vec::new(),
+            scope: Default::default(),
+        });
+    }
     SessionScan {
         directory: None,
         opencode: opencode_scopes,
         hermes: hermes_scopes,
         hermes_errors,
+        antigravity: antigravity_scopes,
     }
 }
 
@@ -766,10 +790,12 @@ pub(crate) fn collect_native_sessions(
 }
 
 /// The service portion of a scan: OpenCode and Hermes answer their scoped
-/// requests here, each separately, so one absent or slow service is
-/// recorded beside the others and never blocks — or empties — the native
-/// portion. The returned listing holds only what the services answered;
-/// folding it into the native portion is [`merge_listing`]'s job.
+/// requests here, and Antigravity's conversation index is read through the
+/// owning Host's read-only SQLite browser. Each source answers separately, so
+/// one absent, slow or unknown store is recorded beside the others and never
+/// blocks — or empties — the native portion. The returned listing holds only
+/// what the services answered; folding it into the native portion is
+/// [`merge_listing`]'s job.
 pub(crate) fn collect_service_sessions(
     host: &dyn lyrel_core::host::Host,
     scan: SessionScan,
@@ -819,6 +845,39 @@ pub(crate) fn collect_service_sessions(
                         kind: SessionErrorKind::Unsupported,
                         message: format!(
                             "OpenCode history reached its {}-session window; older sessions for this directory may be missing",
+                            lyrel_core::core::agent_history::MAX_SESSIONS
+                        ),
+                        retained: None,
+                    });
+                }
+            }
+            Err(error) => listing.errors.push(error),
+        }
+    }
+    for request in &scan.antigravity {
+        match lyrel_core::host::session_operations::antigravity::sessions(
+            host,
+            directory.as_deref(),
+            request,
+        ) {
+            Ok(sessions) => {
+                listing.any_listed = true;
+                let window_full = directory.is_some()
+                    && sessions.len() >= lyrel_core::core::agent_history::MAX_SESSIONS;
+                for session in sessions {
+                    if !listing
+                        .sessions
+                        .iter()
+                        .any(|existing| same_listed_session(existing, &session))
+                    {
+                        listing.sessions.push(session);
+                    }
+                }
+                if window_full {
+                    listing.errors.push(SessionOperationError {
+                        kind: SessionErrorKind::Unsupported,
+                        message: format!(
+                            "Antigravity history reached its {}-conversation index page; older sessions for this directory may be missing",
                             lyrel_core::core::agent_history::MAX_SESSIONS
                         ),
                         retained: None,
@@ -3339,6 +3398,7 @@ mod tests {
             opencode: vec![service_request(CLIAgent::OpenCode)],
             hermes: vec![service_request(CLIAgent::Hermes)],
             hermes_errors: Vec::new(),
+            antigravity: Vec::new(),
         }
     }
 

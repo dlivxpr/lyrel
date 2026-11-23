@@ -292,6 +292,36 @@ seance 来源不作为可恢复主会话列出。标题取正式 title slot／�
 既有原生操作探针取得真实新 header ID，并分别恢复源与分叉；真实 Windows GUI 裸启动也已有独立证据。
 这些结果不能外推成功模型、多请求、审批、后台工作或两个会话继续对话的完整矩阵。
 
+## Antigravity 1.5.15 的历史与精确恢复
+
+Antigravity 使用自己的 `agy` CLI 数据目录，不与桌面 Antigravity 2.0 或 IDE 混用。已观测的
+`antigravity-cli` 1.5.15 存储布局为：
+
+- `<home>/.gemini/antigravity-cli/conversation_summaries.db`：搜索索引；`search_schema_version`
+  当前为 `3`，`conversation_summaries` 记录原生 ID、标题、预览、工作区 URI、更新时间和
+  `app_data_dir`。
+- `<home>/.gemini/antigravity-cli/conversations/<id>.db`：单个已保存对话。
+- `<home>/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`：观察钩子
+  也上报的精确 transcript 文件。
+
+三个历史入口共用同一只读适配器。读取通过所属 Host 既有的只读 SQLite 浏览能力
+（`sqlite-browse-v1`）与 `agent-environment` 完成，不新增 provider 专用 control 变体；旧 peer
+缺少这些能力时明确报告需要更新，其他来源照常列出。索引版本不是 `3`、缺少已知列、工作区 URI
+无法解码或行身份不完整时按“未知格式”报告，不把空结果冒充为没有会话。
+
+列表只包含 CLI 根级对话：`app_data_dir = antigravity-cli`、无父对话、`nesting_depth = 0`。
+桌面／IDE 记录和子代理对话不会出现。时间取自索引；标题为空时退回首条预览，再退回原生 ID。
+目录筛选按所属 Host 的路径语义进行；`--add-dir` 的附加目录不替代主工作区。
+
+恢复前适配器重新读取同一原生 ID，核对 `app_data_dir`、根级身份、记录的工作目录和
+`conversations/<id>.db`，然后只构造交互式 `agy --conversation <id>`；`--continue`／`-c`、
+print 模式、提示词和其他一次性参数会从重放参数中移除，未知选项 fail-closed。已有窗格以
+`conversationId` 精确匹配时直接聚焦，不再启动第二个写入者。上游若实际打开了另一对话，
+观察钩子报告的新 ID 会产生“不是精确恢复”的错误通知，并保留该新对话供用户检查。
+
+`antigravity-v1` 能力只协商 session operation 的执行；旧 server 不接收该请求。Antigravity
+没有已验证的原生删除路径，列表保持不可删除；Fork 仍按 #386 保持关闭，直到两窗格契约通过。
+
 <a id="acceptance-status"></a>
 ## 验收状态与已知限制
 
@@ -299,6 +329,7 @@ seance 来源不作为可恢复主会话列出。标题取正式 title slot／�
 
 - 已有 Windows／Linux 构建、契约套件、真实 CLI→daemon→PTY、部分正式 Host 会话操作及隔离 SSH／SFTP 证据；Windows GUI 语言、shell 创建及 OpenCode 共享服务生命周期也有独立实跑记录。这些结果不代表五种智能体的完整成功模型矩阵均已通过。
 - Kimi Code 2.2.0 保留原生 TUI 的自动首任务仍缺公开接收／交接契约；Hermes 裸启动及部分恢复／分叉后的即时身份仍缺正式事件，不能从屏幕或内部 breadcrumb 猜测。各自的其他能力不能掩盖这些缺口。
+- Antigravity #385 的索引读取与精确恢复准备已用真实 1.5.15 存储布局的 SQLite 夹具覆盖，混合版本能力拒绝也有协议回归；但真实 `agy` TUI 的恢复、上游实际打开另一对话时的运行表现、远端 SSH／WSL 和 macOS 实机尚未运行。精确性依赖 #384 钩子上报的 `conversationId`；缺少钩子时只能确认预备身份，不能声称恢复已被上游确认。原生删除与 Fork 仍不在支持范围。
 - 多请求、真实审批、重试／压缩、后台工作及活跃写入的完整组合仍需分别验收；模型连接错误和终态收敛不等同成功模型回复。
 - macOS 自有适配尚无完整原生实机证据，该独立验收门已获豁免并记录为已接受风险，而非通过。GSSAPI 需要票据与真实服务前提；Windows 没有该认证实现。
 - 远端晚到 pane 的 RAII 回收已修正，但没有新增真实 SSH 桌面取消场景的运行证明。平台包、在线更新、签名、公证及真实系统注册仍各自需要对应环境与资产，不能由本机测试外推。

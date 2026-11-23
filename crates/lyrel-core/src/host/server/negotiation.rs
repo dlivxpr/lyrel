@@ -41,6 +41,7 @@ pub(super) fn handshake<R: Read>(
         // it (see `RemoteHost::search_content`).
         feature::CONTENT_SEARCH.to_string(),
         feature::SESSION_OPERATIONS.to_string(),
+        feature::ANTIGRAVITY.to_string(),
         feature::HERMES_HISTORY.to_string(),
         feature::HERMES_STATISTICS.to_string(),
         feature::OPENCODE_STATISTICS.to_string(),

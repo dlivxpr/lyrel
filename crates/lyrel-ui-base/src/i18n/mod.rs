@@ -499,6 +499,7 @@ l10n_keys! {
     AppSessionNotResumable,
     AppSessionDirectoryGone,
     AppSessionOpenUnconfirmed,
+    AppSessionResumeOpenedDifferent,
     SearchSessionActions,
     SessionActionsHint,
     SessionActionResume,

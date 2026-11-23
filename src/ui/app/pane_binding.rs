@@ -232,6 +232,7 @@ impl LyrelApp {
         cx: &mut Context<LyrelApp>,
     ) {
         cx.subscribe_in(view, window, |app, view, _: &ChildExited, window, cx| {
+            app.forget_exact_resume(view.entity_id());
             app.on_child_exited(view.clone(), window, cx);
         })
         .detach();
@@ -254,8 +255,9 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
+            |app, view, _: &lyrel_terminal::view::AgentSessionChanged, window, cx| {
                 app.save_session(cx);
+                app.note_agent_session_changed(view, window, cx);
                 cx.notify();
             },
         )

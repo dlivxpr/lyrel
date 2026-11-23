@@ -218,6 +218,11 @@ pub mod feature {
     pub const CLOSED_TABS: &str = "closed-tabs";
     /// Native session preparation; never send the new request to older peers.
     pub const SESSION_OPERATIONS: &str = "session-operations-v1";
+    /// The peer can resume one exact Antigravity CLI conversation. History is
+    /// read through `sqlite-browse-v1` + `agent-environment`, but the session
+    /// operation itself executes there, so an older peer must be refused
+    /// before the request reaches the wire.
+    pub const ANTIGRAVITY: &str = "antigravity-v1";
     pub const AGENT_ENVIRONMENT: &str = "agent-environment";
     pub const HERMES_HISTORY: &str = "hermes-history-v1";
     /// Optional since_ms in AgentStates; absent means unknown age.
