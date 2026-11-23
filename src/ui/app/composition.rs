@@ -455,8 +455,7 @@ impl LyrelApp {
                     .size_4(),
             )
             .label(label)
-            .accessibility_label(badge.clone())
-            .tooltip(badge)
+            .accessibility_label(badge)
             .on_hover(cx.listener(|this, over: &bool, window, cx| {
                 this.parked_deck.update(cx, |deck, cx| {
                     if *over {

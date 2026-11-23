@@ -1011,7 +1011,7 @@ fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
     use lyrel_core::core::osc::{NOTE_WINDOW, NOTES_PER_WINDOW};
     let _capture = crate::desktop_notification::capture_test_notifications();
     let _ = take_notifications();
-    let (window, mut daemon) = harness(cx);
+    let (_window, mut daemon) = harness(cx);
     let _ = take_notifications();
     lyrel_ui_base::i18n::set_locale("en");
     configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
