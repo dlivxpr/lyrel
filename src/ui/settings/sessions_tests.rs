@@ -322,6 +322,14 @@ fn blockers_name_running_unsupported_and_unconfirmed() {
         session_blockers(&bare, &[]),
         vec![SessionBlocker::StoreUnconfirmed]
     );
+
+    let antigravity =
+        SessionIdentity::of(host, &session(CLIAgent::Antigravity, "thread", "/w", NOW));
+    assert_eq!(
+        session_blockers(&antigravity, &[]),
+        vec![SessionBlocker::SourceUnsupported],
+        "Antigravity has no verified native delete path; the row stays explicitly ineligible"
+    );
 }
 
 #[gpui_kit::test]

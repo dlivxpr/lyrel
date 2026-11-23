@@ -42,7 +42,7 @@
           return
         end
         set agent (string replace -r '^.*/' '' -- $token)
-        contains -- $agent omp kimi pi opencode opencode2 hermes; or return
+        contains -- $agent omp kimi pi opencode opencode2 hermes agy; or return
       end
     end
     test -n "$agent"; or return
