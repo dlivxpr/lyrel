@@ -5107,7 +5107,7 @@ mod content_view_tests {
             can_read_versions: bool,
         ) -> SharedHost {
             Arc::new(Self {
-                inner: Arc::new(LocalHost::new()),
+                inner: LocalHost::new(),
                 id,
                 can_read_versions,
                 mount: Some((shown.to_path_buf(), backing.to_path_buf())),
