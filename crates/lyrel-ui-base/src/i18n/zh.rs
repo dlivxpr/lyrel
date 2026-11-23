@@ -1629,6 +1629,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SftpMenuNewFile => "新建文件",
         L10nKey::SftpMenuUploadFiles => "上传文件",
         L10nKey::SftpMenuUploadFolders => "上传文件夹",
+        L10nKey::SftpMenuGotoPath => "转到路径",
         L10nKey::SftpMenuGotoShellCwd => "转到 shell 目录",
         L10nKey::SftpMenuHideTransferHistory => "隐藏传输历史",
         L10nKey::SftpMenuTransferHistory => "传输历史",

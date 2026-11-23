@@ -1788,6 +1788,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SftpMenuNewFile => "New File",
         L10nKey::SftpMenuUploadFiles => "Upload files",
         L10nKey::SftpMenuUploadFolders => "Upload folders",
+        L10nKey::SftpMenuGotoPath => "Go to Path",
         L10nKey::SftpMenuGotoShellCwd => "Go to Shell Directory",
         L10nKey::SftpMenuHideTransferHistory => "Hide Transfer History",
         L10nKey::SftpMenuTransferHistory => "Transfer History",
