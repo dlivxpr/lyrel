@@ -20,6 +20,22 @@ impl Tab {
                 .into_iter()
                 .filter_map(|leaf| leaf.read(cx).progress()),
         )?;
+        // A failed task reports through the Failed row; everything else —
+        // running, indeterminate, paused — is the Running row's in-flight
+        // mark. A closed tab channel hides the line entirely.
+        use lyrel_core::core::config::ActivityState;
+        let row = match kind {
+            ProgressKind::Error => ActivityState::Failed,
+            _ => ActivityState::Running,
+        };
+        let enabled = cx
+            .global::<lyrel_ui_base::config::Config>()
+            .program_activity
+            .channels(row)
+            .tab;
+        if !enabled {
+            return None;
+        }
         let key = match (kind, percent.is_some()) {
             (ProgressKind::Running, false) => L10nKey::TabProgressRunning,
             (ProgressKind::Running, true) => L10nKey::TabProgressRunningPercent,

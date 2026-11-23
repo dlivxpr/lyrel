@@ -50,6 +50,10 @@ pub struct AgentNotice {
     pub delayed: bool,
     /// How the settled result reads in the shared history.
     pub severity: Severity,
+    /// The activity-matrix row this transition belongs to (waiting on the
+    /// user, or a settled result). The row's channels decide how it may
+    /// interrupt; the record itself is written either way.
+    pub activity: lyrel_core::core::config::ActivityState,
     /// The session-and-transition half of the stable event identity. The view
     /// prepends its source (Host, pane, ownership); what remains here names
     /// the session and the transition, so the same turn settling is recorded
@@ -286,6 +290,7 @@ impl AgentActivity {
                         .unwrap_or_else(|| t(L10nKey::NotifyAgentWaiting).to_string()),
                     delayed: false,
                     severity: Severity::Warning,
+                    activity: lyrel_core::core::config::ActivityState::Waiting,
                     identity: format!(
                         "agent-wait|{}|{}|{}|{}",
                         session_identity(session),
@@ -336,6 +341,11 @@ impl AgentActivity {
                             AgentOutcome::Interrupted => Severity::Warning,
                         }
                     }),
+                    activity: lyrel_core::core::config::ActivityState::of_agent(
+                        AgentStatus::Done,
+                        result.as_ref().map(|result| result.outcome),
+                    )
+                    .expect("Done always maps to a result row"),
                     identity: format!(
                         "agent-done|{}|{}|{}|{result:?}",
                         session_identity(session),

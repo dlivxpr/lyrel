@@ -1262,10 +1262,29 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DocumentDock => "停靠在终端旁",
         L10nKey::DocumentFill => "铺满窗口",
         L10nKey::SettingsNotifications => "通知",
-        L10nKey::SettingsNotifyOnCommandFinish => "命令完成时通知",
-        L10nKey::SettingsNotifyOnCommandFinishDesc => "较长的前台命令完成后发出桌面提醒。",
+        L10nKey::SettingsNotifyOnCommandFinish => "通知时机",
+        L10nKey::SettingsNotifyOnCommandFinishDesc => "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。",
         L10nKey::SettingsNotifyThreshold => "最短命令运行时间",
         L10nKey::SettingsNotifyThresholdDesc => "仅在命令运行达到此时长后发送完成通知。",
+        L10nKey::SettingsCommandDesktop => "命令结果",
+        L10nKey::SettingsCommandDesktopDesc => "前台命令运行达到最短时长后发送桌面通知。",
+        L10nKey::SettingsOscDesktop => "程序通知（OSC）",
+        L10nKey::SettingsOscDesktopDesc => "程序显式请求的桌面通知（OSC 9、99、777）。",
+        L10nKey::SettingsProgramActivity => "程序活动",
+        L10nKey::SettingsProgramActivityDesc => {
+            "按程序报告的活动状态分别配置标签页、桌面和声音渠道。同一次结果只会是结束或失败之一。"
+        }
+        L10nKey::ActivityRowRunning => "运行中",
+        L10nKey::ActivityRowRunningDesc => "程序或 agent 正在工作；只有标签页标记适用。",
+        L10nKey::ActivityRowWaiting => "等待中",
+        L10nKey::ActivityRowWaitingDesc => "程序或 agent 在等待你的输入。",
+        L10nKey::ActivityRowEnded => "已结束",
+        L10nKey::ActivityRowEndedDesc => "程序或 agent 成功完成任务。",
+        L10nKey::ActivityRowFailed => "失败",
+        L10nKey::ActivityRowFailedDesc => "程序或 agent 因错误结束。",
+        L10nKey::ActivityChannelTab => "标签页",
+        L10nKey::ActivityChannelDesktop => "桌面",
+        L10nKey::ActivityChannelSound => "声音",
         L10nKey::SettingsWindow => "启动与恢复",
         L10nKey::NotifyModeNever => "从不",
         L10nKey::NotifyModeUnfocused => "窗口未聚焦时",
@@ -1479,6 +1498,27 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchNotifyThresholdKeywords => {
             "通知阈值 通知 秒数 时长 命令 notify threshold notification duration seconds"
+        }
+        L10nKey::SettingsSearchProgramActivityKeywords => {
+            "程序活动 活动矩阵 渠道 标签页 桌面 声音 通知 program activity matrix channels tab desktop sound"
+        }
+        L10nKey::SettingsSearchActivityRunningKeywords => {
+            "运行中 工作中 程序 agent 进度 活动 标签页 running working busy progress"
+        }
+        L10nKey::SettingsSearchActivityWaitingKeywords => {
+            "等待中 阻塞 权限 提问 需要输入 程序 agent waiting blocked permission question"
+        }
+        L10nKey::SettingsSearchActivityEndedKeywords => {
+            "已结束 完成 成功 程序 agent 结果 ended finished done completed success result"
+        }
+        L10nKey::SettingsSearchActivityFailedKeywords => {
+            "失败 错误 拒绝 程序 agent 结果 failed error rejected crashed result"
+        }
+        L10nKey::SettingsSearchCommandDesktopKeywords => {
+            "命令结果 命令完成 通知 桌面 阈值 时长 command finished result notification desktop"
+        }
+        L10nKey::SettingsSearchOscDesktopKeywords => {
+            "程序通知 osc 桌面 转义序列 显式 osc notification desktop escape explicit"
         }
         L10nKey::SettingsSearchOpacityKeywords => {
             "不透明度 透明度 窗口 半透明 alpha opacity transparency translucent window"

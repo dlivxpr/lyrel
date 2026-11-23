@@ -374,9 +374,23 @@ pub struct Config {
     /// either way.
     #[serde(default = "default_true")]
     pub sidebar_auto_grouping: bool,
+    /// Shared delivery timing for every desktop and sound channel —
+    /// Never / When unfocused / Always. The activity rows
+    /// ([`program_activity`]) and terminal events
+    /// ([`terminal_notifications`]) open a channel; this decides whether it
+    /// may interrupt right now. Kept key-for-key from before the matrix, so
+    /// an existing preference carries over untouched.
     #[serde(default, deserialize_with = "de_lenient")]
     pub notify_on_command_finish: NotifyMode,
     pub check_for_updates: bool,
+    /// The activity matrix: tab, desktop, sound and badge channels for
+    /// Running, Waiting, Ended and Failed — see [`ProgramActivity`].
+    #[serde(default)]
+    pub program_activity: ProgramActivity,
+    /// Separate desktop delivery for ordinary command results and explicit
+    /// OSC notices — see [`TerminalNotifications`].
+    #[serde(default)]
+    pub terminal_notifications: TerminalNotifications,
     /// Whether a found update is fetched and verified before the user asks for
     /// it. On by default: it turns "spend five minutes downloading" into "press
     /// restart", which is the whole difference between an update people apply
@@ -734,6 +748,156 @@ impl NotifyMode {
     }
 }
 
+/// One row of the notification activity matrix: the structured program
+/// states a pane reports (OSC 7501 program records, coding-agent session
+/// status). `Running` is a state, not a result; `Ended` and `Failed` are
+/// mutually exclusive for any single result — a result enters exactly one
+/// of the two, never both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    Running,
+    Waiting,
+    Ended,
+    Failed,
+}
+
+impl ActivityState {
+    /// The matrix row a retained program record belongs to. `Idle` has no
+    /// row — it reports the absence of activity rather than an activity.
+    pub fn of_program(state: crate::core::program_status::ProgramState) -> Option<Self> {
+        use crate::core::program_status::ProgramState;
+        match state {
+            ProgramState::Idle => None,
+            ProgramState::Working => Some(Self::Running),
+            ProgramState::Blocked => Some(Self::Waiting),
+            ProgramState::Done => Some(Self::Ended),
+            ProgramState::Error => Some(Self::Failed),
+        }
+    }
+
+    /// The matrix row an agent session status belongs to. A settled turn's
+    /// authoritative outcome decides between `Ended` and `Failed`; a turn
+    /// that ended without a reported failure ended.
+    pub fn of_agent(
+        status: crate::core::cli_agent::AgentStatus,
+        outcome: Option<crate::core::cli_agent::AgentOutcome>,
+    ) -> Option<Self> {
+        use crate::core::cli_agent::{AgentOutcome, AgentStatus};
+        match status {
+            AgentStatus::Idle => None,
+            AgentStatus::Working => Some(Self::Running),
+            AgentStatus::Waiting => Some(Self::Waiting),
+            AgentStatus::Done => Some(match outcome {
+                Some(AgentOutcome::Failed | AgentOutcome::Rejected) => Self::Failed,
+                _ => Self::Ended,
+            }),
+        }
+    }
+}
+
+/// What one activity row may do. `tab` drives the tab strip's own marks,
+/// `desktop` the OS banner, `sound` the alert sound and `badge` the
+/// platform count on the app's own icon; an enabled `badge` with nothing to
+/// count yet is wired up with the system-badge column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ActivityChannels {
+    #[serde(default = "default_true")]
+    pub tab: bool,
+    #[serde(default = "default_true")]
+    pub desktop: bool,
+    pub sound: bool,
+    /// No per-row function: a row whose `badge` key was written stays with
+    /// it, and a missing one follows the struct default; the Waiting/Failed
+    /// rows override that when the whole row is absent.
+    #[serde(default)]
+    pub badge: bool,
+}
+
+impl Default for ActivityChannels {
+    fn default() -> Self {
+        Self {
+            tab: true,
+            desktop: true,
+            sound: false,
+            badge: false,
+        }
+    }
+}
+
+/// The `Running` row's channels. Running is never a result, so only the
+/// tab's own activity mark applies to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RunningChannels {
+    #[serde(default = "default_true")]
+    pub tab: bool,
+}
+
+impl Default for RunningChannels {
+    fn default() -> Self {
+        Self { tab: true }
+    }
+}
+
+/// The notification channel matrix by structured program activity. A field
+/// missing from an old config file fills with the row's approved default, so
+/// an existing install gains the matrix without losing its other settings.
+///
+/// `notify_on_command_finish` stays the shared delivery *timing* (never /
+/// when unfocused / always) for the desktop and sound channels; these rows
+/// decide whether a channel is open at all, and closing one only spares the
+/// interruption — the event's history record is already written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProgramActivity {
+    pub running: RunningChannels,
+    #[serde(default = "default_activity_waiting")]
+    pub waiting: ActivityChannels,
+    pub ended: ActivityChannels,
+    #[serde(default = "default_activity_failed")]
+    pub failed: ActivityChannels,
+}
+
+impl ProgramActivity {
+    /// The channels configured for one matrix row.
+    pub fn channels(&self, activity: ActivityState) -> ActivityChannels {
+        match activity {
+            ActivityState::Running => ActivityChannels {
+                tab: self.running.tab,
+                ..ActivityChannels::default()
+            },
+            ActivityState::Waiting => self.waiting,
+            ActivityState::Ended => self.ended,
+            ActivityState::Failed => self.failed,
+        }
+    }
+}
+
+/// Desktop delivery toggles for the terminal's own events, held separate
+/// from the activity matrix as agreed: an ordinary command result that met
+/// the duration threshold and an explicit program notification (OSC 9, 99,
+/// 777) are different kinds of event with their own controls. Both honour
+/// the shared delivery timing; both default on, the delivery every earlier
+/// version performed. Eligible history is unaffected by either flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TerminalNotifications {
+    #[serde(default = "default_true")]
+    pub command_desktop: bool,
+    #[serde(default = "default_true")]
+    pub osc_desktop: bool,
+}
+
+impl Default for TerminalNotifications {
+    fn default() -> Self {
+        Self {
+            command_desktop: true,
+            osc_desktop: true,
+        }
+    }
+}
+
 /// The modifier that makes the mouse wheel resize the font.
 ///
 /// `Platform` is ⌘ on macOS and Ctrl elsewhere, stored rather than the
@@ -894,6 +1058,8 @@ impl Default for Config {
             editor_git_gutter: true,
             sidebar_auto_grouping: true,
             notify_on_command_finish: NotifyMode::Unfocused,
+            program_activity: ProgramActivity::default(),
+            terminal_notifications: TerminalNotifications::default(),
             check_for_updates: true,
             auto_download_updates: true,
             install_cli_on_path: true,
@@ -1592,6 +1758,22 @@ pub fn working_directory_base() -> Option<PathBuf> {
 
 pub fn extra_env() -> HashMap<String, String> {
     Config::load().env
+}
+
+/// Waiting (blocked, needs the reader) badges on by default.
+fn default_activity_waiting() -> ActivityChannels {
+    ActivityChannels {
+        badge: true,
+        ..ActivityChannels::default()
+    }
+}
+
+/// Failed (errored result) badges on by default; ended stays off.
+fn default_activity_failed() -> ActivityChannels {
+    ActivityChannels {
+        badge: true,
+        ..ActivityChannels::default()
+    }
 }
 
 /// Every wrapper name the daemon should read as an agent: `agent_commands`,

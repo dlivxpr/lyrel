@@ -1030,7 +1030,7 @@ impl LyrelApp {
                             .map(|(p, home)| crate::ui::home::display_path(&p, home.as_deref()))
                             .unwrap_or_default(),
                         agent: tab.agent(cx),
-                        status: tab.agent_status(cx),
+                        status: tab.agent_indicator_status(cx),
                         unread: tab.agent_unread_count(cx),
                         waited: tab.agent_waited(now_ms, cx),
                         ssh: self.tab_ssh_dot(tab, cx),

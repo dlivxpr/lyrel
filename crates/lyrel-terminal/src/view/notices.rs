@@ -98,7 +98,8 @@ impl TerminalView {
     /// Record the ordinary command's result in the shared history and, when
     /// this process has not seen the event before and delivery is open, show
     /// the desktop note. Intake follows the caller's eligibility (the runtime
-    /// threshold); `deliver` is only the desktop timing mode.
+    /// threshold); `deliver` is the shared delivery timing, ANDed with the
+    /// ordinary-command desktop toggle here so the two stay independent.
     pub fn notify_command_finished(
         &self,
         label: &str,
@@ -152,6 +153,9 @@ impl TerminalView {
             self.terminal.prompt_cycle()
         );
         let source = self.resolve_event_source(window, cx);
+        // Ordinary results have their own desktop toggle, separate from the
+        // OSC one and from the activity matrix; history intake is untouched.
+        let deliver = deliver && cx.global::<Config>().terminal_notifications.command_desktop;
         if self.record_pane_event(&identity, severity, &body, source, cx) && deliver {
             self.notify_pane(None, &body, cx);
         }
@@ -175,8 +179,19 @@ impl TerminalView {
             self.terminal.prompt_cycle()
         );
         let source = self.resolve_event_source(window, cx);
-        if self.record_pane_event(&identity, Severity::Info, &body, source, cx) && deliver {
-            self.notify_pane(Some(agent.display_name()), &body, cx);
+        // A plain agent ending is an Ended activity event: its desktop and
+        // sound channels govern, the shared timing rides in `deliver`.
+        let channels = cx
+            .global::<Config>()
+            .program_activity
+            .channels(lyrel_core::core::config::ActivityState::Ended);
+        if self.record_pane_event(&identity, Severity::Info, &body, source, cx) {
+            if deliver && channels.sound {
+                crate::desktop_notification::play_activity_sound();
+            }
+            if deliver && channels.desktop {
+                self.notify_pane(Some(agent.display_name()), &body, cx);
+            }
         }
     }
 
@@ -217,10 +232,11 @@ impl TerminalView {
         let notes = self.terminal.take_osc_notes();
         let watched = window.is_window_active() && self.focus_handle.is_focused(window);
         let hooked = self.terminal.agent_session().is_some_and(|s| s.rich);
-        let show = cx
-            .global::<Config>()
-            .notify_on_command_finish
-            .allows(watched)
+        let cfg = cx.global::<Config>();
+        // Explicit OSC delivery is its own toggle beside the ordinary
+        // command one; both still sit under the shared delivery timing.
+        let show = cfg.notify_on_command_finish.allows(watched)
+            && cfg.terminal_notifications.osc_desktop
             && !(hooked && hooks_notify);
         if !notes.is_empty() {
             log::debug!(
@@ -306,8 +322,10 @@ impl TerminalView {
     }
 
     fn resolve_event_source(&self, window: &mut Window, cx: &mut App) -> Option<Source> {
-        cx.try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
-            .resolve(self.event_origin_pane(), window, cx)
+        let resolve =
+            cx.try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
+                .resolver();
+        resolve(self.event_origin_pane(), window, cx)
     }
 
     /// Record one qualified pane event in the per-installation history.
@@ -334,9 +352,11 @@ impl TerminalView {
         })
     }
 
-    /// One agent notice: recorded with its stable session identity, and
-    /// delivered to the desktop only on first observation and only when the
-    /// caller's timing mode lets it through.
+    /// One agent notice: recorded with its stable session identity. Its
+    /// activity row's channels decide what may interrupt — the banner needs
+    /// `deliver` (the shared timing) and the desktop channel, the sound only
+    /// the timing and its own channel — and both fire once per event, on the
+    /// same first observation the record takes.
     fn emit_agent_notice(
         &self,
         notice: &crate::agent_activity::AgentNotice,
@@ -345,9 +365,17 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let identity = format!("{}|{}", self.event_source_prefix(), notice.identity);
-        if self.record_pane_event(&identity, notice.severity, &notice.body, source, cx) && deliver
-        {
-            self.notify_pane(Some(notice.agent), &notice.body, cx);
+        let channels = cx
+            .global::<Config>()
+            .program_activity
+            .channels(notice.activity);
+        if self.record_pane_event(&identity, notice.severity, &notice.body, source, cx) {
+            if deliver && channels.sound {
+                crate::desktop_notification::play_activity_sound();
+            }
+            if deliver && channels.desktop {
+                self.notify_pane(Some(notice.agent), &notice.body, cx);
+            }
         }
     }
 }
