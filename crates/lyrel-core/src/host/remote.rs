@@ -804,19 +804,12 @@ impl Host for RemoteHost {
                 "session host is disconnected".into(),
             ));
         }
-        if !self
-            .peer()
-            .has_feature(crate::daemon::control::feature::SESSION_OPERATIONS)
-        {
-            return Err(error(
-                SessionErrorKind::Unsupported,
-                "update lyrel-server: this peer does not support session operations".into(),
-            ));
-        }
         // The resume selector, the store check and the launched argv are
         // Antigravity-specific. A peer without the capability would either
         // not know the operation or not perform it, so answer here instead of
         // risking a control link that cannot decode or honour the request.
+        // This leaf gate comes first: an older peer lacks both features, and
+        // the operator needs the capability that actually closes the gap.
         if request.agent == crate::core::cli_agent::CLIAgent::Antigravity
             && !self
                 .peer()
@@ -828,6 +821,15 @@ impl Host for RemoteHost {
                     "update lyrel-server: antigravity-v1 is required to resume {} conversations on this host",
                     request.agent.display_name()
                 ),
+            ));
+        }
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SESSION_OPERATIONS)
+        {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                "update lyrel-server: this peer does not support session operations".into(),
             ));
         }
         let mut wire = request.clone();

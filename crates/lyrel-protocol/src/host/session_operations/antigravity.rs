@@ -191,6 +191,12 @@ pub fn sessions<H: Host + ?Sized>(
                 continue;
             }
         }
+        if never_used(raw.updated.as_deref()) {
+            // SQLite's zero date is what the CLI writes for a conversation
+            // nobody has used. It is a known shape, not an unknown format,
+            // and such a row is never a resumable saved conversation.
+            continue;
+        }
         let Some(session) = session_from_row(host, &root, &raw) else {
             unreadable += 1;
             continue;
@@ -459,6 +465,13 @@ fn validate_cwd<H: Host + ?Sized>(
     Ok(())
 }
 
+/// The CLI leaves a conversation that was never started at SQLite's zero
+/// date (`0001-01-01 00:00:00+00:00`). Reading that shape as an unknown
+/// timestamp would turn every unused row into a format failure.
+fn never_used(updated: Option<&str>) -> bool {
+    updated.is_some_and(|text| text.trim_start().starts_with("0001-01-01"))
+}
+
 fn session_from_row<H: Host + ?Sized>(
     host: &H,
     root: &Path,
@@ -670,7 +683,9 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
     let decoded = percent_decode(rest)?;
-    if decoded.is_empty() {
+    if decoded.is_empty() || decoded.chars().all(|ch| ch == '/') {
+        // A bare `file:///` names a filesystem root, not a workspace: a
+        // conversation scoped there has no project directory to resume in.
         return None;
     }
     let bytes = decoded.as_bytes();

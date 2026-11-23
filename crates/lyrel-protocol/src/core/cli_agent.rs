@@ -347,17 +347,20 @@ impl CLIAgent {
         let mut out: Vec<String> = argv[..env].to_vec();
         out.push(self.binary().to_string());
         let mut takes_value = false;
+        let mut drops_seed_value = false;
         for t in tail {
             if self == CLIAgent::Antigravity {
                 // A remembered default never re-submits the first task that
                 // seeded this run: `--prompt-interactive` (or `-i`) exists
                 // only to carry it, so the flag and its value drop together.
-                if takes_value {
-                    takes_value = false;
+                // This tracks the seed flag alone: `takes_value` belongs to
+                // every other option, whose value the default keeps.
+                if drops_seed_value {
+                    drops_seed_value = false;
                     continue;
                 }
                 if t == "--prompt-interactive" || t == "-i" {
-                    takes_value = true;
+                    drops_seed_value = true;
                     continue;
                 }
                 if t.starts_with("--prompt-interactive=") {
@@ -1051,7 +1054,14 @@ impl AgentSessionState {
                     self.status = AgentStatus::Waiting;
                     return;
                 }
-                if self.status != AgentStatus::Done {
+                // `agy` invokes its Stop hook once per finished execution and
+                // carries no turn identity on the wire, so a settled Stop that
+                // arrives after Done is a later execution: an error path can
+                // end one before a fresh invocation report reaches lyrel. The
+                // generic rule — Done means this turn already settled — holds
+                // for agents whose Stop fires inside a turn, never for `agy`.
+                let later_execution = ev.agent == Some(CLIAgent::Antigravity);
+                if self.status != AgentStatus::Done || later_execution {
                     self.turns = self.turns.wrapping_add(1);
                 }
                 self.status = AgentStatus::Done;
@@ -2056,9 +2066,11 @@ mod tests {
     #[test]
     fn antigravity_identity_survives_the_wire_and_unknown_ones_still_decode_to_none() {
         // What this build sends for the pane identity, and what an older
-        // peer must be able to swallow without losing the pane stream.
+        // peer must be able to swallow without losing the pane stream. The
+        // wire keeps the enum's existing PascalCase spelling for every
+        // provider; a slug would decode as an unknown agent.
         let encoded = serde_json::to_string(&Some(CLIAgent::Antigravity)).unwrap();
-        assert_eq!(encoded, "\"antigravity\"");
+        assert_eq!(encoded, "\"Antigravity\"");
         let mut decoder = serde_json::Deserializer::from_slice(encoded.as_bytes());
         assert_eq!(
             deserialize_optional_agent(&mut decoder).unwrap(),
