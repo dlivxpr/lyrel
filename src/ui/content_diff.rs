@@ -562,8 +562,8 @@ mod tests {
     #[test]
     fn a_landing_from_a_retired_instance_is_rejected() {
         let mut tracker = ContentFetchTracker::default();
-        let retired = lyrel_core::host::local::shared();
-        let live = lyrel_core::host::local::shared();
+        let retired = lyrel_core::host::local::new();
+        let live = lyrel_core::host::local::new();
         assert_eq!(retired.id(), live.id());
         assert!(!Arc::ptr_eq(&retired, &live));
         let key = ContentFetchKey {

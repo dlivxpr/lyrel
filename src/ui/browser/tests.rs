@@ -34,6 +34,7 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
         );
         (first, second)
     });
+    settle(&mut vcx);
     vcx.update(|window, _| {
         assert!(window.find(format!("web-tab-{first}")).visible());
         assert!(window.find(format!("web-tab-{second}")).visible());

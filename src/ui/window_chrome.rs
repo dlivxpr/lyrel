@@ -633,6 +633,7 @@ impl WindowChrome {
             window,
             cx,
         )
+        .test_support()
         .into_any_element();
         let trailing_inset = titlebar_trailing_inset(macos_fullscreen);
         let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);

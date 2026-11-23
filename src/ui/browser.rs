@@ -612,6 +612,7 @@ impl LyrelApp {
                 last: page.route.last_forward().cloned(),
             };
             page.status = PageStatus::RouteUnverified(message);
+            page.route_pending = false;
             page.surface_attempted = true;
         }
         cx.notify();
@@ -994,6 +995,15 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(layout) = self.right_panel.tool_layouts.get(&self.workspace) else {
+            return;
+        };
+        let PanelTab::Web(tab) = &layout.active else {
+            return;
+        };
+        if !layout.open || tab.id != tab_id {
+            return;
+        }
         let scale = window.scale_factor();
         let window_id = window.window_handle().window_id();
         let covered = self.native_surface_covered(window_id, cx);
@@ -1019,19 +1029,10 @@ impl LyrelApp {
             page.sync_visibility(true, covered);
             return;
         }
-        if page.surface_pending || page.surface_attempted {
+        if page.surface_pending || page.surface_attempted || page.route_pending {
             return;
         }
-        let tab = {
-            let layout = self.tool_layout();
-            layout.order.iter().find_map(|entry| match entry {
-                PanelTab::Web(tab) if tab.id == tab_id => Some(tab.clone()),
-                _ => None,
-            })
-        };
-        let Some(tab) = tab else {
-            return;
-        };
+        let tab = tab.clone();
         let Some(site) = route::browser_site_data(&tab) else {
             if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                 page.surface_attempted = true;
@@ -1399,12 +1400,15 @@ pub(crate) fn render_browser_page(
         .min_h_0()
         .relative()
         .on_children_prepainted({
-            let app = cx.entity();
+            let app = cx.entity().downgrade();
             move |bounds, window, cx| {
-                if let Some(bounds) = bounds.first() {
-                    let bounds = *bounds;
-                    app.update(cx, |app, cx| {
-                        app.browser_page_prepared(&tab_id_bounds, bounds, window, cx);
+                if let Some(bounds) = bounds.first().copied() {
+                    let app = app.clone();
+                    let tab_id = tab_id_bounds.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = app.update(cx, |app, cx| {
+                            app.browser_page_prepared(&tab_id, bounds, window, cx);
+                        });
                     });
                 }
             }

@@ -2,8 +2,8 @@
 //! page gives way to the workbench's covering surfaces, paints a bounded still
 //! frame from the selected tab, and comes back without a reload.
 
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
@@ -33,65 +33,67 @@ fn register_window(
     );
 }
 
-fn open_page(
-    app: &mut LyrelApp,
-    address: &str,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::Context<LyrelApp>,
-) -> String {
-    app.open_web_page(address, None, cx);
-    let id = layout_active_web(&app.tool_layout()).expect("the new page is selected");
-    app.attach_test_browser_surface(&id, cx);
-    window.draw(cx).clear(cx);
+fn frame(vcx: &mut VisualTestContext) {
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+fn open_page(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, address: &str) -> String {
+    let id = app.update_in(vcx, |app, window, cx| {
+        register_window(app, window, cx);
+        app.open_web_page(address, None, cx);
+        let id = layout_active_web(&app.tool_layout()).expect("the new page is selected");
+        app.attach_test_browser_surface(&id, cx);
+        id
+    });
+    frame(vcx);
     assert_eq!(
-        visibility(app, &id),
-        Some(true),
-        "the freshly painted page is visible"
+        app.read_with(vcx, |app, _| visibility(app, &id)),
+        Some(true)
     );
     id
+}
+
+fn select_page(app: &mut LyrelApp, id: &str, window: &mut Window, cx: &mut Context<LyrelApp>) {
+    let entry = app
+        .tool_layout()
+        .order
+        .into_iter()
+        .find(|entry| matches!(entry, PanelTab::Web(tab) if tab.id == id))
+        .expect("page is open");
+    app.select_panel_tab(&entry, window, cx);
+}
+
+fn page_surface<'a>(app: &'a LyrelApp, tab: &str) -> &'a BrowserSurfaceHost {
+    app.right_panel.web_pages[tab].surface.as_ref().unwrap()
 }
 
 #[gpui_kit::test]
 fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let tab = open_page(&app, &mut vcx, "https://example.test/form");
     app.update_in(&mut vcx, |app, window, cx| {
-        register_window(app, window, cx);
-        let tab = open_page(app, "https://example.test/form", window, cx);
-        fn page_surface<'a>(app: &'a LyrelApp, tab: &str) -> &'a BrowserSurfaceHost {
-            app.right_panel.web_pages[tab].surface.as_ref().unwrap()
-        }
         page_surface(app, &tab).test_take_focus();
-
         app.open_search(SearchTab::All, "", window, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &tab),
-            Some(false),
-            "Search Everywhere hides the live page"
-        );
+    });
+    frame(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(visibility(app, &tab), Some(false));
+        assert!(app.right_panel.web_pages[&tab].still_frame());
+    });
+    vcx.update(|window, _| {
         assert!(
             window
                 .try_find(format!("browser-still-frame-{tab}"))
-                .is_some(),
-            "the bounded still frame names the concealed tab"
+                .is_some()
         );
-        assert!(
-            app.right_panel.web_pages[&tab].still_frame(),
-            "the page paints the still frame while its surface is hidden"
-        );
+    });
 
-        app.close_search(window, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &tab),
-            Some(true),
-            "closing the overlay restores the live page"
-        );
+    app.update_in(&mut vcx, |app, window, cx| app.close_search(window, cx));
+    frame(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(visibility(app, &tab), Some(true));
         assert_eq!(page_surface(app, &tab).test_focus_requests(), 1);
-        assert!(
-            app.browser_surface_commands(&tab).is_empty(),
-            "concealment never navigates or reloads the page"
-        );
+        assert!(app.browser_surface_commands(&tab).is_empty());
     });
 }
 
@@ -100,65 +102,56 @@ fn overlapping_covers_lift_one_at_a_time_and_a_tab_switch_uses_the_new_page(
     cx: &mut TestAppContext,
 ) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let first = open_page(&app, &mut vcx, "https://example.test/first");
+    let second = open_page(&app, &mut vcx, "https://example.test/second");
     app.update_in(&mut vcx, |app, window, cx| {
-        register_window(app, window, cx);
-        let first = open_page(app, "https://example.test/first", window, cx);
-        app.open_web_page("https://example.test/second", None, cx);
-        let second = layout_active_web(&app.tool_layout()).expect("second selected");
-        app.attach_test_browser_surface(&second, cx);
+        select_page(app, &first, window, cx)
+    });
+    frame(&mut vcx);
 
-        let first_entry = app
-            .tool_layout()
-            .order
-            .into_iter()
-            .find(|entry| matches!(entry, crate::ui::right_panel::PanelTab::Web(tab) if tab.id == first))
-            .expect("first page is open");
-        app.select_panel_tab(&first_entry, window, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(visibility(app, &first), Some(true));
-
+    app.update_in(&mut vcx, |app, _, cx| {
         app.set_surface_cover(CoverSource::SearchEverywhere, true, cx);
         app.set_surface_cover(CoverSource::ToolAddMenu, true, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(visibility(app, &first), Some(false));
+    });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &first)),
+        Some(false)
+    );
 
+    app.update_in(&mut vcx, |app, _, cx| {
         app.set_surface_cover(CoverSource::SearchEverywhere, false, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &first),
-            Some(false),
-            "the second cover keeps the page concealed"
-        );
+    });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &first)),
+        Some(false)
+    );
 
-        let second_entry = app
-            .tool_layout()
-            .order
-            .into_iter()
-            .find(|entry| matches!(entry, crate::ui::right_panel::PanelTab::Web(tab) if tab.id == second))
-            .expect("second page is open");
-        app.select_panel_tab(&second_entry, window, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &first),
-            Some(false),
-            "switching tabs while covered keeps the old surface hidden"
-        );
+    app.update_in(&mut vcx, |app, window, cx| {
+        select_page(app, &second, window, cx)
+    });
+    frame(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(visibility(app, &first), Some(false));
         assert_eq!(visibility(app, &second), Some(false));
+    });
+    vcx.update(|window, _| {
         assert!(
             window
                 .try_find(format!("browser-still-frame-{second}"))
-                .is_some(),
-            "the still frame belongs to the newly selected surface"
+                .is_some()
         );
         assert!(
             window
                 .try_find(format!("browser-still-frame-{first}"))
-                .is_none(),
-            "no stale frame from the previous tab remains"
+                .is_none()
         );
+    });
 
+    app.update_in(&mut vcx, |app, _, cx| {
         app.set_surface_cover(CoverSource::ToolAddMenu, false, cx);
-        window.draw(cx).clear(cx);
+    });
+    frame(&mut vcx);
+    app.read_with(&vcx, |app, _| {
         assert_eq!(visibility(app, &second), Some(true));
         assert_eq!(visibility(app, &first), Some(false));
     });
@@ -167,11 +160,10 @@ fn overlapping_covers_lift_one_at_a_time_and_a_tab_switch_uses_the_new_page(
 #[gpui_kit::test]
 fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| {
-        register_window(app, window, cx);
+    let tab = open_page(&app, &mut vcx, "https://example.test/table");
+    let panel = app.update_in(&mut vcx, |app, window, cx| app.right_panel_px(window, cx));
+    vcx.update(|window, cx| {
         crate::ui::theme::apply_theme(Some(window), cx);
-        let tab = open_page(app, "https://example.test/table", window, cx);
-        let panel = app.right_panel_px(window, cx);
         assert_eq!(
             gpui_kit::component::Theme::global(cx)
                 .notification
@@ -190,12 +182,13 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
         );
 
         window.notify_app(Notification::new().message("Saved"), cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &tab),
-            Some(true),
-            "a toast must not conceal the page"
-        );
+    });
+    frame(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(true)
+    );
+    vcx.update(|_, cx| {
         assert_eq!(
             gpui_kit::component::Theme::global(cx)
                 .notification
@@ -210,28 +203,25 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_dialog_cover_conceals_and_releases_the_page(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| {
-        register_window(app, window, cx);
-        let tab = open_page(app, "https://example.test/dialog", window, cx);
-        let cover = lyrel_ui_base::native_surface::cover(window, cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &tab),
-            Some(false),
-            "a dialog cover hides the native page"
-        );
+    let tab = open_page(&app, &mut vcx, "https://example.test/dialog");
+    let cover = vcx.update(|window, cx| lyrel_ui_base::native_surface::cover(window, cx));
+    frame(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(false)
+    );
+    vcx.update(|window, _| {
         assert!(
             window
                 .try_find(format!("browser-still-frame-{tab}"))
                 .is_some()
         );
-
-        cover.release(cx);
-        window.draw(cx).clear(cx);
-        assert_eq!(
-            visibility(app, &tab),
-            Some(true),
-            "releasing the dialog restores the page"
-        );
     });
+
+    vcx.update(|_, cx| cover.release(cx));
+    frame(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(true)
+    );
 }

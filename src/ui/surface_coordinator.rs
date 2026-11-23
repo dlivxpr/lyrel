@@ -158,10 +158,12 @@ pub(crate) fn popup_menu_open(window: WindowId, cx: &mut App) -> bool {
 /// The whole workbench's surfaces re-read the cover set after a menu opens,
 /// closes or is dropped.
 fn notify_live_apps(cx: &mut App) {
-    let apps: Vec<_> = crate::ui::windows::WindowRegistry::live_apps(cx).collect();
-    for app in apps {
-        let _ = app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
-    }
+    cx.defer(|cx| {
+        let apps: Vec<_> = crate::ui::windows::WindowRegistry::live_apps(cx).collect();
+        for app in apps {
+            app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
+        }
+    });
 }
 
 #[derive(Default)]
@@ -179,9 +181,11 @@ pub(crate) fn install_native_surface_cover_hooks(cx: &mut App) {
     }
     cx.set_global(NativeSurfaceCoverHooks);
     lyrel_ui_base::native_surface::on_change(cx, |window, cx| {
-        if let Some(app) = crate::ui::windows::WindowRegistry::app_for_window(cx, window) {
-            let _ = app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
-        }
+        cx.defer(move |cx| {
+            if let Some(app) = crate::ui::windows::WindowRegistry::app_for_window(cx, window) {
+                app.update(cx, |app, cx| app.sync_browser_surfaces(cx));
+            }
+        });
     });
 }
 
