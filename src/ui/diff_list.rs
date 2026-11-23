@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui_kit::SharedString;
 
-use crate::ui::content_diff::{ContentFile, ContentState};
+use crate::ui::content_diff::{ContentFailure, ContentFile, ContentState};
 use crate::ui::diff_rows::{RowId, SplitRow, UnifiedRow, split_hunk, unified_rows};
 use crate::ui::scm::diff::{
     AUTO_COLLAPSE_LINES, DiffLine, DiffSnapshot, FileDiff, FileStatus, LineKind, MAX_RENDERED_FILES,
@@ -257,6 +257,9 @@ pub(crate) fn content_preview_rows(
         ContentState::Ready(cf) => (cf.file.added, cf.file.removed),
         _ => (0, 0),
     };
+    // An untracked binary file has no textual comparison; the header's
+    // binary badge is the existing indication, exactly as in the line view.
+    let binary = matches!(state, ContentState::Failed(ContentFailure::Binary));
     let mut rows = vec![DiffRow::FileHeader(FileHead {
         index: usize::MAX,
         path: path.to_string(),
@@ -264,7 +267,7 @@ pub(crate) fn content_preview_rows(
         status: FileStatus::Added,
         added,
         removed,
-        binary: false,
+        binary,
         expandable: false,
         expanded: true,
     })];
@@ -272,6 +275,7 @@ pub(crate) fn content_preview_rows(
         ContentState::Ready(cf) => {
             rows.extend(content_rows(usize::MAX, path, cf, inner));
         }
+        ContentState::Failed(ContentFailure::Binary) => {}
         ContentState::Failed(reason) => {
             rows.push(DiffRow::ContentStatus(reason.message()));
         }
@@ -371,6 +375,13 @@ fn content_file_rows(
     file: &FileDiff,
     content: &ContentViews<'_>,
 ) -> Vec<DiffRow> {
+    // A binary file has no textual versions to compare, and no content read
+    // is dispatched for it: the file header's binary indication is the whole
+    // card, exactly as in the line views. Without this the card would claim
+    // to be reading bytes that were never asked for.
+    if file.binary {
+        return Vec::new();
+    }
     let inner = match content.inner {
         DiffViewMode::Unified => DiffViewMode::Unified,
         _ => DiffViewMode::Split,
