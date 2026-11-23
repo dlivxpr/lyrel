@@ -297,12 +297,17 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
+        // One narrowing decision for the whole chrome: the Park entry form and
+        // the metrics capsule variant read it, so they can never disagree
+        // about who compresses first.
+        let chrome_fit = self.titlebar_chrome_fit(window, cx);
         let top_chrome = WindowChrome::new(
             self.left_panel_open(cx),
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
-            self.render_titlebar_metrics(window, cx),
+            self.render_park_entry(chrome_fit, window, cx),
+            self.render_titlebar_metrics(window, cx, chrome_fit),
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
@@ -404,6 +409,66 @@ impl LyrelApp {
             .child(self.pane_drag_capture(cx))
             .child(bottom_row)
             .into_any_element()
+    }
+}
+
+impl LyrelApp {
+    /// The centered title-bar Park entry: the active tab's parked count, with
+    /// the deck's downward fan as its surface. Hovering opens the fan without
+    /// taking the keyboard; clicking focuses the deck for keyboard
+    /// navigation; Escape hands focus back to whatever was focused before.
+    /// `None` where there is no terminal tab to park panes in.
+    fn render_park_entry(
+        &self,
+        fit: crate::ui::window_chrome::TitlebarFit,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(gpui_kit::AnyElement, f32)> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        use gpui_kit::component::button::ButtonVariants as _;
+        let compact = fit.park_compact();
+        let count = self.parked_deck.read(cx).parked_count();
+        let scale = window.rem_size().as_f32() / 16.;
+        let width = (if compact {
+            crate::ui::window_chrome::PARK_ENTRY_COMPACT_W
+        } else {
+            crate::ui::window_chrome::PARK_ENTRY_FULL_W
+        }) * scale;
+        let badge = t_fmt(L10nKey::ParkedEntryCount, &[("count", &count.to_string())]);
+        let label = if compact {
+            count.to_string()
+        } else {
+            format!("{} · {}", t(L10nKey::ParkDropTarget), count)
+        };
+        let entry = gpui_kit::component::button::Button::new("titlebar-park")
+            .custom(crate::ui::window_chrome::chrome_tile_variant(cx))
+            .h(gpui_kit::rems(2.))
+            .w(px(width))
+            .gap(gpui_kit::rems(6. / 16.))
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .icon(gpui_kit::component::Icon::empty().path("icons/park.svg").size_4())
+            .label(label)
+            .accessibility_label(badge.clone())
+            .tooltip(badge)
+            .on_hover(cx.listener(|this, over: &bool, window, cx| {
+                this.parked_deck.update(cx, |deck, cx| {
+                    if *over {
+                        deck.show_for_pointer(cx);
+                    } else {
+                        deck.hide_for_pointer(window, cx);
+                    }
+                });
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.parked_deck
+                    .update(cx, |deck, cx| deck.focus(None, window, cx));
+            }))
+            .into_any_element();
+        Some((entry, width))
     }
 }
 

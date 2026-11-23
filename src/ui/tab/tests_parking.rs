@@ -60,6 +60,159 @@ fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn park_fan_opens_downward_from_the_centered_entry_and_restores_by_keyboard_and_pointer(
+    cx: &mut TestAppContext,
+) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
+        window.focus(&current.focus_handle(cx), cx);
+        app.park_pane(parked.entity_id(), window, cx);
+        parked
+    });
+    vcx.run_until_parked();
+    let card = ("parked-card", parked.entity_id().as_u64() as usize);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // At rest the content paints nothing: the entry badge carries the
+        // active tab's count in the title bar.
+        assert!(window.try_find(card).is_none());
+        assert_eq!(
+            window.find("titlebar-park").label().map(str::to_owned),
+            Some(lyrel_ui_base::i18n::t_fmt(
+                L10nKey::ParkedEntryCount,
+                &[("count", "1")]
+            ))
+        );
+        assert!(
+            (f32::from(window.find("titlebar-park").bounds().center().x)
+                - f32::from(window.viewport_size().width) / 2.)
+            .abs()
+                <= 1.
+        );
+        // Hover opens the fan downward from the title-bar center.
+        window.hover("titlebar-park", cx);
+        window.render_frame(cx);
+        let bounds = window.find(card).bounds();
+        let content = window.find("workbench-content").bounds();
+        assert!(
+            bounds.top() >= content.top() - px(1.),
+            "the fan cannot start above the content it hangs into"
+        );
+        assert!(
+            bounds.top() <= content.top() + window.rem_size() * 2.,
+            "the fan opens just below the title bar, not midway down the window"
+        );
+        assert!(
+            (f32::from(bounds.center().x) - f32::from(content.center().x)).abs()
+                <= f32::from(window.rem_size()) * 12.,
+            "the fan stays under the centered entry"
+        );
+    });
+    // Moving away for the content closes the fan again.
+    vcx.update(|window, cx| {
+        window.hover("terminal-surface", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(card).is_none());
+    });
+    // Clicking focuses the deck: Enter previews the active card, Enter again
+    // restores the pane and its focus.
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        assert!(window.find(card).visible());
+        window.press("enter", cx);
+        window.render_frame(cx);
+        assert!(window.find("parked-preview").visible());
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&parked, cx));
+        assert!(parked.contains_focused(window, cx));
+    });
+}
+
+#[gpui_kit::test]
+fn restore_out_of_fill_docks_the_document_and_preserves_it(cx: &mut TestAppContext) {
+    use lyrel_ui_base::actions::ToggleDocumentFill;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("park-restore-out-of-fill.txt");
+    std::fs::write(&path, "").unwrap();
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
+        window.focus(&current.focus_handle(cx), cx);
+        app.park_pane(parked.entity_id(), window, cx);
+        parked
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    // HostOps 的真实线程池不随 GPUI executor 一起排空。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+        if app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the document did not open");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    vcx.simulate_keystrokes("h");
+    vcx.run_until_parked();
+    let editor = app.read_with(&vcx, |app, cx| {
+        app.editor_active_local_file(cx).unwrap().into_input()
+    });
+    vcx.dispatch_action(ToggleDocumentFill);
+    vcx.run_until_parked();
+    assert!(
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.document_dock_px(window, cx).is_none()
+        }),
+        "a filling document owns the workspace"
+    );
+    // Restoring the parked pane gives Fill way: the document docks, the
+    // terminal comes back, and the document's content is untouched.
+    vcx.dispatch_action(RestoreParkedPane);
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&parked, cx));
+        assert!(parked.contains_focused(window, cx));
+        assert_eq!(
+            app.document_layout(cx),
+            lyrel_core::core::config::DocumentLayout::Dock
+        );
+    });
+    assert!(
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.document_dock_px(window, cx).is_some()
+        }),
+        "docking reveals the terminal beside the preserved document"
+    );
+    assert_eq!(
+        editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+        "h"
+    );
+}
+
+#[gpui_kit::test]
 fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let parked = app.update_in(&mut vcx, |app, window, cx| {
@@ -75,6 +228,10 @@ fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mu
     vcx.run_until_parked();
     let card = ("parked-card", parked.entity_id().as_u64() as usize);
     vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // The deck rests invisible now; the centered title-bar entry owns
+        // the fan.
+        window.hover("titlebar-park", cx);
         window.render_frame(cx);
         assert!(window.find(card).visible());
         window.hover(card, cx);
@@ -966,6 +1123,10 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
                 .is_none_or(|card| !card.visible()),
             "the last pane needs the overflow path at this viewport"
         );
+        // At rest the deck is invisible; the entry opens the fan that owns
+        // the overflow control.
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
         assert!(window.find("parked-more").visible());
         window.click("parked-more", cx);
     });
@@ -1192,7 +1353,11 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     for step in 0..3 {
         match step {
@@ -1286,7 +1451,11 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     for (pane, activation) in [(&parked[1], "enter"), (&parked[2], "space")] {
         vcx.update(|window, cx| {
@@ -1365,7 +1534,11 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.press("end", cx);
@@ -1435,6 +1608,8 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         window.render_frame(cx);
         assert!(window.try_find("parked-preview").is_none());
         assert!(window.try_find("parked-overflow").is_none());
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
         window.click("parked-more", cx);
     });
     vcx.run_until_parked();

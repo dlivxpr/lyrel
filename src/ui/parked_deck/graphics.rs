@@ -377,8 +377,12 @@ struct CardFrame {
 #[derive(Clone, Default, Debug)]
 pub(super) struct Frame {
     bounds: Bounds<Pixels>,
-    deck_bounds: Bounds<Pixels>,
     viewport: Bounds<Pixels>,
+    /// The window's horizontal centre, in window coordinates. The deck
+    /// overlay may sit inside a terminal column that side panels shove
+    /// sideways; the fan still opens under the title-bar entry, which is
+    /// anchored to the window itself.
+    center_x: Pixels,
     cards: Vec<CardFrame>,
     zoom: f32,
     fan: f32,
@@ -408,7 +412,9 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
 pub(super) struct FrameInput {
     pub bounds: Bounds<Pixels>,
     pub viewport: Bounds<Pixels>,
-    pub deck_bounds: Bounds<Pixels>,
+    /// The window centre the fan hangs from — the title-bar Park entry's
+    /// line, independent of which side panels are open.
+    pub center_x: Pixels,
     pub zoom: f32,
     pub cards: Vec<FrameCard>,
     pub fan: f32,
@@ -421,7 +427,7 @@ impl Frame {
         let FrameInput {
             bounds,
             viewport,
-            deck_bounds,
+            center_x,
             zoom,
             cards,
             fan,
@@ -430,8 +436,8 @@ impl Frame {
         } = input;
         let mut result = Self {
             bounds,
-            deck_bounds,
             viewport,
+            center_x,
             cards: Vec::with_capacity(cards.len()),
             zoom,
             fan,
@@ -455,18 +461,22 @@ impl Frame {
                 radians.sin() * pose.scale * zoom,
                 radians.cos() * pose.scale * zoom,
             );
-            let mut anchor_x = f32::from(deck_bounds.center().x) + (pose.x - shift) * zoom;
-            let mut anchor_y = f32::from(bounds.bottom()) + pose.y * zoom;
+            let mut anchor_x = f32::from(self.center_x) + (pose.x - shift) * zoom;
+            // The fan hangs below the title bar now: the deck overlays the
+            // content, whose top edge sits directly under the centered Park
+            // entry, and every pose's (negative) lift carries its card
+            // downward from that line.
+            let mut anchor_y = f32::from(bounds.top()) - pose.y * zoom;
             if card.selected {
-                // 不把恢复操作放到 content 顶边外；极小区域仍由共同 viewport 裁切。
+                // 不把恢复操作放到 content 区域外；极小区域仍由共同 viewport 裁切。
                 let w = pose.width * pose.scale * zoom;
                 let h = pose.height * pose.scale * zoom;
                 let left = f32::from(viewport.left()) + w / 2.;
                 let right = (f32::from(viewport.right()) - w / 2.).max(left);
                 anchor_x = anchor_x.clamp(left, right);
                 anchor_y = anchor_y
-                    .max(f32::from(viewport.top()) + h)
-                    .min(f32::from(viewport.bottom()));
+                    .max(f32::from(viewport.top()))
+                    .min(f32::from(viewport.bottom()) - h);
             }
             let (sx, sy) = (pose.width / 56., pose.height / 74.);
             let outer = Affine {
@@ -559,10 +569,7 @@ impl Frame {
         let width = self.viewport.size.width.min(px(360. * self.zoom));
         let height = self.viewport.size.height.min(px(154. * self.zoom));
         Bounds {
-            origin: point(
-                self.deck_bounds.center().x - width / 2.,
-                self.viewport.bottom() - height,
-            ),
+            origin: point(self.center_x - width / 2., self.viewport.top()),
             size: size(width, height),
         }
         .intersect(&self.viewport)
@@ -602,11 +609,14 @@ impl Frame {
         })
     }
 
+    /// Whether `position` is in the deck's interaction band. The band starts
+    /// one title-bar row above the viewport's top edge — the centered Park
+    /// entry lives up there — and reaches down across the fanned cards, so
+    /// the pointer road from the entry into the fan never leaves the deck.
     pub fn deck_contains(&self, position: Point<Pixels>) -> bool {
-        self.viewport.contains(&position)
-            && (f32::from(position.x) - f32::from(self.deck_bounds.center().x)).abs()
-                <= 180. * self.zoom
-            && f32::from(position.y) >= f32::from(self.bounds.bottom()) - 154. * self.zoom
+        let x = f32::from(position.x) - f32::from(self.center_x);
+        let y = f32::from(position.y) - f32::from(self.viewport.top());
+        x.abs() <= 180. * self.zoom && y >= -(48. * self.zoom) && y <= 154. * self.zoom
     }
 
     pub fn hit(&self, position: Point<Pixels>) -> Option<(u64, bool)> {
@@ -736,15 +746,18 @@ impl Frame {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
             }
         } else {
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 130 A129 129 0 0 1 259 130" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
+            // The fan aura opens downward from the title-bar edge: the same
+            // dome the deck wore at the content's bottom, mirrored into the
+            // top edge it hangs from now.
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 0 A129 129 0 0 0 259 0" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
         };
         let bounds = if park {
             self.park_target_geometry()
         } else {
             Bounds {
                 origin: point(
-                    self.deck_bounds.center().x - px(width * self.zoom / 2.),
-                    self.bounds.bottom() - px(height * self.zoom),
+                    self.center_x - px(width * self.zoom / 2.),
+                    self.bounds.top(),
                 ),
                 size: size(px(width * self.zoom), px(height * self.zoom)),
             }

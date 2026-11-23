@@ -2277,6 +2277,12 @@ impl LyrelApp {
             return;
         };
         self.maximized = None;
+        // A restore out of a filling document must reveal the pane: dock the
+        // document instead. The document stays open with its content,
+        // undo history and selection untouched.
+        if self.document_layout(cx) == lyrel_core::core::config::DocumentLayout::Fill {
+            self.set_document_layout(lyrel_core::core::config::DocumentLayout::Dock, cx);
+        }
         self.sync_parked_deck(window, cx);
         self.focus_leaf(&slot, window, cx);
         self.save_session(cx);
