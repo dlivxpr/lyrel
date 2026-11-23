@@ -282,12 +282,13 @@ fn agent_diagnostic_wheel_moves_the_list_without_moving_the_settings_page(cx: &m
         px(-30.),
         "scrolling a long agent diagnostic must not move the page"
     );
+    let last = format!("agent-row-{}", HookAgent::ALL.len() - 1);
     assert_boundary_handoff(
         &mut vcx,
         &outer,
         "agent-hook-list",
         "agent-row-0",
-        "agent-row-4",
+        &last,
         before,
     );
     let filter = app.update_in(&mut vcx, |app, window, cx| {

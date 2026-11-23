@@ -163,9 +163,21 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
     );
     program_assert_unread(&first, &mut av, 0);
     program_assert_unread(&second, &mut bv, 1);
+    // Done is the Ended matrix row, whose approved desktop default is open.
+    // Two viewers share the process-wide result identity, so the result
+    // crosses both windows as exactly one OS notice — its own ended result,
+    // not a second completion notice from a shell or rich-agent path.
+    let notes = command_notification_take();
+    assert_eq!(
+        notes.len(),
+        1,
+        "a settled done result notifies once as Ended: {notes:?}"
+    );
     assert!(
-        command_notification_take().is_empty(),
-        "done is visual, not another completion notice"
+        notes
+            .iter()
+            .all(|note| note.title.starts_with("Program") && note.body.contains("Done")),
+        "the notice names the program result: {notes:?}"
     );
 
     av.deactivate_window();
@@ -190,6 +202,22 @@ fn program_attention_two_real_windows_ack_independently_and_reconnect_detects_ne
                 view.with_program_status(|status| status.result_version() > old_version)
             })
         },
+    );
+    // The reader-side version can be current before this window has drained
+    // the queued frame; the unread mark proves the consumer observed it, so
+    // the delivery below cannot race the event queue.
+    program_assert_unread(&first, &mut av, 1);
+    let notes = command_notification_take();
+    assert_eq!(
+        notes.len(),
+        1,
+        "the new done result still notifies once while the other window is gone: {notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.title.starts_with("Program") && note.body.contains("Done")),
+        "the notice names the new program result: {notes:?}"
     );
     let reattached = program_consumer_attach_stream(
         program_observer_stream(&daemon, pane),
@@ -244,6 +272,15 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
     av.deactivate_window();
 
     let (second, mut bv) = crate::ui::app::test_window::harness(cx);
+    // The harness installs the app globals afresh; the second window shares
+    // this process's Config, so reopen the same Never timing the first
+    // window set. This test observes unread marks with desktop delivery
+    // closed, not the Ended row's approved default (covered by the
+    // two-window case above).
+    bv.update(|_, cx| {
+        cx.global_mut::<Config>().notify_on_command_finish =
+            lyrel_core::core::config::NotifyMode::Never;
+    });
     bv.deactivate_window();
     let b = program_consumer_attach_stream(
         program_observer_stream(&daemon, pane),
@@ -306,7 +343,7 @@ fn program_attention_cold_and_unchanged_reconnect_stay_quiet_but_recreated_resul
     program_assert_unread(&second, &mut bv, 256);
     assert!(
         command_notification_take().is_empty(),
-        "eviction/recreation of done stays visual only"
+        "with delivery Never, eviction/recreation of done stays visual only"
     );
 
     let old_session = a.read_with(cx, |view, _| {

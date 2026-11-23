@@ -818,22 +818,26 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     assert!(app.read_with(&vcx, |app, cx| {
         app.tabs[app.tabs.active_index()].pip_slot(cx).is_none()
     }));
-    for (width, font) in [(1440., 16.), (760., 20.)] {
-        vcx.simulate_resize(size(px(width), px(720.)));
-        app.update_in(&mut vcx, |_, _, cx| {
-            cx.global_mut::<lyrel_ui_base::config::Config>()
-                .ui_font_size = font;
-            cx.notify();
-        });
-        settle(&mut vcx);
-        vcx.update(|window, _| {
-            assert!(window.find("titlebar-metric-cpu").visible());
-            assert!(window.find("titlebar-metric-ram").visible());
-            let metrics = window.find("titlebar-metrics").bounds();
-            assert!(metrics.right() <= window.viewport_size().width);
-            assert!(metrics.top() >= px(0.));
-        });
-    }
+    settle(&mut vcx);
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.find("titlebar-metric-cpu").visible());
+        assert!(window.find("titlebar-metric-ram").visible());
+        let metrics = window.find("titlebar-metrics").bounds();
+        assert!(metrics.right() <= window.viewport_size().width);
+        assert!(metrics.top() >= px(0.));
+    });
+    vcx.simulate_resize(size(px(760.), px(720.)));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = 20.;
+        cx.notify();
+    });
+    settle(&mut vcx);
+    vcx.update(|window, _| assert!(window.try_find("titlebar-metrics").is_none()));
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    wait_sample(&mut vcx, true);
 
     // A document workflow replaces, rather than duplicates, the terminal widgets.
     vcx.dispatch_action(EditorNewFile);
