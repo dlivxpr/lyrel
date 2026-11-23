@@ -95,6 +95,16 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        // The deck's overlay covers the terminal column. Its +N control and
+        // capacity budget live in that local frame, but the fan itself is
+        // window-centred, so hand the deck the column's window rectangle
+        // before it renders. The canvas measurement alone is deferred and
+        // would leave the first open frame guessing at the wrong size.
+        if let Some(area) = self.pane_area.get() {
+            self.parked_deck.update(cx, |deck, cx| {
+                deck.set_content_bounds(area, cx);
+            });
+        }
         self.sync_parked_deck(window, cx);
         // A recognized tiled or PiP pane drag reveals the parking target for
         // as long as it is in flight — the affordance has to be findable
@@ -132,16 +142,23 @@ impl LyrelApp {
                     })
                 });
                 match maximized {
-                    Some(leaf) => Pane::leaf(PaneSlot::Ready(leaf.clone())).render(
-                        &crate::ui::pane::PaneChrome {
-                            dim_inactive: false,
-                            app: cx.entity().downgrade(),
-                            lifted: None,
-                            drag: self.pane_drag.clone(),
-                        },
-                        window,
-                        cx,
-                    ),
+                    Some(leaf) => div()
+                        .id("pane-presentations")
+                        .test_support()
+                        .size_full()
+                        .relative()
+                        .overflow_hidden()
+                        .child(Pane::leaf(PaneSlot::Ready(leaf.clone())).render(
+                            &crate::ui::pane::PaneChrome {
+                                dim_inactive: false,
+                                app: cx.entity().downgrade(),
+                                lifted: None,
+                                drag: self.pane_drag.clone(),
+                            },
+                            window,
+                            cx,
+                        ))
+                        .into_any_element(),
                     None => {
                         let several = active_tab.pane.leaves().len() > 1;
                         let chrome = crate::ui::pane::PaneChrome {

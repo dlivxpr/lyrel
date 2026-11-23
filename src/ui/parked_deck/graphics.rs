@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{ParkedCard, ParkedDeckLabels};
+use super::{MORE_OFFSET, MORE_SLOT, ParkedCard, ParkedDeckLabels};
 use lyrel_ui_base::presets::{Interactions, Parking};
 
 // 批准的原生闸门几何，以 rem=16 为设计坐标；矩阵和逆命中共享同一比例。
@@ -489,10 +489,14 @@ impl Frame {
                 radians.cos() * pose.scale * zoom,
             );
             let mut anchor_x = f32::from(center_x) + (pose.x - shift) * zoom;
-            // The fan hangs below the title bar now: the deck overlays the
-            // content, whose top edge sits directly under the centered Park
-            // entry, and every pose's (negative) lift carries its card
-            // downward from that line.
+            // The fan hangs from the content's top edge — the line directly
+            // under the centered Park entry. The anchor is the card's centre,
+            // so the closed card straddles that line and the fan's lower half
+            // is what emerges into the pane area; a pose's negative lift then
+            // carries the card down from it. Keeping the line as the card's
+            // bottom instead put every resting card above the deck's content
+            // mask, where it clipped to nothing and could neither paint nor be
+            // queried.
             let mut anchor_y = f32::from(bounds.top()) - pose.y * zoom;
             if card.selected {
                 // 不把恢复操作放到 content 区域外；极小区域仍由共同 viewport 裁切。
@@ -501,9 +505,9 @@ impl Frame {
                 let left = f32::from(viewport.left()) + w / 2.;
                 let right = (f32::from(viewport.right()) - w / 2.).max(left);
                 anchor_x = anchor_x.clamp(left, right);
-                anchor_y = anchor_y
-                    .max(f32::from(viewport.top()))
-                    .min(f32::from(viewport.bottom()) - h);
+                let top = f32::from(viewport.top()) + h / 2.;
+                let bottom = (f32::from(viewport.bottom()) - h / 2.).max(top);
+                anchor_y = anchor_y.clamp(top, bottom);
             }
             let (sx, sy) = (pose.width / 56., pose.height / 74.);
             let outer = Affine {
@@ -511,8 +515,8 @@ impl Frame {
                 b: b * sy,
                 c: c * sx,
                 d: d * sy,
-                x: anchor_x - a * pose.width / 2. - b * pose.height,
-                y: anchor_y - c * pose.width / 2. - d * pose.height,
+                x: anchor_x - a * pose.width / 2. - b * pose.height / 2.,
+                y: anchor_y - c * pose.width / 2. - d * pose.height / 2.,
             };
             let compression = (std::f32::consts::PI * pose.flip).cos().abs();
             let face = if pose.flip > 0.5 {
@@ -612,7 +616,7 @@ impl Frame {
     ) -> impl Iterator<Item = (&ParkedCard, Bounds<Pixels>, bool, Option<Bounds<Pixels>>)> + '_
     {
         self.cards.iter().map(|card| {
-            let bounds_for = |transform: Affine, points: [(f32, f32); 4]| {
+            let bounds_for = |transform: Affine, points: [(f32, f32); 4], clip: bool| {
                 let points = points.map(|(x, y)| transform.apply(x, y));
                 let min_x = points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
                 let min_y = points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
@@ -624,17 +628,31 @@ impl Frame {
                     .iter()
                     .map(|p| p[1])
                     .fold(f32::NEG_INFINITY, f32::max);
-                Bounds {
+                let bounds = Bounds {
                     origin: point(px(min_x), px(min_y)),
                     size: size(px(max_x - min_x), px(max_y - min_y)),
+                };
+                if clip {
+                    bounds.intersect(&self.viewport)
+                } else {
+                    bounds
                 }
-                .intersect(&self.viewport)
             };
-            let bounds = bounds_for(card.outer, [(0., 0.), (56., 0.), (56., 74.), (0., 74.)]);
+            // The card keeps its full rectangle: the deck's content mask is
+            // what hides the part above the pane area, but the card still
+            // exists at that rectangle (the fan is centred on the content's
+            // top line). Clipping it here would erase a resting card whose
+            // lower half is what the mask actually shows.
+            let bounds = bounds_for(
+                card.outer,
+                [(0., 0.), (56., 0.), (56., 74.), (0., 74.)],
+                false,
+            );
             let restore = (card.selected && card.pose.flip > 0.5).then(|| {
                 bounds_for(
                     card.face,
                     [(27., 84.), (93., 84.), (93., 108.), (27., 108.)],
+                    true,
                 )
             });
             (&card.model, bounds, card.selected, restore)
@@ -645,10 +663,17 @@ impl Frame {
     /// one title-bar row above the viewport's top edge — the centered Park
     /// entry lives up there — and reaches down across the fanned cards, so
     /// the pointer road from the entry into the fan never leaves the deck.
+    /// It reaches further to the right than the fan itself: the +N control
+    /// sits right of the band (and, in a narrow column, is clamped to the
+    /// deck's right edge), so the band has to cover its whole target or
+    /// moving onto it would close the deck before the click lands.
     pub fn deck_contains(&self, position: Point<Pixels>) -> bool {
         let x = f32::from(position.x) - f32::from(self.center_x);
         let y = f32::from(position.y) - f32::from(self.viewport.top());
-        x.abs() <= 180. * self.zoom && y >= -(48. * self.zoom) && y <= 154. * self.zoom
+        x >= -(180. * self.zoom)
+            && x <= (MORE_OFFSET + MORE_SLOT) * self.zoom
+            && y >= -(48. * self.zoom)
+            && y <= 154. * self.zoom
     }
 
     pub fn hit(&self, position: Point<Pixels>) -> Option<(u64, bool)> {
