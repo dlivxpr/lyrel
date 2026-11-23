@@ -5206,6 +5206,8 @@ mod content_view_tests {
             "fn alpha() {\n    println!(\"one\");\n}\n\nfn beta() {\n    println!(\"two\");\n}\n",
         );
         commit_all(&root, "base");
+        // `git mv` does not create the destination directory.
+        std::fs::create_dir_all(root.join("new")).unwrap();
         git_ok(&root, &["mv", "old/name.rs", "new/name.rs"]);
         write_file(
             &root,
@@ -5349,9 +5351,9 @@ mod content_view_tests {
     #[gpui_kit::test]
     fn a_binary_file_keeps_the_existing_indication(cx: &mut TestAppContext) {
         let (_temp, root) = empty_repo();
-        std::fs::write(root.join("blob.dat"), [0u8, 1, 2, 3]).unwrap();
+        std::fs::write(root.join("blob.rs"), [0u8, 1, 2, 3]).unwrap();
         commit_all(&root, "base");
-        std::fs::write(root.join("blob.dat"), [0u8, 9, 8, 7, 6]).unwrap();
+        std::fs::write(root.join("blob.rs"), [0u8, 9, 8, 7, 6]).unwrap();
 
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
         open_source(
@@ -5359,13 +5361,13 @@ mod content_view_tests {
             &mut vcx,
             &root,
             DiffSource::Worktree,
-            Some("blob.dat"),
-            &["blob.dat"],
+            Some("blob.rs"),
+            &["blob.rs"],
         );
         pump_until(&app, &mut vcx, snapshot_ready);
         frame(&app, &mut vcx);
         let rows = rows(&app, &mut vcx);
-        assert!(file_head(&rows, "blob.dat").binary);
+        assert!(file_head(&rows, "blob.rs").binary);
         assert!(
             !rows
                 .iter()
@@ -5376,7 +5378,7 @@ mod content_view_tests {
             app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
-                .is_some_and(|overlay| overlay.content.contains_key("blob.dat"))
+                .is_some_and(|overlay| overlay.content.contains_key("blob.rs"))
         });
         assert!(!has_content, "binary files never enter the content map");
     }
@@ -5386,7 +5388,7 @@ mod content_view_tests {
         let (_temp, root) = empty_repo();
         write_file(&root, "kept.rs", "fn kept() {}\n");
         commit_all(&root, "base");
-        std::fs::write(root.join("blob.dat"), [0u8, 1, 2, 3]).unwrap();
+        std::fs::write(root.join("blob.rs"), [0u8, 1, 2, 3]).unwrap();
 
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
         open_source(
@@ -5394,8 +5396,8 @@ mod content_view_tests {
             &mut vcx,
             &root,
             DiffSource::Worktree,
-            Some("blob.dat"),
-            &["blob.dat"],
+            Some("blob.rs"),
+            &["blob.rs"],
         );
         pump_until(&app, &mut vcx, |app| {
             app.tabs[app.tabs.active_index()]
@@ -5403,14 +5405,14 @@ mod content_view_tests {
                 .as_ref()
                 .is_some_and(|overlay| {
                     matches!(
-                        overlay.content.get("blob.dat"),
+                        overlay.content.get("blob.rs"),
                         Some(ContentState::Failed(ContentFailure::Binary))
                     )
                 })
         });
         frame(&app, &mut vcx);
         let rows = rows(&app, &mut vcx);
-        assert!(file_head(&rows, "blob.dat").binary);
+        assert!(file_head(&rows, "blob.rs").binary);
         assert!(
             !rows
                 .iter()
