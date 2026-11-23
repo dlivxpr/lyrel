@@ -733,17 +733,65 @@ impl Tab {
         self.agent_row(cx).map(|(_, status)| status)
     }
 
+    /// The agent status the tab indicator may show, filtered through the
+    /// activity matrix's tab channel: a leaf whose row's tab channel is off
+    /// contributes nothing, and urgency is ranked across what is left.
+    /// `agent_status` stays for the places that need the truth — menus,
+    /// caffeine — never hidden by a presentation setting.
+    pub(crate) fn agent_indicator_status(
+        &self,
+        cx: &App,
+    ) -> Option<crate::core::cli_agent::AgentStatus> {
+        use crate::core::cli_agent::AgentStatus;
+        use lyrel_core::core::config::ActivityState;
+        let activity = cx.global::<lyrel_ui_base::config::Config>().program_activity;
+        let urgency = |s: AgentStatus| match s {
+            AgentStatus::Waiting => 3,
+            AgentStatus::Working => 2,
+            AgentStatus::Done => 1,
+            AgentStatus::Idle => 0,
+        };
+        self.pane
+            .terminals()
+            .into_iter()
+            .filter_map(|leaf| {
+                let view = leaf.read(cx);
+                view.agent()?;
+                let session = view.agent_session();
+                let status = session.map(|s| s.status).unwrap_or(AgentStatus::Idle);
+                let row = ActivityState::of_agent(
+                    status,
+                    session.and_then(|s| s.readout.result.as_ref().map(|r| r.outcome)),
+                )?;
+                activity.channels(row).tab.then_some(status)
+            })
+            .max_by_key(|status| urgency(*status))
+    }
+
+    /// The unread agent results the tab may count — same settled turns as
+    /// before, but only the ones whose activity row keeps its tab channel.
     pub(crate) fn agent_unread_count(&self, cx: &App) -> usize {
         use crate::core::cli_agent::AgentStatus;
-        if self.agent_status(cx) != Some(AgentStatus::Done) {
+        use lyrel_core::core::config::ActivityState;
+        if self.agent_indicator_status(cx) != Some(AgentStatus::Done) {
             return 0;
         }
+        let activity = cx.global::<lyrel_ui_base::config::Config>().program_activity;
         self.pane
             .terminals()
             .into_iter()
             .filter(|l| {
                 let v = l.read(cx);
-                v.agent_session().map(|s| s.status) == Some(AgentStatus::Done)
+                let session = v.agent_session();
+                session.is_some_and(|s| s.status == AgentStatus::Done)
+                    && session
+                        .and_then(|s| {
+                            ActivityState::of_agent(
+                                s.status,
+                                s.readout.result.as_ref().map(|r| r.outcome),
+                            )
+                        })
+                        .is_some_and(|row| activity.channels(row).tab)
                     && v.agent_result_unread()
             })
             .count()

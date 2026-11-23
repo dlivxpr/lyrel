@@ -204,6 +204,55 @@ impl SettingsWindow {
         self.update_config(cx, |cfg| cfg.notify_threshold_secs = secs.clamp(1, 3600));
     }
 
+    /// One cell of the activity matrix: a channel on one activity row.
+    /// `Running` only owns the tab channel — anything else on that row is
+    /// rejected by the matrix itself rather than by the UI hiding it.
+    pub(crate) fn set_activity_channel(
+        &mut self,
+        activity: lyrel_core::core::config::ActivityState,
+        channel: ActivityChannel,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) {
+        use lyrel_core::core::config::ActivityState;
+        self.update_config(cx, |cfg| {
+            let row = |channels: &mut lyrel_core::core::config::ActivityChannels| match channel
+            {
+                ActivityChannel::Tab => channels.tab = on,
+                ActivityChannel::Desktop => channels.desktop = on,
+                ActivityChannel::Sound => channels.sound = on,
+            };
+            match activity {
+                ActivityState::Running => {
+                    if channel == ActivityChannel::Tab {
+                        cfg.program_activity.running.tab = on;
+                    }
+                }
+                ActivityState::Waiting => row(&mut cfg.program_activity.waiting),
+                ActivityState::Ended => row(&mut cfg.program_activity.ended),
+                ActivityState::Failed => row(&mut cfg.program_activity.failed),
+            }
+        });
+    }
+
+    /// The terminal events' own desktop toggles — ordinary command results
+    /// and explicit OSC notices stay separate by design.
+    pub(crate) fn set_terminal_notification(
+        &mut self,
+        channel: TerminalNotificationChannel,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_config(cx, |cfg| match channel {
+            TerminalNotificationChannel::CommandDesktop => {
+                cfg.terminal_notifications.command_desktop = on;
+            }
+            TerminalNotificationChannel::OscDesktop => {
+                cfg.terminal_notifications.osc_desktop = on;
+            }
+        });
+    }
+
     pub(crate) fn set_bell_mode(
         &mut self,
         mode: lyrel_core::core::config::BellMode,
@@ -349,6 +398,46 @@ impl SettingsWindow {
             }
             L10nKey::SettingsNotifyThreshold => {
                 self.set_notify_threshold(defaults.notify_threshold_secs, cx)
+            }
+            L10nKey::SettingsCommandDesktop => {
+                self.set_terminal_notification(
+                    TerminalNotificationChannel::CommandDesktop,
+                    defaults.terminal_notifications.command_desktop,
+                    cx,
+                )
+            }
+            L10nKey::SettingsOscDesktop => {
+                self.set_terminal_notification(
+                    TerminalNotificationChannel::OscDesktop,
+                    defaults.terminal_notifications.osc_desktop,
+                    cx,
+                )
+            }
+            L10nKey::SettingsProgramActivity => {
+                self.update_config(cx, |cfg| cfg.program_activity = defaults.program_activity)
+            }
+            L10nKey::ActivityRowRunning => {
+                self.set_activity_channel(
+                    lyrel_core::core::config::ActivityState::Running,
+                    ActivityChannel::Tab,
+                    defaults.program_activity.running.tab,
+                    cx,
+                )
+            }
+            L10nKey::ActivityRowWaiting => {
+                self.update_config(cx, |cfg| {
+                    cfg.program_activity.waiting = defaults.program_activity.waiting
+                })
+            }
+            L10nKey::ActivityRowEnded => {
+                self.update_config(cx, |cfg| {
+                    cfg.program_activity.ended = defaults.program_activity.ended
+                })
+            }
+            L10nKey::ActivityRowFailed => {
+                self.update_config(cx, |cfg| {
+                    cfg.program_activity.failed = defaults.program_activity.failed
+                })
             }
             L10nKey::SettingsTerminalBell => self.set_bell_mode(defaults.bell, cx),
             L10nKey::SettingsRestoreLastLayout => {
@@ -628,3 +717,4 @@ impl SettingsWindow {
         cx.emit(SettingsEvent::RestartDaemon);
     }
 }
+

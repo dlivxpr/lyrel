@@ -1426,14 +1426,45 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DocumentDock => "Dock beside terminal",
         L10nKey::DocumentFill => "Fill window",
         L10nKey::SettingsNotifications => "Notifications",
-        L10nKey::SettingsNotifyOnCommandFinish => "Notify on command finish",
+        L10nKey::SettingsNotifyOnCommandFinish => "Notification timing",
         L10nKey::SettingsNotifyOnCommandFinishDesc => {
-            "Alert when a long foreground command finishes."
+            "When enabled channels may interrupt. Eligible events still reach the notification history."
         }
         L10nKey::SettingsNotifyThreshold => "Minimum command duration",
         L10nKey::SettingsNotifyThresholdDesc => {
             "Notify only when a command runs for at least this long."
         }
+        L10nKey::SettingsCommandDesktop => "Command results",
+        L10nKey::SettingsCommandDesktopDesc => {
+            "Desktop notification when a foreground command finishes after the minimum duration."
+        }
+        L10nKey::SettingsOscDesktop => "Program notifications (OSC)",
+        L10nKey::SettingsOscDesktopDesc => {
+            "Desktop notification a program explicitly asks for (OSC 9, 99, 777)."
+        }
+        L10nKey::SettingsProgramActivity => "Program activity",
+        L10nKey::SettingsProgramActivityDesc => {
+            "Tab, desktop and sound channels by the activity a program reports. One result ends or fails, never both."
+        }
+        L10nKey::ActivityRowRunning => "Running",
+        L10nKey::ActivityRowRunningDesc => {
+            "A program or agent is still working. Only the tab indicator applies."
+        }
+        L10nKey::ActivityRowWaiting => "Waiting",
+        L10nKey::ActivityRowWaitingDesc => {
+            "A program or agent is waiting for your input."
+        }
+        L10nKey::ActivityRowEnded => "Ended",
+        L10nKey::ActivityRowEndedDesc => {
+            "A program or agent finished its task successfully."
+        }
+        L10nKey::ActivityRowFailed => "Failed",
+        L10nKey::ActivityRowFailedDesc => {
+            "A program or agent ended with an error."
+        }
+        L10nKey::ActivityChannelTab => "Tab",
+        L10nKey::ActivityChannelDesktop => "Desktop",
+        L10nKey::ActivityChannelSound => "Sound",
         L10nKey::SettingsWindow => "Startup & restore",
         L10nKey::NotifyModeNever => "Never",
         L10nKey::NotifyModeUnfocused => "When unfocused",
@@ -1637,6 +1668,27 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsSearchNotifyThresholdKeywords => {
             "notification alert seconds duration long command delay"
+        }
+        L10nKey::SettingsSearchProgramActivityKeywords => {
+            "program activity matrix channels tab desktop sound badge notification"
+        }
+        L10nKey::SettingsSearchActivityRunningKeywords => {
+            "running working busy program agent progress activity tab"
+        }
+        L10nKey::SettingsSearchActivityWaitingKeywords => {
+            "waiting blocked permission question input needs attention program agent"
+        }
+        L10nKey::SettingsSearchActivityEndedKeywords => {
+            "ended finished done completed success program agent result"
+        }
+        L10nKey::SettingsSearchActivityFailedKeywords => {
+            "failed error rejected crashed program agent result"
+        }
+        L10nKey::SettingsSearchCommandDesktopKeywords => {
+            "command finished result notification desktop threshold duration"
+        }
+        L10nKey::SettingsSearchOscDesktopKeywords => {
+            "osc notification desktop program escape sequence 9 99 777 explicit"
         }
         L10nKey::SettingsSearchOpacityKeywords => {
             "transparency translucent see through window alpha"

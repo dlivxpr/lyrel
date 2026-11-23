@@ -396,6 +396,41 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
             keywords: SettingsSearchNotifyThresholdKeywords,
         },
         SearchEntry {
+            section: General,
+            title: SettingsCommandDesktop,
+            keywords: SettingsSearchCommandDesktopKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: SettingsOscDesktop,
+            keywords: SettingsSearchOscDesktopKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: SettingsProgramActivity,
+            keywords: SettingsSearchProgramActivityKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: ActivityRowRunning,
+            keywords: SettingsSearchActivityRunningKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: ActivityRowWaiting,
+            keywords: SettingsSearchActivityWaitingKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: ActivityRowEnded,
+            keywords: SettingsSearchActivityEndedKeywords,
+        },
+        SearchEntry {
+            section: General,
+            title: ActivityRowFailed,
+            keywords: SettingsSearchActivityFailedKeywords,
+        },
+        SearchEntry {
             section: KeyboardMouse,
             title: SettingsSearchKeybindingsTitle,
             keywords: SettingsSearchKeybindingsKeywords,
@@ -445,6 +480,13 @@ impl SearchEntry {
             L10nKey::SettingsEditorSoftWrap => "editor_soft_wrap",
             L10nKey::SettingsNotifyOnCommandFinish => "notify_on_command_finish",
             L10nKey::SettingsNotifyThreshold => "notify_threshold_secs",
+            L10nKey::SettingsCommandDesktop => "terminal_notifications",
+            L10nKey::SettingsOscDesktop => "terminal_notifications",
+            L10nKey::SettingsProgramActivity => "program_activity",
+            L10nKey::ActivityRowRunning => "program_activity",
+            L10nKey::ActivityRowWaiting => "program_activity",
+            L10nKey::ActivityRowEnded => "program_activity",
+            L10nKey::ActivityRowFailed => "program_activity",
             L10nKey::SettingsTerminalBell => "bell",
             L10nKey::SettingsRestoreLastLayout => "restore_session",
             L10nKey::SettingsPerPaneHistory => "per_pane_history",
@@ -558,6 +600,13 @@ impl SearchEntry {
             L10nKey::SettingsEditorSoftWrap => t(L10nKey::SettingsEditorSoftWrapDesc),
             L10nKey::SettingsNotifyOnCommandFinish => t(L10nKey::SettingsNotifyOnCommandFinishDesc),
             L10nKey::SettingsNotifyThreshold => t(L10nKey::SettingsNotifyThresholdDesc),
+            L10nKey::SettingsCommandDesktop => t(L10nKey::SettingsCommandDesktopDesc),
+            L10nKey::SettingsOscDesktop => t(L10nKey::SettingsOscDesktopDesc),
+            L10nKey::SettingsProgramActivity => t(L10nKey::SettingsProgramActivityDesc),
+            L10nKey::ActivityRowRunning => t(L10nKey::ActivityRowRunningDesc),
+            L10nKey::ActivityRowWaiting => t(L10nKey::ActivityRowWaitingDesc),
+            L10nKey::ActivityRowEnded => t(L10nKey::ActivityRowEndedDesc),
+            L10nKey::ActivityRowFailed => t(L10nKey::ActivityRowFailedDesc),
             L10nKey::SettingsAppHttpProxy => t(L10nKey::SettingsAppHttpProxyDesc),
             L10nKey::SettingsAutoDownload => t(L10nKey::SettingsAutoDownloadDesc),
             L10nKey::SettingsPerPaneHistory => t(L10nKey::SettingsPerPaneHistoryDescription),
@@ -611,6 +660,27 @@ impl SearchEntry {
             }
             L10nKey::SettingsNotifyThreshold => {
                 cfg.notify_threshold_secs != defaults.notify_threshold_secs
+            }
+            L10nKey::SettingsCommandDesktop => {
+                cfg.terminal_notifications.command_desktop
+                    != defaults.terminal_notifications.command_desktop
+            }
+            L10nKey::SettingsOscDesktop => {
+                cfg.terminal_notifications.osc_desktop
+                    != defaults.terminal_notifications.osc_desktop
+            }
+            L10nKey::SettingsProgramActivity => cfg.program_activity != defaults.program_activity,
+            L10nKey::ActivityRowRunning => {
+                cfg.program_activity.running != defaults.program_activity.running
+            }
+            L10nKey::ActivityRowWaiting => {
+                cfg.program_activity.waiting != defaults.program_activity.waiting
+            }
+            L10nKey::ActivityRowEnded => {
+                cfg.program_activity.ended != defaults.program_activity.ended
+            }
+            L10nKey::ActivityRowFailed => {
+                cfg.program_activity.failed != defaults.program_activity.failed
             }
             L10nKey::SettingsTerminalBell => cfg.bell != defaults.bell,
             L10nKey::SettingsRestoreLastLayout => cfg.restore_session != defaults.restore_session,

@@ -42,7 +42,18 @@ impl PaneObservation {
             .count()
     }
 
+    /// Whether this record's update is worth an interruption. The settled
+    /// states (waiting on the reader, errored, or ended) all report; a new
+    /// record reporting one counts the same as a transition into it. Which
+    /// row — and therefore which channels — one resolves to is `deliver`'s
+    /// business, not this boolean's.
     fn update_record(&mut self, record: &ProgramRecord, cold: bool) -> bool {
+        let notice_worthy = |state: ProgramState| {
+            matches!(
+                state,
+                ProgramState::Blocked | ProgramState::Error | ProgramState::Done
+            )
+        };
         let version = record.result_version();
         let Some(cursor) = self.records.get_mut(record.id()) else {
             self.records.insert(
@@ -53,11 +64,9 @@ impl PaneObservation {
                     acknowledged: if cold { version } else { 0 },
                 },
             );
-            return version != 0
-                && matches!(record.state(), ProgramState::Blocked | ProgramState::Error);
+            return version != 0 && notice_worthy(record.state());
         };
-        let attention = version > cursor.observed
-            && matches!(record.state(), ProgramState::Blocked | ProgramState::Error);
+        let attention = version > cursor.observed && notice_worthy(record.state());
         cursor.state = record.state();
         cursor.observed = version;
         if cold {
@@ -177,6 +186,16 @@ impl ProgramAttention {
     }
 }
 
+/// One program-record interruption, split per channel by the record's
+/// activity row: `desktop` is the OS banner, `sound` the platform alert.
+/// The row already promised at least one is open, or the notice would not
+/// have been emitted.
+struct PaneNotice {
+    body: String,
+    desktop: bool,
+    sound: bool,
+}
+
 #[derive(Default)]
 struct ProgramNotices {
     sources: HashMap<ProgramSource, NoticeSource>,
@@ -213,7 +232,8 @@ impl ProgramNotices {
         frame: &ProgramStatusFrame,
         wanted: &[String],
         now: Instant,
-    ) -> Vec<String> {
+        activity: &lyrel_core::core::config::ProgramActivity,
+    ) -> Vec<PaneNotice> {
         let ProgramStatusFrame::Update(delta) = frame else {
             return Vec::new();
         };
@@ -270,12 +290,34 @@ impl ProgramNotices {
             if version <= floor || version <= entry.viewers[position].seen {
                 continue;
             }
+            // The record's own row decides what may interrupt: the banner
+            // needs the desktop channel, the alert only the sound channel —
+            // either is open even when the other is closed. A row with both
+            // closed skips delivery entirely, exactly as timing would have.
+            let Some(state) = lyrel_core::core::config::ActivityState::of_program(record.state())
+            else {
+                entry.viewers[position].seen = entry.viewers[position].seen.max(version);
+                continue;
+            };
+            let channels = activity.channels(state);
+            if !channels.desktop && !channels.sound {
+                entry.viewers[position].seen = entry.viewers[position].seen.max(version);
+                continue;
+            }
             let (allowed, dropped) = entry.budget.admit(now, 1);
             if dropped {
-                notices.push(t(L10nKey::ProgramNotesDropped).to_owned());
+                notices.push(PaneNotice {
+                    body: t(L10nKey::ProgramNotesDropped).to_owned(),
+                    desktop: channels.desktop,
+                    sound: channels.sound,
+                });
             }
             if allowed != 0 {
-                notices.push(crate::ui::program_status::record_label(record));
+                notices.push(PaneNotice {
+                    body: crate::ui::program_status::record_label(record),
+                    desktop: channels.desktop,
+                    sound: channels.sound,
+                });
             }
             entry.viewers[position].seen = version;
             entry
@@ -299,10 +341,9 @@ impl crate::ui::app::LyrelApp {
         }
         let source = view.read(cx).program_source();
         let watched = self.program_pane_is_viewed(view, window, cx);
-        let deliver = cx
-            .global::<lyrel_ui_base::config::Config>()
-            .notify_on_command_finish
-            .allows(watched);
+        let cfg = cx.global::<lyrel_ui_base::config::Config>();
+        let deliver = cfg.notify_on_command_finish.allows(watched);
+        let activity = cfg.program_activity;
         let now = Instant::now();
         let mut changed = false;
         for frame in frames {
@@ -314,6 +355,7 @@ impl crate::ui::app::LyrelApp {
                 frame,
                 &update.notices,
                 now,
+                &activity,
             );
             if !notices.is_empty() {
                 // Same reports from different panes are indistinguishable
@@ -327,12 +369,17 @@ impl crate::ui::app::LyrelApp {
                     };
                     view.notification_title(Some(&lead), cx)
                 };
-                for body in notices {
-                    lyrel_terminal::desktop_notification::notify_desktop_for_pane(
-                        Some(&title),
-                        &body,
-                        Some(view.entity_id()),
-                    );
+                for notice in notices {
+                    if notice.sound {
+                        lyrel_terminal::desktop_notification::play_activity_sound();
+                    }
+                    if notice.desktop {
+                        lyrel_terminal::desktop_notification::notify_desktop_for_pane(
+                            Some(&title),
+                            &notice.body,
+                            Some(view.entity_id()),
+                        );
+                    }
                 }
             }
         }

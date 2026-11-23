@@ -204,11 +204,147 @@ impl SettingsWindow {
                         threshold,
                         cx,
                     ),
+                    self.settings_row(
+                        t(L10nKey::SettingsCommandDesktop),
+                        t(L10nKey::SettingsCommandDesktopDesc),
+                        {
+                            let on = cx.global::<Config>().terminal_notifications.command_desktop;
+                            self.settings_switch("settings-cmd-desktop", on, cx, |this, on, _, cx| {
+                                this.set_terminal_notification(
+                                    TerminalNotificationChannel::CommandDesktop,
+                                    on,
+                                    cx,
+                                )
+                            })
+                        },
+                        cx,
+                    ),
+                    self.settings_row(
+                        t(L10nKey::SettingsOscDesktop),
+                        t(L10nKey::SettingsOscDesktopDesc),
+                        {
+                            let on = cx.global::<Config>().terminal_notifications.osc_desktop;
+                            self.settings_switch("settings-osc-desktop", on, cx, |this, on, _, cx| {
+                                this.set_terminal_notification(
+                                    TerminalNotificationChannel::OscDesktop,
+                                    on,
+                                    cx,
+                                )
+                            })
+                        },
+                        cx,
+                    ),
+                ]
+                .map(IntoElement::into_any_element),
+                cx,
+            ),
+            self.settings_group(
+                Some(t(L10nKey::SettingsProgramActivity)),
+                Some(t(L10nKey::SettingsProgramActivityDesc)),
+                [
+                    self.activity_matrix_header(cx),
+                    self.activity_row(
+                        t(L10nKey::ActivityRowRunning),
+                        t(L10nKey::ActivityRowRunningDesc),
+                        lyrel_core::core::config::ActivityState::Running,
+                        cx.global::<Config>().program_activity.running,
+                        cx,
+                    ),
+                    self.activity_row(
+                        t(L10nKey::ActivityRowWaiting),
+                        t(L10nKey::ActivityRowWaitingDesc),
+                        lyrel_core::core::config::ActivityState::Waiting,
+                        cx.global::<Config>().program_activity.waiting,
+                        cx,
+                    ),
+                    self.activity_row(
+                        t(L10nKey::ActivityRowEnded),
+                        t(L10nKey::ActivityRowEndedDesc),
+                        lyrel_core::core::config::ActivityState::Ended,
+                        cx.global::<Config>().program_activity.ended,
+                        cx,
+                    ),
+                    self.activity_row(
+                        t(L10nKey::ActivityRowFailed),
+                        t(L10nKey::ActivityRowFailedDesc),
+                        lyrel_core::core::config::ActivityState::Failed,
+                        cx.global::<Config>().program_activity.failed,
+                        cx,
+                    ),
                 ]
                 .map(IntoElement::into_any_element),
                 cx,
             ),
         ])
+    }
+
+    /// The column heads over the activity matrix. They mirror the row's
+    /// right-aligned control area, so each label sits over its switch
+    /// column; the badge column lands with #397.
+    fn activity_matrix_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let head = |key: L10nKey| {
+            div()
+                .w(px(56.))
+                .flex()
+                .justify_center()
+                .text_xs()
+                .text_color(cx.theme().foreground.opacity(0.5))
+                .child(t(key))
+        };
+        h_flex()
+            .w_full()
+            .justify_end()
+            .child(
+                h_flex()
+                    .gap(px(4.))
+                    .child(head(L10nKey::ActivityChannelTab))
+                    .child(head(L10nKey::ActivityChannelDesktop))
+                    .child(head(L10nKey::ActivityChannelSound)),
+            )
+            .into_any_element()
+    }
+
+    /// One matrix row: the activity name as the row label, its channels as
+    /// fixed-width cells. `Running` only owns the tab column — the others
+    /// are placeholders so the grid still lines up.
+    fn activity_row(
+        &self,
+        label: SharedString,
+        desc: SharedString,
+        activity: lyrel_core::core::config::ActivityState,
+        channels: lyrel_core::core::config::ActivityChannels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let cell = |channel: ActivityChannel, on: bool| {
+            div()
+                .w(px(56.))
+                .flex()
+                .justify_center()
+                .child(self.settings_switch(
+                    match channel {
+                        ActivityChannel::Tab => "settings-activity-tab",
+                        ActivityChannel::Desktop => "settings-activity-desktop",
+                        ActivityChannel::Sound => "settings-activity-sound",
+                    },
+                    on,
+                    cx,
+                    move |this, on, _, cx| this.set_activity_channel(activity, channel, on, cx),
+                ))
+        };
+        let controls = if activity == lyrel_core::core::config::ActivityState::Running {
+            h_flex()
+                .gap(px(4.))
+                .child(cell(ActivityChannel::Tab, channels.tab))
+                .child(div().w(px(56.)))
+                .child(div().w(px(56.)))
+        } else {
+            h_flex()
+                .gap(px(4.))
+                .child(cell(ActivityChannel::Tab, channels.tab))
+                .child(cell(ActivityChannel::Desktop, channels.desktop))
+                .child(cell(ActivityChannel::Sound, channels.sound))
+        };
+        self.settings_row(label, desc, controls, cx)
     }
 
     fn render_tabs_group(&self, cx: &mut Context<Self>) -> AnyElement {
