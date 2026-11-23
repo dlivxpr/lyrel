@@ -2807,18 +2807,24 @@ impl LyrelApp {
                         let Some(source) = app.dragged_parking_pane(cx) else {
                             return;
                         };
-                        if app
-                            .parked_deck
-                            .read(cx)
-                            .drop_target_contains(event.position)
-                        {
+                        // The painted ellipse parks; its clipped envelope's
+                        // empty corners cancel; anywhere else the gesture
+                        // keeps whatever landing it was over.
+                        let (in_target, in_envelope) = {
+                            let deck = app.parked_deck.read(cx);
+                            (
+                                deck.drop_target_contains(event.position),
+                                deck.drop_target_covers(event.position),
+                            )
+                        };
+                        if in_target {
                             if let Some(tab) = app.tabs.get(app.tabs.active_index()) {
                                 tab.pip_interaction.cancel();
                             }
                             app.park_pane(source, window, cx);
                             cx.stop_active_drag(window);
                             cx.stop_propagation();
-                        } else if app.parked_deck.read(cx).is_drop_target_visible() {
+                        } else if in_envelope {
                             // Empty corners of the parking affordance must not unexpectedly split a pane.
                             app.cancel_pane_drag(window, cx);
                             cx.stop_propagation();
@@ -2939,11 +2945,17 @@ impl LyrelApp {
         let from = pane_drag::lifted(&self.pane_drag)?;
         let area = self.pane_area.get()?;
         let tab = self.tabs.get(self.tabs.active_index())?;
+        // The parking target is on screen for the whole drag, so only the
+        // pointer actually inside its envelope displaces the split preview:
+        // outside it, a pane drag still reads as the rearrangement it is.
         if self.maximized.is_some()
             || tab
                 .pip_slot(cx)
                 .is_some_and(|slot| slot.entity_id() == from)
-            || self.parked_deck.read(cx).is_drop_target_visible()
+            || self
+                .parked_deck
+                .read(cx)
+                .drop_target_covers(window.mouse_position())
         {
             return None;
         }

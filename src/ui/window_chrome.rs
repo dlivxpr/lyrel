@@ -8,7 +8,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, TitleBar, h_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Axis, ClickEvent, Pixels, Point, Window, img, point, prelude::*, px, rems,
+    AnyElement, App, Axis, ClickEvent, Pixels, Point, TestSupportExt as _, Window, img, point,
+    prelude::*, px, rems,
 };
 
 use lyrel_ui_base::actions::{
@@ -166,6 +167,24 @@ fn title_bar_drag(
     window_move_gesture(row, key, window, cx).on_double_click(|_, window, _| {
         window.titlebar_double_click();
     })
+}
+
+/// A title-bar row that is a window-move region unless a pane drag owns the
+/// pointer. Locked, it keeps its identity, its tiles and its drag band for
+/// layout — only the native caption area and the move gesture go away, and
+/// they come back the frame the drag ends.
+fn title_bar_row(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window_move_locked: bool,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    if window_move_locked {
+        row
+    } else {
+        title_bar_drag(row, key, window, cx)
+    }
 }
 
 struct WindowMoveArm {
@@ -459,6 +478,11 @@ pub(crate) struct WindowChrome {
     /// The centered Park entry (`element`, `width`); `None` where there is
     /// no terminal tab to park panes in.
     park: Option<(AnyElement, f32)>,
+    /// Whether a pane drag owns the pointer. The title bar then stops being a
+    /// window-move region: the parking target hangs directly below its centre,
+    /// and a release or a press up there must not be swallowed by the native
+    /// caption hit test.
+    window_move_locked: bool,
 }
 
 impl WindowChrome {
@@ -469,6 +493,7 @@ impl WindowChrome {
         new_tab: impl IntoElement,
         park: Option<(AnyElement, f32)>,
         metrics: Option<(AnyElement, f32)>,
+        window_move_locked: bool,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -579,11 +604,13 @@ impl WindowChrome {
             right: right.into_any_element(),
             metrics,
             park,
+            window_move_locked,
         }
     }
 
     pub(crate) fn render(self, window: &mut Window, cx: &mut App) -> AnyElement {
         let macos_fullscreen = cfg!(target_os = "macos") && window.is_fullscreen();
+        let window_move_locked = self.window_move_locked;
         let left_row = h_flex()
             .id("workbench-left-drag")
             .w_full()
@@ -599,7 +626,8 @@ impl WindowChrome {
             .gap_2()
             .child(window_mark())
             .child(self.left);
-        let left = title_bar_drag(left_row, "workbench-left-drag", window, cx).into_any_element();
+        let left = title_bar_row(left_row, "workbench-left-drag", window_move_locked, window, cx)
+            .into_any_element();
         let trailing_inset = titlebar_trailing_inset(macos_fullscreen);
         let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);
         let strip = h_flex()
@@ -643,7 +671,8 @@ impl WindowChrome {
                 .flex_none()
                 .w_full()
                 .child(strip);
-            title_bar_drag(row, "workbench-right-drag", window, cx).into_any_element()
+            title_bar_row(row, "workbench-right-drag", window_move_locked, window, cx)
+                .into_any_element()
         };
         let right = gpui_kit::div().flex_none().w(px(right_width)).child(right);
         let right = if self.park.is_some() {
@@ -652,6 +681,7 @@ impl WindowChrome {
             right
         };
         h_flex()
+            .relative()
             .flex_none()
             .h(rems(3.))
             .w_full()
@@ -671,9 +701,27 @@ impl WindowChrome {
                     .items_center()
                     .justify_center()
                     .child(park);
-                bar.child(title_bar_drag(row, "workbench-center-drag", window, cx))
+                let center =
+                    title_bar_row(row, "workbench-center-drag", window_move_locked, window, cx);
+                bar.child(center)
             })
             .child(right)
+            // While a pane drag owns the pointer, one occluding plate covers
+            // the bar: `TitleBar`'s own caption hitbox and the rows' move
+            // gestures are then behind the front hitbox, so the native hit
+            // test reports no window-control area up here and no press can
+            // arm a window move. It is rebuilt away the frame the drag ends,
+            // which restores ordinary title-bar dragging.
+            .when(window_move_locked, |bar| {
+                bar.child(
+                    gpui_kit::div()
+                        .id("titlebar-drag-shield")
+                        .test_support()
+                        .absolute()
+                        .inset_0()
+                        .occlude(),
+                )
+            })
             .into_any_element()
     }
 }

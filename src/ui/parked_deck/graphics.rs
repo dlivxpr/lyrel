@@ -363,6 +363,17 @@ impl Tokens {
     }
 }
 
+/// The warm parking target's design box. It hangs from the content's top
+/// edge — the line directly under the centered title-bar Park entry — and
+/// reaches about 104 design pixels down into the pane area, so a pane can be
+/// parked without aiming for the window's edge.
+const PARK_TARGET_W: f32 = 360.;
+const PARK_TARGET_H: f32 = 104.;
+
+/// The label capsule's design box inside the target: the same 80×24 pill,
+/// just below the entry that owns the window centre.
+const PARK_PILL: [f32; 4] = [140., 12., 80., 24.];
+
 #[derive(Clone, Debug)]
 struct CardFrame {
     model: ParkedCard,
@@ -383,6 +394,10 @@ pub(super) struct Frame {
     /// sideways; the fan still opens under the title-bar entry, which is
     /// anchored to the window itself.
     center_x: Pixels,
+    /// The window's horizontal centre without the fan's `+N` reserve shift.
+    /// The parking target hangs from the entry's line, so it follows this
+    /// one even while the overflow control moves the fan band aside.
+    window_center_x: Pixels,
     cards: Vec<CardFrame>,
     zoom: f32,
     fan: f32,
@@ -403,8 +418,16 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
     sprite(
         Layer::Ink,
         None,
-        [0., 0., 360., 170.],
-        &text(label, font, 180., 28., 11., 80., true),
+        [0., 0., PARK_TARGET_W, PARK_TARGET_H],
+        &text(
+            label,
+            font,
+            PARK_TARGET_W / 2.,
+            PARK_PILL[1] + PARK_PILL[3] / 2. + 4.,
+            11.,
+            PARK_PILL[2],
+            true,
+        ),
     )
 }
 
@@ -415,6 +438,8 @@ pub(super) struct FrameInput {
     /// The window centre the fan hangs from — the title-bar Park entry's
     /// line, independent of which side panels are open.
     pub center_x: Pixels,
+    /// The unshifted window centre, which the parking target hangs from.
+    pub window_center_x: Pixels,
     pub zoom: f32,
     pub cards: Vec<FrameCard>,
     pub fan: f32,
@@ -428,6 +453,7 @@ impl Frame {
             bounds,
             viewport,
             center_x,
+            window_center_x,
             zoom,
             cards,
             fan,
@@ -438,6 +464,7 @@ impl Frame {
             bounds,
             viewport,
             center_x,
+            window_center_x,
             cards: Vec::with_capacity(cards.len()),
             zoom,
             fan,
@@ -518,18 +545,20 @@ impl Frame {
         self
     }
 
-    // Keep the approved rem-sized target and label; narrow content clips its outer arc,
-    // rather than shrinking the pill's text and pointer target along with the viewport.
+    // The approved rem-sized target and label, hanging from the content's top
+    // edge: the line the centered Park entry sits above. Narrow content clips
+    // its outer arc, rather than shrinking the pill's text and pointer target
+    // along with the viewport.
     fn park_target_geometry(&self) -> Bounds<Pixels> {
         let scale = self
             .zoom
-            .min(f32::from(self.viewport.size.height) / 170.)
+            .min(f32::from(self.viewport.size.height) / PARK_TARGET_H)
             .max(0.);
-        let extent = size(px(360. * scale), px(170. * scale));
+        let extent = size(px(PARK_TARGET_W * scale), px(PARK_TARGET_H * scale));
         Bounds::new(
             point(
-                self.viewport.center().x - extent.width / 2.,
-                self.viewport.bottom() - extent.height,
+                self.window_center_x - extent.width / 2.,
+                self.viewport.top(),
             ),
             extent,
         )
@@ -542,14 +571,17 @@ impl Frame {
 
     pub fn park_pill_bounds(&self) -> Bounds<Pixels> {
         let target = self.park_target_geometry();
-        let scale = f32::from(target.size.width) / 360.;
+        let scale = f32::from(target.size.width) / PARK_TARGET_W;
         Bounds::new(
-            target.origin + point(px(140. * scale), px(12. * scale)),
-            size(px(80. * scale), px(24. * scale)),
+            target.origin + point(px(PARK_PILL[0] * scale), px(PARK_PILL[1] * scale)),
+            size(px(PARK_PILL[2] * scale), px(PARK_PILL[3] * scale)),
         )
         .intersect(&self.viewport)
     }
 
+    /// Whether `position` is inside the painted half-ellipse, not its
+    /// bounding rectangle: the target hangs from the top edge, so the empty
+    /// corners are the ones at its lower left and right.
     pub fn park_target_contains(&self, position: Point<Pixels>) -> bool {
         let target = self.park_target_geometry();
         if !self.viewport.contains(&position)
@@ -561,8 +593,8 @@ impl Frame {
             return false;
         }
         let x = f32::from(position.x - target.center().x) / f32::from(target.size.width / 2.);
-        let y = f32::from(position.y - target.bottom()) / f32::from(target.size.height);
-        x * x + y * y <= 1.
+        let y = f32::from(position.y - target.top()) / f32::from(target.size.height);
+        y >= 0. && x * x + y * y <= 1.
     }
 
     pub fn keyboard_bounds(&self) -> Bounds<Pixels> {
@@ -738,12 +770,20 @@ impl Frame {
         window: &mut Window,
         cx: &App,
     ) -> Result<(), String> {
-        let (width, height) = if park { (360., 170.) } else { (260., 130.) };
+        let (width, height) = if park {
+            (PARK_TARGET_W, PARK_TARGET_H)
+        } else {
+            (260., 130.)
+        };
         let data = if park {
+            // The target hangs from the content's top edge, directly under the
+            // centered entry: the same dome the deck wore at the bottom,
+            // mirrored into the edge it hangs from now. Its widest line is the
+            // top one, so the empty corners are the lower left and right.
             if self.park_hover {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".14" stroke="white" stroke-opacity=".8"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white"/></svg>"#
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="104"><path d="M0 0 A180 104 0 0 0 360 0" fill="white" fill-opacity=".14" stroke="white" stroke-opacity=".8"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white"/></svg>"#
             } else {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="104"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 0 A180 104 0 0 0 360 0" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
             }
         } else {
             // The fan aura opens downward from the title-bar edge: the same
@@ -904,7 +944,7 @@ mod tests {
                         "{selected}, {value}, back={back}"
                     );
                 }
-                let expected = reference(actual, pill, 180., 28., [0., 0., 360., 170.]);
+                let expected = reference(actual, pill, 180., 28., [0., 0., 360., 104.]);
                 assert_eq!(
                     pixels(&renderer, &park_label(&labels.park, selected)),
                     pixels(&renderer, &expected),
