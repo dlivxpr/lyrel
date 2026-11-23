@@ -83,6 +83,8 @@ pub(crate) struct WebPage {
     /// The cover state the surface was last synced against, so a repaint
     /// only talks to the native child when something changed.
     cover_synced: Option<bool>,
+    pending_still_frame: Option<u64>,
+    still_frame: Option<std::sync::Arc<gpui_kit::Image>>,
     pub(crate) load_error: Option<String>,
     /// The explicit share of this page back to its agent (#393). Created on
     /// the user's first share action, so a page nobody asked about carries no
@@ -241,6 +243,8 @@ impl WebPage {
             surface_pending: false,
             surface_attempted: false,
             cover_synced: None,
+            pending_still_frame: None,
+            still_frame: None,
             load_error: None,
             feedback: None,
             next_capture: 0,
@@ -275,6 +279,12 @@ impl WebPage {
         }
         if self.surface_visible && !effective {
             self.restore_focus = surface.has_focus();
+            self.still_frame = None;
+            let request = surface::still_frame_request_id();
+            self.pending_still_frame = surface
+                .command(BrowserCommand::Capture { request })
+                .ok()
+                .map(|()| request);
         }
         self.surface_visible = effective;
         self.cover_synced = Some(covered);
@@ -286,11 +296,36 @@ impl WebPage {
         true
     }
 
-    /// Whether the page should paint the bounded still frame instead of its
-    /// live native surface.
-    #[cfg(test)]
-    pub(crate) fn still_frame(&self) -> bool {
-        !self.surface_visible && self.surface.is_some()
+    fn invalidate_still_frame(&mut self) {
+        self.pending_still_frame = None;
+        self.still_frame = None;
+    }
+
+    fn finish_still_frame(&mut self, request: u64, png: Option<Vec<u8>>) {
+        if self.pending_still_frame != Some(request) {
+            return;
+        }
+        self.pending_still_frame = None;
+        self.still_frame = png.and_then(|bytes| {
+            const MAX_BYTES: usize = 8 << 20;
+            const MAX_PIXELS: u64 = 8 << 20;
+            if bytes.len() > MAX_BYTES {
+                return None;
+            }
+            let (width, height) = image::ImageReader::with_format(
+                std::io::Cursor::new(&bytes),
+                image::ImageFormat::Png,
+            )
+            .into_dimensions()
+            .ok()?;
+            if u64::from(width) * u64::from(height) > MAX_PIXELS {
+                return None;
+            }
+            Some(std::sync::Arc::new(gpui_kit::Image::from_bytes(
+                gpui_kit::ImageFormat::Png,
+                bytes,
+            )))
+        });
     }
 }
 
@@ -1290,6 +1325,7 @@ impl LyrelApp {
                     .and_then(|verified| verified.forwarded_url(&url))
                     .unwrap_or_else(|| url.clone());
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.invalidate_still_frame();
                     page.load_error = None;
                     page.display_url = url;
                     if let Some(surface) = page.surface.as_mut() {
@@ -1428,11 +1464,13 @@ impl LyrelApp {
     }
 
     fn browser_command(&mut self, tab_id: &str, command: BrowserCommand, cx: &mut Context<Self>) {
-        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id)
-            && let Some(surface) = page.surface.as_mut()
-            && let Err(error) = surface.command(command)
-        {
-            page.status = PageStatus::Failed(error.to_string());
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            page.invalidate_still_frame();
+            if let Some(surface) = page.surface.as_mut()
+                && let Err(error) = surface.command(command)
+            {
+                page.status = PageStatus::Failed(error.to_string());
+            }
         }
         cx.notify();
     }
@@ -1490,6 +1528,7 @@ impl LyrelApp {
                 can_forward,
             } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.invalidate_still_frame();
                     page.display_url = page
                         .route
                         .verified()
@@ -1510,10 +1549,22 @@ impl LyrelApp {
                 }
             }
             BrowserEvent::Captured { request, png } => {
-                self.preview_capture_ready(tab_id, request, png, cx);
+                if surface::is_still_frame_request(request) {
+                    if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                        page.finish_still_frame(request, Some(png));
+                    }
+                } else {
+                    self.preview_capture_ready(tab_id, request, png, cx);
+                }
             }
             BrowserEvent::CaptureFailed { request, message } => {
-                self.preview_capture_failed(tab_id, request, message, cx);
+                if surface::is_still_frame_request(request) {
+                    if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                        page.finish_still_frame(request, None);
+                    }
+                } else {
+                    self.preview_capture_failed(tab_id, request, message, cx);
+                }
             }
             BrowserEvent::TitleChanged { title } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
@@ -2220,6 +2271,20 @@ pub(crate) fn render_browser_page(
             })
     });
 
+    let overlay = if covered
+        && load_error.is_none()
+        && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
+    {
+        let frame = app
+            .right_panel
+            .web_pages
+            .get(&tab.id)
+            .and_then(|page| page.still_frame.clone());
+        Some(browser_still_frame(&tab.id, &title, &address, frame, cx))
+    } else {
+        browser_overlay(&tab.id, &status, &address, load_error.as_deref(), cx)
+    };
+
     v_flex()
         .flex_1()
         .min_w_0()
@@ -2233,39 +2298,19 @@ pub(crate) fn render_browser_page(
                 .min_h_0()
                 .relative()
                 .child(anchor)
-                .children(browser_overlay(
-                    &tab.id,
-                    &status,
-                    &address,
-                    load_error.as_deref(),
-                    covered,
-                    &title,
-                    cx,
-                )),
+                .children(overlay),
         )
         .into_any_element()
 }
 
-/// The frame over the page area while the surface is not Ready: a bounded
-/// static frame, so concealment never shows a hole and a failed page says
-/// why in place. While a workbench overlay covers the page, the same bounded
-/// frame names the page it stands in for — the surface itself is hidden, not
-/// destroyed, so the draft, scroll position and focus come back with it.
+/// The loading or failure state shown over the page area.
 fn browser_overlay(
     tab_id: &str,
     status: &PageStatus,
     address: &str,
     load_error: Option<&str>,
-    covered: bool,
-    title: &str,
     cx: &mut Context<LyrelApp>,
 ) -> Option<AnyElement> {
-    if covered
-        && load_error.is_none()
-        && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
-    {
-        return Some(browser_still_frame(tab_id, title, address, cx));
-    }
     let muted = cx.theme().muted_foreground;
     let message = match status {
         PageStatus::Ready => load_error.map(str::to_owned),
@@ -2332,15 +2377,36 @@ fn browser_overlay(
     )
 }
 
-/// The bounded still frame painted in place of a concealed native page. It
-/// carries the covered tab's own title and address, so a tab switch during a
-/// transition shows the incoming page rather than a stale one.
+/// The selected page's last captured frame. A page that has not produced a
+/// frame yet keeps its own title and address visible while covered.
 fn browser_still_frame(
     tab_id: &str,
     title: &str,
     address: &str,
+    frame: Option<std::sync::Arc<gpui_kit::Image>>,
     cx: &mut Context<LyrelApp>,
 ) -> AnyElement {
+    if let Some(frame) = frame {
+        return div()
+            .id(format!("browser-still-frame-{tab_id}"))
+            .test_support()
+            .absolute()
+            .inset_0()
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .child(
+                div()
+                    .id("browser-still-frame-image")
+                    .test_support()
+                    .size_full()
+                    .child(
+                        gpui_kit::img(frame)
+                            .size_full()
+                            .object_fit(gpui_kit::ObjectFit::Contain),
+                    ),
+            )
+            .into_any_element();
+    }
     let muted = cx.theme().muted_foreground;
     let foreground = cx.theme().foreground;
     let border = cx.theme().border;

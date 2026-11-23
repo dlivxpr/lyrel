@@ -1838,14 +1838,28 @@ impl LyrelApp {
         let state = strip_state.read(cx).clone();
         let layout = self.tool_layout();
 
-        // Opening or selecting a tab reveals it: `prev_active` starts `None`
-        // on a fresh mount (the keyed state is dropped with the collapsed
-        // header), so a re-expanded panel re-reveals its selection too. The
-        // handle applies the reveal while its container lays out.
-        if state.prev_active.as_ref() != Some(&layout.active) {
-            if let Some(index) = layout.order.iter().position(|open| *open == layout.active) {
-                state.scroll.scroll_to_item(index);
-            }
+        // Reveal again once the strip has laid out its new viewport. GPUI
+        // applies scroll_to_item before refreshing the handle's viewport,
+        // so the first pass can use the previous frame's width or origin.
+        if state.prev_active.as_ref() != Some(&layout.active)
+            && let Some(index) = layout
+                .order
+                .iter()
+                .position(|open| entry_identity_eq(open, &layout.active))
+        {
+            state.scroll.scroll_to_item(index);
+            let active = layout.active.clone();
+            let strip = strip_state.downgrade();
+            window.defer(cx, move |window, cx| {
+                let Some(strip) = strip.upgrade() else {
+                    return;
+                };
+                let state = strip.read(cx);
+                if state.prev_active.as_ref() == Some(&active) {
+                    state.scroll.scroll_to_item(index);
+                    window.refresh();
+                }
+            });
         }
         // The slots the strip rendered last frame, in last frame's order —
         // the geometry a drag measures against for one whole frame.

@@ -11,7 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Div, ExternalPaths, FontWeight, PathPromptOptions, SharedString,
-    Stateful, Subscription, Window, div, prelude::*, px, rems,
+    Stateful, Subscription, TestSupportExt as _, Window, div, prelude::*, px, rems,
 };
 
 use crate::daemon::protocol::{
@@ -1579,6 +1579,7 @@ impl LyrelApp {
             lane = lane.child(
                 div()
                     .id(seg_id)
+                    .test_support()
                     .flex_none()
                     .text_xs()
                     .font_weight(weight)

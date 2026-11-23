@@ -83,10 +83,10 @@ fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut
         page_surface(app, &tab).test_take_focus();
         app.open_search(SearchTab::All, "", window, cx);
     });
+    vcx.run_until_parked();
     frame(&mut vcx);
     app.read_with(&vcx, |app, _| {
         assert_eq!(visibility(app, &tab), Some(false));
-        assert!(app.right_panel.web_pages[&tab].still_frame());
     });
     vcx.update(|window, _| {
         assert!(
@@ -94,6 +94,7 @@ fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut
                 .try_find(format!("browser-still-frame-{tab}"))
                 .is_some()
         );
+        assert!(window.try_find("browser-still-frame-image").is_some());
     });
 
     app.update_in(&mut vcx, |app, window, cx| app.close_search(window, cx));
@@ -101,7 +102,10 @@ fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut
     app.read_with(&vcx, |app, _| {
         assert_eq!(visibility(app, &tab), Some(true));
         assert_eq!(page_surface(app, &tab).test_focus_requests(), 1);
-        assert!(app.browser_surface_commands(&tab).is_empty());
+        assert!(matches!(
+            app.browser_surface_commands(&tab).as_slice(),
+            [BrowserCommand::Capture { .. }]
+        ));
     });
 }
 
@@ -236,24 +240,23 @@ fn a_dialog_cover_conceals_and_releases_the_page(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn focused_popup_menu_stays_above_the_native_page(cx: &mut TestAppContext) {
-    use gpui_kit::Focusable as _;
-    use gpui_kit::component::menu::PopupMenu;
+    use gpui_kit::{Modifiers, MouseButton};
 
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let tab = open_page(&app, &mut vcx, "https://example.test/popup");
-    let menu = vcx.update(|window, cx| {
+    let trigger = vcx.update(|window, cx| {
         crate::ui::surface_coordinator::install_popup_menu_presence(cx);
-        let menu = PopupMenu::build(window, cx, |menu, _, _| menu);
-        window.focus(&menu.read(cx).focus_handle(cx), cx);
-        menu
+        window.find(("tab-row", 0usize)).bounds().center()
     });
+    vcx.simulate_mouse_down(trigger, MouseButton::Right, Modifiers::none());
+    vcx.simulate_mouse_up(trigger, MouseButton::Right, Modifiers::none());
     frame(&mut vcx);
     assert_eq!(
         app.read_with(&vcx, |app, _| visibility(app, &tab)),
         Some(false)
     );
 
-    drop(menu);
+    vcx.simulate_keystrokes("escape");
     frame(&mut vcx);
     assert_eq!(
         app.read_with(&vcx, |app, _| visibility(app, &tab)),

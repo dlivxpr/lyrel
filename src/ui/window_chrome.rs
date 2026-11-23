@@ -290,38 +290,39 @@ fn titlebar_trailing_inset(fullscreen: bool) -> f32 {
     }
 }
 
-/// Width the title bar keeps for its leading inset, window mark, both
-/// command groups, native window controls and the drag band before the
-/// centered Park slot and the metrics capsule get a pixel. `titlebar_fit`
-/// and `host_metrics::capsule_strip_w` read this one number to choose the
-/// Park form, the capsule variant and the hidden state, and `render` lays
-/// those same pieces out, so paint cannot be chosen over a command group.
-pub(crate) fn titlebar_chrome_reserve(rem_size: f32, fullscreen: bool) -> f32 {
+/// Width required by the two command groups and the chosen optional content.
+/// With Park present, each side must fit within its own half of the bar.
+pub(super) fn titlebar_required_width(
+    rem_size: f32,
+    fullscreen: bool,
+    controls_width: f32,
+    park_width: f32,
+    capsule_width: f32,
+) -> f32 {
     let scale = rem_size / 16.;
-    let macos_fullscreen = cfg!(target_os = "macos") && fullscreen;
-    let lead = if macos_fullscreen {
-        // A fullscreen macOS window has no traffic lights; the row uses
-        // `pl_3` instead of their reserved lead.
+    let lead = if cfg!(target_os = "macos") && fullscreen {
         12. * scale
     } else {
         TITLE_BAR_LEAD
     };
-    let native = if window_controls_drawn(fullscreen) {
-        gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
-    } else {
-        0.
-    };
     let group = titlebar_group_width(rem_size);
-    TITLEBAR_DRAG_MIN_WIDTH
-        + lead
-        + WINDOW_MARK_SIZE * scale
-        // Left row: `gap_2` before the group and `pr_1` after it.
-        + 12. * scale
-        + group
-        // Right strip: the group and its trailing inset.
-        + group
-        + rem_size * titlebar_trailing_inset(fullscreen)
-        + native
+    let left = lead + WINDOW_MARK_SIZE * scale + 12. * scale + group + TITLEBAR_DRAG_MIN_WIDTH;
+    let right =
+        group + rem_size * titlebar_trailing_inset(fullscreen) + controls_width + capsule_width;
+    if park_width > 0. {
+        park_width + 2. * (left.max(right) + CENTER_SLOT_GAP * scale)
+    } else {
+        left + right
+    }
+}
+
+pub(super) fn titlebar_native_controls_width(window: &Window) -> f32 {
+    if !window_controls_drawn(window.is_fullscreen()) {
+        return 0.;
+    }
+    let controls = window.window_controls();
+    let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
+    gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
 }
 
 /// The Park entry's widths at the default scale (`rem = 16`): the labelled
@@ -375,12 +376,12 @@ pub(crate) fn titlebar_fit(
     viewport_width: f32,
     rem_size: f32,
     fullscreen: bool,
+    controls_width: f32,
     park_shown: bool,
     capsule_full_w: f32,
     capsule_compact_w: f32,
 ) -> TitlebarFit {
     let scale = rem_size / 16.;
-    let available = viewport_width - titlebar_chrome_reserve(rem_size, fullscreen);
     let park_full = if park_shown {
         PARK_ENTRY_FULL_W * scale
     } else {
@@ -391,12 +392,15 @@ pub(crate) fn titlebar_fit(
     } else {
         0.
     };
-    let gap = CENTER_SLOT_GAP * scale;
-    if available >= park_full + gap + capsule_full_w {
+    let fits = |park, capsule| {
+        viewport_width
+            >= titlebar_required_width(rem_size, fullscreen, controls_width, park, capsule)
+    };
+    if fits(park_full, capsule_full_w) {
         TitlebarFit::Full
-    } else if available >= park_full + gap + capsule_compact_w {
+    } else if fits(park_full, capsule_compact_w) {
         TitlebarFit::NoCharts
-    } else if available >= park_compact + gap + capsule_compact_w {
+    } else if fits(park_compact, capsule_compact_w) {
         TitlebarFit::CompactPark
     } else {
         TitlebarFit::HiddenMetrics
@@ -646,17 +650,7 @@ impl WindowChrome {
             .when_some(self.metrics, |strip, (metrics, _)| strip.child(metrics))
             .child(self.right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
-        let native_width = if controls_drawn {
-            let controls = window.window_controls();
-            let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
-            gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
-        } else {
-            0.
-        };
-        // 三按钮组、指标条与外边距共用宽度预算；原生控件不随界面缩放。
-        // The group's tiles and spacing follow the rem; keeping the same
-        // arithmetic here and in `titlebar_chrome_reserve` is what stops a
-        // wide metrics strip from being chosen over the group.
+        let native_width = titlebar_native_controls_width(window);
         let rem_size = window.rem_size().as_f32();
         let right_width = titlebar_group_width(rem_size)
             + rem_size * trailing_inset
@@ -812,26 +806,34 @@ mod gpui_tests {
     #[test]
     fn titlebar_fit_stages_narrowing_in_the_approved_order() {
         use super::{
-            CENTER_SLOT_GAP, PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, TitlebarFit,
-            titlebar_chrome_reserve, titlebar_fit,
+            PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, TitlebarFit, titlebar_fit,
+            titlebar_required_width,
         };
         // The capsule widths the product derives for all three metrics.
         let capsule_full = crate::ui::host_metrics::capsule_strip_w(3, true, 16.);
         let capsule_compact = crate::ui::host_metrics::capsule_strip_w(3, false, 16.);
         let rem = 16.;
-        let reserve = titlebar_chrome_reserve(rem, false);
-        let full_need = PARK_ENTRY_FULL_W + CENTER_SLOT_GAP + capsule_full;
-        let compact_need = PARK_ENTRY_FULL_W + CENTER_SLOT_GAP + capsule_compact;
-        let park_compact_need = PARK_ENTRY_COMPACT_W + CENTER_SLOT_GAP + capsule_compact;
+        let controls = if cfg!(target_os = "macos") {
+            0.
+        } else {
+            gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
+        };
+        let full_need =
+            titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, capsule_full);
+        let compact_need =
+            titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, capsule_compact);
+        let park_compact_need =
+            titlebar_required_width(rem, false, controls, PARK_ENTRY_COMPACT_W, capsule_compact);
         assert!(
             PARK_ENTRY_FULL_W <= 192.,
             "the reviewed width cap for the Park entry is 12rem"
         );
         assert_eq!(
             titlebar_fit(
-                reserve + full_need,
+                full_need,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -840,9 +842,10 @@ mod gpui_tests {
         );
         assert_eq!(
             titlebar_fit(
-                reserve + full_need - 1.,
+                full_need - 1.,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -851,9 +854,10 @@ mod gpui_tests {
         );
         assert_eq!(
             titlebar_fit(
-                reserve + compact_need,
+                compact_need,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -862,9 +866,10 @@ mod gpui_tests {
         );
         assert_eq!(
             titlebar_fit(
-                reserve + compact_need - 1.,
+                compact_need - 1.,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -873,9 +878,10 @@ mod gpui_tests {
         );
         assert_eq!(
             titlebar_fit(
-                reserve + park_compact_need,
+                park_compact_need,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -884,9 +890,10 @@ mod gpui_tests {
         );
         assert_eq!(
             titlebar_fit(
-                reserve + park_compact_need - 1.,
+                park_compact_need - 1.,
                 rem,
                 false,
+                controls,
                 true,
                 capsule_full,
                 capsule_compact
@@ -897,9 +904,10 @@ mod gpui_tests {
         // center slot keeps the labelled Park form whenever it fits at all.
         assert_eq!(
             titlebar_fit(
-                reserve + PARK_ENTRY_FULL_W + CENTER_SLOT_GAP,
+                titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, 0.),
                 rem,
                 false,
+                controls,
                 true,
                 0.,
                 0.
@@ -951,15 +959,22 @@ mod gpui_tests {
                         window.find("workbench-left-drag").bounds().size.width >= px(40.),
                         "width {width}: the drag band survives next to the centered entry"
                     );
-                    let capsule = window.find("titlebar-metrics").bounds();
+                    let right_group = window.find("titlebar-split-right").bounds();
                     assert!(
-                        capsule.left() >= entry.right(),
-                        "width {width}: the capsule cannot reach over the Park entry"
+                        right_group.left() >= entry.right(),
+                        "width {width}: the right group clears Park"
                     );
-                    assert!(
-                        window.find("titlebar-split-right").bounds().left() >= capsule.right(),
-                        "width {width}: the right command group keeps its lane"
-                    );
+                    if let Some(capsule) = window.try_find("titlebar-metrics") {
+                        let capsule = capsule.bounds();
+                        assert!(
+                            capsule.left() >= entry.right(),
+                            "width {width}: the capsule clears Park"
+                        );
+                        assert!(
+                            right_group.left() >= capsule.right(),
+                            "width {width}: the right group clears the capsule"
+                        );
+                    }
                     for id in [
                         "titlebar-left-panel",
                         "titlebar-search",

@@ -629,31 +629,32 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
     wait_sample(&mut vcx, true);
 
     let rem = 16.;
-    // The budget reserves three native controls; a test window may report
-    // fewer. Mirror `WindowChrome::render`'s own count so the stages land
-    // where the window actually puts them (macOS draws none of its own).
-    #[cfg(target_os = "macos")]
-    let reserve = crate::ui::window_chrome::titlebar_chrome_reserve(rem, false);
-    #[cfg(not(target_os = "macos"))]
-    let reserve = {
-        let controls = vcx.update(|window, _| window.window_controls());
-        let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
-        let native = gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count);
-        crate::ui::window_chrome::titlebar_chrome_reserve(rem, false) + native
-            - gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
+    use crate::ui::window_chrome::{
+        PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, titlebar_native_controls_width,
+        titlebar_required_width,
     };
-    let full_w = reserve
-        + crate::ui::window_chrome::PARK_ENTRY_FULL_W
-        + crate::ui::window_chrome::CENTER_SLOT_GAP
-        + capsule_strip_w(3, true, rem);
-    let no_charts_w = reserve
-        + crate::ui::window_chrome::PARK_ENTRY_FULL_W
-        + crate::ui::window_chrome::CENTER_SLOT_GAP
-        + capsule_strip_w(3, false, rem);
-    let compact_park_w = reserve
-        + crate::ui::window_chrome::PARK_ENTRY_COMPACT_W
-        + crate::ui::window_chrome::CENTER_SLOT_GAP
-        + capsule_strip_w(3, false, rem);
+    let controls = vcx.update(|window, _| titlebar_native_controls_width(window));
+    let full_w = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_FULL_W,
+        capsule_strip_w(3, true, rem),
+    );
+    let no_charts_w = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_FULL_W,
+        capsule_strip_w(3, false, rem),
+    );
+    let compact_park_w = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_COMPACT_W,
+        capsule_strip_w(3, false, rem),
+    );
 
     // Wide: the full two-line capsule sits right of the labelled Park entry.
     vcx.simulate_resize(size(px(full_w + 40.), px(720.)));
@@ -737,20 +738,13 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
         cx.notify();
     });
     let rem = 20.;
-    #[cfg(target_os = "macos")]
-    let reserve = crate::ui::window_chrome::titlebar_chrome_reserve(rem, false);
-    #[cfg(not(target_os = "macos"))]
-    let reserve = {
-        let controls = vcx.update(|window, _| window.window_controls());
-        let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
-        let native = gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count);
-        crate::ui::window_chrome::titlebar_chrome_reserve(rem, false) + native
-            - gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
-    };
-    let scaled_compact = reserve
-        + crate::ui::window_chrome::PARK_ENTRY_COMPACT_W * (rem / 16.)
-        + crate::ui::window_chrome::CENTER_SLOT_GAP * (rem / 16.)
-        + capsule_strip_w(3, false, rem);
+    let scaled_compact = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_COMPACT_W * (rem / 16.),
+        capsule_strip_w(3, false, rem),
+    );
     vcx.simulate_resize(size(px(scaled_compact + 30.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {

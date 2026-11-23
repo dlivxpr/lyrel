@@ -21,6 +21,19 @@
 use gpui_kit::{Bounds, Pixels};
 use smol::channel::Sender;
 
+// The high bit keeps ephemeral page frames separate from explicit shares.
+const STILL_FRAME_REQUEST: u64 = 1 << 63;
+
+pub(super) fn still_frame_request_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed) | STILL_FRAME_REQUEST
+}
+
+pub(super) fn is_still_frame_request(request: u64) -> bool {
+    request & STILL_FRAME_REQUEST != 0
+}
+
 /// One native event the browsing surface reports to the panel.
 #[derive(Clone, Debug, PartialEq)]
 // The platform arms are built only by the native hosts; automated builds
@@ -41,9 +54,8 @@ pub enum BrowserEvent {
     TitleChanged {
         title: String,
     },
-    /// The visible page was captured as PNG bytes for the explicit share
-    /// action (#393). `request` is the one the panel minted, so a slow answer
-    /// cannot be mistaken for a newer capture.
+    /// The visible page was captured as PNG for a cover or an explicit share.
+    /// `request` identifies the exact capture.
     Captured {
         request: u64,
         png: Vec<u8>,
@@ -105,9 +117,8 @@ pub enum BrowserCommand {
     SetRouteGuard {
         guard: RouteGuard,
     },
-    /// Capture the visible page as PNG for the explicit share action (#393).
-    /// The answer is [`BrowserEvent::Captured`] or
-    /// [`BrowserEvent::CaptureFailed`], carrying this request id back.
+    /// Capture the visible page as PNG. The answer is
+    /// [`BrowserEvent::Captured`] or [`BrowserEvent::CaptureFailed`].
     Capture {
         request: u64,
     },
@@ -442,10 +453,14 @@ impl BrowserSurfaceHost {
             #[cfg(any(test, feature = "test-support"))]
             Inner::Test(surface) => {
                 if let BrowserCommand::Capture { request } = command {
-                    let _ = surface._events.try_send(BrowserEvent::Captured {
-                        request,
-                        png: test_support::CAPTURED_PNG.to_vec(),
-                    });
+                    let png = if is_still_frame_request(request) {
+                        include_bytes!("../../../assets/logo@256.png").to_vec()
+                    } else {
+                        test_support::CAPTURED_PNG.to_vec()
+                    };
+                    let _ = surface
+                        ._events
+                        .try_send(BrowserEvent::Captured { request, png });
                 }
                 surface.commands.borrow_mut().push(command);
                 Ok(())

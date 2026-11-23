@@ -1465,6 +1465,7 @@ impl LyrelApp {
             window.viewport_size().width.as_f32(),
             rem,
             window.is_fullscreen(),
+            crate::ui::window_chrome::titlebar_native_controls_width(window),
             !self.tabs.is_empty(),
             full,
             compact,

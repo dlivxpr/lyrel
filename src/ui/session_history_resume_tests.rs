@@ -1155,6 +1155,7 @@ fn exact_resume_reports_a_different_upstream_conversation(cx: &mut TestAppContex
     let view = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
     let prepared = antigravity_prepared(cwd, "expected-conversation");
     app.update_in(&mut vcx, |app, window, cx| {
+        LyrelApp::watch_terminal(&view, window, cx);
         app.run_history_prepared_when_ready(
             crate::ui::pane::PaneSlot::Ready(view.clone()),
             prepared,
