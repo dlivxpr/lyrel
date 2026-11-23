@@ -39,9 +39,7 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
     settle(&mut vcx);
     vcx.update(|window, _| {
         let strip = window.find("side-panel-tool-scroll").bounds();
-        let first_tab = window.find(format!("web-tab-{first}"));
         let second_tab = window.find(format!("web-tab-{second}"));
-        assert!(strip.contains(&first_tab.bounds().center()));
         assert!(strip.contains(&second_tab.bounds().center()));
         assert_eq!(second_tab.selected(), Some(true));
     });
@@ -60,6 +58,14 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
             Some(first.as_str())
         );
         assert!(app.browser_surface_commands(&second).is_empty());
+    });
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        let strip = window.find("side-panel-tool-scroll").bounds();
+        let first_tab = window.find(format!("web-tab-{first}"));
+        assert!(strip.contains(&first_tab.bounds().center()));
+        assert_eq!(first_tab.selected(), Some(true));
+        assert!(window.try_find(format!("web-tab-{second}")).is_none());
     });
 }
 
