@@ -427,6 +427,10 @@ pub struct LyrelApp {
     /// Parked switcher groups (#485) whose notice the user dismissed by key —
     /// the entries stay, only the "will not reconnect" block is hidden.
     pub(crate) parked_dismissed: std::collections::HashSet<String>,
+    /// Launched exact Antigravity resumes whose native conversation identity
+    /// has not been observed yet (#385). A different reported id is a failed
+    /// exact resume; the pane itself is left alone.
+    pub(crate) exact_resumes: Vec<crate::ui::agent_launch::ExactResumeExpectation>,
     /// Why the window opened with no terminal in it. Shown on the home screen,
     /// which is otherwise indistinguishable from having closed everything.
     pub(crate) startup_error: Option<gpui_kit::SharedString>,

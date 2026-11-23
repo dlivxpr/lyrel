@@ -186,6 +186,24 @@ fn prepared(cwd: PathBuf) -> PreparedSession {
     }
 }
 
+fn antigravity_prepared(cwd: PathBuf, conversation: &str) -> PreparedSession {
+    PreparedSession {
+        host_id: HostId::LOCAL.0,
+        agent: CLIAgent::Antigravity,
+        source_id: conversation.into(),
+        target_id: Some(conversation.into()),
+        session_file: Some(PathBuf::from(format!(
+            "/store/.gemini/antigravity-cli/brain/{conversation}/.system_generated/logs/transcript.jsonl"
+        ))),
+        title: Some("agy fixture".into()),
+        cwd,
+        scope: Default::default(),
+        launch_argv: vec!["agy".into()],
+        command: Some(format!("agy --conversation {conversation}")),
+        created: false,
+    }
+}
+
 fn request(cwd: Option<PathBuf>, fork: bool) -> ResumeSessionRequest {
     ResumeSessionRequest {
         agent: CLIAgent::Pi,
@@ -933,4 +951,156 @@ fn fork_still_opens_a_new_tab_even_when_the_session_is_open(cx: &mut TestAppCont
         "the fork reaches the Host as a fork: {:?}",
         host.seen()
     );
+}
+
+/// The three consumers share one plan: an offered Antigravity agent adds one
+/// read-only index request, and an unoffered one adds none.
+#[gpui_kit::test]
+fn plan_scan_offers_antigravity_history_only_for_an_offered_agent(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let launches = std::collections::HashMap::new();
+    let offered = cx.update(|cx| {
+        crate::ui::session_history::plan_scan(
+            HostId::LOCAL,
+            &[],
+            &[CLIAgent::Antigravity],
+            Path::new("/project"),
+            &launches,
+            cx,
+        )
+    });
+    assert_eq!(offered.antigravity.len(), 1);
+    assert_eq!(offered.antigravity[0].agent, CLIAgent::Antigravity);
+    assert_eq!(offered.antigravity[0].cwd, PathBuf::from("/project"));
+    assert_eq!(
+        offered.antigravity[0].kind,
+        SessionOperationKind::Resume
+    );
+
+    let unoffered = cx.update(|cx| {
+        crate::ui::session_history::plan_scan(
+            HostId::LOCAL,
+            &[],
+            &[CLIAgent::Pi],
+            Path::new("/project"),
+            &launches,
+            cx,
+        )
+    });
+    assert!(
+        unoffered.antigravity.is_empty(),
+        "a workspace that never offered agy does not scan its store"
+    );
+}
+
+/// Antigravity's native conversation id is the exact identity: a pane that
+/// reports it on the same Host is the same conversation even when the live
+/// hook's transcript path is not the scan's derived path. Focusing it starts
+/// no second writer (#385).
+#[gpui_kit::test]
+fn resume_focuses_an_open_antigravity_conversation_by_exact_id(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let first = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+    DaemonMsg::Agent(Some(CLIAgent::Antigravity))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some(SESSION_ID.into()),
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the Antigravity identity lands", || {
+        first.read_with(&mut vcx, |view, _| {
+            view.agent() == Some(CLIAgent::Antigravity)
+                && view
+                    .agent_session()
+                    .and_then(|state| state.session_id)
+                    .as_deref()
+                    == Some(SESSION_ID)
+        })
+    });
+
+    let tabs_before = tab_count(&app, &mut vcx);
+    let panes_before = pane_count(&app, &mut vcx);
+    let mut req = request(Some(cwd), false);
+    req.agent = CLIAgent::Antigravity;
+    // The live hook need not repeat the scan's transcript path; the exact
+    // conversation id is the identity the CLI itself assigned.
+    let mut saved = lyrel_core::host::session_operations::SessionScope::default();
+    saved.session_file = Some(PathBuf::from(
+        "/some/other/.gemini/antigravity-cli/brain/hist365/.system_generated/logs/transcript.jsonl",
+    ));
+    req.scope = Some(saved);
+    run_resume(&app, &mut vcx, req);
+    vcx.background_executor.run_until_parked();
+
+    assert!(
+        host.seen().is_empty(),
+        "an open exact conversation must not reach the Host: {:?}",
+        host.seen()
+    );
+    assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
+    assert_eq!(pane_count(&app, &mut vcx), panes_before, "no new pane");
+    let focused = vcx.update(|window, cx| window.focused(cx));
+    let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    assert_eq!(focused, Some(first_focus), "the original pane took focus");
+}
+
+/// The observer hook's conversation id is authoritative. If upstream opens a
+/// different conversation instead of the requested one, the workbench says
+/// the exact resume failed and leaves the newly opened conversation alone.
+#[gpui_kit::test]
+fn exact_resume_reports_a_different_upstream_conversation(cx: &mut TestAppContext) {
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let view = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+    let prepared = antigravity_prepared(cwd, "expected-conversation");
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.run_history_prepared_when_ready(
+            crate::ui::pane::PaneSlot::Ready(view.clone()),
+            prepared,
+            window,
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+
+    DaemonMsg::Agent(Some(CLIAgent::Antigravity))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some("different-conversation".into()),
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the different conversation identity lands", || {
+        view.read_with(&mut vcx, |view, _| {
+            view.agent() == Some(CLIAgent::Antigravity)
+                && view
+                    .agent_session()
+                    .and_then(|state| state.session_id)
+                    .as_deref()
+                    == Some("different-conversation")
+        })
+    });
+    view.update_in(&mut vcx, |view, window, cx| {
+        view.poll_agent_status(false, window, cx);
+    });
+    settle(&mut vcx, "the failed exact resume is reported", |cx| {
+        crate::ui::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .any(|record| {
+                record.message().contains("expected-conversation")
+                    && record.message().contains("different-conversation")
+            })
+    });
 }

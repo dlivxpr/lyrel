@@ -584,6 +584,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppSessionOpenUnconfirmed => {
             "A pane already runs session {id}, but its store could not be confirmed from here. Resume it in that pane instead of starting a second writer."
         }
+        L10nKey::AppSessionResumeOpenedDifferent => {
+            "Asked to resume conversation {expected}, but Antigravity opened {actual}. This is not an exact resume."
+        }
         L10nKey::SearchSessionActions => "Choose what to do with this session…",
         L10nKey::SessionActionsHint => "actions",
         L10nKey::SessionActionResume => "Resume",
