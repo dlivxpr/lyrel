@@ -42,7 +42,7 @@ pub(super) fn apply(
     }
     #[cfg(all(not(test), target_os = "macos"))]
     {
-        let _ = windows;
+        let _ = (description, windows);
         return platform::apply(label);
     }
     #[cfg(all(not(test), not(any(target_os = "windows", target_os = "macos"))))]

@@ -28,8 +28,8 @@ use super::super::route::BrowserSiteData;
 use super::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceError, RouteGuard};
 use gpui_kit::{Bounds, Pixels};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSImage, NSResponder,
     NSView,
@@ -335,9 +335,7 @@ define_class!(
             handler: &block2::DynBlock<dyn Fn(WKNavigationActionPolicy)>,
         ) {
             let request = unsafe { action.request() };
-            let Some(url) =
-                (unsafe { request.URL() }).and_then(|url| unsafe { url.absoluteString() })
-            else {
+            let Some(url) = request.URL().and_then(|url| url.absoluteString()) else {
                 handler.call((WKNavigationActionPolicy::Cancel,));
                 return;
             };
@@ -464,7 +462,7 @@ fn emit_navigated(shared: &Rc<RefCell<Shared>>, webview: &WKWebView) {
 }
 
 fn emit_failed(shared: &Rc<RefCell<Shared>>, webview: &WKWebView, error: &NSError) {
-    let message = unsafe { error.localizedDescription() }.to_string();
+    let message = error.localizedDescription().to_string();
     emit(
         shared,
         BrowserEvent::LoadFailed {
@@ -495,42 +493,7 @@ define_class!(
             action: &WKNavigationAction,
             _window_features: &WKWindowFeatures,
         ) -> Option<Retained<WKWebView>> {
-            let request = unsafe { action.request() };
-            let url = unsafe { request.URL() }
-                .and_then(|url| unsafe { url.absoluteString() })
-                .map(|url| url.to_string())
-                .unwrap_or_default();
-            if super::super::policy::classify(&url) != super::super::policy::Route::Load {
-                emit(
-                    &self.ivars().shared,
-                    BrowserEvent::Blocked {
-                        reason: format!("a new window to {url}"),
-                    },
-                );
-                return None;
-            }
-            let allowed = self
-                .ivars()
-                .shared
-                .try_borrow()
-                .is_ok_and(|state| state.guard.allows(&url));
-            if !allowed {
-                emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
-                return None;
-            }
-            // Only a real link click becomes a sibling tab. A script-opened
-            // window, a form target or an unclassified request is refused.
-            if unsafe { action.navigationType() } == WKNavigationType::LinkActivated {
-                emit(&self.ivars().shared, BrowserEvent::NewWindow { url });
-            } else {
-                emit(
-                    &self.ivars().shared,
-                    BrowserEvent::Blocked {
-                        reason: "an unsolicited popup".to_string(),
-                    },
-                );
-            }
-            None
+            self.decide_new_window(action)
         }
 
         #[unsafe(method(webViewDidClose:))]
@@ -566,7 +529,7 @@ define_class!(
             _webview: &WKWebView,
             _message: &NSString,
             _frame: &WKFrameInfo,
-            handler: &block2::DynBlock<dyn Fn(bool)>,
+            handler: &block2::DynBlock<dyn Fn(Bool)>,
         ) {
             emit(
                 &self.ivars().shared,
@@ -574,7 +537,7 @@ define_class!(
                     reason: "a script dialog".to_string(),
                 },
             );
-            handler.call((false,));
+            handler.call((Bool::NO,));
         }
 
         #[unsafe(method(webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:))]
@@ -637,6 +600,53 @@ impl BrowserUiDelegate {
         let this = Self::alloc(mtm).set_ivars(UiIvars { shared });
         unsafe { msg_send![super(this), init] }
     }
+
+    /// Decides a `window.open`/`target=_blank` request from the page.
+    ///
+    /// The web view is never given a second view: an allowed link click is
+    /// reported as a sibling-tab event and every other request is refused.
+    /// This is a plain method because a `define_class!` body is the
+    /// Objective-C trampoline itself — a `return` there exits before the
+    /// retained return value is converted, and this decision exits early.
+    fn decide_new_window(&self, action: &WKNavigationAction) -> Option<Retained<WKWebView>> {
+        let request = unsafe { action.request() };
+        let url = request
+            .URL()
+            .and_then(|url| url.absoluteString())
+            .map(|url| url.to_string())
+            .unwrap_or_default();
+        if super::super::policy::classify(&url) != super::super::policy::Route::Load {
+            emit(
+                &self.ivars().shared,
+                BrowserEvent::Blocked {
+                    reason: format!("a new window to {url}"),
+                },
+            );
+            return None;
+        }
+        let allowed = self
+            .ivars()
+            .shared
+            .try_borrow()
+            .is_ok_and(|state| state.guard.allows(&url));
+        if !allowed {
+            emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
+            return None;
+        }
+        // Only a real link click becomes a sibling tab. A script-opened
+        // window, a form target or an unclassified request is refused.
+        if unsafe { action.navigationType() } == WKNavigationType::LinkActivated {
+            emit(&self.ivars().shared, BrowserEvent::NewWindow { url });
+        } else {
+            emit(
+                &self.ivars().shared,
+                BrowserEvent::Blocked {
+                    reason: "an unsolicited popup".to_string(),
+                },
+            );
+        }
+        None
+    }
 }
 
 struct TitleIvars {
@@ -659,7 +669,7 @@ define_class!(
             _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
             _context: *mut c_void,
         ) {
-            if key_path.is_some_and(|path| unsafe { path.isEqualToString(ns_string!("title")) }) {
+            if key_path.is_some_and(|path| path.isEqualToString(ns_string!("title"))) {
                 let title = current_title(&self.ivars().webview);
                 emit(
                     &self.ivars().shared,
